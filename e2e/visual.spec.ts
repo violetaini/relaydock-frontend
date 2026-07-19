@@ -220,6 +220,7 @@ async function mockAPI(
       "/api/admin/remote/outbounds": { success: true, outbounds: [{ tag: "direct", protocol: "freedom", settings: {} }] },
       "/api/admin/remote/routing": { success: true, routing: { domainStrategy: "IPIfNonMatch", rules: [{ type: "field", domain: ["domain:google.com"], network: "tcp", outboundTag: "direct" }] } },
       "/api/admin/nodes": { nodes },
+      "/api/admin/managed-node-offers": { offers: [] },
       "/api/traffic/summary": trafficResponse,
       "/api/admin/tunnels": tunnels,
       "/api/admin/remote/warp/status": { installed: true, license_active: true, addr_v4: "172.16.0.2", addr_v6: "2606:4700:110:8765::2" },

@@ -259,6 +259,7 @@ test("parses node URIs, previews them, and sends the complete batch payload", as
   ];
   mock
     .on("GET", "/api/admin/nodes", () => json({ nodes: storedNodes }))
+    .on("GET", "/api/admin/managed-node-offers", () => json({ offers: [] }))
     .on("GET", "/api/admin/speedtest/results", () => json({ results: [] }))
     .on("GET", "/api/user/config", () => json({
       force_sync_external: false,

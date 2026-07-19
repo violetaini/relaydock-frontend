@@ -1,0 +1,59 @@
+.ssn-panel { min-width: 0; margin-bottom: 20px; }
+.ssn-heading { min-height: 42px; margin-bottom: 9px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ssn-heading > div { display: flex; flex-direction: column; gap: 3px; }
+.ssn-heading strong { font-size: 13px; }
+.ssn-heading small { font-size: 10px; }
+.ssn-loading { min-height: 150px; display: flex; align-items: center; justify-content: center; }
+.ssn-selection-list { display: flex; flex-direction: column; gap: 7px; }
+.ssn-selection-row { min-height: 72px; padding: 10px 12px; display: grid; grid-template-columns: minmax(190px, 1.2fr) minmax(210px, 1fr) auto auto; align-items: center; gap: 12px; box-shadow: none; }
+.ssn-node-cell { min-width: 0; display: flex; align-items: center; gap: 9px; }
+.ssn-node-cell > span:last-child { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.ssn-node-cell strong, .ssn-node-cell small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssn-node-cell strong { font-size: 12px; }
+.ssn-node-cell small { font-size: 9px; }
+.ssn-effective-policy { min-width: 0; display: flex; align-items: flex-start; gap: 7px; color: var(--text-soft); }
+.ssn-effective-policy > span { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.ssn-effective-policy strong { font-size: 10px; }
+.ssn-effective-policy small, .ssn-deny { max-width: 260px; overflow: hidden; color: var(--red); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.ssn-row-actions { display: flex; gap: 2px; }
+.ssn-catalog-toolbar { min-height: 48px; margin-bottom: 13px; display: grid; grid-template-columns: minmax(210px, 1fr) minmax(180px, 260px) auto; align-items: center; gap: 9px; }
+.ssn-catalog-toolbar select { min-height: 42px; padding: 0 34px 0 10px; color: var(--text); background: var(--surface); border: 2px solid var(--border-strong); }
+.ssn-search { width: 100%; }
+.ssn-search input { height: 42px; }
+.ssn-grant-strip { margin-bottom: 13px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 2px solid var(--border-strong); background: var(--surface); }
+.ssn-grant-strip > span { min-width: 0; min-height: 62px; padding: 10px 12px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; border-right: 1px solid var(--border); }
+.ssn-grant-strip > span:nth-child(3n), .ssn-grant-strip > span:last-child { border-right: 0; }
+.ssn-grant-strip > span > svg { color: var(--accent); }
+.ssn-grant-strip > span > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.ssn-grant-strip strong, .ssn-grant-strip small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssn-grant-strip strong { font-size: 11px; }
+.ssn-grant-strip small { font-size: 9px; }
+.ssn-catalog-surface { box-shadow: none; }
+.ssn-catalog-table td:nth-child(1) { min-width: 190px; }
+.ssn-catalog-table td:nth-child(2) { min-width: 130px; }
+.ssn-catalog-table td:nth-child(3) { min-width: 220px; }
+.ssn-catalog-table td:nth-child(4) { min-width: 150px; }
+.ssn-catalog-table td:nth-child(5) { min-width: 120px; }
+.ssn-catalog-table td:last-child { text-align: right; }
+.ssn-date { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; white-space: nowrap; }
+.ssn-deny { margin-top: 5px; display: block; }
+
+@media (max-width: 880px) {
+  .ssn-selection-row { grid-template-columns: minmax(180px, 1fr) auto auto; }
+  .ssn-effective-policy { grid-column: 1 / -1; grid-row: 2; }
+  .ssn-grant-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ssn-grant-strip > span:nth-child(3n) { border-right: 1px solid var(--border); }
+  .ssn-grant-strip > span:nth-child(2n) { border-right: 0; }
+}
+
+@media (max-width: 620px) {
+  .ssn-catalog-toolbar { grid-template-columns: minmax(0, 1fr) auto; }
+  .ssn-catalog-toolbar select { grid-column: 1 / -1; grid-row: 2; }
+  .ssn-grant-strip { grid-template-columns: 1fr; }
+  .ssn-grant-strip > span, .ssn-grant-strip > span:nth-child(2n), .ssn-grant-strip > span:nth-child(3n) { border-right: 0; border-bottom: 1px solid var(--border); }
+  .ssn-grant-strip > span:last-child { border-bottom: 0; }
+  .ssn-selection-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .ssn-selection-row > .badge { grid-row: 2; }
+  .ssn-effective-policy { grid-column: 1 / -1; grid-row: 3; }
+  .ssn-row-actions { grid-column: 2; grid-row: 1; }
+}

@@ -1,0 +1,21 @@
+.two-factor-settings { grid-column: 1 / -1; }
+.two-factor-status { min-height: 48px; }
+.two-factor-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+.two-factor-actions .spinner { white-space: nowrap; }
+.two-factor-credential { padding: 12px 14px; display: grid; gap: 7px; border: 2px solid var(--border); background: var(--surface-muted); }
+.two-factor-credential > span { color: var(--text-soft); font-size: 11px; font-weight: 700; }
+.two-factor-credential code { overflow-wrap: anywhere; user-select: all; font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; line-height: 1.6; }
+.recovery-warning { padding: 13px 14px; display: flex; align-items: flex-start; gap: 10px; border: 2px solid color-mix(in srgb, var(--amber) 48%, var(--border)); background: var(--amber-soft); }
+.recovery-warning svg { flex: 0 0 auto; color: var(--amber); }
+.recovery-warning p { font-size: 12px; line-height: 1.6; }
+.recovery-code-grid { padding: 14px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; border: 2px solid var(--border-strong); background: var(--surface-muted); }
+.recovery-code-grid code { padding: 8px 10px; border: 1px solid var(--border); background: var(--surface); user-select: all; font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; text-align: center; }
+.recovery-copy-row { display: flex; justify-content: flex-end; }
+.recovery-acknowledgement { min-height: 42px; padding: 10px 12px; border: 2px solid var(--border); color: var(--text); background: var(--surface); }
+
+@media (max-width: 600px) {
+  .two-factor-status { align-items: flex-start; flex-direction: column; }
+  .two-factor-actions { width: 100%; justify-content: space-between; }
+  .recovery-code-grid { grid-template-columns: 1fr; }
+  .recovery-copy-row .button { width: 100%; }
+}

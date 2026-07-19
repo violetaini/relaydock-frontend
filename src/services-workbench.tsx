@@ -170,8 +170,6 @@ interface CreateServerForm {
   trafficSource: string;
   ipv6Enabled: boolean;
   ddnsEnabled: boolean;
-  stealSelf: boolean;
-  use443: boolean;
   stealMode: string;
   siteType: string;
   siteValue: string;
@@ -194,8 +192,6 @@ const emptyCreateForm: CreateServerForm = {
   trafficSource: "system",
   ipv6Enabled: true,
   ddnsEnabled: false,
-  stealSelf: false,
-  use443: false,
   stealMode: "default",
   siteType: "static",
   siteValue: "",
@@ -267,16 +263,6 @@ function parseRoutingValues(value: string): string[] {
   return value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
 }
 
-function buildInstallCommand(server: ManagedServer, token: string, agentToken: string): string {
-  if (server.connection_mode === "pull") {
-    return `# pull 模式：主服务器从 ${server.pull_address || server.ip_address || "SERVER"}:${server.pull_port || 23889} 拉取数据\n# 子服务器配置 MMWX_MODE=child MMWX_CHILD_API_TOKEN=${agentToken}`;
-  }
-  const url = new URL("/api/remote/install.sh", window.location.origin);
-  if (server.xray_mode === "embedded") url.searchParams.set("xray_mode", "embedded");
-  if (server.listen_port) url.searchParams.set("listen_port", String(server.listen_port));
-  return `curl -fsSL -H 'Authorization: Bearer ${token}' '${url.toString()}' | bash${server.connection_mode === "websocket" ? " -s -- --mode=websocket" : ""}`;
-}
-
 export function ServicesWorkbenchPage({ notify }: { notify: Notify }) {
   const [servers, setServers] = useState<ManagedServer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -335,14 +321,15 @@ export function ServicesWorkbenchPage({ notify }: { notify: Notify }) {
   const revealCredentials = async (server: ManagedServer) => {
     setCredentialsLoading(server.id);
     try {
-      const result = assertSuccess(await api.get<ActionResponse & { token?: string; pull_token?: string; agent_token?: string }>(`/api/admin/remote-servers/reveal-token?server_id=${server.id}`), "读取凭据失败");
+      const result = assertSuccess(await api.get<ActionResponse & { token?: string; pull_token?: string; agent_token?: string; install_command?: string }>(`/api/admin/remote-servers/reveal-token?server_id=${server.id}`), "读取凭据失败");
       if (!result.token) throw new Error("服务端未返回服务器 Token");
+      if (!result.install_command) throw new Error("服务端未返回权威安装命令，请先升级控制端");
       setCredentials({
         server,
         token: result.token,
         pullToken: result.pull_token ?? "",
         agentToken: result.agent_token ?? "",
-        command: buildInstallCommand(server, result.token, result.agent_token ?? result.pull_token ?? ""),
+        command: result.install_command,
       });
     } catch (reason) {
       notify(messageFrom(reason, "读取凭据失败"), "error");
@@ -517,16 +504,16 @@ function ServerTable({ servers, selected, credentialsLoading, onSelect, onOpen, 
 function ServerFormFields({ form, setForm, editing = false }: { form: CreateServerForm; setForm: (value: CreateServerForm) => void; editing?: boolean }) {
   const patch = <K extends keyof CreateServerForm>(key: K, value: CreateServerForm[K]) => setForm({ ...form, [key]: value });
   return <>
-    <div className="form-grid"><Field label="服务器名称"><input required autoFocus value={form.name} onChange={(event) => patch("name", event.target.value)} placeholder="Hong Kong 01" /></Field><Field label="连接模式"><select value={form.connectionMode} onChange={(event) => patch("connectionMode", event.target.value)}><option value="websocket">WebSocket（推荐）</option><option value="push">HTTP Push</option><option value="pull">HTTP Pull</option></select></Field></div>
+    <div className="form-grid"><Field label="服务器名称"><input required autoFocus value={form.name} onChange={(event) => patch("name", event.target.value)} placeholder="Hong Kong 01" /></Field><Field label="连接模式"><select value={form.connectionMode} onChange={(event) => patch("connectionMode", event.target.value)} disabled={editing}><option value="websocket">WebSocket（推荐）</option><option value="push">HTTP Push</option><option value="pull">HTTP Pull</option></select></Field></div>
     <div className="form-grid"><Field label="公网 IPv4 / 初始地址" hint="允许留空，Agent 首次连接后自动上报"><input value={form.ipAddress} onChange={(event) => patch("ipAddress", event.target.value)} placeholder="203.0.113.10" disabled={editing} /></Field><Field label="服务器地址 / DDNS 域名"><input value={form.pullAddress} onChange={(event) => patch("pullAddress", event.target.value)} placeholder="edge.example.com" /></Field></div>
-    <div className="form-grid"><Field label="Agent 监听端口"><input type="number" min="1024" max="65535" value={form.listenPort} onChange={(event) => patch("listenPort", event.target.value)} /></Field><Field label="Pull 端口"><input type="number" min="1" max="65535" value={form.pullPort} onChange={(event) => patch("pullPort", event.target.value)} disabled={form.connectionMode !== "pull"} /></Field></div>
+    <div className="form-grid"><Field label="Agent 监听端口"><input type="number" min="1024" max="65534" value={form.listenPort} onChange={(event) => patch("listenPort", event.target.value)} disabled={editing} /></Field><Field label="Pull 端口"><input type="number" min="1" max="65535" value={form.pullPort} onChange={(event) => patch("pullPort", event.target.value)} disabled={form.connectionMode !== "pull"} /></Field></div>
     {!editing && form.connectionMode === "pull" ? <Field label="可选 Agent 认证 Token" hint="留空时由控制端安全生成"><input value={form.pullToken} onChange={(event) => patch("pullToken", event.target.value)} /></Field> : null}
-    <div className="form-grid"><Field label="节点域名"><input value={form.domain} onChange={(event) => patch("domain", event.target.value)} placeholder="hk.example.com" /></Field><Field label="Xray 模式"><select value={form.xrayMode} onChange={(event) => patch("xrayMode", event.target.value)}><option value="external">外置 Xray</option><option value="embedded">内嵌 Xray</option></select></Field></div>
+    <div className="form-grid"><Field label="节点域名" hint={form.stealMode === "default" ? undefined : "Tunnel/Fallback 接管模式必填"}><input required={form.stealMode !== "default"} value={form.domain} onChange={(event) => patch("domain", event.target.value)} placeholder="hk.example.com" /></Field><Field label="Xray 模式"><select value={form.xrayMode} onChange={(event) => patch("xrayMode", event.target.value)}><option value="external">外置 Xray</option><option value="embedded">内嵌 Xray</option></select></Field></div>
     <div className="form-grid"><Field label="流量限额（GB）" hint="0 或留空表示不限"><input type="number" min="0" step="0.01" value={form.trafficLimitGB} onChange={(event) => patch("trafficLimitGB", event.target.value)} /></Field><Field label={editing ? "已用流量校准（GB，可选）" : "初始已用流量（GB）"}><input type="number" min="0" step="0.01" value={form.trafficUsedGB} onChange={(event) => patch("trafficUsedGB", event.target.value)} placeholder={editing ? "留空保持不变" : "0"} /></Field></div>
     <div className="form-grid"><Field label="每月重置日" hint="0 表示不自动重置"><input type="number" min="0" max="31" value={form.trafficResetDay} onChange={(event) => patch("trafficResetDay", event.target.value)} /></Field><Field label="服务器流量来源"><select value={form.trafficSource} onChange={(event) => patch("trafficSource", event.target.value)}><option value="system">系统网卡（VPS 计费口径）</option><option value="xray">Xray 节点聚合</option></select></Field></div>
     <Field label="流量统计方向"><select value={form.trafficStatsMode} onChange={(event) => patch("trafficStatsMode", event.target.value)}><option value="both">上行 + 下行</option><option value="max">上行 / 下行取较大值</option><option value="upload">仅上行</option><option value="download">仅下行</option></select></Field>
     <div className="service-toggle-grid"><Toggle checked={form.ipv6Enabled} onChange={(value) => patch("ipv6Enabled", value)} label="启用 IPv6" /><Toggle checked={form.ddnsEnabled} onChange={(value) => patch("ddnsEnabled", value)} label="自动同步 DDNS" /></div>
-    {!editing ? <details className="service-advanced-fields"><summary>前置与伪装站高级选项</summary><div className="form-stack"><div className="service-toggle-grid"><Toggle checked={form.stealSelf} onChange={(value) => patch("stealSelf", value)} label="安装后接管本机 443" /><Toggle checked={form.use443} onChange={(value) => patch("use443", value)} label="使用 443 隧道" /></div><div className="form-grid"><Field label="接管模式"><select value={form.stealMode} onChange={(event) => patch("stealMode", event.target.value)}><option value="default">不接管</option><option value="tunnel">Tunnel</option><option value="fallback">Fallback</option></select></Field><Field label="站点类型"><select value={form.siteType} onChange={(event) => patch("siteType", event.target.value)}><option value="static">静态目录</option><option value="proxy">反向代理</option></select></Field></div><Field label={form.siteType === "proxy" ? "反代目标" : "静态目录"}><input value={form.siteValue} onChange={(event) => patch("siteValue", event.target.value)} placeholder={form.siteType === "proxy" ? "http://127.0.0.1:8080" : "/var/www/html"} /></Field></div></details> : null}
+    {!editing ? <details className="service-advanced-fields"><summary>前置与伪装站高级选项</summary><div className="form-stack"><div className="form-grid"><Field label="接管模式"><select value={form.stealMode} onChange={(event) => patch("stealMode", event.target.value)}><option value="default">不接管</option><option value="tunnel">Tunnel</option><option value="fallback">Fallback</option></select></Field><Field label="站点类型"><select value={form.siteType} onChange={(event) => patch("siteType", event.target.value)}><option value="static">静态目录</option><option value="proxy">反向代理</option></select></Field></div><Field label={form.siteType === "proxy" ? "反代目标" : "静态目录"}><input value={form.siteValue} onChange={(event) => patch("siteValue", event.target.value)} placeholder={form.siteType === "proxy" ? "http://127.0.0.1:8080" : "/var/www/html"} /></Field></div></details> : null}
   </>;
 }
 
@@ -557,14 +544,14 @@ function CreateServerDialog({ onClose, onCreated }: { onClose: () => void; onCre
         ipv6_enabled: form.ipv6Enabled,
         ddns_enabled: form.ddnsEnabled,
         ddns_provider_id: 0,
-        steal_self: form.stealSelf,
+        steal_self: form.stealMode === "tunnel" || form.stealMode === "fallback",
         front_service: "xray",
-        use_443: form.use443,
+        use_443: form.stealMode === "tunnel" || form.stealMode === "fallback",
         steal_mode: form.stealMode,
         site_type: form.siteType,
         site_value: form.siteValue.trim(),
       }), "创建服务器失败");
-      if (!response.server) throw new Error("创建成功，但响应缺少服务器信息");
+      if (!response.server || !response.install_command) throw new Error("创建成功，但响应缺少服务器信息或权威安装命令");
       onCreated(response);
     } catch (reason) {
       setError(messageFrom(reason, "创建服务器失败"));
@@ -639,7 +626,7 @@ function EditServerDialog({ server, onClose, onSaved }: { server: ManagedServer;
       setWorking(false);
     }
   };
-  return <Dialog title={`编辑 ${server.name}`} description="保存后连接模式、流量口径和 Xray 模式会同步到 Agent" onClose={() => !working && onClose()} wide><form className="form-stack" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}<ServerFormFields form={form} setForm={setForm} editing /><div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose} disabled={working}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />保存更改</>}</Button></div></form></Dialog>;
+  return <Dialog title={`编辑 ${server.name}`} description="保存后流量口径和 Xray 模式会同步到 Agent" onClose={() => !working && onClose()} wide><form className="form-stack" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}<ServerFormFields form={form} setForm={setForm} editing /><div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose} disabled={working}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />保存更改</>}</Button></div></form></Dialog>;
 }
 
 function AddSharedServerDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {

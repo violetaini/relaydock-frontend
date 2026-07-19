@@ -56,7 +56,7 @@ function mockServerReads(servers: RemoteServer[] = [onlineServer, offlineServer]
     } as T;
     if (path.includes("/api/admin/remote/agent/version-info")) return { server_id: 11, current: "0.3.0", latest: "0.3.1", upgrade_available: true } as T;
     if (path.includes("/api/admin/remote/system/info")) return { success: true, hostname: "edge-hk", uptime: "3600", loadavg: "0.10 0.20 0.30 1/100 1", memory: { MemAvailable: "1024 MB" } } as T;
-    if (path.includes("/api/admin/remote-servers/reveal-token")) return { success: true, pull_token: "existing-agent-token", agent_token: "existing-agent-token" } as T;
+    if (path.includes("/api/admin/remote-servers/reveal-token")) return { success: true, token: "revealed-server-token", pull_token: "existing-agent-token", agent_token: "existing-agent-token", install_command: "authoritative-install-command" } as T;
     if (path === "/api/admin/remote/inbounds?server_id=11") return { success: true, inbounds: resources.inbounds ?? [] } as T;
     if (path === "/api/admin/remote/outbounds?server_id=11") return { success: true, outbounds: resources.outbounds ?? [] } as T;
     if (path === "/api/admin/remote/routing?server_id=11") return { success: true, routing: resources.routing ?? { rules: [] } } as T;
@@ -98,6 +98,7 @@ describe("service management workbench", () => {
     await screen.findByText("Edge Hong Kong");
     fireEvent.click(screen.getByRole("button", { name: "添加服务器" }));
     const dialog = screen.getByRole("dialog", { name: "添加服务器" });
+    expect(within(dialog).getByRole("spinbutton", { name: "Agent 监听端口" })).toHaveAttribute("max", "65534");
     fireEvent.change(within(dialog).getByRole("textbox", { name: "服务器名称" }), { target: { value: "Edge Singapore" } });
     fireEvent.change(within(dialog).getByRole("textbox", { name: /公网 IPv4 \/ 初始地址/ }), { target: { value: "203.0.113.13" } });
     fireEvent.change(within(dialog).getByRole("spinbutton", { name: /流量限额（GB）/ }), { target: { value: "500" } });
@@ -113,8 +114,36 @@ describe("service management workbench", () => {
       traffic_source: "system",
       traffic_stats_mode: "both",
       ipv6_enabled: true,
+      steal_mode: "default",
+      steal_self: false,
     })));
     expect(await screen.findByRole("dialog", { name: "Edge Singapore 接入凭据" })).toBeInTheDocument();
+  });
+
+  it("derives port 443 takeover authorization from the selected takeover mode", async () => {
+    mockServerReads([onlineServer]);
+    const post = vi.spyOn(api, "post").mockResolvedValue({
+      success: true,
+      server: { ...onlineServer, id: 14, name: "Edge Fallback" },
+      install_command: "safe installer",
+    });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    await screen.findByText("Edge Hong Kong");
+    fireEvent.click(screen.getByRole("button", { name: "添加服务器" }));
+    const dialog = screen.getByRole("dialog", { name: "添加服务器" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "服务器名称" }), { target: { value: "Edge Fallback" } });
+    expect(within(dialog).queryByText("安装后接管本机 443")).not.toBeInTheDocument();
+    fireEvent.change(within(dialog).getByRole("combobox", { name: "接管模式" }), { target: { value: "fallback" } });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: /节点域名/ }), { target: { value: "fallback.example.com" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "创建并生成命令" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote-servers/create", expect.objectContaining({
+      steal_mode: "fallback",
+      steal_self: true,
+      use_443: true,
+      domain: "fallback.example.com",
+    })));
   });
 
   it("validates and adds a shared server using the federation payload", async () => {
@@ -161,6 +190,8 @@ describe("service management workbench", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "编辑 Edge Hong Kong" }));
     const dialog = screen.getByRole("dialog", { name: "编辑 Edge Hong Kong" });
+    expect(within(dialog).getByRole("spinbutton", { name: "Agent 监听端口" })).toBeDisabled();
+    expect(within(dialog).getByRole("combobox", { name: "连接模式" })).toBeDisabled();
     fireEvent.click(within(dialog).getByRole("button", { name: "保存更改" }));
 
     await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/remote-servers/update", expect.objectContaining({
@@ -169,6 +200,16 @@ describe("service management workbench", () => {
       pull_port: 23889,
       pull_token: "existing-agent-token",
     })));
+  });
+
+  it("uses only the authoritative installer command returned by the backend", async () => {
+    mockServerReads([onlineServer]);
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "查看 Edge Hong Kong 安装凭据" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edge Hong Kong 接入凭据" });
+    const command = within(dialog).getByText("authoritative-install-command");
+    expect(command.tagName).toBe("CODE");
   });
 
   it("does not delete a server until the destructive action is confirmed", async () => {

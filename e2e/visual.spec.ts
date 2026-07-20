@@ -309,6 +309,30 @@ async function closeDialog(page: Page) {
   await expect(dialog).toBeHidden();
 }
 
+test("desktop navigation keeps every menu label visible", async ({ page }) => {
+  await mockAPI(page);
+
+  for (const width of [1440, 1050]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/#/dashboard");
+    await expect(page.getByRole("navigation", { name: "主导航" })).toBeVisible();
+
+    const labels = page.locator(".sidebar-nav .nav-item > span");
+    await expect(labels).toHaveCount(15);
+    const clipped = await labels.evaluateAll((elements) => elements.flatMap((element) => {
+      const label = element.textContent?.trim() || "<empty>";
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display === "none" || style.visibility === "hidden" || style.position === "absolute" || rect.width <= 1 || rect.height <= 1
+        ? [{ label, display: style.display, visibility: style.visibility, position: style.position, width: rect.width, height: rect.height }]
+        : [];
+    }));
+
+    expect(clipped, `${width}px desktop navigation labels must remain visible`).toEqual([]);
+    await expectViewportIntegrity(page, `${width}px desktop navigation`);
+  }
+});
+
 test("advanced workflows render without runtime errors", async ({ page }) => {
   const errors: Error[] = [];
   page.on("pageerror", (error) => errors.push(error));

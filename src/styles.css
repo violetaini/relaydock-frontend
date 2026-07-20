@@ -876,63 +876,6 @@ td { min-height: 62px; }
 .auth-subtitle { margin-bottom: 24px; text-align: center; }
 .auth-form-wrap .form-grid { grid-template-columns: 1fr; }
 
-/* Keep the upstream-style toolbar discoverable without clipping its final actions. */
-@media (min-width: 1041px) {
-  .sidebar-nav > .nav-group:nth-child(2) .nav-item:nth-of-type(n + 3),
-  .sidebar-nav > .nav-group:nth-child(n + 3) .nav-item {
-    width: 38px;
-    padding-inline: 0;
-    justify-content: center;
-  }
-  .sidebar-nav > .nav-group:nth-child(2) .nav-item:nth-of-type(n + 3) span,
-  .sidebar-nav > .nav-group:nth-child(n + 3) .nav-item span {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-  }
-}
-
-@media (min-width: 1041px) and (max-width: 1240px) {
-  .sidebar-nav > .nav-group:nth-child(2) .nav-item {
-    width: 38px;
-    padding-inline: 0;
-    justify-content: center;
-  }
-  .sidebar-nav > .nav-group:nth-child(2) .nav-item span {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-  }
-}
-
-@media (min-width: 1041px) and (max-width: 1120px) {
-  .sidebar-nav > .nav-group:first-child .nav-item {
-    width: 38px;
-    padding-inline: 0;
-    justify-content: center;
-  }
-  .sidebar-nav > .nav-group:first-child .nav-item span {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-  }
-}
-
 @media (max-width: 1220px) {
   .nav-item { padding-inline: 9px; }
   .sidebar-footer { min-width: 196px; }

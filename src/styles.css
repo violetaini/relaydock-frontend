@@ -876,9 +876,18 @@ td { min-height: 62px; }
 .auth-subtitle { margin-bottom: 24px; text-align: center; }
 .auth-form-wrap .form-grid { grid-template-columns: 1fr; }
 
+@media (min-width: 1041px) {
+  .sidebar { height: auto; min-height: 64px; }
+  .sidebar-brand { height: auto; min-height: 64px; }
+  .sidebar-nav { flex-wrap: wrap; align-content: center; overflow: visible; }
+  .nav-group { display: contents; }
+  .sidebar-footer { align-self: stretch; }
+}
+
 @media (max-width: 1220px) {
-  .nav-item { padding-inline: 9px; }
-  .sidebar-footer { min-width: 196px; }
+  .sidebar-nav { gap: 7px; }
+  .nav-item { padding-inline: 7px; gap: 5px; font-size: 11px; }
+  .sidebar-footer { min-width: 160px; }
   .account-block > span:last-child { display: none; }
 }
 

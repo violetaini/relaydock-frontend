@@ -323,12 +323,18 @@ test("desktop navigation keeps every menu label visible", async ({ page }) => {
       const label = element.textContent?.trim() || "<empty>";
       const style = window.getComputedStyle(element);
       const rect = element.getBoundingClientRect();
+      const navRect = element.closest(".sidebar-nav")?.getBoundingClientRect();
       return style.display === "none" || style.visibility === "hidden" || style.position === "absolute" || rect.width <= 1 || rect.height <= 1
+        || !navRect || rect.left < navRect.left - 1 || rect.right > navRect.right + 1
         ? [{ label, display: style.display, visibility: style.visibility, position: style.position, width: rect.width, height: rect.height }]
         : [];
     }));
 
     expect(clipped, `${width}px desktop navigation labels must remain visible`).toEqual([]);
+    const navOverflow = await page.locator(".sidebar-nav").evaluate((nav) => nav.scrollWidth - nav.clientWidth);
+    expect(navOverflow, `${width}px desktop navigation must not require horizontal scrolling`).toBeLessThanOrEqual(1);
+    const headerHeight = await page.locator(".sidebar").evaluate((header) => header.getBoundingClientRect().height);
+    expect(headerHeight, `${width}px desktop navigation must stay within two rows`).toBeLessThanOrEqual(112);
     await expectViewportIntegrity(page, `${width}px desktop navigation`);
   }
 });

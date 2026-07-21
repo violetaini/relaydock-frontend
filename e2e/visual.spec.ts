@@ -609,7 +609,7 @@ for (const viewport of [
     await expect(serverDialog.getByText("vless-in", { exact: true })).toBeVisible();
     await serverDialog.getByRole("button", { name: "添加入站" }).first().click();
     await expect(serverDialog.getByRole("tab", { name: /VLESS \+ Reality/ })).toHaveAttribute("aria-selected", "true");
-    await expect(serverDialog.getByRole("combobox", { name: "Reality 伪装域名" })).toBeVisible();
+    await expect(serverDialog.getByRole("combobox", { name: "Reality 伪装目标 / SNI" })).toBeVisible();
     await expect(serverDialog.getByText("已生成", { exact: true })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} secure inbound wizard`);
     await serverDialog.getByRole("tab", { name: /高级 JSON/ }).click();
@@ -637,9 +637,10 @@ for (const viewport of [
     await expect(page.getByRole("heading", { name: "选择协议与安全组合" })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} managed protocol selection`);
     await page.screenshot({ path: path.resolve("../docs/change-records/assets/MMX-100", `managed-node-protocols-${viewport.name}.png`), fullPage: true });
-    await page.getByRole("button", { name: /Shadowsocks 2022/ }).click();
+    await page.getByRole("combobox", { name: "节点协议" }).selectOption("shadowsocks");
+    await expect(page.getByRole("combobox", { name: "节点传输与安全预设" })).toHaveValue("shadowsocks");
     await page.getByRole("button", { name: "下一步" }).click();
-    await expect(page.getByRole("heading", { name: "配置 Shadowsocks 2022" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "配置 Shadowsocks" })).toBeVisible();
     await expect(page.getByLabel("Shadowsocks 加密方式")).toHaveValue("2022-blake3-aes-128-gcm");
     await expectViewportIntegrity(page, `${viewport.name} managed Shadowsocks configuration`);
     await page.screenshot({ path: path.resolve("../docs/change-records/assets/MMX-100", `managed-node-shadowsocks-${viewport.name}.png`), fullPage: true });

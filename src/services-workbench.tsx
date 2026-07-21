@@ -434,12 +434,10 @@ function buildSecureInbound(
         security: "reality",
         realitySettings: {
           show: false,
-          dest: `${domain}:443`,
+          target: `${domain}:443`,
           xver: 0,
           serverNames: [domain],
           privateKey: draft.privateKey,
-          // 控制端同步 Clash 节点时需要公钥；Xray 会忽略服务端不消费的字段。
-          publicKey: draft.publicKey,
           shortIds: [shortId],
         },
       },
@@ -458,7 +456,7 @@ function buildSecureInbound(
     streamSettings: {
       network: "ws",
       security: "none",
-      wsSettings: { path, headers: { Host: domain } },
+      wsSettings: { path, host: domain },
     },
     sniffing: { enabled: true, destOverride: ["http", "tls"], routeOnly: false },
   };
@@ -1222,8 +1220,6 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", kind, notify }: {
       const result = assertSuccess(await api.get<RealityDomainsResponse>(`/api/admin/remote/reality-domains?server_id=${serverId}`), "探测 Reality 域名失败");
       const candidates = result.domains ?? [];
       setRealityDomains(candidates);
-      const preferred = candidates.find((item) => item.success && validDomain(item.domain)) ?? candidates.find((item) => validDomain(item.domain));
-      if (preferred) setSecureDraft((current) => current.domain ? current : { ...current, domain: preferred.domain.toLowerCase() });
     } catch (reason) {
       setDomainsError(messageFrom(reason, "域名探测暂不可用，可手动填写"));
     } finally {
@@ -1304,6 +1300,7 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", kind, notify }: {
     setPort("443");
     if (preset === "wss") setSecureDraft((current) => ({ ...current, domain: serverDomain.trim().toLowerCase() }));
     if (preset === "reality") {
+      if (creationPreset !== "reality") setSecureDraft((current) => ({ ...current, domain: "" }));
       void loadRealityDomains();
       if (!secureDraft.privateKey || !secureDraft.publicKey) void generateRealityKeys();
     }
@@ -1453,9 +1450,9 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", kind, notify }: {
         {kind === "inbound" && editor.mode === "create" && creationPreset !== "advanced" ? <>
           <div className="secure-inbound-reference"><span><Badge tone={matchingExample ? "good" : examplesError ? "warn" : "neutral"}>{examplesLoading ? "模板读取中" : matchingExample ? "官方模板" : "内置模板"}</Badge><strong>{matchingExample?.dir_name || (creationPreset === "reality" ? "VLESS TCP Reality" : "VLESS WSS")}</strong></span>{examplesError ? <small>{examplesError}</small> : null}</div>
           <div className="form-grid two"><Field label="Tag"><input required aria-label="入站 Tag" value={tag} onChange={(event) => setTag(event.target.value)} placeholder={creationPreset === "reality" ? "vless-reality" : "vless-wss"} /></Field><Field label={creationPreset === "wss" ? "外部 TLS 端口" : "监听端口"} hint={creationPreset === "wss" ? "Nginx 对外使用 443，Agent 会自动分配内部端口" : undefined}><input type="number" min="1" max="65535" required aria-label="入站监听端口" value={port} onChange={(event) => setPort(event.target.value)} /></Field></div>
-          <div className="form-grid two"><Field label="客户端 UUID"><div className="secure-field-action"><input required aria-label="客户端 UUID" value={secureDraft.uuid} onChange={(event) => setSecureDraft({ ...secureDraft, uuid: event.target.value.trim() })} /><IconButton type="button" label="重新生成客户端 UUID" onClick={() => setSecureDraft({ ...secureDraft, uuid: createUUID() })}><RefreshCw size={15} /></IconButton></div></Field><Field label={creationPreset === "reality" ? "Reality 伪装域名" : "TLS 节点域名"} hint={creationPreset === "wss" && !serverDomain ? "请先在服务器编辑页配置节点域名" : undefined}><div className="secure-field-action"><input required aria-label={creationPreset === "reality" ? "Reality 伪装域名" : "TLS 节点域名"} list={creationPreset === "reality" ? `reality-domains-${serverId}` : undefined} readOnly={creationPreset === "wss"} value={secureDraft.domain} onChange={(event) => setSecureDraft({ ...secureDraft, domain: event.target.value.trim().toLowerCase() })} placeholder="www.example.com" />{creationPreset === "reality" ? <IconButton type="button" label="重新探测 Reality 域名" disabled={domainsLoading} onClick={() => void loadRealityDomains()}>{domainsLoading ? <Spinner /> : <RefreshCw size={15} />}</IconButton> : null}</div></Field></div>
+          <div className="form-grid two"><Field label="客户端 UUID"><div className="secure-field-action"><input required aria-label="客户端 UUID" value={secureDraft.uuid} onChange={(event) => setSecureDraft({ ...secureDraft, uuid: event.target.value.trim() })} /><IconButton type="button" label="重新生成客户端 UUID" onClick={() => setSecureDraft({ ...secureDraft, uuid: createUUID() })}><RefreshCw size={15} /></IconButton></div></Field><Field label={creationPreset === "reality" ? "Reality 伪装目标 / SNI" : "TLS 节点域名"} hint={creationPreset === "reality" ? "必须明确选择目标；优先使用同 ASN 且证书覆盖该 SNI 的 TLS 站点" : creationPreset === "wss" && !serverDomain ? "请先在服务器编辑页配置节点域名" : undefined}><div className="secure-field-action"><input required aria-label={creationPreset === "reality" ? "Reality 伪装目标 / SNI" : "TLS 节点域名"} list={creationPreset === "reality" ? `reality-domains-${serverId}` : undefined} readOnly={creationPreset === "wss"} value={secureDraft.domain} onChange={(event) => setSecureDraft({ ...secureDraft, domain: event.target.value.trim().toLowerCase() })} placeholder="www.example.com" />{creationPreset === "reality" ? <IconButton type="button" label="重新探测 Reality 域名" disabled={domainsLoading} onClick={() => void loadRealityDomains()}>{domainsLoading ? <Spinner /> : <RefreshCw size={15} />}</IconButton> : null}</div></Field></div>
           {creationPreset === "reality" ? <>
-            <datalist id={`reality-domains-${serverId}`}>{realityDomains.map((item) => <option key={item.domain} value={item.domain}>{item.success ? `${item.latency_ms ?? "-"} ms` : item.error || "探测失败"}</option>)}</datalist>
+            <datalist id={`reality-domains-${serverId}`}>{realityDomains.map((item) => <option key={item.domain} value={item.domain}>{item.success ? `443 可达 · ${item.latency_ms ?? "-"} ms` : item.error || "探测失败"}</option>)}</datalist>
             {domainsError ? <small className="secure-inline-error">{domainsError}</small> : null}
             <div className="form-grid two"><Field label="Reality Short ID" hint="2-16 位偶数长度十六进制"><input required aria-label="Reality Short ID" value={secureDraft.shortId} onChange={(event) => setSecureDraft({ ...secureDraft, shortId: event.target.value.trim().toLowerCase() })} /></Field><Field label="X25519 密钥对"><div className="secure-key-status"><Badge tone={validRealityKey(secureDraft.privateKey) && validRealityKey(secureDraft.publicKey) ? "good" : "warn"}>{validRealityKey(secureDraft.privateKey) && validRealityKey(secureDraft.publicKey) ? "已生成" : "未就绪"}</Badge><Button type="button" variant="secondary" disabled={keyWorking !== ""} onClick={() => void generateRealityKeys()}>{keyWorking === "reality" ? <Spinner label="生成中" /> : <><KeyRound size={15} />重新生成</>}</Button></div></Field></div>
             <div className="secure-encryption-row"><Toggle checked={secureDraft.enhancedEncryption} disabled={keyWorking !== ""} label="VLESS 后量子增强加密" onChange={(checked) => { setSecureDraft((current) => ({ ...current, enhancedEncryption: checked })); if (checked && (!secureDraft.decryptionConfig || !secureDraft.encryption)) void generateVlessEncryption(); }} />{secureDraft.enhancedEncryption ? <span><Badge tone={secureDraft.decryptionConfig && secureDraft.encryption ? "good" : "warn"}>{secureDraft.decryptionConfig && secureDraft.encryption ? "增强密钥已生成" : "增强密钥未就绪"}</Badge><Button type="button" variant="ghost" disabled={keyWorking !== ""} onClick={() => void generateVlessEncryption()}>{keyWorking === "encryption" ? <Spinner label="生成中" /> : <><RefreshCw size={14} />重生成</>}</Button></span> : null}</div>

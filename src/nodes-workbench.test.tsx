@@ -4,6 +4,7 @@ import { api } from "./api";
 import {
   ChainProxyDialog,
   ExternalSubscriptionsDialog,
+  NodeEditor,
   NodesWorkbench,
   RegionEmojiDialog,
   ResolveIPDialog,
@@ -11,6 +12,9 @@ import {
   SpeedDialog,
   TempSubscriptionDialog,
   URIManagerDialog,
+  managedCertificateMatchesServer,
+  managedCertificateNameMatchesHost,
+  managedTLSHostnameForCertificate,
   type WorkbenchNode,
 } from "./nodes-workbench";
 
@@ -70,6 +74,49 @@ function userConfig(nodeOrder: number[] = []) {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+});
+
+describe("managed certificate hostname coverage", () => {
+  const server = { id: 3, domain: "edge.example.com" } as never;
+  const valid = { id: 9, domain: "example.com", status: "valid", expiry_date: "2030-01-01T00:00:00Z", remote_server_id: 3 };
+
+  it("uses exact X.509 wildcard semantics", () => {
+    expect(managedCertificateNameMatchesHost("example.com", "edge.example.com")).toBe(false);
+    expect(managedCertificateNameMatchesHost("edge.example.com", "edge.example.com")).toBe(true);
+    expect(managedCertificateNameMatchesHost("*.example.com", "edge.example.com")).toBe(true);
+    expect(managedCertificateNameMatchesHost("*.example.com", "deep.edge.example.com")).toBe(false);
+    expect(managedCertificateNameMatchesHost("*.example.com", "example.com")).toBe(false);
+  });
+
+  it("matches SANs and fills the concrete server hostname for wildcard TLS certificates", () => {
+    expect(managedCertificateMatchesServer(valid, server)).toBe(false);
+    const wildcard = { ...valid, domain: "*.example.com", dns_names: ["*.example.com"] };
+    expect(managedCertificateMatchesServer(wildcard, server)).toBe(true);
+    expect(managedTLSHostnameForCertificate(wildcard, server, "")).toBe("edge.example.com");
+    expect(managedCertificateMatchesServer({ ...valid, remote_server_id: 8, dns_names: ["edge.example.com"] }, server)).toBe(false);
+    expect(managedCertificateMatchesServer({ ...valid, dns_names: ["other.example.com", "edge.example.com"] }, server)).toBe(true);
+  });
+});
+
+describe("managed offer protocol guard", () => {
+  it("keeps classic Shadowsocks unavailable in the generic node editor", async () => {
+    const classic = node(7, "Classic SS", "ss");
+    const config = { name: "Classic SS", type: "ss", server: "edge.example.com", port: 8388, cipher: "aes-128-gcm", password: "shared" };
+    classic.clash_config = JSON.stringify(config);
+    classic.parsed_config = JSON.stringify(config);
+    const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<NodeEditor node={classic} onClose={vi.fn()} onComplete={vi.fn()} />);
+
+    const selfService = screen.getByRole("switch", { name: "允许获授权用户自助开通" });
+    expect(selfService).toBeDisabled();
+    fireEvent.click(selfService);
+    expect(selfService).not.toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "保存节点" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/nodes/7", expect.objectContaining({ protocol: "ss" })));
+    expect(post).not.toHaveBeenCalledWith("/api/admin/managed-node-offers", expect.anything());
+  });
 });
 
 describe("nodes speedtest workbench", () => {
@@ -190,7 +237,7 @@ describe("managed server node creation", () => {
       if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
       if (path === "/api/admin/remote-servers") return { servers: [{ id: 3, name: "香港入口", status: "online", ws_connected: true, xray_running: true, xray_mode: "embedded", ipv6_enabled: false, domain: "edge.example.com", current_upload_speed: 0, current_download_speed: 0, traffic_limit: 0, traffic_used: 0, traffic_stats_mode: "both", traffic_source: "xray", connection_mode: "websocket", encrypted: true, inbounds: [] }] } as T;
       if (path === "/api/admin/remote/inbounds?server_id=3") return { success: true, inbounds: [{ tag: "existing", protocol: "vless", port: 443 }] } as T;
-      if (path === "/api/admin/certificates") return { certificates: [] } as T;
+      if (path === "/api/admin/certificates") return { certificates: [{ id: 9, domain: "*.example.com", status: "valid", expiry_date: "2030-01-01T00:00:00Z", remote_server_id: 3 }] } as T;
       if (path === "/api/admin/remote/reality-domains?server_id=3") return { domains: [{ domain: "www.cloudflare.com", success: true, latency_ms: 16 }] } as T;
       throw new Error(`unexpected GET ${path}`);
     });
@@ -207,10 +254,13 @@ describe("managed server node creation", () => {
     expect(await screen.findByText("地址由服务器配置自动生成，不需要手工填写 IP 或域名。")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "下一步" })).not.toBeDisabled());
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
-    expect(await screen.findByRole("button", { name: /VLESS Reality/ })).toBeInTheDocument();
+    expect(await screen.findByRole("combobox", { name: "节点协议" })).toHaveValue("vless");
+    expect(screen.getByRole("combobox", { name: "节点传输与安全预设" })).toHaveValue("vless-reality");
+    expect(screen.getByRole("option", { name: "VLESS WSS" })).not.toBeDisabled();
     await waitFor(() => expect(screen.getByRole("button", { name: "下一步" })).not.toBeDisabled());
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     fireEvent.change(await screen.findByRole("textbox", { name: "节点名称" }), { target: { value: "香港 Reality 02" } });
+    fireEvent.change(screen.getByRole("combobox", { name: /^伪装目标域名 \/ SNI/ }), { target: { value: "www.cloudflare.com" } });
     expect(screen.getByRole("spinbutton", { name: "监听端口" })).toHaveValue(8443);
     fireEvent.change(screen.getByRole("combobox", { name: "Reality 流控" }), { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
@@ -225,6 +275,79 @@ describe("managed server node creation", () => {
       }),
     })));
     expect(notify).toHaveBeenCalledWith("受管节点已创建");
+  });
+
+  it("offers public WS without a server domain while keeping WSS disabled", async () => {
+    const existing = node(1, "香港 A");
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [existing] } as T;
+      if (path === "/api/admin/speedtest/results?latest=1") return { results: [] } as T;
+      if (path === "/api/user/config") return userConfig([1]) as T;
+      if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
+      if (path === "/api/admin/remote-servers") return { servers: [{ id: 3, name: "香港入口", status: "online", ws_connected: true, xray_running: true, xray_mode: "embedded", ipv6_enabled: false, domain: "", ip_address: "203.0.113.8", current_upload_speed: 0, current_download_speed: 0, traffic_limit: 0, traffic_used: 0, traffic_stats_mode: "both", traffic_source: "xray", connection_mode: "websocket", encrypted: true, inbounds: [] }] } as T;
+      if (path === "/api/admin/remote/inbounds?server_id=3") return { success: true, inbounds: [] } as T;
+      if (path === "/api/admin/certificates") return { certificates: [] } as T;
+      if (path === "/api/admin/remote/reality-domains?server_id=3") return { domains: [{ domain: "www.cloudflare.com", success: true, latency_ms: 16 }] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/xray/generate-x25519") return { privateKey: "A".repeat(43), publicKey: "B".repeat(43) } as T;
+      throw new Error(`unexpected POST ${path}`);
+    });
+    render(<NodesWorkbench isAdmin notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "在服务器创建" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "下一步" })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+
+    const preset = await screen.findByRole("combobox", { name: "节点传输与安全预设" });
+    expect(screen.getByRole("option", { name: /VLESS WSS/ })).toBeDisabled();
+    expect(screen.getByRole("option", { name: "VLESS WS" })).not.toBeDisabled();
+    fireEvent.change(preset, { target: { value: "vless-ws" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+
+    expect(await screen.findByRole("textbox", { name: /WebSocket Host（可选）/ })).toHaveValue("");
+    expect(screen.getByRole("spinbutton", { name: "监听端口" })).toHaveValue(8080);
+    fireEvent.change(screen.getByRole("textbox", { name: "节点名称" }), { target: { value: "香港 WS" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    const preview = await screen.findByRole("textbox", { name: "受管节点 Xray JSON" });
+    expect((preview as HTMLTextAreaElement).value).toContain('"listen": "0.0.0.0"');
+    expect((preview as HTMLTextAreaElement).value).not.toContain('"headers"');
+  });
+
+  it("turns off self-service publishing when classic Shadowsocks is selected", async () => {
+    const existing = node(1, "香港 A");
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [existing] } as T;
+      if (path === "/api/admin/speedtest/results?latest=1") return { results: [] } as T;
+      if (path === "/api/user/config") return userConfig([1]) as T;
+      if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
+      if (path === "/api/admin/remote-servers") return { servers: [{ id: 3, name: "香港入口", status: "online", ws_connected: true, xray_running: true, xray_mode: "embedded", ipv6_enabled: false, domain: "edge.example.com", current_upload_speed: 0, current_download_speed: 0, traffic_limit: 0, traffic_used: 0, traffic_stats_mode: "both", traffic_source: "xray", connection_mode: "websocket", encrypted: true, inbounds: [] }] } as T;
+      if (path === "/api/admin/remote/inbounds?server_id=3") return { success: true, inbounds: [] } as T;
+      if (path === "/api/admin/certificates") return { certificates: [] } as T;
+      if (path === "/api/admin/remote/reality-domains?server_id=3") return { domains: [{ domain: "www.cloudflare.com", success: true, latency_ms: 16 }] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/xray/generate-x25519") return { privateKey: "A".repeat(43), publicKey: "B".repeat(43) } as T;
+      throw new Error(`unexpected POST ${path}`);
+    });
+    render(<NodesWorkbench isAdmin notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "在服务器创建" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "下一步" })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByRole("option", { name: /VLESS WSS（缺少匹配的有效证书）/ })).toBeDisabled();
+    fireEvent.change(await screen.findByRole("combobox", { name: "节点协议" }), { target: { value: "shadowsocks" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+
+    const publish = await screen.findByRole("switch", { name: "创建后发布到用户自助目录" });
+    fireEvent.click(publish);
+    expect(publish).toBeChecked();
+    fireEvent.change(screen.getByRole("combobox", { name: "Shadowsocks 加密方式" }), { target: { value: "aes-128-gcm" } });
+    expect(publish).not.toBeChecked();
+    expect(publish).toBeDisabled();
+    expect(screen.getByText(/经典 Shadowsocks 只有一组共享密码/)).toBeInTheDocument();
   });
 });
 

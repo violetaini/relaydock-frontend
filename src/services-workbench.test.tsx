@@ -407,20 +407,25 @@ describe("service management workbench", () => {
     fireEvent.click(within(dialog).getByRole("tab", { name: "入站" }));
     fireEvent.click(await within(dialog).findByRole("button", { name: "添加入站" }));
 
-    await waitFor(() => expect(within(dialog).getByRole("combobox", { name: "Reality 伪装域名" })).toHaveValue("www.cloudflare.com"));
+    await waitFor(() => expect(within(dialog).getByRole("combobox", { name: "Reality 伪装目标 / SNI" })).toHaveValue(""));
     await waitFor(() => expect(within(dialog).getByText("已生成")).toBeInTheDocument());
     expect(get).toHaveBeenCalledWith("/api/admin/xray-examples");
     expect(get).toHaveBeenCalledWith("/api/admin/remote/reality-domains?server_id=11");
     expect(post).toHaveBeenCalledWith("/api/admin/xray/generate-x25519");
 
+    fireEvent.click(within(dialog).getByRole("tab", { name: /VLESS \+ WS \+ TLS/ }));
+    expect(within(dialog).getByRole("textbox", { name: "TLS 节点域名" })).toHaveValue("hk.example.com");
+    fireEvent.click(within(dialog).getByRole("tab", { name: /VLESS \+ Reality/ }));
+    expect(within(dialog).getByRole("combobox", { name: "Reality 伪装目标 / SNI" })).toHaveValue("");
+
     fireEvent.change(within(dialog).getByRole("textbox", { name: "客户端 UUID" }), { target: { value: "123e4567-e89b-12d3-a456-426614174000" } });
     fireEvent.change(within(dialog).getByRole("textbox", { name: "Reality Short ID" }), { target: { value: "0123456789abcdef" } });
-    fireEvent.change(within(dialog).getByRole("combobox", { name: "Reality 伪装域名" }), { target: { value: "https://invalid.example/path" } });
+    fireEvent.change(within(dialog).getByRole("combobox", { name: "Reality 伪装目标 / SNI" }), { target: { value: "https://invalid.example/path" } });
     fireEvent.submit(within(dialog).getByRole("button", { name: "创建入站" }).closest("form") as HTMLFormElement);
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("域名必须");
     expect(post).not.toHaveBeenCalledWith("/api/admin/remote/inbounds?server_id=11", expect.anything());
 
-    fireEvent.change(within(dialog).getByRole("combobox", { name: "Reality 伪装域名" }), { target: { value: "www.cloudflare.com" } });
+    fireEvent.change(within(dialog).getByRole("combobox", { name: "Reality 伪装目标 / SNI" }), { target: { value: "www.cloudflare.com" } });
     fireEvent.click(within(dialog).getByRole("switch", { name: "VLESS 后量子增强加密" }));
     await waitFor(() => expect(within(dialog).getByText("增强密钥已生成")).toBeInTheDocument());
     expect(post).toHaveBeenCalledWith("/api/admin/xray/generate-keys", {
@@ -449,11 +454,10 @@ describe("service management workbench", () => {
           security: "reality",
           realitySettings: {
             show: false,
-            dest: "www.cloudflare.com:443",
+            target: "www.cloudflare.com:443",
             xver: 0,
             serverNames: ["www.cloudflare.com"],
             privateKey,
-            publicKey,
             shortIds: ["0123456789abcdef"],
           },
         },
@@ -493,7 +497,7 @@ describe("service management workbench", () => {
         streamSettings: {
           network: "ws",
           security: "none",
-          wsSettings: { path: "/ws/arcway", headers: { Host: "hk.example.com" } },
+          wsSettings: { path: "/ws/arcway", host: "hk.example.com" },
         },
         sniffing: { enabled: true, destOverride: ["http", "tls"], routeOnly: false },
       },

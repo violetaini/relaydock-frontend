@@ -406,7 +406,8 @@ test("creates and publishes a managed Shadowsocks 2022 node with exact payload a
   const dialog = page.getByRole("dialog", { name: "在服务器创建节点" });
   await expect(dialog.getByRole("button", { name: /Hong Kong Embedded/ })).toHaveAttribute("aria-pressed", "true");
   await dialog.getByRole("button", { name: "下一步" }).click();
-  await dialog.getByRole("button", { name: /Shadowsocks 2022/ }).click();
+  await dialog.getByRole("combobox", { name: "节点协议" }).selectOption("shadowsocks");
+  await expect(dialog.getByRole("combobox", { name: "节点传输与安全预设" })).toHaveValue("shadowsocks");
   await dialog.getByRole("button", { name: "下一步" }).click();
 
   await dialog.getByLabel("节点名称").fill("  HK SS 2022  ");
@@ -420,7 +421,7 @@ test("creates and publishes a managed Shadowsocks 2022 node with exact payload a
   await dialog.getByRole("button", { name: "下一步" }).click();
 
   await expect(dialog.getByText("HK SS 2022", { exact: true })).toBeVisible();
-  await expect(dialog.getByText("Shadowsocks 2022", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("Shadowsocks", { exact: true })).toBeVisible();
   await expect(dialog.getByText("18443 · V4", { exact: true })).toBeVisible();
   await expect(dialog.getByText("创建后发布", { exact: true })).toBeVisible();
   await dialog.getByRole("button", { name: "创建节点" }).click();
@@ -460,6 +461,102 @@ test("creates and publishes a managed Shadowsocks 2022 node with exact payload a
     node_id: 42,
     enabled: true,
     sort_order: 8,
+  }]);
+});
+
+test("creates plain VLESS WebSocket on an IP-only server without a domain or TLS rewrite", async ({ page }) => {
+  const mock = await createMock(page);
+  const embeddedServer = server(8, "IP Only Edge", "198.51.100.28", {
+    domain: "",
+    xray_mode: "embedded",
+  });
+  const storedNodes: JsonObject[] = [];
+
+  mock
+    .on("GET", "/api/admin/nodes", () => json({ nodes: storedNodes }))
+    .on("GET", "/api/admin/managed-node-offers", () => json({ offers: [] }))
+    .on("GET", "/api/admin/speedtest/results", () => json({ results: [] }))
+    .on("GET", "/api/user/config", () => json({
+      force_sync_external: false,
+      match_rule: "node_name",
+      sync_scope: "saved_only",
+      keep_node_name: true,
+      cache_expire_minutes: 0,
+      sync_traffic: true,
+      node_name_filter: "",
+      append_sub_info: false,
+      custom_rules_enabled: true,
+      enable_short_link: false,
+      use_new_template_system: true,
+      enable_proxy_provider: false,
+      node_order: [],
+      proxy_groups_source_url: "",
+      client_compatibility_mode: false,
+    }))
+    .on("GET", "/api/admin/remote-servers", () => json({ success: true, servers: [embeddedServer] }))
+    .on("GET", "/api/admin/remote/inbounds", () => json({ success: true, inbounds: [] }))
+    .on("GET", "/api/admin/certificates", () => json({ success: true, certificates: [] }))
+    .on("GET", "/api/admin/remote/reality-domains", () => json({ success: true, domains: [] }))
+    .on("POST", "/api/admin/xray/generate-x25519", () => json({ privateKey: "A".repeat(43), publicKey: "B".repeat(43) }))
+    .on("POST", "/api/admin/managed-nodes/create", (call) => {
+      expect(call.query).toEqual({ server_id: "8" });
+      const created = node(43, "IP VLESS WS", "vless", {
+        original_server: "IP Only Edge",
+        inbound_tag: "vless-ws-ip",
+        clash_config: JSON.stringify({
+          name: "IP VLESS WS",
+          type: "vless",
+          server: "198.51.100.28",
+          port: 18080,
+          network: "ws",
+          "ws-opts": { path: "/socket" },
+        }),
+      });
+      storedNodes.push(created);
+      return json({ success: true, node_id: 43, node: created });
+    });
+
+  await page.goto("/#/nodes");
+  await page.getByRole("button", { name: "在服务器创建" }).click();
+  const dialog = page.getByRole("dialog", { name: "在服务器创建节点" });
+  await expect(dialog.getByRole("button", { name: /IP Only Edge/ })).toHaveAttribute("aria-pressed", "true");
+  await dialog.getByRole("button", { name: "下一步" }).click();
+
+  const preset = dialog.getByRole("combobox", { name: "节点传输与安全预设" });
+  await expect(preset.getByRole("option", { name: /VLESS WSS/ })).toHaveAttribute("disabled", "");
+  await expect(preset.getByRole("option", { name: "VLESS WS", exact: true })).not.toHaveAttribute("disabled", "");
+  await preset.selectOption("vless-ws");
+  await dialog.getByRole("button", { name: "下一步" }).click();
+
+  await dialog.getByLabel("节点名称").fill("IP VLESS WS");
+  await dialog.getByLabel("入站 Tag").fill("vless-ws-ip");
+  await dialog.getByLabel("监听端口").fill("18080");
+  await dialog.getByLabel("WebSocket Host（可选）").fill("");
+  await dialog.getByLabel("WebSocket 路径").fill("/socket");
+  await dialog.getByRole("button", { name: "下一步" }).click();
+  await dialog.getByRole("button", { name: "创建节点" }).click();
+
+  await expect(page.getByRole("status").filter({ hasText: "受管节点已创建" })).toBeVisible();
+  expect(mock.callsFor("POST", "/api/admin/managed-nodes/create").map((call) => call.body)).toEqual([{
+    action: "add",
+    node_name: "IP VLESS WS",
+    ip_version: "v4",
+    inbound: {
+      tag: "vless-ws-ip",
+      listen: "0.0.0.0",
+      port: 18080,
+      protocol: "vless",
+      settings: {
+        clients: [{ id: expect.any(String), email: "admin" }],
+        decryption: "none",
+      },
+      streamSettings: {
+        network: "ws",
+        security: "none",
+        wsSettings: { path: "/socket" },
+      },
+      sniffing: { enabled: true, destOverride: ["http", "tls", "quic"], routeOnly: false },
+    },
   }]);
 });
 

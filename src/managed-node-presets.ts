@@ -1,4 +1,26 @@
-export type ManagedProtocol = "vless-reality" | "vless-ws" | "vmess" | "trojan" | "shadowsocks" | "hysteria2" | "socks5" | "http";
+export type ManagedProtocol =
+  | "vless-reality"
+  | "vless-tls"
+  | "vless-ws"
+  | "vless-wss"
+  | "vmess"
+  | "vmess-tls"
+  | "vmess-ws"
+  | "vmess-wss"
+  | "trojan"
+  | "trojan-wss"
+  | "shadowsocks"
+  | "hysteria2"
+  | "socks5"
+  | "http";
+
+export type ManagedProtocolFamily = "vless" | "vmess" | "trojan" | "shadowsocks" | "hysteria2" | "socks5" | "http";
+export type ShadowsocksCipher =
+  | "aes-128-gcm"
+  | "aes-256-gcm"
+  | "chacha20-ietf-poly1305"
+  | "2022-blake3-aes-128-gcm"
+  | "2022-blake3-aes-256-gcm";
 
 export interface ManagedInboundDraft {
   name: string;
@@ -15,8 +37,8 @@ export interface ManagedInboundDraft {
   shortId: string;
   privateKey: string;
   publicKey: string;
-  vmessCipher: "auto" | "aes-128-gcm" | "chacha20-poly1305" | "none";
-  ssCipher: "2022-blake3-aes-128-gcm" | "2022-blake3-aes-256-gcm";
+  vmessCipher: "auto" | "aes-128-gcm" | "chacha20-poly1305";
+  ssCipher: ShadowsocksCipher;
   certificateId: string;
   skipCertVerify: boolean;
   hysteriaObfsPassword: string;
@@ -34,19 +56,47 @@ export interface ManagedInboundRequest {
 
 export const managedProtocolOptions: Array<{
   value: ManagedProtocol;
+  family: ManagedProtocolFamily;
+  familyLabel: string;
   label: string;
   detail: string;
   requiresCertificate?: boolean;
 }> = [
-  { value: "vless-reality", label: "VLESS Reality", detail: "TCP · Reality · 可选 Vision 流控" },
-  { value: "vless-ws", label: "VLESS WSS", detail: "WebSocket · Nginx TLS · 443" },
-  { value: "shadowsocks", label: "Shadowsocks 2022", detail: "多用户隔离 · AES-GCM" },
-  { value: "vmess", label: "VMess", detail: "TCP · 可选客户端加密" },
-  { value: "trojan", label: "Trojan TLS", detail: "TCP · 托管证书", requiresCertificate: true },
-  { value: "hysteria2", label: "Hysteria2", detail: "UDP · TLS · 可选 Salamander", requiresCertificate: true },
-  { value: "socks5", label: "SOCKS5", detail: "TCP + UDP · 用户名密码" },
-  { value: "http", label: "HTTP Proxy", detail: "TCP · 用户名密码" },
+  { value: "vless-reality", family: "vless", familyLabel: "VLESS", label: "VLESS Reality", detail: "RAW/TCP · Reality · 伪装目标 SNI 必填" },
+  { value: "vless-tls", family: "vless", familyLabel: "VLESS", label: "VLESS TCP TLS", detail: "TCP · 托管 TLS 证书", requiresCertificate: true },
+  { value: "vless-wss", family: "vless", familyLabel: "VLESS", label: "VLESS WSS", detail: "WebSocket · Nginx TLS · 节点域名" },
+  { value: "vless-ws", family: "vless", familyLabel: "VLESS", label: "VLESS WS", detail: "WebSocket · 无 TLS · 域名可选 · 受信链路" },
+  { value: "vmess-tls", family: "vmess", familyLabel: "VMess", label: "VMess TCP TLS", detail: "TCP · 托管 TLS 证书", requiresCertificate: true },
+  { value: "vmess-wss", family: "vmess", familyLabel: "VMess", label: "VMess WSS", detail: "WebSocket · Nginx TLS · 节点域名" },
+  { value: "vmess-ws", family: "vmess", familyLabel: "VMess", label: "VMess WS", detail: "WebSocket · 无 TLS · 域名可选" },
+  { value: "vmess", family: "vmess", familyLabel: "VMess", label: "VMess TCP（兼容）", detail: "TCP · 无传输层加密" },
+  { value: "trojan", family: "trojan", familyLabel: "Trojan", label: "Trojan TCP TLS", detail: "TCP · 托管 TLS 证书", requiresCertificate: true },
+  { value: "trojan-wss", family: "trojan", familyLabel: "Trojan", label: "Trojan WSS", detail: "WebSocket · Nginx TLS · 节点域名" },
+  { value: "shadowsocks", family: "shadowsocks", familyLabel: "Shadowsocks", label: "Shadowsocks", detail: "经典 AEAD 或 2022 多用户" },
+  { value: "hysteria2", family: "hysteria2", familyLabel: "Hysteria2", label: "Hysteria2", detail: "UDP · TLS · 可选 Salamander", requiresCertificate: true },
+  { value: "socks5", family: "socks5", familyLabel: "SOCKS5", label: "SOCKS5", detail: "TCP + UDP · 用户名密码" },
+  { value: "http", family: "http", familyLabel: "HTTP", label: "HTTP Proxy", detail: "TCP · 用户名密码" },
 ];
+
+export function isManagedWSSProtocol(protocol: ManagedProtocol): boolean {
+  return protocol === "vless-wss" || protocol === "vmess-wss" || protocol === "trojan-wss";
+}
+
+export function isManagedPlainWSProtocol(protocol: ManagedProtocol): boolean {
+  return protocol === "vless-ws" || protocol === "vmess-ws";
+}
+
+export function isManagedUUIDProtocol(protocol: ManagedProtocol): boolean {
+  return protocol === "vless-reality" || protocol === "vless-tls" || protocol === "vless-ws" || protocol === "vless-wss" || protocol === "vmess" || protocol === "vmess-tls" || protocol === "vmess-ws" || protocol === "vmess-wss";
+}
+
+export function isShadowsocks2022Cipher(cipher: ShadowsocksCipher): boolean {
+  return cipher.startsWith("2022-");
+}
+
+export function managedInboundSupportsPublishing(draft: Pick<ManagedInboundDraft, "protocol" | "ssCipher">): boolean {
+  return draft.protocol !== "shadowsocks" || isShadowsocks2022Cipher(draft.ssCipher);
+}
 
 function randomBytes(length: number): Uint8Array {
   const bytes = new Uint8Array(length);
@@ -106,10 +156,16 @@ export function protocolDefaults(protocol: ManagedProtocol): Partial<ManagedInbo
   const base = { protocol, port: "443" } as const;
   switch (protocol) {
     case "vless-reality": return { ...base, tag: "vless-reality", flow: "xtls-rprx-vision" };
-    case "vless-ws": return { ...base, tag: "vless-wss", flow: "" };
+    case "vless-tls": return { ...base, tag: "vless-tcp-tls", flow: "xtls-rprx-vision" };
+    case "vless-ws": return { ...base, port: "8080", tag: "vless-ws", flow: "", domain: "" };
+    case "vless-wss": return { ...base, tag: "vless-wss", flow: "" };
     case "vmess": return { ...base, tag: "vmess-tcp", flow: "" };
+    case "vmess-tls": return { ...base, tag: "vmess-tcp-tls", flow: "" };
+    case "vmess-ws": return { ...base, port: "8080", tag: "vmess-ws", flow: "", domain: "" };
+    case "vmess-wss": return { ...base, tag: "vmess-wss", flow: "" };
     case "trojan": return { ...base, tag: "trojan-tls", flow: "" };
-    case "shadowsocks": return { ...base, tag: "ss2022", flow: "" };
+    case "trojan-wss": return { ...base, tag: "trojan-wss", flow: "" };
+    case "shadowsocks": return { ...base, tag: "ss2022", flow: "", ssCipher: "2022-blake3-aes-128-gcm" };
     case "hysteria2": return { ...base, tag: "hysteria2", flow: "" };
     case "socks5": return { ...base, tag: "socks5", flow: "" };
     case "http": return { ...base, tag: "http-proxy", flow: "" };
@@ -140,6 +196,27 @@ function requireDomain(value: string): string {
     throw new Error("域名必须是不含协议、端口和路径的有效主机名");
   }
   return domain;
+}
+
+function requireRealityTargetDomain(value: string): string {
+  try {
+    return requireDomain(value);
+  } catch {
+    throw new Error("Reality 必须填写有效的伪装目标域名 / SNI（它不是节点连接地址）");
+  }
+}
+
+function requireWebSocketPath(value: string): string {
+  const path = value.trim();
+  if (path.length < 2 || path.length > 1024 || !/^\/[^\s?#]*$/.test(path)) throw new Error("WebSocket 路径必须以 / 开头，且不能包含空格、查询参数或片段");
+  return path;
+}
+
+function optionalWebSocketHost(value: string): string {
+  const host = value.trim();
+  if (!host) return "";
+  if (host.length > 253 || /[\s/?#]/.test(host) || host.includes("://")) throw new Error("WebSocket Host 只能填写主机名或 IP，不含协议、端口和路径");
+  return host;
 }
 
 function baseInbound(draft: ManagedInboundDraft, protocol: string, settings: Record<string, unknown>): Record<string, unknown> {
@@ -173,6 +250,27 @@ function tlsStream(draft: ManagedInboundDraft): Record<string, unknown> {
   };
 }
 
+function wssStream(draft: ManagedInboundDraft): Record<string, unknown> {
+  const domain = requireDomain(draft.domain);
+  const path = requireWebSocketPath(draft.wsPath);
+  return {
+    listen: "127.0.0.1",
+    streamSettings: { network: "ws", security: "none", wsSettings: { path, host: domain } },
+  };
+}
+
+function wsStream(draft: ManagedInboundDraft): Record<string, unknown> {
+  const path = requireWebSocketPath(draft.wsPath);
+  const host = optionalWebSocketHost(draft.domain);
+  return {
+    streamSettings: {
+      network: "ws",
+      security: "none",
+      wsSettings: { path, ...(host ? { host } : {}) },
+    },
+  };
+}
+
 export function buildManagedInboundRequest(draft: ManagedInboundDraft): ManagedInboundRequest {
   const name = draft.name.trim();
   if (!name) throw new Error("节点名称不能为空");
@@ -180,7 +278,7 @@ export function buildManagedInboundRequest(draft: ManagedInboundDraft): ManagedI
 
   switch (draft.protocol) {
     case "vless-reality": {
-      const domain = requireDomain(draft.domain);
+      const domain = requireRealityTargetDomain(draft.domain);
       const privateKey = draft.privateKey.trim();
       const publicKey = draft.publicKey.trim();
       const shortId = draft.shortId.trim().toLowerCase();
@@ -195,32 +293,59 @@ export function buildManagedInboundRequest(draft: ManagedInboundDraft): ManagedI
           security: "reality",
           realitySettings: {
             show: false,
-            dest: `${domain}:443`,
+            target: `${domain}:443`,
             xver: 0,
             serverNames: [domain],
             privateKey,
-            publicKey,
             shortIds: [shortId],
           },
         },
       };
       break;
     }
-    case "vless-ws": {
-      const domain = requireDomain(draft.domain);
-      const path = draft.wsPath.trim();
-      if (path.length < 2 || path.length > 1024 || !/^\/[^\s?#]*$/.test(path)) throw new Error("WebSocket 路径必须以 / 开头，且不能包含空格、查询参数或片段");
+    case "vless-tls": {
+      const client: Record<string, unknown> = { id: requireUUID(draft.uuid), email: "admin" };
+      if (draft.flow) client.flow = draft.flow;
       inbound = {
-        ...baseInbound(draft, "vless", { clients: [{ id: requireUUID(draft.uuid), email: "admin" }], decryption: "none" }),
-        listen: "127.0.0.1",
-        streamSettings: { network: "ws", security: "none", wsSettings: { path, headers: { Host: domain } } },
+        ...baseInbound(draft, "vless", { clients: [client], decryption: "none" }),
+        ...tlsStream(draft),
       };
       break;
     }
+    case "vless-ws":
+      inbound = {
+        ...baseInbound(draft, "vless", { clients: [{ id: requireUUID(draft.uuid), email: "admin" }], decryption: "none" }),
+        ...wsStream(draft),
+      };
+      break;
+    case "vless-wss":
+      inbound = {
+        ...baseInbound(draft, "vless", { clients: [{ id: requireUUID(draft.uuid), email: "admin" }], decryption: "none" }),
+        ...wssStream(draft),
+      };
+      break;
     case "vmess":
       inbound = {
         ...baseInbound(draft, "vmess", { clients: [{ id: requireUUID(draft.uuid), email: "admin", security: draft.vmessCipher, level: 0 }] }),
         streamSettings: { network: "tcp", security: "none" },
+      };
+      break;
+    case "vmess-tls":
+      inbound = {
+        ...baseInbound(draft, "vmess", { clients: [{ id: requireUUID(draft.uuid), email: "admin", security: draft.vmessCipher, level: 0 }] }),
+        ...tlsStream(draft),
+      };
+      break;
+    case "vmess-ws":
+      inbound = {
+        ...baseInbound(draft, "vmess", { clients: [{ id: requireUUID(draft.uuid), email: "admin", security: draft.vmessCipher, level: 0 }] }),
+        ...wsStream(draft),
+      };
+      break;
+    case "vmess-wss":
+      inbound = {
+        ...baseInbound(draft, "vmess", { clients: [{ id: requireUUID(draft.uuid), email: "admin", security: draft.vmessCipher, level: 0 }] }),
+        ...wssStream(draft),
       };
       break;
     case "trojan":
@@ -229,7 +354,22 @@ export function buildManagedInboundRequest(draft: ManagedInboundDraft): ManagedI
         ...tlsStream(draft),
       };
       break;
+    case "trojan-wss":
+      inbound = {
+        ...baseInbound(draft, "trojan", { clients: [{ password: requirePassword(draft.password), email: "admin", level: 0 }] }),
+        ...wssStream(draft),
+      };
+      break;
     case "shadowsocks": {
+      if (!isShadowsocks2022Cipher(draft.ssCipher)) {
+        inbound = baseInbound(draft, "shadowsocks", {
+          method: draft.ssCipher,
+          password: requirePassword(draft.password),
+          email: "admin",
+          network: "tcp,udp",
+        });
+        break;
+      }
       const keyLength = draft.ssCipher === "2022-blake3-aes-128-gcm" ? 16 : 32;
       let decodedLength = 0;
       let userDecodedLength = 0;

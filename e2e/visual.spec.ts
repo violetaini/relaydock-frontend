@@ -313,7 +313,7 @@ async function closeDialog(page: Page) {
   await expect(dialog).toBeHidden();
 }
 
-test("desktop navigation keeps every menu label visible", async ({ page }) => {
+test("desktop navigation follows the upstream primary and secondary hierarchy", async ({ page }) => {
   await mockAPI(page);
 
   for (const width of [1440, 1360, 1359, 1280, 1219, 1050, 1041]) {
@@ -321,9 +321,13 @@ test("desktop navigation keeps every menu label visible", async ({ page }) => {
     await page.goto("/#/dashboard");
     await expect(page.getByRole("navigation", { name: "主导航" })).toBeVisible();
 
-    const labels = page.locator(".sidebar-nav .nav-item > span");
-    await expect(labels).toHaveCount(15);
-    const clipped = await labels.evaluateAll((elements) => elements.flatMap((element) => {
+    const primaryLabels = page.locator(".sidebar-nav .nav-primary .nav-item > span");
+    const utilityItems = page.locator(".sidebar-nav .nav-utility .nav-item");
+    await expect(primaryLabels).toHaveCount(7);
+    await expect(utilityItems).toHaveCount(4);
+    await expect(page.locator(".sidebar-nav .nav-secondary")).toBeHidden();
+    await expect(page.getByRole("button", { name: "更多功能", exact: true })).toBeVisible();
+    const clipped = await primaryLabels.evaluateAll((elements) => elements.flatMap((element) => {
       const label = element.textContent?.trim() || "<empty>";
       const style = window.getComputedStyle(element);
       const rect = element.getBoundingClientRect();
@@ -334,15 +338,52 @@ test("desktop navigation keeps every menu label visible", async ({ page }) => {
         : [];
     }));
 
-    expect(clipped, `${width}px desktop navigation labels must remain visible`).toEqual([]);
+    expect(clipped, `${width}px primary navigation labels must remain visible`).toEqual([]);
     const navOverflow = await page.locator(".sidebar-nav").evaluate((nav) => nav.scrollWidth - nav.clientWidth);
     expect(navOverflow, `${width}px desktop navigation must not require horizontal scrolling`).toBeLessThanOrEqual(1);
-    const renderedRows = await labels.evaluateAll((elements) => new Set(elements.map((element) => Math.round(element.closest(".nav-item")!.getBoundingClientRect().top))).size);
+    const renderedRows = await page.locator(".sidebar-nav .nav-primary .nav-item, .sidebar-nav .nav-utility .nav-item").evaluateAll((elements) => new Set(elements.map((element) => Math.round(element.getBoundingClientRect().top))).size);
     expect(renderedRows, `${width}px desktop navigation row count`).toBeLessThanOrEqual(width >= 1360 ? 1 : 2);
     const headerHeight = await page.locator(".sidebar").evaluate((header) => header.getBoundingClientRect().height);
-    expect(headerHeight, `${width}px desktop navigation uses its stable height`).toBeLessThanOrEqual(width >= 1360 ? 64 : 104);
+    expect(headerHeight, `${width}px desktop navigation uses its stable height`).toBeLessThanOrEqual(width >= 1360 ? 65 : 104);
     await expectViewportIntegrity(page, `${width}px desktop navigation`);
   }
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/#/dashboard");
+  await page.getByRole("button", { name: "更多功能", exact: true }).click();
+  const moreMenu = page.getByRole("menu", { name: "更多功能" });
+  await expect(moreMenu).toBeVisible();
+  await expect(moreMenu.getByRole("menuitem")).toHaveCount(4);
+  await expect(moreMenu.getByRole("menuitem", { name: "高级管理" })).toBeVisible();
+});
+
+test("dashboard uses the upstream desktop canvas and card scale", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockAPI(page);
+  await page.goto("/#/dashboard");
+
+  await expect(page.locator(".page-header")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "流量信息", level: 1 })).toBeAttached();
+  const measurements = await page.evaluate(() => {
+    const nav = document.querySelector<HTMLElement>(".nav-primary .nav-item");
+    const pageContent = document.querySelector<HTMLElement>(".page-dashboard");
+    const metric = document.querySelector<HTMLElement>(".metric");
+    const chart = document.querySelector<HTMLElement>(".dashboard-chart");
+    if (!nav || !pageContent || !metric || !chart) throw new Error("dashboard scale targets are missing");
+    return {
+      navFont: Number.parseFloat(getComputedStyle(nav).fontSize),
+      pageWidth: pageContent.getBoundingClientRect().width,
+      metricWidth: metric.getBoundingClientRect().width,
+      metricHeight: metric.getBoundingClientRect().height,
+      chartHeight: chart.getBoundingClientRect().height,
+    };
+  });
+  expect(measurements.navFont).toBe(14);
+  expect(measurements.pageWidth).toBe(1152);
+  expect(measurements.metricWidth).toBeCloseTo(264, 0);
+  expect(measurements.metricHeight).toBeGreaterThanOrEqual(130);
+  expect(measurements.chartHeight).toBeGreaterThanOrEqual(390);
+  await expectViewportIntegrity(page, "dashboard upstream scale");
 });
 
 test("desktop layout switch preserves navigation and preference", async ({ page }) => {

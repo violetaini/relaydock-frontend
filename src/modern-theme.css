@@ -1131,3 +1131,148 @@
     transition-duration: .01ms !important;
   }
 }
+
+/* Keep the desktop chrome aligned with the upstream hierarchy and scale. */
+.nav-overflow { display: none; position: relative; }
+.nav-overflow-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 80;
+  width: 210px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-high);
+}
+.nav-overflow-menu button {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 11px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-soft);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 650;
+  text-align: left;
+}
+.nav-overflow-menu button:hover { color: var(--text); background: var(--surface-hover); }
+.nav-overflow-menu button.is-active { color: var(--accent-strong); border-color: var(--border); background: var(--accent-soft); }
+.nav-overflow-menu button svg { color: var(--accent); }
+
+@media (min-width: 1041px) {
+  .console-layout.layout-top .nav-secondary { display: none !important; }
+  .console-layout.layout-top .nav-overflow { display: block; }
+  .console-layout.layout-side .nav-overflow { display: none; }
+
+  .console-layout.layout-top .nav-utility .nav-item {
+    width: 36px;
+    min-width: 36px;
+    padding-inline: 0;
+    justify-content: center;
+  }
+  .console-layout.layout-top .nav-utility .nav-item span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  :root[data-style-theme="flat"] .page-content {
+    width: min(100%, 1280px);
+    padding: 32px 24px 52px;
+  }
+  :root[data-style-theme="flat"] .page-dashboard { width: min(100%, 1152px); }
+  :root[data-style-theme="flat"] .page-settings { width: min(100%, 896px); }
+  :root[data-style-theme="flat"] .page-header h1 { font-size: 30px; line-height: 1.2; }
+
+  :root[data-style-theme="flat"] .metric {
+    min-height: 130px;
+    padding: 18px 24px;
+  }
+  :root[data-style-theme="flat"] .metric-copy > span { font-size: 16px; font-weight: 650; }
+  :root[data-style-theme="flat"] .metric-copy small { font-size: 14px; line-height: 20px; }
+  :root[data-style-theme="flat"] .metric > strong { margin-top: 12px; font-size: 30px; }
+  :root[data-style-theme="flat"] .speed-summary { font-size: 18px; }
+  :root[data-style-theme="flat"] .metric-grid { gap: 16px; margin-bottom: 30px; }
+  :root[data-style-theme="flat"] .surface-heading h2 { font-size: 16px; }
+  :root[data-style-theme="flat"] .surface-heading small { font-size: 12px; }
+  :root[data-style-theme="flat"] .dashboard-chart,
+  :root[data-style-theme="flat"] .dashboard-chart.is-empty { min-height: 390px; margin-bottom: 32px; }
+  :root[data-style-theme="flat"] .dashboard-chart.is-empty .empty-state { min-height: 320px; }
+  :root[data-style-theme="flat"] .dashboard-chart .bar-chart { height: 314px; }
+  :root[data-style-theme="flat"] .dashboard-summary-grid { gap: 16px; }
+}
+
+@media (min-width: 1360px) {
+  :root[data-style-theme="flat"] { --app-header-height: 65px; }
+  :root[data-style-theme="flat"] .console-layout.layout-top .sidebar {
+    height: 65px;
+    min-height: 65px;
+    max-height: 65px;
+  }
+  :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-brand {
+    width: 76px;
+    min-width: 76px;
+    min-height: 65px;
+    padding: 0 12px 0 24px;
+  }
+  :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-brand .brand-mark { width: 40px; height: 40px; }
+  :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-nav {
+    padding: 14px 12px;
+    gap: 12px;
+  }
+  :root[data-style-theme="flat"] .console-layout.layout-top .nav-primary .nav-item {
+    min-width: 116px;
+    height: 36px;
+    min-height: 36px;
+    padding: 0 12px;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  :root[data-style-theme="flat"] .console-layout.layout-top .nav-item > svg:first-child { width: 18px; height: 18px; }
+  :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-footer {
+    min-width: 164px;
+    min-height: 65px;
+    padding: 8px 6px;
+  }
+}
+
+@media (min-width: 1041px) and (max-width: 1359px) {
+  :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-nav { gap: 8px; }
+  :root[data-style-theme="flat"] .console-layout.layout-top .nav-primary .nav-item {
+    min-width: 100px;
+    padding-inline: 10px;
+    gap: 7px;
+    font-size: 13px;
+  }
+  :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-footer { min-width: 154px; }
+}
+
+@media (max-width: 1040px) {
+  .nav-overflow { display: none !important; }
+}
+
+@media (max-width: 760px) {
+  :root[data-style-theme="flat"] .dashboard-chart-tools {
+    display: grid;
+    grid-template-columns: auto 36px minmax(0, 1fr);
+    align-items: center;
+  }
+  :root[data-style-theme="flat"] .dashboard-chart-tools .chart-total { justify-self: end; }
+  :root[data-style-theme="flat"] .dashboard-period {
+    width: 100%;
+    grid-column: 1 / -1;
+  }
+  :root[data-style-theme="flat"] .dashboard-period button { white-space: nowrap; }
+}

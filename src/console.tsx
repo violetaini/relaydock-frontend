@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   Activity,
   ArrowDownToLine,
@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Clipboard,
   Copy,
+  Ellipsis,
   FileText,
   FileCode2,
   Gauge,
@@ -38,6 +39,7 @@ import {
   WifiOff,
   Wrench,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import { AdvancedPage } from "./advanced";
 import { AccountWorkbenchPage } from "./account-workbench";
@@ -91,6 +93,7 @@ type PageKey = "dashboard" | "subscriptions" | "generator" | "servers" | "nodes"
 
 interface ToastState { message: string; tone: "success" | "error" }
 type LayoutMode = "top" | "side";
+interface SecondaryNavItem { page: PageKey; label: string; icon: LucideIcon }
 
 const pageTitles: Record<PageKey, string> = {
   dashboard: "流量信息",
@@ -140,9 +143,11 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => normalizeThemeMode(localStorage.getItem("arcway-theme")));
   const [theme, setTheme] = useState<Theme>(() => document.documentElement.dataset.theme === "dark" ? "dark" : "light");
   const [layoutMode, setLayoutMode] = useState<LayoutMode>(() => localStorage.getItem("arcway-layout") === "side" ? "side" : "top");
+  const [moreOpen, setMoreOpen] = useState(false);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [userPages, setUserPages] = useState<string[] | null>(profile.is_admin ? [] : null);
   const [identity, setIdentity] = useState(profile);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const updateIdentity = (event: Event) => {
@@ -185,7 +190,24 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
     location.hash = `/${next}`;
     setPage(next);
     setSidebarOpen(false);
+    setMoreOpen(false);
   };
+
+  useEffect(() => {
+    if (!moreOpen) return;
+    const closeOnPointerDown = (event: PointerEvent) => {
+      if (!moreMenuRef.current?.contains(event.target as Node)) setMoreOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMoreOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnPointerDown);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnPointerDown);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [moreOpen]);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -220,6 +242,15 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
   };
 
   const notify = (message: string, tone: ToastState["tone"] = "success") => setToast({ message, tone });
+  const secondaryNavItems: SecondaryNavItem[] = [
+    ...(pageAllowed("customRules", profile.is_admin, userPages) ? [{ page: "customRules" as const, label: "覆写管理", icon: Braces }] : []),
+    ...(profile.is_admin ? [
+      { page: "rulesConfig" as const, label: "规则配置", icon: FileCode2 },
+      { page: "traffic" as const, label: "流量明细", icon: LayoutDashboard },
+      { page: "advanced" as const, label: "高级管理", icon: Wrench },
+    ] : [{ page: "traffic" as const, label: "流量明细", icon: LayoutDashboard }]),
+  ];
+  const secondaryActive = secondaryNavItems.some((item) => item.page === page);
 
   return (
     <div className={`console-layout layout-${layoutMode}`}>
@@ -227,35 +258,40 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
       <aside className={`sidebar ${sidebarOpen ? "is-open" : ""}`}>
         <div className="sidebar-brand brand"><span className="brand-mark"><Network size={20} /></span><span>Arcway</span><IconButton className="sidebar-close" label="关闭导航" onClick={() => setSidebarOpen(false)}><X size={19} /></IconButton></div>
         <nav className="sidebar-nav" aria-label="主导航">
-          <NavGroup label="运行">
+          <NavGroup label="主导航" className="nav-primary">
             <NavItem active={page === "dashboard"} icon={<Activity size={18} />} label="流量信息" onClick={() => navigate("dashboard")} />
             {pageAllowed("subscriptions", profile.is_admin, userPages) ? <NavItem active={page === "subscriptions"} icon={<Link2 size={18} />} label="订阅链接" onClick={() => navigate("subscriptions")} /> : null}
             {pageAllowed("generator", profile.is_admin, userPages) ? <NavItem active={page === "generator"} icon={<Wrench size={18} />} label="生成订阅" onClick={() => navigate("generator")} /> : null}
             {pageAllowed("nodes", profile.is_admin, userPages) ? <NavItem active={page === "nodes"} icon={<Route size={18} />} label="节点管理" onClick={() => navigate("nodes")} /> : null}
-          </NavGroup>
-          {profile.is_admin ? (
-            <NavGroup label="管理">
+            {profile.is_admin ? <>
               <NavItem active={page === "servers"} icon={<Server size={18} />} label="服务管理" onClick={() => navigate("servers")} />
               <NavItem active={page === "users"} icon={<Users size={18} />} label="用户管理" onClick={() => navigate("users")} />
               <NavItem active={page === "packages"} icon={<Package size={18} />} label="套餐管理" onClick={() => navigate("packages")} />
-              <NavItem active={page === "certificates"} icon={<ShieldCheck size={18} />} label="证书管理" onClick={() => navigate("certificates")} />
-            </NavGroup>
-          ) : null}
-          <NavGroup label="内容">
+            </> : null}
+          </NavGroup>
+          <NavGroup label="常用管理" className="nav-utility">
+            {profile.is_admin ? <NavItem active={page === "certificates"} icon={<ShieldCheck size={18} />} label="证书管理" onClick={() => navigate("certificates")} /> : null}
             {pageAllowed("templates", profile.is_admin, userPages) ? <NavItem active={page === "templates"} icon={<Clipboard size={18} />} label="模板管理" onClick={() => navigate("templates")} /> : null}
             {pageAllowed("subscribeFiles", profile.is_admin, userPages) ? <NavItem active={page === "subscribeFiles"} icon={<FileText size={18} />} label="订阅管理" onClick={() => navigate("subscribeFiles")} /> : null}
-            {pageAllowed("customRules", profile.is_admin, userPages) ? <NavItem active={page === "customRules"} icon={<Braces size={18} />} label="覆写管理" onClick={() => navigate("customRules")} /> : null}
-            {profile.is_admin ? <NavItem active={page === "rulesConfig"} icon={<FileCode2 size={18} />} label="规则配置" onClick={() => navigate("rulesConfig")} /> : null}
+            {profile.is_admin ? <NavItem active={page === "settings"} icon={<Settings size={18} />} label="系统设置" onClick={() => navigate("settings")} /> : null}
           </NavGroup>
-          {profile.is_admin ? (
-            <NavGroup label="控制端">
-              <NavItem active={page === "traffic"} icon={<LayoutDashboard size={18} />} label="流量明细" onClick={() => navigate("traffic")} />
-              <NavItem active={page === "advanced"} icon={<Wrench size={18} />} label="网络工具" onClick={() => navigate("advanced")} />
-              <NavItem active={page === "settings"} icon={<Settings size={18} />} label="系统设置" onClick={() => navigate("settings")} />
-            </NavGroup>
-          ) : <NavGroup label="记录"><NavItem active={page === "traffic"} icon={<LayoutDashboard size={18} />} label="流量明细" onClick={() => navigate("traffic")} /></NavGroup>}
+          <NavGroup label="更多功能" className="nav-secondary">
+            {secondaryNavItems.map((item) => {
+              const ItemIcon = item.icon;
+              return <NavItem key={item.page} active={page === item.page} icon={<ItemIcon size={18} />} label={item.label} onClick={() => navigate(item.page)} />;
+            })}
+          </NavGroup>
         </nav>
         <div className="sidebar-footer">
+          {secondaryNavItems.length ? <div className="nav-overflow" ref={moreMenuRef}>
+            <IconButton className={`nav-overflow-trigger ${secondaryActive ? "is-active" : ""}`} label="更多功能" onClick={() => setMoreOpen((current) => !current)}><Ellipsis size={19} /></IconButton>
+            {moreOpen ? <div className="nav-overflow-menu" role="menu" aria-label="更多功能">
+              {secondaryNavItems.map((item) => {
+                const ItemIcon = item.icon;
+                return <button key={item.page} type="button" role="menuitem" className={page === item.page ? "is-active" : ""} onClick={() => navigate(item.page)}><ItemIcon size={17} /><span>{item.label}</span></button>;
+              })}
+            </div> : null}
+          </div> : null}
           <IconButton label={themeLabel} onClick={toggleTheme}>{themeIcon}</IconButton>
           <button type="button" className={`account-block ${page === "account" ? "is-active" : ""}`} aria-label="账户中心" title="账户中心" onClick={() => navigate("account")}>
             <span className="account-avatar">{(identity.nickname || identity.username).slice(0, 1).toUpperCase()}</span>
@@ -278,7 +314,7 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
             <button type="button" className="topbar-avatar" aria-label="账户中心" title="账户中心" onClick={() => navigate("account")}>{(identity.nickname || identity.username).slice(0, 1).toUpperCase()}</button>
           </div>
         </header>
-        <main className="page-content">
+        <main className={`page-content page-${page}`}>
           {page === "dashboard" ? <DashboardPage profile={profile} navigate={navigate} /> : null}
           {page === "subscriptions" && pageAllowed(page, profile.is_admin, userPages) ? <SubscriptionLinksPage notify={notify} /> : null}
           {page === "generator" && pageAllowed(page, profile.is_admin, userPages) ? <SubscriptionGeneratorPage notify={notify} /> : null}
@@ -306,8 +342,8 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
   );
 }
 
-function NavGroup({ label, children }: { label: string; children: ReactNode }) {
-  return <div className="nav-group"><span className="nav-label">{label}</span>{children}</div>;
+function NavGroup({ label, className = "", children }: { label: string; className?: string; children: ReactNode }) {
+  return <div className={`nav-group ${className}`.trim()}><span className="nav-label">{label}</span>{children}</div>;
 }
 
 function NavItem({ icon, label, active, onClick }: { icon: ReactNode; label: string; active: boolean; onClick: () => void }) {
@@ -369,17 +405,7 @@ function DashboardPage({ profile, navigate }: { profile: Profile; navigate: (pag
 
   return (
     <>
-      <PageHeader
-        eyebrow="Operations"
-        title="流量信息"
-        description={profile.is_admin
-          ? `${online} / ${servers.length} 台服务器在线 · ${nodes.filter((node) => node.enabled).length} 个节点启用`
-          : `${nodes.filter((node) => node.enabled).length} 个节点可用`}
-        actions={<>
-          <span className={`dashboard-live-state ${error ? "is-error" : loading ? "is-syncing" : "is-online"}`}><span />{error ? "数据同步异常" : loading ? "正在同步" : "实时数据已连接"}</span>
-          <IconButton label="刷新流量概览" onClick={() => void load()} disabled={loading}><RefreshCw className={loading ? "is-spinning" : ""} size={18} /></IconButton>
-        </>}
-      />
+      <h1 className="sr-only">流量信息</h1>
       {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
       <div className="metric-grid">
         <Metric tone="info" icon={<ArrowUpFromLine size={22} />} label="总流量配额" value={loading ? "--" : `${traffic?.metrics.total_limit_gb ?? 0} GB`} detail="所有节点的总配额" />
@@ -392,6 +418,8 @@ function DashboardPage({ profile, navigate }: { profile: Profile; navigate: (pag
         <div className="surface-heading dashboard-chart-heading">
           <div><h2>每日流量消耗</h2><small>{periodDescription}</small></div>
           <div className="dashboard-chart-tools">
+            <span className={`dashboard-live-state ${error ? "is-error" : loading ? "is-syncing" : "is-online"}`}><span />{error ? "数据异常" : loading ? "同步中" : "实时数据"}</span>
+            <IconButton label="刷新流量概览" onClick={() => void load()} disabled={loading}><RefreshCw className={loading ? "is-spinning" : ""} size={17} /></IconButton>
             <span className="chart-total">{periodUsed.toFixed(1)} GB</span>
             <div className="dashboard-period" role="tablist" aria-label="流量周期">
               {([['today', '今天'], ['week', '本周'], ['month', '本月']] as const).map(([value, label]) => <button key={value} type="button" role="tab" aria-selected={period === value} className={period === value ? "is-active" : ""} onClick={() => setPeriod(value)}>{label}</button>)}

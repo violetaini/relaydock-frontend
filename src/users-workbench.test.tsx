@@ -145,4 +145,22 @@ describe("users workbench", () => {
       expire_date: "2026-12-31",
     }));
   });
+
+  it("requires confirmation before unassigning a package", async () => {
+    vi.spyOn(api, "get").mockImplementation(async (path) => {
+      if (path === "/api/admin/users") return { users: [alice] };
+      if (path === "/api/admin/packages") return { packages: [{ id: 2, name: "标准", traffic_limit_gb: 100, cycle_days: 30 }] };
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<UsersWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "用户设置 alice" }));
+    fireEvent.click(await screen.findByRole("button", { name: "解绑套餐" }));
+
+    expect(screen.getByRole("dialog", { name: "解绑用户套餐" })).toBeInTheDocument();
+    expect(post).not.toHaveBeenCalledWith("/api/admin/packages/unassign", expect.anything());
+    fireEvent.click(screen.getByRole("button", { name: "确认解绑" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/packages/unassign", { username: "alice" }));
+  });
 });

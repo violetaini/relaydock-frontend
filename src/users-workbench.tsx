@@ -264,6 +264,7 @@ function UserSettingsDialog({
   const [packageLoading, setPackageLoading] = useState(user.role !== "admin");
   const [packageWorking, setPackageWorking] = useState(false);
   const [packageError, setPackageError] = useState("");
+  const [confirmUnassign, setConfirmUnassign] = useState(false);
 
   useEffect(() => {
     if (user.role === "admin") return;
@@ -310,6 +311,7 @@ function UserSettingsDialog({
     try {
       const response = await api.post<PackageMutationResponse>("/api/admin/packages/unassign", { username: user.username });
       if (response.success === false) throw new Error(response.error || response.message || "解绑套餐失败");
+      setConfirmUnassign(false);
       await onComplete(`已解绑 ${user.username} 的套餐`);
     } catch (reason) {
       setPackageError(messageOf(reason, "解绑套餐失败"));
@@ -341,7 +343,7 @@ function UserSettingsDialog({
               <Field label="套餐"><select aria-label="用户套餐" required value={packageID} onChange={(event) => setPackageID(event.target.value)}><option value="">请选择套餐</option>{packages.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.traffic_limit_gb} GB / {item.cycle_days} 天</option>)}</select></Field>
               <Field label="开始日期" hint="留空表示今天"><input type="date" aria-label="套餐开始日期" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></Field>
               <Field label="到期日期" hint={`留空表示开始后 ${selectedPackage?.cycle_days ?? 30} 天`}><input type="date" aria-label="套餐到期日期" value={expireDate} onChange={(event) => setExpireDate(event.target.value)} /></Field>
-              <div className="user-package-actions"><Button type="submit" disabled={packageWorking || !packageID}>{packageWorking ? <Spinner label="正在下发" /> : <><PackageIcon size={16} />{user.package_id ? "更新套餐" : "分配套餐"}</>}</Button>{user.package_id ? <Button type="button" variant="ghost" onClick={() => void unassignPackage()} disabled={packageWorking}>解绑套餐</Button> : null}</div>
+              <div className="user-package-actions"><Button type="submit" disabled={packageWorking || !packageID}>{packageWorking ? <Spinner label="正在下发" /> : <><PackageIcon size={16} />{user.package_id ? "更新套餐" : "分配套餐"}</>}</Button>{user.package_id ? <Button type="button" variant="ghost" onClick={() => setConfirmUnassign(true)} disabled={packageWorking}>解绑套餐</Button> : null}</div>
             </form>}
             {user.package_id ? <div className="user-package-current"><span>当前套餐：<strong>{user.package_name || `套餐 #${user.package_id}`}</strong></span><span>{user.package_end_date ? `到期 ${user.package_end_date}` : "未设置到期日"}</span><Button type="button" variant="ghost" onClick={() => onOpen("extend")}><CalendarPlus size={15} />续期</Button></div> : null}
           </section>
@@ -366,6 +368,7 @@ function UserSettingsDialog({
           <Button type="button" variant="danger" onClick={onDelete} disabled={working}><Trash2 size={16} />删除用户</Button>
         </section> : null}
       </div>
+      {confirmUnassign ? <ConfirmDialog title="解绑用户套餐" description={`确认解绑 ${user.username} 的“${user.package_name || "当前套餐"}”？系统会同步清理该套餐下发的节点凭据和订阅关联。`} confirmLabel="确认解绑" working={packageWorking} onCancel={() => setConfirmUnassign(false)} onConfirm={() => void unassignPackage()} /> : null}
     </Dialog>
   );
 }

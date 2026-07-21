@@ -3,7 +3,7 @@
 .settings-settings-group + .settings-settings-group { padding-top: 30px; border-top: 1px solid var(--border); }
 .settings-group-heading { display: flex; align-items: center; gap: 11px; padding: 0 2px 3px; }
 .settings-group-heading h2 { margin: 0; font-size: 18px; line-height: 1.25; }
-.settings-group-heading p { margin: 4px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.45; }
+.settings-group-heading p { margin: 4px 0 0; color: var(--text-soft); font-size: 12px; line-height: 1.45; }
 .settings-group-icon { width: 34px; height: 34px; flex: 0 0 34px; display: grid; place-items: center; color: var(--accent); border: 1px solid var(--border); background: var(--accent-soft); }
 .settings-workbench-section { min-height: 0; padding: 24px; }
 .settings-workbench-section .settings-heading { margin-bottom: 22px; }

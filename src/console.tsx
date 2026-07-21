@@ -369,28 +369,41 @@ function DashboardPage({ profile, navigate }: { profile: Profile; navigate: (pag
 
   return (
     <>
-      <h1 className="sr-only">流量信息</h1>
+      <PageHeader
+        eyebrow="Operations"
+        title="流量信息"
+        description={profile.is_admin
+          ? `${online} / ${servers.length} 台服务器在线 · ${nodes.filter((node) => node.enabled).length} 个节点启用`
+          : `${nodes.filter((node) => node.enabled).length} 个节点可用`}
+        actions={<>
+          <span className={`dashboard-live-state ${error ? "is-error" : loading ? "is-syncing" : "is-online"}`}><span />{error ? "数据同步异常" : loading ? "正在同步" : "实时数据已连接"}</span>
+          <IconButton label="刷新流量概览" onClick={() => void load()} disabled={loading}><RefreshCw className={loading ? "is-spinning" : ""} size={18} /></IconButton>
+        </>}
+      />
       {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
       <div className="metric-grid">
-        <Metric icon={<ArrowUpFromLine size={24} />} label="总流量配额" value={loading ? "--" : `${traffic?.metrics.total_limit_gb ?? 0} GB`} detail="所有节点的总配额" />
-        <Metric icon={<Activity size={25} />} label="已用流量" value={loading ? "--" : `${traffic?.metrics.total_used_gb ?? 0} GB`} detail="所有节点累计消耗" />
-        <Metric icon={<Boxes size={24} />} label="剩余流量" value={loading ? "--" : `${traffic?.metrics.total_remaining_gb ?? 0} GB`} detail="仍可分配的余量" />
-        <Metric icon={<Gauge size={24} />} label="实时网速" value={loading ? "--" : <span className="speed-summary"><span>↑ {formatBytes(uploadSpeed, true)}</span><span>↓ {formatBytes(downloadSpeed, true)}</span></span>} detail="所有服务器汇总" />
+        <Metric tone="info" icon={<ArrowUpFromLine size={22} />} label="总流量配额" value={loading ? "--" : `${traffic?.metrics.total_limit_gb ?? 0} GB`} detail="所有节点的总配额" />
+        <Metric tone="accent" icon={<Activity size={22} />} label="已用流量" value={loading ? "--" : `${traffic?.metrics.total_used_gb ?? 0} GB`} detail="所有节点累计消耗" />
+        <Metric tone="good" icon={<Boxes size={22} />} label="剩余流量" value={loading ? "--" : `${traffic?.metrics.total_remaining_gb ?? 0} GB`} detail="仍可分配的余量" />
+        <Metric tone="warn" icon={<Gauge size={22} />} label="实时网速" value={loading ? "--" : <span className="speed-summary"><span>↑ {formatBytes(uploadSpeed, true)}</span><span>↓ {formatBytes(downloadSpeed, true)}</span></span>} detail="所有服务器汇总" />
       </div>
 
-      <Surface className="chart-surface dashboard-chart">
-        <div className="surface-heading"><div><h2>每日流量消耗</h2><small>最近记录的日度流量趋势</small></div><span className="chart-total">{periodUsed.toFixed(1)} GB</span></div>
+      <Surface className={`chart-surface dashboard-chart ${!loading && history.length === 0 ? "is-empty" : ""}`}>
+        <div className="surface-heading dashboard-chart-heading">
+          <div><h2>每日流量消耗</h2><small>{periodDescription}</small></div>
+          <div className="dashboard-chart-tools">
+            <span className="chart-total">{periodUsed.toFixed(1)} GB</span>
+            <div className="dashboard-period" role="tablist" aria-label="流量周期">
+              {([['today', '今天'], ['week', '本周'], ['month', '本月']] as const).map(([value, label]) => <button key={value} type="button" role="tab" aria-selected={period === value} className={period === value ? "is-active" : ""} onClick={() => setPeriod(value)}>{label}</button>)}
+            </div>
+          </div>
+        </div>
         {loading ? <div className="center-state"><Spinner /></div> : history.length === 0 ? <EmptyState icon={<Activity size={22} />} title="暂无历史记录" /> : (
           <div className={`bar-chart period-${period}`} aria-label="每日流量消耗图">
             {history.map((item) => <div className="bar-column" key={item.date} title={`${item.date}: ${item.used_gb} GB`}><span className="bar-value">{item.used_gb > 0 ? item.used_gb : ""}</span><span className="bar" style={{ height: `${Math.max(4, item.used_gb / maxHistory * 100)}%` }} /><small>{item.date.slice(-2)}</small></div>)}
           </div>
         )}
       </Surface>
-
-      <div className="period-row" role="tablist" aria-label="流量周期">
-        {([['today', '今天'], ['week', '本周'], ['month', '本月']] as const).map(([value, label]) => <Button key={value} role="tab" aria-selected={period === value} variant={period === value ? "primary" : "secondary"} onClick={() => setPeriod(value)}>{label}</Button>)}
-        <small>{periodDescription}</small>
-      </div>
 
       <div className="dashboard-summary-grid">
         <Surface className="summary-surface">
@@ -411,8 +424,8 @@ function DashboardPage({ profile, navigate }: { profile: Profile; navigate: (pag
   );
 }
 
-function Metric({ icon, label, value, detail }: { icon: ReactNode; label: string; value: ReactNode; detail: string }) {
-  return <Surface className="metric"><div className="metric-top"><span>{label}</span><span className="metric-icon">{icon}</span></div><small>{detail}</small><strong>{value}</strong></Surface>;
+function Metric({ icon, label, value, detail, tone = "accent" }: { icon: ReactNode; label: string; value: ReactNode; detail: string; tone?: "accent" | "good" | "info" | "warn" }) {
+  return <Surface className={`metric metric-${tone}`}><div className="metric-top"><span className="metric-icon">{icon}</span><span className="metric-copy"><span>{label}</span><small>{detail}</small></span></div><strong>{value}</strong></Surface>;
 }
 
 function ServerHealthRow({ server }: { server: RemoteServer }) {

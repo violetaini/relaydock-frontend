@@ -496,6 +496,7 @@ for (const viewport of [
   { name: "mobile", width: 390, height: 844 },
 ]) {
   test(`primary workbench entry points open cleanly on ${viewport.name}`, async ({ page }) => {
+    test.setTimeout(60_000);
     const pageErrors: string[] = [];
     const unknownPaths: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -553,11 +554,23 @@ for (const viewport of [
     await closeDialog(page);
 
     await page.goto("/#/nodes");
-    await page.getByRole("button", { name: "添加节点" }).click();
-    await expect(page.getByRole("dialog", { name: "手工添加节点" })).toBeVisible();
+    await expect(page.locator(".toast")).toHaveCount(0, { timeout: 5_000 });
+    await page.getByRole("button", { name: "在服务器创建" }).click();
+    await expect(page.getByRole("dialog", { name: "在服务器创建节点" })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} node create`);
+    await page.screenshot({ path: path.resolve("../docs/change-records/assets/MMX-100", `managed-node-wizard-${viewport.name}.png`), fullPage: true });
+    await page.getByRole("button", { name: "下一步" }).click();
+    await expect(page.getByRole("heading", { name: "选择协议与安全组合" })).toBeVisible();
+    await expectViewportIntegrity(page, `${viewport.name} managed protocol selection`);
+    await page.screenshot({ path: path.resolve("../docs/change-records/assets/MMX-100", `managed-node-protocols-${viewport.name}.png`), fullPage: true });
+    await page.getByRole("button", { name: /Shadowsocks 2022/ }).click();
+    await page.getByRole("button", { name: "下一步" }).click();
+    await expect(page.getByRole("heading", { name: "配置 Shadowsocks 2022" })).toBeVisible();
+    await expect(page.getByLabel("Shadowsocks 加密方式")).toHaveValue("2022-blake3-aes-128-gcm");
+    await expectViewportIntegrity(page, `${viewport.name} managed Shadowsocks configuration`);
+    await page.screenshot({ path: path.resolve("../docs/change-records/assets/MMX-100", `managed-node-shadowsocks-${viewport.name}.png`), fullPage: true });
     await closeDialog(page);
-    await page.getByRole("button", { name: "导入", exact: true }).click();
+    await page.getByRole("button", { name: "导入已有节点" }).click();
     await expect(page.getByRole("dialog", { name: "导入外部节点" })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} node import`);
     await closeDialog(page);

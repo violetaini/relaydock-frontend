@@ -197,6 +197,7 @@ test("creates a server with the exact contract and presents its one-time install
   const installCommand = "curl -fsSL https://console.example/install.sh | bash -s -- --token one-time-token";
   mock
     .on("GET", "/api/admin/remote-servers", () => json({ success: true, servers }))
+    .on("GET", "/api/admin/dns-providers", () => json({ success: true, providers: [] }))
     .on("POST", "/api/admin/remote-servers/create", (call) => {
       const created = server(2, "Tokyo Edge", "203.0.113.18", { connection_mode: "pull", xray_mode: "embedded" });
       servers.push(created);
@@ -286,7 +287,7 @@ test("parses node URIs, previews them, and sends the complete batch payload", as
     });
 
   await page.goto("/#/nodes");
-  await page.getByRole("button", { name: "导入", exact: true }).click();
+  await page.getByRole("button", { name: "导入已有节点" }).click();
   const dialog = page.getByRole("dialog", { name: "导入外部节点" });
   const source = "vless://first\nhysteria2://second";
   await dialog.getByLabel("节点内容").fill(source);
@@ -315,6 +316,147 @@ test("parses node URIs, previews them, and sends the complete batch payload", as
     tags: ["亚太"],
   }));
   expect(mock.callsFor("POST", "/api/admin/nodes/batch").map((call) => call.body)).toEqual([{ nodes: expectedNodes }]);
+});
+
+test("creates and publishes a managed Shadowsocks 2022 node with exact payload and source classification", async ({ page }) => {
+  const mock = await createMock(page);
+  const embeddedServer = server(7, "Hong Kong Embedded", "198.51.100.27", {
+    domain: "hk-edge.example.com",
+    xray_mode: "embedded",
+  });
+  const importedNode = node(1, "Imported VLESS", "vless", {
+    original_server: "",
+    inbound_tag: "",
+    clash_config: JSON.stringify({ name: "Imported VLESS", type: "vless", server: "vendor.example.com", port: 443 }),
+  });
+  const routedNode = node(2, "Private Route", "socks5", {
+    original_server: "Hong Kong Embedded",
+    inbound_tag: "",
+    node_type: "routed",
+    clash_config: JSON.stringify({ name: "Private Route", type: "socks5", server: "127.0.0.1", port: 18080 }),
+  });
+  const storedNodes: JsonObject[] = [importedNode, routedNode];
+  const offers: JsonObject[] = [];
+  const serverKey = "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE=";
+  const userKey = "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=";
+
+  mock
+    .on("GET", "/api/admin/nodes", () => json({ nodes: storedNodes }))
+    .on("GET", "/api/admin/managed-node-offers", () => json({ offers }))
+    .on("GET", "/api/admin/speedtest/results", () => json({ results: [] }))
+    .on("GET", "/api/user/config", () => json({
+      force_sync_external: false,
+      match_rule: "node_name",
+      sync_scope: "saved_only",
+      keep_node_name: true,
+      cache_expire_minutes: 0,
+      sync_traffic: true,
+      node_name_filter: "",
+      append_sub_info: false,
+      custom_rules_enabled: true,
+      enable_short_link: false,
+      use_new_template_system: true,
+      enable_proxy_provider: false,
+      node_order: [],
+      proxy_groups_source_url: "",
+      client_compatibility_mode: false,
+    }))
+    .on("GET", "/api/admin/remote-servers", () => json({ success: true, servers: [embeddedServer] }))
+    .on("GET", "/api/admin/certificates", () => json({ success: true, certificates: [] }))
+    .on("GET", "/api/admin/remote/reality-domains", (call) => {
+      expect(call.query).toEqual({ server_id: "7" });
+      return json({ success: true, domains: [{ domain: "www.cloudflare.com", success: true, latency_ms: 18 }] });
+    })
+    .on("POST", "/api/admin/xray/generate-x25519", () => json({ privateKey: "A".repeat(43), publicKey: "B".repeat(43) }))
+    .on("POST", "/api/admin/managed-nodes/create", (call) => {
+      expect(call.query).toEqual({ server_id: "7" });
+      const created = node(42, "HK SS 2022", "shadowsocks", {
+        original_server: "Hong Kong Embedded",
+        inbound_tag: "ss2022-hk-user",
+        clash_config: JSON.stringify({
+          name: "HK SS 2022",
+          type: "ss",
+          server: "hk-edge.example.com",
+          port: 18443,
+          cipher: "2022-blake3-aes-256-gcm",
+          password: `${serverKey}:${userKey}`,
+        }),
+      });
+      storedNodes.push(created);
+      return json({ success: true, node_id: 42, node: created });
+    })
+    .on("POST", "/api/admin/managed-node-offers", (call) => {
+      const body = call.body as { node_id: number; enabled: boolean; sort_order: number };
+      offers.push({ id: 9, server_id: 7, inbound_tag: "ss2022-hk-user", ...body });
+      return json({ success: true, offer: offers[0] });
+    });
+
+  await page.goto("/#/nodes");
+  const sourceFilters = page.getByLabel("节点来源");
+  await expect(sourceFilters.getByRole("button", { name: /全部节点\s+2/ })).toBeVisible();
+  await expect(sourceFilters.getByRole("button", { name: /服务器创建\s+0/ })).toBeVisible();
+  await expect(sourceFilters.getByRole("button", { name: /外部导入\s+1/ })).toBeVisible();
+  await expect(sourceFilters.getByRole("button", { name: /路由出站\s+1/ })).toBeVisible();
+
+  await page.getByRole("button", { name: "在服务器创建" }).click();
+  const dialog = page.getByRole("dialog", { name: "在服务器创建节点" });
+  await expect(dialog.getByRole("button", { name: /Hong Kong Embedded/ })).toHaveAttribute("aria-pressed", "true");
+  await dialog.getByRole("button", { name: "下一步" }).click();
+  await dialog.getByRole("button", { name: /Shadowsocks 2022/ }).click();
+  await dialog.getByRole("button", { name: "下一步" }).click();
+
+  await dialog.getByLabel("节点名称").fill("  HK SS 2022  ");
+  await dialog.getByLabel("入站 Tag").fill("  ss2022-hk-user  ");
+  await dialog.getByLabel("监听端口").fill("18443");
+  await dialog.getByLabel("Shadowsocks 加密方式").selectOption("2022-blake3-aes-256-gcm");
+  await dialog.getByLabel("服务端主密钥").fill(serverKey);
+  await dialog.getByLabel("初始用户密钥").fill(userKey);
+  await dialog.getByRole("switch", { name: "创建后发布到用户自助目录" }).click();
+  await dialog.getByLabel("目录排序").fill("8");
+  await dialog.getByRole("button", { name: "下一步" }).click();
+
+  await expect(dialog.getByText("HK SS 2022", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("Shadowsocks 2022", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("18443 · V4", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("创建后发布", { exact: true })).toBeVisible();
+  await dialog.getByRole("button", { name: "创建节点" }).click();
+
+  await expect(page.getByRole("status").filter({ hasText: "受管节点已创建并发布给用户" })).toBeVisible();
+  await expect(sourceFilters.getByRole("button", { name: /全部节点\s+3/ })).toBeVisible();
+  await expect(sourceFilters.getByRole("button", { name: /服务器创建\s+1/ })).toBeVisible();
+  await sourceFilters.getByRole("button", { name: /服务器创建\s+1/ }).click();
+  await expect(page.getByText("HK SS 2022", { exact: true })).toBeVisible();
+  await expect(page.getByText("Imported VLESS", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Private Route", { exact: true })).toHaveCount(0);
+  await sourceFilters.getByRole("button", { name: /外部导入\s+1/ }).click();
+  await expect(page.getByText("Imported VLESS", { exact: true })).toBeVisible();
+  await expect(page.getByText("HK SS 2022", { exact: true })).toHaveCount(0);
+  await sourceFilters.getByRole("button", { name: /路由出站\s+1/ }).click();
+  await expect(page.getByText("Private Route", { exact: true })).toBeVisible();
+
+  expect(mock.callsFor("POST", "/api/admin/managed-nodes/create").map((call) => call.body)).toEqual([{
+    action: "add",
+    node_name: "HK SS 2022",
+    ip_version: "v4",
+    inbound: {
+      tag: "ss2022-hk-user",
+      listen: "0.0.0.0",
+      port: 18443,
+      protocol: "shadowsocks",
+      settings: {
+        method: "2022-blake3-aes-256-gcm",
+        password: serverKey,
+        network: "tcp,udp",
+        clients: [{ password: userKey, email: "admin", level: 0 }],
+      },
+      sniffing: { enabled: true, destOverride: ["http", "tls", "quic"], routeOnly: false },
+    },
+  }]);
+  expect(mock.callsFor("POST", "/api/admin/managed-node-offers").map((call) => call.body)).toEqual([{
+    node_id: 42,
+    enabled: true,
+    sort_order: 8,
+  }]);
 });
 
 test("creates a user, preserves the one-time password, and disables it", async ({ page }) => {
@@ -447,7 +589,7 @@ test("does not report routed deletion success when routing returns success false
   await page.getByRole("button", { name: "删除隧道 route-media" }).click();
   await page.getByRole("dialog", { name: "删除隧道" }).getByRole("button", { name: "确认删除" }).click();
 
-  await expect(page.getByRole("status").filter({ hasText: "规则仍在使用" })).toBeVisible();
+  await expect(page.getByRole("alert").filter({ hasText: "规则仍在使用" })).toBeVisible();
   await expect(page.getByRole("status").filter({ hasText: "隧道已删除" })).toHaveCount(0);
   await expect(page.getByText("route-media", { exact: true })).toBeVisible();
   expect(mock.callsFor("POST", "/api/admin/remote/routing").map((call) => call.body)).toEqual([

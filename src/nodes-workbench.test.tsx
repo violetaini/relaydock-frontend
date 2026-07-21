@@ -180,6 +180,51 @@ describe("node workbench permissions", () => {
   });
 });
 
+describe("managed server node creation", () => {
+  it("separates managed creation from importing and submits a protocol-aware Reality payload", async () => {
+    const existing = node(1, "香港 A");
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [existing] } as T;
+      if (path === "/api/admin/speedtest/results?latest=1") return { results: [] } as T;
+      if (path === "/api/user/config") return userConfig([1]) as T;
+      if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
+      if (path === "/api/admin/remote-servers") return { servers: [{ id: 3, name: "香港入口", status: "online", ws_connected: true, xray_running: true, xray_mode: "embedded", ipv6_enabled: false, domain: "edge.example.com", current_upload_speed: 0, current_download_speed: 0, traffic_limit: 0, traffic_used: 0, traffic_stats_mode: "both", traffic_source: "xray", connection_mode: "websocket", encrypted: true, inbounds: [] }] } as T;
+      if (path === "/api/admin/certificates") return { certificates: [] } as T;
+      if (path === "/api/admin/remote/reality-domains?server_id=3") return { domains: [{ domain: "www.cloudflare.com", success: true, latency_ms: 16 }] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/xray/generate-x25519") return { privateKey: "A".repeat(43), publicKey: "B".repeat(43) } as T;
+      if (path === "/api/admin/managed-nodes/create?server_id=3") return { success: true, node_id: 8 } as T;
+      throw new Error(`unexpected POST ${path}`);
+    });
+    const notify = vi.fn();
+    render(<NodesWorkbench isAdmin notify={notify} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "在服务器创建" }));
+    expect(screen.getByRole("dialog", { name: "在服务器创建节点" })).toBeInTheDocument();
+    expect(await screen.findByText("地址由服务器配置自动生成，不需要手工填写 IP 或域名。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(await screen.findByRole("button", { name: /VLESS Reality/ })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "下一步" })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "节点名称" }), { target: { value: "香港 Reality 02" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Reality 流控" }), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建节点" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/managed-nodes/create?server_id=3", expect.objectContaining({
+      node_name: "香港 Reality 02",
+      inbound: expect.objectContaining({
+        protocol: "vless",
+        settings: expect.objectContaining({ clients: [expect.not.objectContaining({ flow: expect.anything() })] }),
+        streamSettings: expect.objectContaining({ security: "reality" }),
+      }),
+    })));
+    expect(notify).toHaveBeenCalledWith("受管节点已创建");
+  });
+});
+
 describe("persistent node order", () => {
   it("keeps the complete user configuration while replacing only node_order", async () => {
     const config = userConfig([2, 1, 3]);

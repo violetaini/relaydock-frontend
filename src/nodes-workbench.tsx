@@ -3,6 +3,8 @@ import {
   Activity,
   ArrowDown,
   ArrowUp,
+  ArrowLeft,
+  ArrowRight,
   Cable,
   Check,
   ChevronDown,
@@ -34,6 +36,7 @@ import {
   Server,
   Settings2,
   ShieldCheck,
+  Shield,
   Shuffle,
   Tag,
   Terminal,
@@ -46,7 +49,19 @@ import {
 } from "lucide-react";
 import { api } from "./api";
 import { TunnelsPanel } from "./advanced";
+import {
+  buildManagedInboundRequest,
+  managedProtocolOptions,
+  newManagedInboundDraft,
+  protocolDefaults,
+  randomBase64,
+  createManagedUUID,
+  randomHex,
+  type ManagedInboundDraft,
+  type ManagedProtocol,
+} from "./managed-node-presets";
 import { SelfServiceNodes } from "./self-service-nodes";
+import type { RemoteServer, ServerListResponse } from "./types";
 import {
   Badge,
   Button,
@@ -166,8 +181,9 @@ interface TempSubscriptionResponse {
 }
 
 type SortMode = "recent" | "custom" | "name" | "protocol" | "server" | "latency" | "speed";
+type SourceFilter = "all" | "managed" | "imported" | "routed";
 type WorkbenchDialog =
-  | { kind: "create" }
+  | { kind: "managed-create" }
   | { kind: "edit"; node: WorkbenchNode }
   | { kind: "config"; node: WorkbenchNode }
   | { kind: "import" }
@@ -215,7 +231,34 @@ export interface ManagedNodeOffer {
   sort_order: number;
 }
 
-const protocols = ["vmess", "vless", "trojan", "ss", "socks5", "hysteria", "hysteria2", "tuic", "anytls", "wireguard", "snell"];
+const protocols = ["vmess", "vless", "trojan", "ss", "socks5", "http", "hysteria2", "tuic", "anytls", "wireguard", "snell"];
+
+interface ManagedCertificate {
+  id: number;
+  domain: string;
+  status: string;
+  expiry_date?: string | null;
+}
+
+interface X25519Response {
+  privateKey?: string;
+  publicKey?: string;
+  success?: boolean;
+  error?: string;
+}
+
+interface RealityDomainProbe {
+  domain: string;
+  success?: boolean;
+  latency_ms?: number;
+}
+
+interface ManagedCreateResponse {
+  success?: boolean;
+  message?: string;
+  node_id?: number;
+  node?: WorkbenchNode;
+}
 
 function readConfig(node: WorkbenchNode): Record<string, unknown> {
   for (const raw of [node.clash_config, node.parsed_config]) {
@@ -240,6 +283,22 @@ function nodeTags(node: WorkbenchNode): string[] {
   const tags = Array.isArray(node.tags) ? node.tags.filter(Boolean) : [];
   if (tags.length) return tags;
   return node.tag ? [node.tag] : [];
+}
+
+function nodeSource(node: WorkbenchNode): Exclude<SourceFilter, "all"> {
+  if (node.node_type === "routed") return "routed";
+  if (node.original_server && node.inbound_tag) return "managed";
+  return "imported";
+}
+
+function nodeProtocolKey(protocol: string): string {
+  switch (protocol.trim().toLowerCase()) {
+    case "shadowsocks": return "ss";
+    case "socks": return "socks5";
+    case "hysteria":
+    case "hy2": return "hysteria2";
+    default: return protocol.trim().toLowerCase();
+  }
 }
 
 function nodePayload(node: WorkbenchNode, patch: Partial<WorkbenchNode> = {}) {
@@ -319,6 +378,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
+  const [source, setSource] = useState<SourceFilter>("all");
   const [protocol, setProtocol] = useState("all");
   const [tag, setTag] = useState("all");
   const [sort, setSort] = useState<SortMode>("recent");
@@ -437,16 +497,31 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
     return () => window.clearInterval(timer);
   }, [hasRunning, load]);
 
-  const allTags = useMemo(() => Array.from(new Set(nodes.flatMap(nodeTags))).sort((a, b) => a.localeCompare(b, "zh-CN")), [nodes]);
+  const sourceScopedNodes = useMemo(() => source === "all" ? nodes : nodes.filter((node) => nodeSource(node) === source), [nodes, source]);
   const protocolCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    for (const node of nodes) counts[node.protocol.toLowerCase()] = (counts[node.protocol.toLowerCase()] || 0) + 1;
+    for (const node of sourceScopedNodes) counts[nodeProtocolKey(node.protocol)] = (counts[nodeProtocolKey(node.protocol)] || 0) + 1;
+    return counts;
+  }, [sourceScopedNodes]);
+  const protocolFilterOptions = useMemo(() => Array.from(new Set([...protocols, ...Object.keys(protocolCounts)])).filter((item) => protocolCounts[item]), [protocolCounts]);
+  const protocolScopedNodes = useMemo(() => protocol === "all" ? sourceScopedNodes : sourceScopedNodes.filter((node) => nodeProtocolKey(node.protocol) === protocol), [protocol, sourceScopedNodes]);
+  const allTags = useMemo(() => Array.from(new Set(protocolScopedNodes.flatMap(nodeTags))).sort((a, b) => a.localeCompare(b, "zh-CN")), [protocolScopedNodes]);
+  const sourceCounts = useMemo(() => {
+    const counts: Record<Exclude<SourceFilter, "all">, number> = { managed: 0, imported: 0, routed: 0 };
+    for (const node of nodes) counts[nodeSource(node)] += 1;
     return counts;
   }, [nodes]);
+  useEffect(() => {
+    if (protocol !== "all" && !protocolCounts[protocol]) setProtocol("all");
+  }, [protocol, protocolCounts]);
+  useEffect(() => {
+    if (tag !== "all" && !allTags.includes(tag)) setTag("all");
+  }, [allTags, tag]);
   const visible = useMemo(() => {
     const query = search.trim().toLowerCase();
     const filtered = nodes.filter((node) => {
-      if (protocol !== "all" && node.protocol.toLowerCase() !== protocol) return false;
+      if (source !== "all" && nodeSource(node) !== source) return false;
+      if (protocol !== "all" && nodeProtocolKey(node.protocol) !== protocol) return false;
       if (tag !== "all" && !nodeTags(node).includes(tag)) return false;
       if (enabledOnly && !node.enabled) return false;
       if (!query) return true;
@@ -464,7 +539,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       if (sort === "speed") return (latest[b.id]?.down_mbps || -1) - (latest[a.id]?.down_mbps || -1);
       return new Date(b.updated_at || b.created_at || 0).getTime() - new Date(a.updated_at || a.created_at || 0).getTime();
     });
-  }, [enabledOnly, latest, manualOrder, nodes, protocol, search, sort, tag]);
+  }, [enabledOnly, latest, manualOrder, nodes, protocol, search, sort, source, tag]);
 
   const selectedNodes = useMemo(() => nodes.filter((node) => selected.has(node.id)), [nodes, selected]);
   const allVisibleSelected = visible.length > 0 && visible.every((node) => selected.has(node.id));
@@ -635,8 +710,8 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
           : userView === "mine" ? `${nodes.length} 个可用节点 · ${nodes.filter((node) => node.enabled).length} 个启用` : "按服务器授权开通独立节点凭据"}
         actions={isAdmin || userView === "mine" ? <>
           <IconButton label="刷新节点数据" onClick={() => void load()} disabled={loading}><RefreshCw size={18} /></IconButton>
-          <Button variant="secondary" onClick={() => setDialog({ kind: "import" })}><Upload size={17} />导入</Button>
-          {isAdmin ? <Button onClick={() => setDialog({ kind: "create" })}><Plus size={17} />添加节点</Button> : null}
+          <Button variant="secondary" onClick={() => setDialog({ kind: "import" })}><Upload size={17} />导入已有节点</Button>
+          {isAdmin ? <Button onClick={() => setDialog({ kind: "managed-create" })}><Server size={17} />在服务器创建</Button> : null}
         </> : undefined}
       />
 
@@ -677,9 +752,15 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
           <Button aria-label="打开分享 URI 工具" variant="secondary" onClick={() => setDialog({ kind: "uris" })}><Link2 size={16} />URI 管理</Button>
           <Button aria-label="打开订阅同步工作台" variant="secondary" onClick={() => setDialog({ kind: "subscriptions" })}><Globe2 size={16} />同步外部订阅</Button>
         </div> : null}
+        <div className="nw-filter-group nw-source-filter" aria-label="节点来源">
+          <button className={source === "all" ? "is-active" : ""} onClick={() => setSource("all")}><ListFilter size={13} />全部节点 <span>{nodes.length}</span></button>
+          <button className={source === "managed" ? "is-active" : ""} onClick={() => setSource("managed")}><Server size={13} />服务器创建 <span>{sourceCounts.managed}</span></button>
+          <button className={source === "imported" ? "is-active" : ""} onClick={() => setSource("imported")}><Upload size={13} />外部导入 <span>{sourceCounts.imported}</span></button>
+          <button className={source === "routed" ? "is-active" : ""} onClick={() => setSource("routed")}><Route size={13} />路由出站 <span>{sourceCounts.routed}</span></button>
+        </div>
         <div className="nw-filter-group" aria-label="协议筛选">
-          <button className={protocol === "all" ? "is-active" : ""} onClick={() => setProtocol("all")}>全部 <span>{nodes.length}</span></button>
-          {protocols.filter((item) => protocolCounts[item]).map((item) => <button key={item} className={protocol === item ? "is-active" : ""} onClick={() => setProtocol(item)}>{item.toUpperCase()} <span>{protocolCounts[item]}</span></button>)}
+          <button className={protocol === "all" ? "is-active" : ""} onClick={() => setProtocol("all")}>全部协议 <span>{sourceScopedNodes.length}</span></button>
+          {protocolFilterOptions.map((item) => <button key={item} className={protocol === item ? "is-active" : ""} onClick={() => setProtocol(item)}>{item.toUpperCase()} <span>{protocolCounts[item]}</span></button>)}
         </div>
         {allTags.length ? <div className="nw-filter-group nw-tag-filters" aria-label="标签筛选"><button className={tag === "all" ? "is-active" : ""} onClick={() => setTag("all")}>全部标签</button>{allTags.map((item) => <button key={item} className={tag === item ? "is-active" : ""} onClick={() => setTag(item)}><Tag size={12} />{item}</button>)}</div> : null}
         {sort === "custom" ? <div className="nw-order-toolbar"><span><ArrowUp size={15} />使用每行的上下箭头调整订阅节点顺序</span><Button variant={orderDirty ? "primary" : "secondary"} disabled={savingOrder || !orderDirty} onClick={() => void saveManualOrder()}>{savingOrder ? <Spinner label="正在保存" /> : <><Check size={15} />保存节点顺序</>}</Button></div> : null}
@@ -699,28 +780,28 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       </div> : null}
 
       <Surface className="table-surface nw-node-surface">
-        {loading ? <div className="center-state"><Spinner label="正在加载节点" /></div> : visible.length === 0 ? <EmptyState icon={<Route size={24} />} title={nodes.length ? "没有匹配的节点" : "暂无节点"} description={nodes.length ? "调整筛选条件后重试" : "导入分享链接、Clash 配置或手工添加节点"} action={!nodes.length ? <Button onClick={() => setDialog({ kind: "import" })}><Upload size={16} />导入节点</Button> : undefined} /> : <div className="table-wrap"><table className="nw-node-table"><thead><tr><th className="nw-check-col"><input aria-label="选择当前结果" type="checkbox" checked={allVisibleSelected} onChange={toggleVisible} /></th>{sort === "custom" ? <th className="nw-order-col">顺序</th> : null}<th>协议 / 节点</th><th>标签与归属</th><th>服务器地址</th><th>连通性</th><th>测速结果</th><th>状态</th><th aria-label="操作" /></tr></thead><tbody>{visible.map((node) => {
+        {loading ? <div className="center-state"><Spinner label="正在加载节点" /></div> : visible.length === 0 ? <EmptyState icon={<Route size={24} />} title={nodes.length ? "没有匹配的节点" : "暂无节点"} description={nodes.length ? "调整筛选条件后重试" : "从受管服务器创建节点，或导入已经建好的外部节点"} action={!nodes.length ? <Button onClick={() => isAdmin ? setDialog({ kind: "managed-create" }) : setDialog({ kind: "import" })}>{isAdmin ? <Server size={16} /> : <Upload size={16} />}{isAdmin ? "在服务器创建" : "导入节点"}</Button> : undefined} /> : <div className="table-wrap"><table className="nw-node-table"><thead><tr><th className="nw-check-col"><input aria-label="选择当前结果" type="checkbox" checked={allVisibleSelected} onChange={toggleVisible} /></th>{sort === "custom" ? <th className="nw-order-col">顺序</th> : null}<th>协议 / 节点</th><th>标签与归属</th><th>服务器地址</th><th>连通性</th><th>测速结果</th><th>状态</th><th aria-label="操作" /></tr></thead><tbody>{visible.map((node) => {
           const address = nodeAddress(node);
           const ping = tcping[node.id];
           const speed = latest[node.id];
           const offer = offers.find((item) => item.node_id === node.id);
           const orderIndex = manualOrder.indexOf(node.id);
           return <tr key={node.id} className={selected.has(node.id) ? "is-selected" : ""}>
-            <td><input aria-label={`选择 ${node.node_name}`} type="checkbox" checked={selected.has(node.id)} onChange={() => toggleSelection(node.id)} /></td>
-            {sort === "custom" ? <td className="nw-order-col"><span>{orderIndex + 1}</span><IconButton label={`上移 ${node.node_name}`} disabled={orderIndex <= 0} onClick={() => moveManualNode(node.id, -1)}><ArrowUp size={14} /></IconButton><IconButton label={`下移 ${node.node_name}`} disabled={orderIndex < 0 || orderIndex >= manualOrder.length - 1} onClick={() => moveManualNode(node.id, 1)}><ArrowDown size={14} /></IconButton></td> : null}
-            <td><div className="nw-node-primary"><Badge tone="info">{node.protocol.toUpperCase() || "UNKNOWN"}</Badge><span><strong>{node.node_name}</strong><small>#{node.id}{node.node_type === "routed" ? " · 路由出站" : ""}{node.relay_orig_server ? " · 已中转" : ""}</small></span></div></td>
-            <td><div className="nw-node-tags">{offer?.enabled ? <Badge tone="good">自助发布</Badge> : null}{nodeTags(node).length ? nodeTags(node).slice(0, 3).map((item) => <Badge key={item}>{item}</Badge>) : <span className="muted">未分类</span>}</div><small className="cell-note">{node.original_server || node.created_by || "外部导入"}{node.inbound_tag ? ` · ${node.inbound_tag}` : ""}</small></td>
-            <td><code className="nw-address">{address.host || "-"}:{address.port || "-"}</code>{node.relay_orig_server ? <small className="cell-note">原站 {node.relay_orig_server}:{node.relay_orig_port || "-"}</small> : node.original_domain ? <small className="cell-note">原域名 {node.original_domain}</small> : null}</td>
-            <td><button className={`nw-result-button ${ping?.success ? "is-good" : ping?.error ? "is-bad" : ""}`} disabled={ping?.loading} title={ping?.error || "点击测试 TCP/UDP 连通延迟"} onClick={() => void pingOne(node)}>{ping?.loading ? <Spinner label="" /> : <Zap size={14} />}{ping?.loading ? "测试中" : ping?.success ? `${ping.latency.toFixed(1)} ms` : ping?.error ? "失败" : "测延迟"}</button></td>
-            <td>{isAdmin ? <button className="nw-speed-cell" title={speed?.error || "打开节点测速"} onClick={() => setDialog({ kind: "speed", nodeIDs: [node.id] })}><Badge tone={speedTone(speed)}>{resultLabel(speed)}</Badge>{speed?.egress_ip ? <small>{speed.egress_ip}</small> : null}</button> : <Badge tone="neutral">管理员功能</Badge>}</td>
-            <td>{isAdmin ? <button className="nw-status-button" title={`点击${node.enabled ? "停用" : "启用"}`} onClick={() => void update(node, { enabled: !node.enabled }, node.enabled ? "节点已停用" : "节点已启用")}><span className={node.enabled ? "is-on" : ""} />{node.enabled ? "启用" : "停用"}</button> : <Badge tone={node.enabled ? "good" : "neutral"}>{node.enabled ? "启用" : "停用"}</Badge>}</td>
-            <td><NodeActions node={node} isAdmin={isAdmin} userRouted={userRouted} onEdit={() => setDialog({ kind: "edit", node })} onConfig={() => setDialog({ kind: "config", node })} onRelay={() => setDialog({ kind: "relay", node })} onCancelRelay={() => cancelRelay(node)} onChain={() => setDialog({ kind: "chain", node })} onResolve={() => setDialog({ kind: "resolve", node })} onRegion={() => setDialog({ kind: "region", node })} onRestore={() => restoreDomain(node)} onRoute={() => setDialog({ kind: "route", node })} onTempSub={() => setDialog({ kind: "temp-sub", nodes: [node] })} onDelete={() => isAdmin ? removeNode(node) : removeUserRouted(node)} /></td>
+            <td className="nw-cell-check"><input aria-label={`选择 ${node.node_name}`} type="checkbox" checked={selected.has(node.id)} onChange={() => toggleSelection(node.id)} /></td>
+            {sort === "custom" ? <td className="nw-order-col nw-cell-order" data-label="顺序"><span>{orderIndex + 1}</span><IconButton label={`上移 ${node.node_name}`} disabled={orderIndex <= 0} onClick={() => moveManualNode(node.id, -1)}><ArrowUp size={14} /></IconButton><IconButton label={`下移 ${node.node_name}`} disabled={orderIndex < 0 || orderIndex >= manualOrder.length - 1} onClick={() => moveManualNode(node.id, 1)}><ArrowDown size={14} /></IconButton></td> : null}
+            <td className="nw-cell-primary"><div className="nw-node-primary"><Badge tone="info">{node.protocol.toUpperCase() || "UNKNOWN"}</Badge><span><strong>{node.node_name}</strong><small>#{node.id}{node.node_type === "routed" ? " · 路由出站" : ""}{node.relay_orig_server ? " · 已中转" : ""}</small></span></div></td>
+            <td className="nw-cell-owner"><div className="nw-node-tags">{offer?.enabled ? <Badge tone="good">自助发布</Badge> : null}{nodeTags(node).length ? nodeTags(node).slice(0, 3).map((item) => <Badge key={item}>{item}</Badge>) : <span className="muted">未分类</span>}</div><small className="cell-note">{node.original_server || node.created_by || "外部导入"}{node.inbound_tag ? ` · ${node.inbound_tag}` : ""}</small></td>
+            <td className="nw-cell-address" data-label="服务器"><code className="nw-address">{address.host || "-"}:{address.port || "-"}</code>{node.relay_orig_server ? <small className="cell-note">原站 {node.relay_orig_server}:{node.relay_orig_port || "-"}</small> : node.original_domain ? <small className="cell-note">原域名 {node.original_domain}</small> : null}</td>
+            <td className="nw-cell-latency" data-label="连通性"><button className={`nw-result-button ${ping?.success ? "is-good" : ping?.error ? "is-bad" : ""}`} disabled={ping?.loading} title={ping?.error || "点击测试 TCP/UDP 连通延迟"} onClick={() => void pingOne(node)}>{ping?.loading ? <Spinner label="" /> : <Zap size={14} />}{ping?.loading ? "测试中" : ping?.success ? `${ping.latency.toFixed(1)} ms` : ping?.error ? "失败" : "测延迟"}</button></td>
+            <td className="nw-cell-speed" data-label="测速">{isAdmin ? <button className="nw-speed-cell" title={speed?.error || "打开节点测速"} onClick={() => setDialog({ kind: "speed", nodeIDs: [node.id] })}><Badge tone={speedTone(speed)}>{resultLabel(speed)}</Badge>{speed?.egress_ip ? <small>{speed.egress_ip}</small> : null}</button> : <Badge tone="neutral">管理员功能</Badge>}</td>
+            <td className="nw-cell-status" data-label="状态">{isAdmin ? <button className="nw-status-button" title={`点击${node.enabled ? "停用" : "启用"}`} onClick={() => void update(node, { enabled: !node.enabled }, node.enabled ? "节点已停用" : "节点已启用")}><span className={node.enabled ? "is-on" : ""} />{node.enabled ? "启用" : "停用"}</button> : <Badge tone={node.enabled ? "good" : "neutral"}>{node.enabled ? "启用" : "停用"}</Badge>}</td>
+            <td className="nw-cell-actions"><NodeActions node={node} isAdmin={isAdmin} userRouted={userRouted} onEdit={() => setDialog({ kind: "edit", node })} onConfig={() => setDialog({ kind: "config", node })} onRelay={() => setDialog({ kind: "relay", node })} onCancelRelay={() => cancelRelay(node)} onChain={() => setDialog({ kind: "chain", node })} onResolve={() => setDialog({ kind: "resolve", node })} onRegion={() => setDialog({ kind: "region", node })} onRestore={() => restoreDomain(node)} onRoute={() => setDialog({ kind: "route", node })} onTempSub={() => setDialog({ kind: "temp-sub", nodes: [node] })} onDelete={() => isAdmin ? removeNode(node) : removeUserRouted(node)} /></td>
           </tr>;
         })}</tbody></table></div>}
       </Surface>
       </>}
 
-      {dialog?.kind === "create" ? <NodeEditor onClose={closeDialog} onComplete={async (message) => { closeDialog(); notify(message); await load(true); }} /> : null}
+      {dialog?.kind === "managed-create" ? <ManagedNodeWizard onClose={closeDialog} onComplete={async (message, tone) => { closeDialog(); if (tone) notify(message, tone); else notify(message); await load(true); }} /> : null}
       {dialog?.kind === "edit" ? <NodeEditor node={dialog.node} offer={offers.find((item) => item.node_id === dialog.node.id)} onClose={closeDialog} onComplete={async (message) => { closeDialog(); notify(message); await load(true); }} /> : null}
       {dialog?.kind === "config" ? <ConfigDialog node={dialog.node} editable={isAdmin} onClose={closeDialog} onComplete={async () => { closeDialog(); notify("节点配置已更新"); await load(true); }} /> : null}
       {dialog?.kind === "import" ? <ImportDialog onClose={closeDialog} onComplete={async (count) => { closeDialog(); notify(`已导入 ${count} 个节点`); await load(true); }} /> : null}
@@ -853,6 +934,230 @@ export function NodeEditor({ node, offer, onClose, onComplete }: { node?: Workbe
       {node ? <div className="nw-managed-offer"><Toggle checked={form.selfService} disabled={!offer && (!node.original_server || !node.inbound_tag)} onChange={(selfService) => setForm({ ...form, selfService })} label="允许获授权用户自助开通" />{form.selfService ? <Field label="目录排序" hint="数值越小越靠前"><input type="number" min="0" step="1" value={form.offerOrder} onChange={(event) => setForm({ ...form, offerOrder: event.target.value })} /></Field> : null}{!node.original_server || !node.inbound_tag ? <small>需要受管服务器和入站标签后才能发布。</small> : <small>保存时会校验 Agent 的开通、到期和限速能力。</small>}</div> : null}
       <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose} disabled={working}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />保存节点</>}</Button></div>
     </form>
+  </Dialog>;
+}
+
+function serverReady(server: RemoteServer): boolean {
+  return Boolean(server.xray_running && (server.ws_connected || server.status === "online" || server.status === "connected"));
+}
+
+function protocolLabel(value: ManagedProtocol): string {
+  return managedProtocolOptions.find((item) => item.value === value)?.label ?? value;
+}
+
+function availableInboundPort(server: RemoteServer | undefined, protocol: ManagedProtocol): string {
+  // WSS is multiplexed by the server's Nginx listener; its public port remains 443.
+  if (protocol === "vless-ws") return "443";
+  const used = new Set((server?.inbounds ?? []).map((inbound) => Number(inbound.port)).filter(Boolean));
+  const preferred = protocol === "hysteria2" ? [8443, 24443] : [443, 8443, 10443, 18443, 24443];
+  const selected = preferred.find((port) => !used.has(port));
+  if (selected) return String(selected);
+  for (let port = 20000; port <= 60000; port += 1) if (!used.has(port)) return String(port);
+  return "443";
+}
+
+function ManagedNodeWizard({ onClose, onComplete }: { onClose: () => void; onComplete: (message: string, tone?: "success" | "error") => void }) {
+  const wizardRef = useRef<HTMLDivElement>(null);
+  const [step, setStep] = useState(1);
+  const [servers, setServers] = useState<RemoteServer[]>([]);
+  const [certificates, setCertificates] = useState<ManagedCertificate[]>([]);
+  const [serverID, setServerID] = useState("");
+  const [draft, setDraft] = useState<ManagedInboundDraft>(() => newManagedInboundDraft());
+  const [loading, setLoading] = useState(true);
+  const [working, setWorking] = useState(false);
+  const [keyWorking, setKeyWorking] = useState(false);
+  const [domainWorking, setDomainWorking] = useState(false);
+  const [realityDomains, setRealityDomains] = useState<RealityDomainProbe[]>([]);
+  const [error, setError] = useState("");
+  const selectedServer = servers.find((server) => String(server.id) === serverID);
+  const readyServers = servers.filter(serverReady);
+  const selectedProtocol = managedProtocolOptions.find((item) => item.value === draft.protocol);
+  const validCertificates = certificates.filter((certificate) => certificate.status === "valid");
+  const canPublish = selectedServer?.xray_mode === "embedded";
+
+  useEffect(() => {
+    const dialogBody = wizardRef.current?.closest<HTMLElement>(".dialog-body");
+    if (dialogBody) dialogBody.scrollTop = 0;
+  }, [step]);
+
+  const generateRealityKeys = useCallback(async () => {
+    setKeyWorking(true);
+    setError("");
+    try {
+      const response = await api.post<X25519Response>("/api/admin/xray/generate-x25519");
+      if (!response.privateKey || !response.publicKey) throw new Error(response.error || "服务端未返回完整的 X25519 密钥对");
+      setDraft((current) => ({ ...current, privateKey: response.privateKey ?? "", publicKey: response.publicKey ?? "" }));
+    } catch (reason) { setError(reasonMessage(reason, "Reality 密钥生成失败")); }
+    finally { setKeyWorking(false); }
+  }, []);
+
+  const loadRealityDomains = useCallback(async (id: string) => {
+    if (!id) return;
+    setDomainWorking(true);
+    try {
+      const response = await api.get<{ domains?: RealityDomainProbe[] }>(`/api/admin/remote/reality-domains?server_id=${id}`);
+      const domains = response.domains ?? [];
+      setRealityDomains(domains);
+      const preferred = domains.find((item) => item.success) ?? domains[0];
+      if (preferred) setDraft((current) => ({ ...current, domain: current.domain || preferred.domain }));
+    } catch { setRealityDomains([]); }
+    finally { setDomainWorking(false); }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      api.get<ServerListResponse>("/api/admin/remote-servers"),
+      api.get<{ certificates?: ManagedCertificate[] }>("/api/admin/certificates").catch(() => ({ certificates: [] })),
+    ]).then(([serverResponse, certificateResponse]) => {
+      if (!active) return;
+      const nextServers = serverResponse.servers ?? [];
+      setServers(nextServers);
+      setCertificates(certificateResponse.certificates ?? []);
+      const preferred = nextServers.find(serverReady);
+      if (preferred) {
+        setServerID(String(preferred.id));
+        setDraft((current) => ({ ...current, port: availableInboundPort(preferred, current.protocol) }));
+      }
+    }).catch((reason) => active && setError(reasonMessage(reason, "创建资源加载失败"))).finally(() => active && setLoading(false));
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!serverID || draft.protocol !== "vless-reality") return;
+    void loadRealityDomains(serverID);
+    if (!draft.privateKey || !draft.publicKey) void generateRealityKeys();
+  // The protocol or selected server is the workflow trigger; key changes must not re-run it.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft.protocol, serverID]);
+
+  useEffect(() => {
+    if (!selectedServer) return;
+    if (draft.protocol === "vless-ws") setDraft((current) => ({ ...current, domain: selectedServer.domain?.trim() || "" }));
+    if (selectedServer.xray_mode !== "embedded" && draft.publish) setDraft((current) => ({ ...current, publish: false }));
+  }, [draft.protocol, draft.publish, selectedServer]);
+
+  const chooseProtocol = (protocol: ManagedProtocol) => {
+    const defaults = protocolDefaults(protocol);
+    const ssKeyLength = (defaults.ssCipher ?? draft.ssCipher) === "2022-blake3-aes-128-gcm" ? 16 : 32;
+    setDraft((current) => ({
+      ...current,
+      ...defaults,
+      tag: `${defaults.tag ?? protocol}-${randomHex(6)}`,
+      port: availableInboundPort(selectedServer, protocol),
+      uuid: protocol === "vless-reality" || protocol === "vless-ws" || protocol === "vmess" ? current.uuid || createManagedUUID() : current.uuid,
+      password: protocol === "shadowsocks" ? randomBase64(ssKeyLength) : current.password || createManagedUUID(),
+      ssUserPassword: protocol === "shadowsocks" ? randomBase64(ssKeyLength) : current.ssUserPassword,
+      domain: protocol === "vless-ws" ? selectedServer?.domain?.trim() || "" : current.domain,
+    }));
+  };
+
+  const chooseServer = (server: RemoteServer) => {
+    setServerID(String(server.id));
+    setDraft((current) => ({
+      ...current,
+      port: availableInboundPort(server, current.protocol),
+      domain: current.protocol === "vless-ws" ? server.domain?.trim() || "" : current.domain,
+    }));
+  };
+
+  const chooseSSCipher = (cipher: ManagedInboundDraft["ssCipher"]) => {
+    const keyLength = cipher === "2022-blake3-aes-128-gcm" ? 16 : 32;
+    setDraft({ ...draft, ssCipher: cipher, password: randomBase64(keyLength), ssUserPassword: randomBase64(keyLength) });
+  };
+
+  const validateStep = () => {
+    setError("");
+    try {
+      if (step === 1) {
+        if (!selectedServer) throw new Error("请选择目标服务器");
+        if (!serverReady(selectedServer)) throw new Error("目标服务器或 Xray 当前不在线");
+        setStep(2);
+        return;
+      }
+      if (step === 2) {
+        if (draft.protocol === "vless-ws" && !selectedServer?.domain?.trim()) throw new Error("VLESS WSS 需要先在服务器设置节点域名");
+        if (draft.protocol === "vless-reality" && (!draft.privateKey || !draft.publicKey)) throw new Error("Reality 密钥尚未生成完成");
+        if (selectedProtocol?.requiresCertificate && validCertificates.length === 0) throw new Error("该协议需要托管 TLS 证书，请先到证书管理申请或上传证书");
+        setStep(3);
+        return;
+      }
+      buildManagedInboundRequest(draft);
+      setStep(4);
+    } catch (reason) { setError(reasonMessage(reason, "请补全当前步骤")); }
+  };
+
+  const submit = async () => {
+    if (!selectedServer) return;
+    setWorking(true);
+    setError("");
+    try {
+      const payload = buildManagedInboundRequest(draft);
+      const response = await api.post<ManagedCreateResponse>(`/api/admin/managed-nodes/create?server_id=${selectedServer.id}`, payload);
+      const nodeID = response.node_id ?? response.node?.id;
+      if (!nodeID) throw new Error(response.message || "节点创建完成但控制端未返回节点记录");
+      if (draft.publish) {
+        try {
+          await api.post("/api/admin/managed-node-offers", {
+            node_id: nodeID,
+            enabled: true,
+            sort_order: Math.max(0, Math.floor(Number(draft.sortOrder) || 0)),
+          });
+        } catch (reason) {
+          onComplete(`节点已创建，但发布到用户目录失败：${reasonMessage(reason, "请在节点编辑中重试发布")}`, "error");
+          return;
+        }
+      }
+      onComplete(draft.publish ? "受管节点已创建并发布给用户" : "受管节点已创建");
+    } catch (reason) { setError(reasonMessage(reason, "受管节点创建失败")); }
+    finally { setWorking(false); }
+  };
+
+  return <Dialog title="在服务器创建节点" description="选择受管服务器后创建真实入站，并在成功后自动登记节点" onClose={onClose} wide dismissible={!working}>
+    <div className="managed-node-wizard" ref={wizardRef}>
+      <ol className="managed-stepper" aria-label="创建进度">
+        {["服务器", "协议", "配置", "确认"].map((label, index) => <li key={label} className={step === index + 1 ? "is-active" : step > index + 1 ? "is-done" : ""}><span>{step > index + 1 ? <Check size={14} /> : index + 1}</span><strong>{label}</strong></li>)}
+      </ol>
+      {error ? <ErrorState message={error} /> : null}
+      {loading ? <div className="center-state"><Spinner label="正在读取服务器与证书" /></div> : step === 1 ? <section className="managed-wizard-step">
+        <div className="managed-step-heading"><span><Server size={19} /></span><div><h3>选择运行节点的服务器</h3><p>地址由服务器配置自动生成，不需要手工填写 IP 或域名。</p></div></div>
+        {servers.length ? <div className="managed-server-grid">{servers.map((server) => {
+          const ready = serverReady(server);
+          return <button key={server.id} type="button" aria-pressed={serverID === String(server.id)} className={serverID === String(server.id) ? "is-selected" : ""} disabled={!ready} onClick={() => chooseServer(server)}>
+            <span className={`managed-server-icon ${ready ? "is-online" : ""}`}><Server size={18} /></span><span><strong>{server.name}</strong><small>{server.domain || server.ip_address || "地址待上报"}</small></span><Badge tone={ready ? "good" : "bad"}>{ready ? "Xray 在线" : "不可创建"}</Badge>
+          </button>;
+        })}</div> : <EmptyState icon={<Server size={23} />} title="还没有受管服务器" description="先在服务器管理添加并安装 Agent。" />}
+        {!readyServers.length && servers.length ? <div className="nw-inline-note"><Activity size={16} /><span>当前没有 Xray 在线的服务器，恢复在线后才能继续。</span></div> : null}
+      </section> : step === 2 ? <section className="managed-wizard-step">
+        <div className="managed-step-heading"><span><Network size={19} /></span><div><h3>选择协议与安全组合</h3><p>仅显示当前 Agent 能可靠创建并同步为节点的组合。</p></div></div>
+        <div className="managed-protocol-grid">{managedProtocolOptions.map((option) => {
+          const disabled = option.value === "vless-ws" && !selectedServer?.domain;
+          return <button key={option.value} type="button" aria-pressed={draft.protocol === option.value} className={draft.protocol === option.value ? "is-selected" : ""} disabled={disabled} onClick={() => chooseProtocol(option.value)}><span><Shield size={17} /></span><strong>{option.label}</strong><small>{disabled ? "服务器未配置域名" : option.detail}</small></button>;
+        })}</div>
+        <div className="managed-import-only"><span><Upload size={16} /></span><div><strong>TUIC、WireGuard 与自定义协议</strong><small>已有节点请使用“导入已有节点”；AnyTLS、Snell 可在服务器的高级入站中配置。</small></div></div>
+      </section> : step === 3 ? <section className="managed-wizard-step">
+        <div className="managed-step-heading"><span><Settings2 size={19} /></span><div><h3>配置 {protocolLabel(draft.protocol)}</h3><p>界面只展示当前协议需要的字段。</p></div></div>
+        <div className="form-grid"><Field label="节点名称"><input autoFocus required value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder={`${selectedServer?.name || "节点"} ${protocolLabel(draft.protocol)}`} /></Field><Field label="入站 Tag" hint="同一服务器必须唯一"><input required value={draft.tag} onChange={(event) => setDraft({ ...draft, tag: event.target.value })} /></Field></div>
+        <div className="form-grid"><Field label="监听端口"><input required type="number" min="1" max="65535" value={draft.port} onChange={(event) => setDraft({ ...draft, port: event.target.value })} /></Field><Field label="客户端地址"><select value={draft.ipVersion} onChange={(event) => setDraft({ ...draft, ipVersion: event.target.value as ManagedInboundDraft["ipVersion"] })}><option value="v4">IPv4</option>{selectedServer?.ipv6_enabled && selectedServer.ip_address_v6 ? <option value="v6">IPv6</option> : null}{selectedServer?.ipv6_enabled && selectedServer.ip_address_v6 ? <option value="both">IPv4 + IPv6</option> : null}</select></Field></div>
+        {draft.protocol === "vless-reality" ? <>
+          <div className="form-grid"><Field label="客户端 UUID"><div className="nw-copy-field"><input value={draft.uuid} onChange={(event) => setDraft({ ...draft, uuid: event.target.value })} /><IconButton label="重新生成 UUID" onClick={() => setDraft({ ...draft, uuid: createManagedUUID() })}><RefreshCw size={15} /></IconButton></div></Field><Field label="流控"><select aria-label="Reality 流控" value={draft.flow} onChange={(event) => setDraft({ ...draft, flow: event.target.value as ManagedInboundDraft["flow"] })}><option value="xtls-rprx-vision">XTLS Vision（推荐）</option><option value="">无流控</option></select></Field></div>
+          <div className="form-grid"><Field label="Reality 伪装域名"><div className="nw-copy-field"><input list="managed-reality-domains" value={draft.domain} onChange={(event) => setDraft({ ...draft, domain: event.target.value })} placeholder="www.cloudflare.com" /><IconButton label="重新探测 Reality 域名" disabled={domainWorking} onClick={() => void loadRealityDomains(serverID)}><RefreshCw size={15} /></IconButton></div></Field><Field label="Short ID" hint="2-16 位偶数长度十六进制"><input value={draft.shortId} onChange={(event) => setDraft({ ...draft, shortId: event.target.value })} /></Field></div>
+          <datalist id="managed-reality-domains">{realityDomains.map((item) => <option key={item.domain} value={item.domain}>{item.success ? `${item.latency_ms ?? "-"} ms` : "探测失败"}</option>)}</datalist>
+          <div className="managed-key-state"><span><KeyRound size={16} /><span><strong>X25519 密钥</strong><small>{draft.privateKey && draft.publicKey ? "已安全生成" : "等待生成"}</small></span></span><Button type="button" variant="secondary" disabled={keyWorking} onClick={() => void generateRealityKeys()}>{keyWorking ? <Spinner label="正在生成" /> : <><RefreshCw size={15} />重新生成</>}</Button></div>
+        </> : null}
+        {draft.protocol === "vless-ws" ? <><Field label="客户端 UUID"><input value={draft.uuid} onChange={(event) => setDraft({ ...draft, uuid: event.target.value })} /></Field><div className="form-grid"><Field label="TLS 节点域名" hint="继承服务器域名"><input readOnly value={draft.domain} /></Field><Field label="WebSocket 路径"><input value={draft.wsPath} onChange={(event) => setDraft({ ...draft, wsPath: event.target.value })} /></Field></div></> : null}
+        {draft.protocol === "vmess" ? <div className="form-grid"><Field label="客户端 UUID"><input value={draft.uuid} onChange={(event) => setDraft({ ...draft, uuid: event.target.value })} /></Field><Field label="客户端加密"><select value={draft.vmessCipher} onChange={(event) => setDraft({ ...draft, vmessCipher: event.target.value as ManagedInboundDraft["vmessCipher"] })}><option value="auto">Auto（推荐）</option><option value="aes-128-gcm">AES-128-GCM</option><option value="chacha20-poly1305">ChaCha20-Poly1305</option><option value="none">None</option></select></Field></div> : null}
+        {draft.protocol === "shadowsocks" ? <><Field label="加密方式"><select aria-label="Shadowsocks 加密方式" value={draft.ssCipher} onChange={(event) => chooseSSCipher(event.target.value as ManagedInboundDraft["ssCipher"])}><option value="2022-blake3-aes-128-gcm">2022 BLAKE3 AES-128-GCM</option><option value="2022-blake3-aes-256-gcm">2022 BLAKE3 AES-256-GCM</option></select></Field><div className="form-grid"><Field label="服务端主密钥" hint="切换加密方式时自动生成"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value.trim() })} /></Field><Field label="初始用户密钥" hint="管理员节点凭据"><input value={draft.ssUserPassword} onChange={(event) => setDraft({ ...draft, ssUserPassword: event.target.value.trim() })} /></Field></div></> : null}
+        {draft.protocol === "socks5" || draft.protocol === "http" ? <div className="form-grid"><Field label="初始用户名"><input value={draft.accountUsername} onChange={(event) => setDraft({ ...draft, accountUsername: event.target.value.trim() })} /></Field><Field label="初始密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field></div> : null}
+        {draft.protocol === "trojan" || draft.protocol === "hysteria2" ? <><div className="form-grid"><Field label="认证密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field><Field label="托管证书"><select value={draft.certificateId} onChange={(event) => { const certificate = validCertificates.find((item) => String(item.id) === event.target.value); setDraft({ ...draft, certificateId: event.target.value, domain: certificate?.domain.replace(/^\*\./, "") || draft.domain }); }}><option value="">请选择证书</option>{validCertificates.map((item) => <option value={item.id} key={item.id}>{item.domain}</option>)}</select></Field></div><Field label="TLS SNI"><input value={draft.domain} onChange={(event) => setDraft({ ...draft, domain: event.target.value })} placeholder="edge.example.com" /></Field>{draft.protocol === "hysteria2" ? <Field label="Salamander 混淆密码" hint="可选；留空表示不启用混淆"><input value={draft.hysteriaObfsPassword} onChange={(event) => setDraft({ ...draft, hysteriaObfsPassword: event.target.value })} /></Field> : null}<Toggle checked={draft.skipCertVerify} onChange={(skipCertVerify) => setDraft({ ...draft, skipCertVerify })} label="客户端跳过证书校验" /></> : null}
+        <div className="managed-publish-panel"><Toggle checked={draft.publish} disabled={!canPublish} onChange={(publish) => setDraft({ ...draft, publish })} label="创建后发布到用户自助目录" />{draft.publish ? <Field label="目录排序" hint="数值越小越靠前"><input type="number" min="0" value={draft.sortOrder} onChange={(event) => setDraft({ ...draft, sortOrder: event.target.value })} /></Field> : <small>{canPublish ? "稍后也可以在节点编辑中发布。" : "该服务器为外置 Xray 模式，只能创建管理员节点，不能安全提供多用户凭据。"}</small>}</div>
+      </section> : <section className="managed-wizard-step">
+        <div className="managed-step-heading"><span><ShieldCheck size={19} /></span><div><h3>确认创建</h3><p>创建会写入远程 Xray，并在控制端生成对应节点。</p></div></div>
+        <dl className="managed-review"><div><dt>服务器</dt><dd>{selectedServer?.name}</dd></div><div><dt>节点名称</dt><dd>{draft.name}</dd></div><div><dt>协议</dt><dd>{protocolLabel(draft.protocol)}</dd></div><div><dt>监听</dt><dd>{draft.port} · {draft.ipVersion.toUpperCase()}</dd></div><div><dt>入站 Tag</dt><dd><code>{draft.tag}</code></dd></div><div><dt>用户目录</dt><dd>{draft.publish ? "创建后发布" : "暂不发布"}</dd></div></dl>
+        <details className="secure-inbound-preview"><summary>查看将提交的 Xray JSON</summary><textarea className="nw-code-editor" aria-label="受管节点 Xray JSON" readOnly value={JSON.stringify(buildManagedInboundRequest(draft).inbound, null, 2)} /></details>
+      </section>}
+      {!loading ? <div className="dialog-actions managed-wizard-actions"><Button type="button" variant="secondary" onClick={step === 1 ? onClose : () => { setError(""); setStep((current) => current - 1); }} disabled={working}><ArrowLeft size={16} />{step === 1 ? "取消" : "上一步"}</Button>{step < 4 ? <Button type="button" onClick={validateStep} disabled={working || (step === 1 && !readyServers.length) || keyWorking}>下一步<ArrowRight size={16} /></Button> : <Button type="button" onClick={() => void submit()} disabled={working}>{working ? <Spinner label="正在创建并校验" /> : <><Server size={16} />创建节点</>}</Button>}</div> : null}
+    </div>
   </Dialog>;
 }
 

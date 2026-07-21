@@ -7,6 +7,7 @@ import { ConsoleApp } from "./console";
 import type { Profile, Session } from "./types";
 import { Button, ErrorState, Spinner } from "./ui";
 import "./styles.css";
+import "./modern-theme.css";
 
 type BootState = "loading" | "setup" | "login" | "ready" | "error";
 

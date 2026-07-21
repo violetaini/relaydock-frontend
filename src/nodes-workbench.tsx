@@ -260,6 +260,16 @@ interface ManagedCreateResponse {
   node?: WorkbenchNode;
 }
 
+interface ManagedInboundInventoryResponse {
+  inbounds?: Array<{
+    tag?: string;
+    protocol?: string;
+    port?: number;
+    uplink?: number;
+    downlink?: number;
+  }>;
+}
+
 function readConfig(node: WorkbenchNode): Record<string, unknown> {
   for (const raw of [node.clash_config, node.parsed_config]) {
     try {
@@ -958,6 +968,7 @@ function availableInboundPort(server: RemoteServer | undefined, protocol: Manage
 
 function ManagedNodeWizard({ onClose, onComplete }: { onClose: () => void; onComplete: (message: string, tone?: "success" | "error") => void }) {
   const wizardRef = useRef<HTMLDivElement>(null);
+  const inventoryRequestRef = useRef(0);
   const [step, setStep] = useState(1);
   const [servers, setServers] = useState<RemoteServer[]>([]);
   const [certificates, setCertificates] = useState<ManagedCertificate[]>([]);
@@ -967,6 +978,8 @@ function ManagedNodeWizard({ onClose, onComplete }: { onClose: () => void; onCom
   const [working, setWorking] = useState(false);
   const [keyWorking, setKeyWorking] = useState(false);
   const [domainWorking, setDomainWorking] = useState(false);
+  const [inventoryWorking, setInventoryWorking] = useState(false);
+  const [inventoryServerID, setInventoryServerID] = useState("");
   const [realityDomains, setRealityDomains] = useState<RealityDomainProbe[]>([]);
   const [error, setError] = useState("");
   const selectedServer = servers.find((server) => String(server.id) === serverID);
@@ -1004,6 +1017,42 @@ function ManagedNodeWizard({ onClose, onComplete }: { onClose: () => void; onCom
     finally { setDomainWorking(false); }
   }, []);
 
+  const loadInboundInventory = useCallback(async (server: RemoteServer) => {
+    const requestID = inventoryRequestRef.current + 1;
+    inventoryRequestRef.current = requestID;
+    setInventoryWorking(true);
+    setInventoryServerID("");
+    try {
+      const response = await api.get<ManagedInboundInventoryResponse>(`/api/admin/remote/inbounds?server_id=${server.id}`);
+      if (inventoryRequestRef.current !== requestID) return;
+      const inbounds = (response.inbounds ?? []).map((inbound) => ({
+        tag: inbound.tag ?? "",
+        protocol: inbound.protocol ?? "",
+        port: Number(inbound.port) || 0,
+        uplink: Number(inbound.uplink) || 0,
+        downlink: Number(inbound.downlink) || 0,
+      }));
+      const enrichedServer = { ...server, inbounds };
+      setServers((current) => current.map((item) => item.id === server.id ? enrichedServer : item));
+      setDraft((current) => ({ ...current, port: availableInboundPort(enrichedServer, current.protocol) }));
+      setInventoryServerID(String(server.id));
+    } catch (reason) {
+      if (inventoryRequestRef.current === requestID) setError(reasonMessage(reason, "读取服务器入站端口失败，请重新选择服务器后重试"));
+    } finally {
+      if (inventoryRequestRef.current === requestID) setInventoryWorking(false);
+    }
+  }, []);
+
+  const chooseServer = useCallback((server: RemoteServer) => {
+    setError("");
+    setServerID(String(server.id));
+    setDraft((current) => ({
+      ...current,
+      domain: current.protocol === "vless-ws" ? server.domain?.trim() || "" : current.domain,
+    }));
+    void loadInboundInventory(server);
+  }, [loadInboundInventory]);
+
   useEffect(() => {
     let active = true;
     Promise.all([
@@ -1015,13 +1064,10 @@ function ManagedNodeWizard({ onClose, onComplete }: { onClose: () => void; onCom
       setServers(nextServers);
       setCertificates(certificateResponse.certificates ?? []);
       const preferred = nextServers.find(serverReady);
-      if (preferred) {
-        setServerID(String(preferred.id));
-        setDraft((current) => ({ ...current, port: availableInboundPort(preferred, current.protocol) }));
-      }
+      if (preferred) chooseServer(preferred);
     }).catch((reason) => active && setError(reasonMessage(reason, "创建资源加载失败"))).finally(() => active && setLoading(false));
     return () => { active = false; };
-  }, []);
+  }, [chooseServer]);
 
   useEffect(() => {
     if (!serverID || draft.protocol !== "vless-reality") return;
@@ -1052,15 +1098,6 @@ function ManagedNodeWizard({ onClose, onComplete }: { onClose: () => void; onCom
     }));
   };
 
-  const chooseServer = (server: RemoteServer) => {
-    setServerID(String(server.id));
-    setDraft((current) => ({
-      ...current,
-      port: availableInboundPort(server, current.protocol),
-      domain: current.protocol === "vless-ws" ? server.domain?.trim() || "" : current.domain,
-    }));
-  };
-
   const chooseSSCipher = (cipher: ManagedInboundDraft["ssCipher"]) => {
     const keyLength = cipher === "2022-blake3-aes-128-gcm" ? 16 : 32;
     setDraft({ ...draft, ssCipher: cipher, password: randomBase64(keyLength), ssUserPassword: randomBase64(keyLength) });
@@ -1072,6 +1109,7 @@ function ManagedNodeWizard({ onClose, onComplete }: { onClose: () => void; onCom
       if (step === 1) {
         if (!selectedServer) throw new Error("请选择目标服务器");
         if (!serverReady(selectedServer)) throw new Error("目标服务器或 Xray 当前不在线");
+        if (inventoryServerID !== serverID) throw new Error("服务器入站端口尚未读取完成，请稍后重试");
         setStep(2);
         return;
       }
@@ -1124,7 +1162,7 @@ function ManagedNodeWizard({ onClose, onComplete }: { onClose: () => void; onCom
         {servers.length ? <div className="managed-server-grid">{servers.map((server) => {
           const ready = serverReady(server);
           return <button key={server.id} type="button" aria-pressed={serverID === String(server.id)} className={serverID === String(server.id) ? "is-selected" : ""} disabled={!ready} onClick={() => chooseServer(server)}>
-            <span className={`managed-server-icon ${ready ? "is-online" : ""}`}><Server size={18} /></span><span><strong>{server.name}</strong><small>{server.domain || server.ip_address || "地址待上报"}</small></span><Badge tone={ready ? "good" : "bad"}>{ready ? "Xray 在线" : "不可创建"}</Badge>
+            <span className={`managed-server-icon ${ready ? "is-online" : ""}`}><Server size={18} /></span><span><strong>{server.name}</strong><small>{server.domain || server.ip_address || "地址待上报"}</small></span><Badge tone={ready ? "good" : "bad"}>{serverID === String(server.id) && inventoryWorking ? "读取配置" : ready ? "Xray 在线" : "不可创建"}</Badge>
           </button>;
         })}</div> : <EmptyState icon={<Server size={23} />} title="还没有受管服务器" description="先在服务器管理添加并安装 Agent。" />}
         {!readyServers.length && servers.length ? <div className="nw-inline-note"><Activity size={16} /><span>当前没有 Xray 在线的服务器，恢复在线后才能继续。</span></div> : null}
@@ -1156,7 +1194,7 @@ function ManagedNodeWizard({ onClose, onComplete }: { onClose: () => void; onCom
         <dl className="managed-review"><div><dt>服务器</dt><dd>{selectedServer?.name}</dd></div><div><dt>节点名称</dt><dd>{draft.name}</dd></div><div><dt>协议</dt><dd>{protocolLabel(draft.protocol)}</dd></div><div><dt>监听</dt><dd>{draft.port} · {draft.ipVersion.toUpperCase()}</dd></div><div><dt>入站 Tag</dt><dd><code>{draft.tag}</code></dd></div><div><dt>用户目录</dt><dd>{draft.publish ? "创建后发布" : "暂不发布"}</dd></div></dl>
         <details className="secure-inbound-preview"><summary>查看将提交的 Xray JSON</summary><textarea className="nw-code-editor" aria-label="受管节点 Xray JSON" readOnly value={JSON.stringify(buildManagedInboundRequest(draft).inbound, null, 2)} /></details>
       </section>}
-      {!loading ? <div className="dialog-actions managed-wizard-actions"><Button type="button" variant="secondary" onClick={step === 1 ? onClose : () => { setError(""); setStep((current) => current - 1); }} disabled={working}><ArrowLeft size={16} />{step === 1 ? "取消" : "上一步"}</Button>{step < 4 ? <Button type="button" onClick={validateStep} disabled={working || (step === 1 && !readyServers.length) || keyWorking}>下一步<ArrowRight size={16} /></Button> : <Button type="button" onClick={() => void submit()} disabled={working}>{working ? <Spinner label="正在创建并校验" /> : <><Server size={16} />创建节点</>}</Button>}</div> : null}
+      {!loading ? <div className="dialog-actions managed-wizard-actions"><Button type="button" variant="secondary" onClick={step === 1 ? onClose : () => { setError(""); setStep((current) => current - 1); }} disabled={working}><ArrowLeft size={16} />{step === 1 ? "取消" : "上一步"}</Button>{step < 4 ? <Button type="button" onClick={validateStep} disabled={working || (step === 1 && (!readyServers.length || inventoryWorking || inventoryServerID !== serverID)) || keyWorking}>下一步<ArrowRight size={16} /></Button> : <Button type="button" onClick={() => void submit()} disabled={working}>{working ? <Spinner label="正在创建并校验" /> : <><Server size={16} />创建节点</>}</Button>}</div> : null}
     </div>
   </Dialog>;
 }

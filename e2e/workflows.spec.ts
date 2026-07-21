@@ -362,6 +362,10 @@ test("creates and publishes a managed Shadowsocks 2022 node with exact payload a
       client_compatibility_mode: false,
     }))
     .on("GET", "/api/admin/remote-servers", () => json({ success: true, servers: [embeddedServer] }))
+    .on("GET", "/api/admin/remote/inbounds", (call) => {
+      expect(call.query).toEqual({ server_id: "7" });
+      return json({ success: true, inbounds: [{ tag: "existing", protocol: "vless", port: 443 }] });
+    })
     .on("GET", "/api/admin/certificates", () => json({ success: true, certificates: [] }))
     .on("GET", "/api/admin/remote/reality-domains", (call) => {
       expect(call.query).toEqual({ server_id: "7" });

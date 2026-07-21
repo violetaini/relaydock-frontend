@@ -189,6 +189,7 @@ describe("managed server node creation", () => {
       if (path === "/api/user/config") return userConfig([1]) as T;
       if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
       if (path === "/api/admin/remote-servers") return { servers: [{ id: 3, name: "香港入口", status: "online", ws_connected: true, xray_running: true, xray_mode: "embedded", ipv6_enabled: false, domain: "edge.example.com", current_upload_speed: 0, current_download_speed: 0, traffic_limit: 0, traffic_used: 0, traffic_stats_mode: "both", traffic_source: "xray", connection_mode: "websocket", encrypted: true, inbounds: [] }] } as T;
+      if (path === "/api/admin/remote/inbounds?server_id=3") return { success: true, inbounds: [{ tag: "existing", protocol: "vless", port: 443 }] } as T;
       if (path === "/api/admin/certificates") return { certificates: [] } as T;
       if (path === "/api/admin/remote/reality-domains?server_id=3") return { domains: [{ domain: "www.cloudflare.com", success: true, latency_ms: 16 }] } as T;
       throw new Error(`unexpected GET ${path}`);
@@ -204,11 +205,13 @@ describe("managed server node creation", () => {
     fireEvent.click(await screen.findByRole("button", { name: "在服务器创建" }));
     expect(screen.getByRole("dialog", { name: "在服务器创建节点" })).toBeInTheDocument();
     expect(await screen.findByText("地址由服务器配置自动生成，不需要手工填写 IP 或域名。")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "下一步" })).not.toBeDisabled());
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     expect(await screen.findByRole("button", { name: /VLESS Reality/ })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "下一步" })).not.toBeDisabled());
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     fireEvent.change(await screen.findByRole("textbox", { name: "节点名称" }), { target: { value: "香港 Reality 02" } });
+    expect(screen.getByRole("spinbutton", { name: "监听端口" })).toHaveValue(8443);
     fireEvent.change(screen.getByRole("combobox", { name: "Reality 流控" }), { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     fireEvent.click(screen.getByRole("button", { name: "创建节点" }));

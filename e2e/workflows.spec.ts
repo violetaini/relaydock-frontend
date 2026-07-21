@@ -565,6 +565,7 @@ test("creates a user, preserves the one-time password, and disables it", async (
   const users = [user("admin", "运维管理员", { role: "admin" })];
   mock
     .on("GET", "/api/admin/users", () => json({ users }))
+    .on("GET", "/api/admin/packages", () => json({ packages: [] }))
     .on("POST", "/api/admin/users/create", (call) => {
       const form = call.body as Record<string, string>;
       users.push(user(form.username, form.nickname, { email: form.email, remark: form.remark }));
@@ -600,7 +601,8 @@ test("creates a user, preserves the one-time password, and disables it", async (
     remark: "QA account",
   }]);
 
-  await row.getByRole("button", { name: "停用 carol" }).click();
+  await row.getByRole("button", { name: "用户设置 carol" }).click();
+  await page.getByRole("dialog", { name: "用户设置 · carol" }).getByRole("button", { name: "停用用户" }).click();
   await expect(row.getByText("停用", { exact: true })).toBeVisible();
   expect(mock.callsFor("POST", "/api/admin/users/status").map((call) => call.body)).toEqual([
     { username: "carol", is_active: false },

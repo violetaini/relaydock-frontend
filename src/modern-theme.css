@@ -1171,19 +1171,20 @@
   .console-layout.layout-side .nav-overflow { display: none; }
 
   .console-layout.layout-top .nav-utility .nav-item {
-    width: 36px;
-    min-width: 36px;
-    padding-inline: 0;
+    width: auto;
+    min-width: max-content;
+    padding-inline: 5px;
     justify-content: center;
+    gap: 5px;
+    font-size: 14px;
   }
   .console-layout.layout-top .nav-utility .nav-item span {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
     white-space: nowrap;
   }
 
@@ -1221,28 +1222,28 @@
     max-height: 65px;
   }
   :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-brand {
-    width: 76px;
-    min-width: 76px;
+    width: 60px;
+    min-width: 60px;
     min-height: 65px;
     padding: 0 12px 0 24px;
   }
   :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-brand .brand-mark { width: 40px; height: 40px; }
   :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-nav {
-    padding: 14px 12px;
-    gap: 12px;
+    padding: 14px 6px;
+    gap: 4px;
   }
   :root[data-style-theme="flat"] .console-layout.layout-top .nav-primary .nav-item {
-    min-width: 116px;
+    min-width: 0;
     height: 36px;
     min-height: 36px;
-    padding: 0 12px;
-    gap: 8px;
+    padding: 0 5px;
+    gap: 5px;
     font-size: 14px;
     font-weight: 600;
   }
   :root[data-style-theme="flat"] .console-layout.layout-top .nav-item > svg:first-child { width: 18px; height: 18px; }
   :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-footer {
-    min-width: 164px;
+    min-width: 120px;
     min-height: 65px;
     padding: 8px 6px;
   }
@@ -1276,3 +1277,136 @@
   }
   :root[data-style-theme="flat"] .dashboard-period button { white-space: nowrap; }
 }
+
+/* Upstream-compatible light canvas. Keep Arcway's extra workflows, but use the
+   same warm, framed visual language so pages feel like one product. */
+:root[data-style-theme="flat"] {
+  --bg: #fffdfb;
+  --surface: #fffefd;
+  --surface-raised: #fffefd;
+  --surface-muted: #fbf5f1;
+  --surface-hover: #fff6f1;
+  --text: #2a1b17;
+  --text-soft: #7b5d52;
+  --text-faint: #9b8278;
+  --border: #e2d1c9;
+  --border-strong: #ceb8af;
+  --accent: #de7858;
+  --accent-strong: #c96043;
+  --accent-soft: #fbe4dc;
+  --shadow-low: 3px 3px 0 rgb(157 148 143 / 48%);
+  --shadow: 4px 4px 0 rgb(157 148 143 / 52%);
+  --shadow-high: 7px 7px 0 rgb(72 58 52 / 26%);
+}
+
+:root[data-style-theme="flat"] body,
+:root[data-style-theme="flat"] .console-layout,
+:root[data-style-theme="flat"] .console-main { background: var(--bg); }
+
+:root[data-style-theme="flat"] .surface,
+:root[data-style-theme="flat"] .table-surface,
+:root[data-style-theme="flat"] .dialog {
+  border: 2px solid var(--border-strong);
+  border-radius: 2px;
+  background: var(--surface);
+  box-shadow: var(--shadow-low);
+}
+
+:root[data-style-theme="flat"] .button,
+:root[data-style-theme="flat"] .icon-button,
+:root[data-style-theme="flat"] :is(.advanced-tabs, .cw-tabs, .nw-tabs, .rw-filter),
+:root[data-style-theme="flat"] :is(.segmented-control, .services-filters, .packages-view-switch, .sg-choice),
+:root[data-style-theme="flat"] :is(input, select, textarea, .search-box input) {
+  border-radius: 2px;
+}
+
+:root[data-style-theme="flat"] .button { box-shadow: 2px 2px 0 rgb(157 148 143 / 40%); }
+:root[data-style-theme="flat"] .button:hover:not(:disabled) { transform: none; box-shadow: 2px 2px 0 rgb(157 148 143 / 58%); }
+:root[data-style-theme="flat"] .surface-heading { background: transparent; }
+
+@media (min-width: 1041px) {
+  :root[data-style-theme="flat"] .page-content { width: min(100%, 1280px); padding-top: 32px; }
+  :root[data-style-theme="flat"] .page-dashboard { width: min(100%, 1152px); }
+  :root[data-style-theme="flat"] .page-header h1 { font-size: 30px; }
+  :root[data-style-theme="flat"] .console-layout.layout-top .sidebar {
+    color: var(--text);
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    box-shadow: none;
+    backdrop-filter: none;
+  }
+  :root[data-style-theme="flat"] .console-layout.layout-top .nav-item {
+    height: 38px;
+    min-height: 38px;
+    color: var(--text);
+    border: 1px solid var(--border-strong);
+    border-radius: 2px;
+    background: var(--surface);
+    box-shadow: 3px 3px 0 rgb(157 148 143 / 42%);
+    font-weight: 700;
+  }
+  :root[data-style-theme="flat"] .console-layout.layout-top .nav-item:hover { background: var(--surface-muted); }
+  :root[data-style-theme="flat"] .console-layout.layout-top .nav-item.is-active {
+    color: var(--accent-strong);
+    border-color: color-mix(in srgb, var(--accent) 52%, var(--border-strong));
+    background: var(--accent-soft);
+  }
+  :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-footer {
+    border-left: 0;
+    color: var(--text);
+  }
+  :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-footer > .icon-button,
+  :root[data-style-theme="flat"] .console-layout.layout-top .nav-overflow-trigger,
+  :root[data-style-theme="flat"] .console-layout.layout-top .account-block {
+    color: var(--text);
+    border: 1px solid var(--border-strong);
+    border-radius: 2px;
+    background: var(--surface);
+    box-shadow: 3px 3px 0 rgb(157 148 143 / 42%);
+  }
+  :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-brand .brand-mark {
+    border: 1px solid var(--border-strong);
+    border-radius: 0;
+    background: var(--surface);
+  }
+}
+
+@media (min-width: 1360px) {
+  :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-nav { gap: 2px; }
+  :root[data-style-theme="flat"] .console-layout.layout-top .nav-primary .nav-item,
+  :root[data-style-theme="flat"] .console-layout.layout-top .nav-utility .nav-item {
+    padding-inline: 2px;
+    gap: 2px;
+    font-size: 14px;
+  }
+  :root[data-style-theme="flat"] .console-layout.layout-top .nav-item > svg:first-child { width: 16px; height: 16px; }
+  :root[data-style-theme="flat"] .console-layout.layout-top .nav-group { display: contents; }
+  :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-footer { min-width: 112px; padding-inline: 3px; gap: 2px; }
+}
+
+@media (max-width: 1040px) {
+  :root[data-style-theme="flat"] .topbar {
+    height: 64px;
+    color: var(--text);
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    box-shadow: none;
+  }
+  :root[data-style-theme="flat"] .mobile-topbar-brand { color: var(--accent-strong); }
+  :root[data-style-theme="flat"] .mobile-topbar-brand .brand-mark,
+  :root[data-style-theme="flat"] .topbar .icon-button,
+  :root[data-style-theme="flat"] .topbar-avatar {
+    color: var(--text);
+    border: 1px solid var(--border-strong);
+    border-radius: 2px;
+    background: var(--surface);
+    box-shadow: 3px 3px 0 rgb(157 148 143 / 42%);
+  }
+  :root[data-style-theme="flat"] .metric-grid,
+  :root[data-style-theme="flat"] .traffic-metrics { grid-template-columns: 1fr; }
+  :root[data-style-theme="flat"] .metric { min-height: 130px; }
+  :root[data-style-theme="flat"] .page-header h1 { font-size: 28px; }
+}
+
+.mobile-page-shortcut { display: none; }
+@media (max-width: 1040px) { .mobile-page-shortcut { display: inline-flex; } }

@@ -53,7 +53,6 @@ test("mobile 2FA setup stays within the viewport and recovery codes cannot be di
   await page.setViewportSize({ width: 390, height: 844 });
   await installSettingsAPI(page);
   await page.goto("/#/settings");
-  await page.getByRole("tab", { name: "账户与 API" }).click();
 
   await page.getByRole("button", { name: "启用 2FA" }).click();
   await page.getByLabel("当前密码").fill("correct-password");
@@ -80,7 +79,6 @@ test("mobile 2FA setup stays within the viewport and recovery codes cannot be di
 test("an invalid setup password does not expire the active admin session", async ({ page }) => {
   await installSettingsAPI(page, 401);
   await page.goto("/#/settings");
-  await page.getByRole("tab", { name: "账户与 API" }).click();
   await page.getByRole("button", { name: "启用 2FA" }).click();
   await page.getByLabel("当前密码").fill("wrong-password");
   await page.getByRole("button", { name: "继续" }).click();

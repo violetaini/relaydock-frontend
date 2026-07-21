@@ -44,6 +44,7 @@ import {
 import { AdvancedPage } from "./advanced";
 import { AccountWorkbenchPage } from "./account-workbench";
 import { api, openDashboardSocket } from "./api";
+import { BrandMark } from "./brand";
 import {
   CertificatesWorkbenchPage,
   SubscribeFilesPage,
@@ -256,7 +257,7 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
     <div className={`console-layout layout-${layoutMode}`}>
       {sidebarOpen ? <button className="sidebar-scrim" aria-label="关闭导航" onClick={() => setSidebarOpen(false)} /> : null}
       <aside className={`sidebar ${sidebarOpen ? "is-open" : ""}`}>
-        <div className="sidebar-brand brand"><span className="brand-mark"><Network size={20} /></span><span>Arcway</span><IconButton className="sidebar-close" label="关闭导航" onClick={() => setSidebarOpen(false)}><X size={19} /></IconButton></div>
+        <div className="sidebar-brand brand"><BrandMark size={24} /><span>Arcway</span><IconButton className="sidebar-close" label="关闭导航" onClick={() => setSidebarOpen(false)}><X size={19} /></IconButton></div>
         <nav className="sidebar-nav" aria-label="主导航">
           <NavGroup label="主导航" className="nav-primary">
             <NavItem active={page === "dashboard"} icon={<Activity size={18} />} label="流量信息" onClick={() => navigate("dashboard")} />
@@ -304,12 +305,13 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
       <div className="console-main">
         <header className="topbar">
           <div className="topbar-leading">
-            <span className="mobile-topbar-brand"><span className="brand-mark"><Network size={18} /></span><strong>Arcway</strong></span>
+            <span className="mobile-topbar-brand"><BrandMark size={22} /><strong>Arcway</strong></span>
             <IconButton className="mobile-menu" label="打开导航" onClick={() => setSidebarOpen(true)}><Menu size={20} /></IconButton>
             <span className="topbar-page-title">{pageTitles[page]}</span>
           </div>
           <div className="topbar-actions">
             <span className="control-state"><span className="status-dot status-good" />控制端在线</span>
+            <IconButton className="mobile-page-shortcut" label="返回流量信息" onClick={() => navigate("dashboard")}><Activity size={18} /></IconButton>
             <IconButton label={themeLabel} onClick={toggleTheme}>{themeIcon}</IconButton>
             <button type="button" className="topbar-avatar" aria-label="账户中心" title="账户中心" onClick={() => navigate("account")}>{(identity.nickname || identity.username).slice(0, 1).toUpperCase()}</button>
           </div>

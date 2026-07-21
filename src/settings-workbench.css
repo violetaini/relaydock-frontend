@@ -1,21 +1,24 @@
-.settings-tabs { margin-bottom: 22px; }
-.settings-workbench { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 20px; }
-.settings-workbench-section { min-height: 190px; padding: 24px; }
+.settings-workbench { width: min(100%, 860px); display: flex; flex-direction: column; gap: 34px; }
+.settings-settings-group { display: flex; flex-direction: column; gap: 14px; margin: 0; padding: 0; border: 0; }
+.settings-settings-group + .settings-settings-group { padding-top: 30px; border-top: 1px solid var(--border); }
+.settings-group-heading { display: flex; align-items: center; gap: 11px; padding: 0 2px 3px; }
+.settings-group-heading h2 { margin: 0; font-size: 18px; line-height: 1.25; }
+.settings-group-heading p { margin: 4px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.45; }
+.settings-group-icon { width: 34px; height: 34px; flex: 0 0 34px; display: grid; place-items: center; color: var(--accent); border: 1px solid var(--border); background: var(--accent-soft); }
+.settings-workbench-section { min-height: 0; padding: 24px; }
 .settings-workbench-section .settings-heading { margin-bottom: 22px; }
 .settings-section-body { display: flex; flex-direction: column; gap: 15px; }
 .settings-fields-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 11px; }
 .settings-check-list { padding: 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; border: 1px solid var(--border); background: var(--surface-muted); }
 .settings-check-list .checkbox-row { min-height: 28px; }
 .permission-pages, .event-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.settings-save-row { grid-column: 1 / -1; position: sticky; bottom: 18px; z-index: 8; display: flex; justify-content: flex-end; pointer-events: none; }
-.settings-save-row .button { pointer-events: auto; box-shadow: 5px 5px 0 color-mix(in srgb, var(--border-strong) 82%, transparent); }
+.settings-save-row { display: flex; justify-content: flex-end; padding: 2px 2px 0; }
+.settings-save-row .button { box-shadow: 3px 3px 0 color-mix(in srgb, var(--border-strong) 76%, transparent); }
 .api-token-row { min-height: 54px; padding: 9px 9px 9px 12px; display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); background: var(--surface-muted); }
 .api-token-row code { min-width: 0; flex: 1; overflow-wrap: anywhere; font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; line-height: 1.5; }
-@media (max-width: 1080px) {
-  .settings-workbench { grid-template-columns: 1fr; }
-  .settings-save-row { grid-column: 1; }
-}
 @media (max-width: 680px) {
+  .settings-workbench { gap: 28px; }
+  .settings-settings-group + .settings-settings-group { padding-top: 24px; }
   .settings-workbench-section { padding: 18px; }
   .settings-fields-grid, .permission-pages, .event-grid { grid-template-columns: 1fr 1fr; }
   .settings-check-list { grid-template-columns: 1fr; }

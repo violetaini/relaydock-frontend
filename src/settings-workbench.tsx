@@ -29,7 +29,6 @@ import { Button, ConfirmDialog, ErrorState, Field, IconButton, PageHeader, Spinn
 import "./settings-workbench.css";
 
 type Notify = (message: string, tone?: "success" | "error") => void;
-type Tab = "general" | "subscription" | "security" | "permissions" | "notifications" | "account";
 
 interface SecuritySettings {
   login_rate_max_attempts: number;
@@ -174,7 +173,6 @@ function messageOf(reason: unknown, fallback: string) {
 }
 
 export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
-  const [tab, setTab] = useState<Tab>("general");
   const [loading, setLoading] = useState(true);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState("");
@@ -311,18 +309,12 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
     await save("token", async () => { const response = await api.post<{ token: string }>("/api/admin/system-settings/api-token/regenerate"); setApiToken(response.token); }, "API Token 已重新生成");
   };
 
-  const tabs: Array<[Tab, ReactNode, string]> = [
-    ["general", <SlidersHorizontal size={17} />, "基础"], ["subscription", <Link2 size={17} />, "订阅"],
-    ["security", <Shield size={17} />, "安全"], ["permissions", <Users size={17} />, "用户权限"],
-    ["notifications", <Bell size={17} />, "通知"], ["account", <KeyRound size={17} />, "账户与 API"],
-  ];
-
   return <>
     <PageHeader title="系统设置" description="控制端、订阅、安全、权限与通知策略" actions={<IconButton label="重新加载设置" onClick={() => void load()} disabled={loading}><RefreshCw size={18} /></IconButton>} />
-    <div className="advanced-tabs settings-tabs" role="tablist">{tabs.map(([key, icon, label]) => <button key={key} role="tab" aria-selected={tab === key} className={tab === key ? "is-active" : ""} onClick={() => setTab(key)}>{icon}{label}</button>)}</div>
     {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
-    {loading ? <Surface className="center-state"><Spinner label="正在加载全部设置" /></Surface> : loaded ? <>
-      {tab === "general" ? <form className="settings-workbench" onSubmit={saveGeneral}>
+    {loading ? <Surface className="center-state"><Spinner label="正在加载全部设置" /></Surface> : loaded ? <div className="settings-workbench settings-workbench-continuous">
+      <form className="settings-settings-group" onSubmit={saveGeneral}>
+        <SettingsGroupHeading icon={<SlidersHorizontal size={18} />} title="基础设置" description="控制端、采集间隔与界面外观" />
         <SettingSection icon={<Network size={19} />} title="控制端与采集" description="Agent 回连地址及运行间隔">
           <Field label="公开 URL"><input type="url" required value={masterURL} onChange={(e) => setMasterURL(e.target.value)} /></Field>
           <div className="settings-fields-grid"><Field label="速度采集（秒）"><input type="number" min="1" value={intervals.speed_collect_interval} onChange={(e) => setIntervals({ ...intervals, speed_collect_interval: Number(e.target.value) })} /></Field><Field label="流量采集（秒）"><input type="number" min="10" value={intervals.traffic_collect_interval} onChange={(e) => setIntervals({ ...intervals, traffic_collect_interval: Number(e.target.value) })} /></Field><Field label="流量检查（秒）"><input type="number" min="10" value={intervals.traffic_check_interval} onChange={(e) => setIntervals({ ...intervals, traffic_check_interval: Number(e.target.value) })} /></Field><Field label="心跳（秒）"><input type="number" min="5" value={intervals.heartbeat_interval} onChange={(e) => setIntervals({ ...intervals, heartbeat_interval: Number(e.target.value) })} /></Field><Field label="看板刷新 / Agent 上报（秒）"><input type="number" min="1" max="60" value={dashboardRefreshMs / 1000} onChange={(e) => setDashboardRefreshMs(Number(e.target.value) * 1000)} /></Field></div>
@@ -337,10 +329,11 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
           <Field label="页面标题"><input value={probe.title} onChange={(e) => setProbe({ ...probe, title: e.target.value })} /></Field>
           <div className="settings-check-list">{servers.map((server) => <label className="checkbox-row" key={server.id}><input type="checkbox" checked={probe.server_ids.includes(server.id)} onChange={() => setProbe({ ...probe, server_ids: probe.server_ids.includes(server.id) ? probe.server_ids.filter((id) => id !== server.id) : [...probe.server_ids, server.id] })} /><span>{server.name}</span></label>)}</div>
         </SettingSection>
-        <SaveRow saving={saving === "general"} />
-      </form> : null}
+        <SaveRow label="保存基础设置" saving={saving === "general"} />
+      </form>
 
-      {tab === "subscription" ? <form className="settings-workbench" onSubmit={saveSubscription}>
+      <form className="settings-settings-group" onSubmit={saveSubscription}>
+        <SettingsGroupHeading icon={<Link2 size={18} />} title="订阅设置" description="订阅同步、输出格式与生成功能" />
         <SettingSection icon={<Link2 size={19} />} title="订阅链接" description="链接格式、短码与节点名称">
           <Toggle checked={shortLink} onChange={setShortLink} label="启用短链接" /><Toggle checked={shortCompat} onChange={setShortCompat} label="兼容根路径短码" /><Toggle checked={prefix.enabled} onChange={(enabled) => setPrefix({ ...prefix, enabled })} label="节点名显示流量倍率" />
           <div className="settings-fields-grid"><Field label="倍率左分隔符"><input maxLength={4} value={prefix.left} onChange={(e) => setPrefix({ ...prefix, left: e.target.value })} /></Field><Field label="倍率右分隔符"><input maxLength={4} value={prefix.right} onChange={(e) => setPrefix({ ...prefix, right: e.target.value })} /></Field></div>
@@ -375,39 +368,47 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
           <Toggle checked={silent.silent_mode} onChange={(silent_mode) => setSilent({ ...silent, silent_mode })} label="启用静默模式" /><Field label="静默超时（秒）"><input type="number" min="1" value={silent.silent_mode_timeout} onChange={(e) => setSilent({ ...silent, silent_mode_timeout: Number(e.target.value) })} /></Field>
         </SettingSection>
         <SettingSection icon={<Clipboard size={19} />} title="兑换码文案" description="支持 {兑换码}、{机器人地址}、{主控域名} 占位符"><Field label="复制模板"><textarea value={redeemTemplate} onChange={(e) => setRedeemTemplate(e.target.value)} /></Field></SettingSection>
-        <SaveRow saving={saving === "subscription"} />
-      </form> : null}
+        <SaveRow label="保存订阅设置" saving={saving === "subscription"} />
+      </form>
 
-      {tab === "security" ? <form className="settings-workbench" onSubmit={saveSecurity}>
+      <form className="settings-settings-group" onSubmit={saveSecurity}>
+        <SettingsGroupHeading icon={<Shield size={18} />} title="安全设置" description="登录、订阅请求与 Agent 通道防护" />
         <SettingSection icon={<LockKeyhole size={19} />} title="登录限流" description="连续失败后锁定来源地址"><div className="settings-fields-grid"><NumberField label="最大尝试" value={security.login_rate_max_attempts} onChange={(value) => setSecurity({ ...security, login_rate_max_attempts: value })} /><NumberField label="统计窗口（分钟）" value={security.login_rate_window_minutes} onChange={(value) => setSecurity({ ...security, login_rate_window_minutes: value })} /><NumberField label="锁定（分钟）" value={security.login_rate_lock_minutes} onChange={(value) => setSecurity({ ...security, login_rate_lock_minutes: value })} /></div><Toggle checked={security.skip_local_ip} onChange={(skip_local_ip) => setSecurity({ ...security, skip_local_ip })} label="跳过本地与私有地址" /></SettingSection>
         <SettingSection icon={<Shield size={19} />} title="暴力与订阅防护" description="策略保存后无需重启即可生效"><Toggle checked={security.brute_force_enabled} onChange={(brute_force_enabled) => setSecurity({ ...security, brute_force_enabled })} label="启用暴力枚举防护" /><div className="settings-fields-grid"><NumberField label="失败阈值" value={security.brute_force_max_failures} onChange={(value) => setSecurity({ ...security, brute_force_max_failures: value })} /><NumberField label="检测窗口（分钟）" value={security.brute_force_window_minutes} onChange={(value) => setSecurity({ ...security, brute_force_window_minutes: value })} /><NumberField label="封禁（分钟）" value={security.brute_force_block_minutes} onChange={(value) => setSecurity({ ...security, brute_force_block_minutes: value })} /></div><Toggle checked={security.sub_rate_enabled} onChange={(sub_rate_enabled) => setSecurity({ ...security, sub_rate_enabled })} label="限制订阅请求频率" /><div className="settings-fields-grid"><NumberField label="请求上限" value={security.sub_rate_limit} onChange={(value) => setSecurity({ ...security, sub_rate_limit: value })} /><NumberField label="窗口（分钟）" value={security.sub_rate_window_minutes} onChange={(value) => setSecurity({ ...security, sub_rate_window_minutes: value })} /></div></SettingSection>
         <SettingSection icon={<Check size={19} />} title="Turnstile" description="两项都填写才会在登录页启用"><Field label="Site Key"><input autoComplete="off" value={security.turnstile_site_key} onChange={(e) => setSecurity({ ...security, turnstile_site_key: e.target.value })} /></Field><Field label="Secret Key" hint="已配置时显示掩码；不修改可原样保存"><input type="password" autoComplete="new-password" value={security.turnstile_secret_key} onChange={(e) => setSecurity({ ...security, turnstile_secret_key: e.target.value })} /></Field></SettingSection>
         <SettingSection icon={<Network size={19} />} title="Agent 通道" description="要求已配对 Agent 使用加密通道"><Toggle checked={requireEncryption} onChange={setRequireEncryption} label="强制 Agent 管理通信加密" /></SettingSection>
-        <SaveRow saving={saving === "security"} />
-      </form> : null}
+        <SaveRow label="保存安全设置" saving={saving === "security"} />
+      </form>
 
-      {tab === "permissions" ? <form className="settings-workbench" onSubmit={savePermissions}>
+      <form className="settings-settings-group" onSubmit={savePermissions}>
+        <SettingsGroupHeading icon={<Users size={18} />} title="用户权限" description="普通用户可访问页面与资源配额" />
         <SettingSection icon={<Users size={19} />} title="普通用户页面" description="管理员始终拥有全部页面"><div className="settings-check-list permission-pages">{[["subscription", "订阅链接"], ["generator", "生成订阅"], ["nodes", "节点管理"], ["templates", "模板管理"], ["subscribe-files", "订阅管理"], ["custom-rules", "覆写管理"]].map(([key, label]) => <label className="checkbox-row" key={key}><input type="checkbox" checked={permissions.pages.includes(key)} onChange={() => setPermissions({ ...permissions, pages: permissions.pages.includes(key) ? permissions.pages.filter((page) => page !== key) : [...permissions.pages, key] })} /><span>{label}</span></label>)}</div></SettingSection>
         <SettingSection icon={<FileJson size={19} />} title="资源配额" description="0 表示不限数量"><div className="settings-fields-grid"><NumberField label="模板数量" min={0} value={permissions.quota_template} onChange={(value) => setPermissions({ ...permissions, quota_template: value })} /><NumberField label="覆写数量" min={0} value={permissions.quota_override} onChange={(value) => setPermissions({ ...permissions, quota_override: value })} /><NumberField label="订阅数量" min={0} value={permissions.quota_subscribe} onChange={(value) => setPermissions({ ...permissions, quota_subscribe: value })} /></div></SettingSection>
         <SettingSection icon={<Network size={19} />} title="私有路由出站" description="每次操作都会让对应 Agent 重载 Xray"><Toggle checked={permissions.routed_outbound_enabled} onChange={(routed_outbound_enabled) => setPermissions({ ...permissions, routed_outbound_enabled })} label="允许普通用户创建路由出站" /><div className="settings-fields-grid"><NumberField label="每用户数量" min={1} value={permissions.quota_routed_outbound} onChange={(value) => setPermissions({ ...permissions, quota_routed_outbound: value })} /><NumberField label="每日操作次数" min={1} value={permissions.daily_limit_routed_outbound} onChange={(value) => setPermissions({ ...permissions, daily_limit_routed_outbound: value })} /></div></SettingSection>
-        <SaveRow saving={saving === "permissions"} />
-      </form> : null}
+        <SaveRow label="保存用户权限" saving={saving === "permissions"} />
+      </form>
 
-      {tab === "notifications" ? <form className="settings-workbench" onSubmit={saveNotifications}>
+      <form className="settings-settings-group" onSubmit={saveNotifications}>
+        <SettingsGroupHeading icon={<Bell size={18} />} title="通知设置" description="Telegram 渠道、事件与阈值策略" />
         <SettingSection icon={<Send size={19} />} title="Telegram" description="Bot Token 只写入，重新加载后以掩码显示"><Toggle checked={notifications.notify_enabled} onChange={(notify_enabled) => setNotifications({ ...notifications, notify_enabled })} label="启用 Telegram 通知" /><Field label="Bot Token"><input type="password" autoComplete="new-password" value={notifications.telegram_bot_token} onChange={(e) => setNotifications({ ...notifications, telegram_bot_token: e.target.value })} /></Field><Field label="Chat ID"><input value={notifications.telegram_chat_id} onChange={(e) => setNotifications({ ...notifications, telegram_chat_id: e.target.value })} /></Field><Button type="button" variant="secondary" onClick={() => void save("notify-test", () => api.post("/api/admin/notify-config/test"), "测试通知已发送")} disabled={saving === "notify-test"}>{saving === "notify-test" ? <Spinner label="正在发送" /> : <><Send size={16} />发送测试</>}</Button></SettingSection>
         <SettingSection icon={<Bell size={19} />} title="事件通知" description="选择需要推送的管理事件"><div className="settings-check-list event-grid">{[["notify_login", "用户登录"], ["notify_subscribe_fetch", "订阅拉取"], ["notify_server_offline", "服务器离线"], ["notify_server_online", "服务器恢复"], ["notify_over_limit", "流量超限"], ["notify_package_expiring", "套餐即将到期"], ["notify_package_expired", "套餐已到期"], ["notify_user_registered", "用户注册"], ["notify_telegram_bound", "Telegram 绑定"], ["notify_cert_result", "证书操作"], ["notify_agent_long_offline", "Agent 长时离线"], ["notify_device_limit_exceeded", "设备数超限"]].map(([key, label]) => <label className="checkbox-row" key={key}><input type="checkbox" checked={Boolean(notifications[key as keyof NotificationSettings])} onChange={(e) => setNotifications({ ...notifications, [key]: e.target.checked })} /><span>{label}</span></label>)}</div></SettingSection>
         <SettingSection icon={<Gauge size={19} />} title="阈值与日报" description="通知触发条件"><Toggle checked={notifications.notify_daily_traffic} onChange={(notify_daily_traffic) => setNotifications({ ...notifications, notify_daily_traffic })} label="发送每日流量摘要" /><Toggle checked={notifications.notify_traffic_threshold} onChange={(notify_traffic_threshold) => setNotifications({ ...notifications, notify_traffic_threshold })} label="启用自定义流量阈值" /><div className="settings-fields-grid"><Field label="日报时间"><input type="time" value={notifications.notify_daily_traffic_time} onChange={(e) => setNotifications({ ...notifications, notify_daily_traffic_time: e.target.value })} /></Field><NumberField label="流量阈值（%）" min={1} max={100} value={notifications.notify_traffic_threshold_percent} onChange={(value) => setNotifications({ ...notifications, notify_traffic_threshold_percent: value })} /><NumberField label="到期提前（天）" min={1} max={365} value={notifications.notify_package_expiring_days} onChange={(value) => setNotifications({ ...notifications, notify_package_expiring_days: value })} /><NumberField label="Agent 离线（分钟）" min={1} max={1440} value={notifications.notify_agent_long_offline_minutes} onChange={(value) => setNotifications({ ...notifications, notify_agent_long_offline_minutes: value })} /><NumberField label="上下线容忍（秒）" min={0} value={notifications.notify_server_tolerance_seconds} onChange={(value) => setNotifications({ ...notifications, notify_server_tolerance_seconds: value })} /></div></SettingSection>
-        <SaveRow saving={saving === "notifications"} />
-      </form> : null}
+        <SaveRow label="保存通知设置" saving={saving === "notifications"} />
+      </form>
 
-      {tab === "account" ? <div className="settings-workbench">
+      <section className="settings-settings-group settings-account-group">
+        <SettingsGroupHeading icon={<KeyRound size={18} />} title="账户与 API" description="管理接口凭据与双因素认证" />
         <SettingSection icon={<KeyRound size={19} />} title="管理 API Token" description="用于可信自动化调用；重新生成后旧 Token 立即失效"><div className="api-token-row"><code>{apiToken || "尚未生成"}</code><IconButton label="复制 API Token" disabled={!apiToken} onClick={() => void navigator.clipboard.writeText(apiToken).then(() => notify("API Token 已复制"))}><Copy size={16} /></IconButton></div><Button type="button" variant="danger" onClick={() => setConfirmTokenReset(true)}>重新生成 Token</Button></SettingSection>
         <TwoFactorSettings notify={notify} />
-      </div> : null}
-    </> : null}
+      </section>
+    </div> : null}
     {confirmTokenReset ? <ConfirmDialog title="重新生成 API Token" description="所有使用当前 Token 的脚本和集成都会立即失效，需要逐一替换。" confirmLabel="确认重新生成" working={saving === "token"} onCancel={() => setConfirmTokenReset(false)} onConfirm={() => void regenerateToken()} /> : null}
     {showMigration ? <MmwMigrationDialog notify={notify} onClose={() => setShowMigration(false)} /> : null}
   </>;
+}
+
+function SettingsGroupHeading({ icon, title, description }: { icon: ReactNode; title: string; description: string }) {
+  return <div className="settings-group-heading"><span className="settings-group-icon">{icon}</span><div><h2>{title}</h2><p>{description}</p></div></div>;
 }
 
 function SettingSection({ icon, title, description, children }: { icon: ReactNode; title: string; description: string; children: ReactNode }) {
@@ -418,6 +419,6 @@ function NumberField({ label, value, onChange, min = 1, max }: { label: string; 
   return <Field label={label}><input type="number" min={min} max={max} value={value} onChange={(event) => onChange(Number(event.target.value))} /></Field>;
 }
 
-function SaveRow({ saving }: { saving: boolean }) {
-  return <div className="settings-save-row"><Button type="submit" disabled={saving}>{saving ? <Spinner label="正在保存" /> : <><Save size={16} />保存当前分区</>}</Button></div>;
+function SaveRow({ label, saving }: { label: string; saving: boolean }) {
+  return <div className="settings-save-row"><Button type="submit" disabled={saving}>{saving ? <Spinner label="正在保存" /> : <><Save size={16} />{label}</>}</Button></div>;
 }

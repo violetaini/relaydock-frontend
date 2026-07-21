@@ -23,7 +23,8 @@ describe("users workbench", () => {
     const notify = vi.fn();
     render(<UsersWorkbenchPage notify={notify} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "停用 alice" }));
+    fireEvent.click(await screen.findByRole("button", { name: "用户设置 alice" }));
+    fireEvent.click(await screen.findByRole("button", { name: "停用用户" }));
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/users/status", { username: "alice", is_active: false }));
     expect(notify).toHaveBeenCalledWith("用户已停用，节点凭据已暂停");
@@ -47,6 +48,7 @@ describe("users workbench", () => {
   it("opens the server authorization workbench from a regular user row", async () => {
     const get = vi.spyOn(api, "get").mockImplementation(async (path) => {
       if (path === "/api/admin/users") return { users: [alice] };
+      if (path === "/api/admin/packages") return { packages: [] };
       if (path === "/api/admin/users/alice/server-grants") return { grants: [] };
       if (path === "/api/admin/users/alice/managed-nodes") return { items: [] };
       if (path === "/api/admin/remote-servers") return { success: true, servers: [] };
@@ -54,7 +56,8 @@ describe("users workbench", () => {
     });
     render(<UsersWorkbenchPage notify={vi.fn()} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "服务器授权 alice" }));
+    fireEvent.click(await screen.findByRole("button", { name: "用户设置 alice" }));
+    fireEvent.click(await screen.findByRole("button", { name: /服务器授权与自建节点/ }));
 
     expect(await screen.findByRole("dialog", { name: "服务器授权 · alice" })).toBeInTheDocument();
     await waitFor(() => expect(get).toHaveBeenCalledWith("/api/admin/users/alice/server-grants"));
@@ -64,6 +67,7 @@ describe("users workbench", () => {
   it("saves an explicit unlimited package traffic override without changing server grants", async () => {
     vi.spyOn(api, "get").mockImplementation(async (path) => {
       if (path === "/api/admin/users") return { users: [{ ...alice, traffic_limit_override_gb: 12.5 }] };
+      if (path === "/api/admin/packages") return { packages: [] };
       if (path === "/api/admin/nodes") return { nodes: [] };
       throw new Error(`unexpected GET ${path}`);
     });
@@ -71,7 +75,8 @@ describe("users workbench", () => {
     const notify = vi.fn();
     render(<UsersWorkbenchPage notify={notify} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "限额 alice" }));
+    fireEvent.click(await screen.findByRole("button", { name: "用户设置 alice" }));
+    fireEvent.click(await screen.findByRole("button", { name: /流量、限速与设备数/ }));
     const traffic = screen.getByRole("spinbutton", { name: /^总流量覆盖（GB）/ });
     expect(traffic).toHaveValue(12.5);
     fireEvent.change(traffic, { target: { value: "0" } });
@@ -87,6 +92,7 @@ describe("users workbench", () => {
   it("reports which limit steps were saved when a later push fails", async () => {
     vi.spyOn(api, "get").mockImplementation(async (path) => {
       if (path === "/api/admin/users") return { users: [alice] };
+      if (path === "/api/admin/packages") return { packages: [] };
       if (path === "/api/admin/nodes") return { nodes: [] };
       throw new Error(`unexpected GET ${path}`);
     });
@@ -96,11 +102,34 @@ describe("users workbench", () => {
     });
     render(<UsersWorkbenchPage notify={vi.fn()} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "限额 alice" }));
+    fireEvent.click(await screen.findByRole("button", { name: "用户设置 alice" }));
+    fireEvent.click(await screen.findByRole("button", { name: /流量、限速与设备数/ }));
     fireEvent.click(screen.getByRole("button", { name: "保存并下发" }));
 
     expect(await screen.findByText(/Agent 暂时不可用.*已保存：总流量/)).toBeInTheDocument();
     expect(put).toHaveBeenCalledTimes(2);
     expect(screen.getByRole("dialog", { name: "alice 的用户限额" })).toBeInTheDocument();
+  });
+
+  it("assigns a package and expiry from the unified user settings", async () => {
+    const unassigned = { ...alice, package_id: undefined, package_name: undefined, package_end_date: undefined };
+    vi.spyOn(api, "get").mockImplementation(async (path) => {
+      if (path === "/api/admin/users") return { users: [unassigned] };
+      if (path === "/api/admin/packages") return { packages: [{ id: 9, name: "合租套餐", traffic_limit_gb: 200, cycle_days: 30 }] };
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<UsersWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "用户设置 alice" }));
+    fireEvent.change(await screen.findByRole("combobox", { name: "用户套餐" }), { target: { value: "9" } });
+    fireEvent.change(screen.getByLabelText("套餐到期日期"), { target: { value: "2026-12-31" } });
+    fireEvent.click(screen.getByRole("button", { name: "分配套餐" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/packages/assign", {
+      username: "alice",
+      package_id: 9,
+      expire_date: "2026-12-31",
+    }));
   });
 });

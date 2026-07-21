@@ -1,8 +1,8 @@
 import { StrictMode, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Network } from "lucide-react";
 import { api, ApiError, getToken, setToken } from "./api";
 import { LoginScreen, PublicProbeScreen, SetupScreen, type PublicProbeState } from "./auth-screens";
+import { BrandMark } from "./brand";
 import { ConsoleApp } from "./console";
 import type { Profile, Session } from "./types";
 import { Button, ErrorState, Spinner } from "./ui";
@@ -99,13 +99,13 @@ export function App() {
   };
 
   if (state === "loading") {
-    return <main className="boot-screen"><span className="brand-mark brand-mark-large"><Network size={27} /></span><strong>Arcway</strong><Spinner label="正在连接控制端" /></main>;
+    return <main className="boot-screen"><BrandMark className="brand-mark-large" size={32} /><strong>Arcway</strong><Spinner label="正在连接控制端" /></main>;
   }
   if (state === "error") {
-    return <main className="boot-screen boot-error"><span className="brand-mark brand-mark-large"><Network size={27} /></span><ErrorState message={error} /><Button onClick={() => void bootstrap()}>重新连接</Button></main>;
+    return <main className="boot-screen boot-error"><BrandMark className="brand-mark-large" size={32} /><ErrorState message={error} /><Button onClick={() => void bootstrap()}>重新连接</Button></main>;
   }
   if (state === "setup") return <SetupScreen onComplete={() => setState("login")} />;
-  if (state === "login" && !publicReady) return <main className="boot-screen"><span className="brand-mark brand-mark-large"><Network size={27} /></span><Spinner label="正在加载入口" /></main>;
+  if (state === "login" && !publicReady) return <main className="boot-screen"><BrandMark className="brand-mark-large" size={32} /><Spinner label="正在加载入口" /></main>;
   if (state === "login" && probe.enabled && !loginRequested) return <PublicProbeScreen probe={probe} onLogin={() => { location.hash = "/login"; setLoginRequested(true); }} />;
   if (state === "login") return <LoginScreen wallpaper={wallpaper} onLogin={onLogin} />;
   if (profile) return <ConsoleApp profile={profile} onLogout={logout} />;

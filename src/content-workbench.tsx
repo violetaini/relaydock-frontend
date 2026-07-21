@@ -717,50 +717,50 @@ export function SubscriptionGeneratorPage({ notify = noNotify }: ContentPageProp
       <PageHeader title="订阅生成器" description="从节点管理选择节点，使用规则分类或模板生成可直接使用的 Mihomo 配置。" actions={<IconButton label="刷新节点和模板" onClick={() => void load()}><RefreshCw size={18} /></IconButton>} />
       {error ? <ErrorState message={error} /> : null}
       {loading ? <Surface className="cw-loading"><Spinner /></Surface> : (
-        <div className="cw-generator-layout">
-          <div className="cw-stack">
-            <Surface className="cw-generator-panel cw-section">
-              <div className="cw-section-title"><div><h2>选择节点</h2><p>从已保存节点添加到订阅</p></div><span className="cw-category-count">已选 {selectedNodes.size}</span></div>
-              <div className="cw-toolbar" style={{ marginBottom: 10 }}>
-                <Button variant="ghost" onClick={() => setSelectedNodes(new Set(nodes.map((node) => node.id)))}>全选</Button>
-                <Button variant="ghost" onClick={() => setSelectedNodes(new Set())}>清空</Button>
+        <Surface className="cw-generator-workbench">
+          <section className="cw-workbench-section cw-node-section">
+            <div className="cw-section-title"><div><h2>选择节点</h2><p>从已保存的节点中选择需要添加到订阅的节点</p></div><span className="cw-category-count">已选 {selectedNodes.size}</span></div>
+            <div className="cw-toolbar cw-generator-toolbar">
+              <Button variant="ghost" onClick={() => setSelectedNodes(new Set(nodes.map((node) => node.id)))}>全选</Button>
+              <Button variant="ghost" onClick={() => setSelectedNodes(new Set())}>清空</Button>
+            </div>
+            {nodes.length === 0 ? <div className="cw-empty-inline">暂无可用节点，请先在节点管理中添加并启用节点。</div> : (
+              <div className="cw-selector cw-selector-table">
+                <div className="cw-selector-head"><span aria-hidden="true" /><strong>节点名称</strong><strong>协议</strong><strong>标签</strong></div>
+                {nodes.map((node) => <label className="cw-selector-row" key={node.id}><input type="checkbox" checked={selectedNodes.has(node.id)} onChange={() => toggleNode(node.id)} /><span><strong>{node.node_name}</strong><small>节点 ID {node.id}</small></span><Badge tone={node.enabled ? "good" : "neutral"}>{node.protocol || "未知"}</Badge><small>{node.tags?.length ? node.tags.join(" / ") : node.tag || "手动输入"}</small></label>)}
               </div>
-              {nodes.length === 0 ? <div className="cw-empty-inline">暂无可用节点，请先在节点管理中添加并启用节点。</div> : (
-                <div className="cw-selector">
-                  {nodes.map((node) => <label className="cw-selector-row" key={node.id}><input type="checkbox" checked={selectedNodes.has(node.id)} onChange={() => toggleNode(node.id)} /><span><strong>{node.node_name}</strong><small>{node.protocol || "未知协议"}{node.tags?.length ? ` · ${node.tags.join(" / ")}` : node.tag ? ` · ${node.tag}` : ""}</small></span><Badge tone={node.enabled ? "good" : "neutral"}>{node.enabled ? "启用" : "停用"}</Badge></label>)}
-                </div>
-              )}
-            </Surface>
-            <Surface className="cw-generator-panel cw-section">
-              <div className="cw-section-title"><div><h2>规则模式</h2><p>自定义分类或加载模板</p></div></div>
-              <div className="cw-mode" role="tablist" aria-label="规则模式">
-                <button type="button" className={mode === "rules" ? "is-active" : ""} onClick={() => setMode("rules")}><Settings2 size={16} />自定义规则</button>
-                <button type="button" className={mode === "template" ? "is-active" : ""} onClick={() => setMode("template")}><FileCode2 size={16} />使用模板</button>
-              </div>
-              {mode === "template" ? <div style={{ marginTop: 14 }}><Field label="选择模板" hint="模板中的代理组会自动注入已选节点"><select value={template} onChange={(event) => setTemplate(event.target.value)}><option value="">请选择模板</option>{templates.map((item) => <option key={item.filename} value={item.filename}>{item.name || item.filename}</option>)}</select></Field></div> : null}
-            </Surface>
-          </div>
-          <div className="cw-stack">
-            {mode === "rules" ? (
-              <Surface className="cw-generator-panel cw-section">
-                <div className="cw-section-title"><div><h2>规则选择</h2><p>均衡规则已预选，可按用途调整</p></div><span className="cw-category-count">{selectedRules.size} 个分类</span></div>
-                <div className="cw-rules">{ruleCategories.map((item) => <button type="button" className={`cw-rule ${selectedRules.has(item.key) ? "is-selected" : ""}`} key={item.key} onClick={() => toggleRule(item.key)}><span>{item.emoji}</span><span>{item.label}</span></button>)}</div>
-              </Surface>
-            ) : null}
-            <Surface className="cw-generator-panel cw-section">
-              <div className="cw-section-title"><div><h2>最终订阅配置</h2><p>生成后可复制、下载或保存到订阅管理</p></div></div>
-              <div className="cw-generator-output">
-                <textarea className="cw-code" aria-label="生成的订阅配置" value={output} onChange={(event) => setOutput(event.target.value)} placeholder="选择节点和规则后生成配置" spellCheck={false} />
-                {output ? <div className="cw-output-actions"><IconButton label="复制配置" onClick={async () => { await copyText(output); notify("配置已复制"); }}><Copy size={16} /></IconButton><IconButton label="下载配置" onClick={() => downloadText("subscription.yaml", output)}><Download size={16} /></IconButton></div> : null}
-              </div>
-              <div className="cw-card-actions" style={{ marginTop: 12 }}>
-                <Button onClick={() => void generate()} disabled={working || selectedNodes.size === 0}>{working ? <Spinner label="正在生成" /> : <><WandSparkles size={16} />生成订阅</>}</Button>
-                <Button variant="secondary" onClick={() => setOutput("")}>清空</Button>
-                <Button variant="secondary" disabled={!output} onClick={() => setShowSave(true)}><Save size={16} />保存订阅</Button>
-              </div>
-            </Surface>
-          </div>
-        </div>
+            )}
+          </section>
+
+          <section className="cw-workbench-section">
+            <div className="cw-section-title"><div><h2>规则模式</h2><p>自定义分类或加载现有模板</p></div></div>
+            <div className="cw-mode" role="tablist" aria-label="规则模式">
+              <button type="button" className={mode === "rules" ? "is-active" : ""} onClick={() => setMode("rules")}><Settings2 size={16} />自定义规则</button>
+              <button type="button" className={mode === "template" ? "is-active" : ""} onClick={() => setMode("template")}><FileCode2 size={16} />使用模板</button>
+            </div>
+            {mode === "template" ? <div className="cw-template-field"><Field label="选择模板" hint="模板中的代理组会自动注入已选节点"><select value={template} onChange={(event) => setTemplate(event.target.value)}><option value="">请选择模板</option>{templates.map((item) => <option key={item.filename} value={item.filename}>{item.name || item.filename}</option>)}</select></Field></div> : null}
+          </section>
+
+          {mode === "rules" ? (
+            <section className="cw-workbench-section">
+              <div className="cw-section-title"><div><h2>规则选择</h2><p>均衡规则已预选，可按用途调整</p></div><span className="cw-category-count">{selectedRules.size} 个分类</span></div>
+              <div className="cw-rules">{ruleCategories.map((item) => <button type="button" className={`cw-rule ${selectedRules.has(item.key) ? "is-selected" : ""}`} key={item.key} onClick={() => toggleRule(item.key)}><span>{item.emoji}</span><span>{item.label}</span></button>)}</div>
+            </section>
+          ) : null}
+
+          <section className={`cw-workbench-section cw-output-section ${output ? "has-output" : ""}`}>
+            <div className="cw-section-title"><div><h2>最终订阅配置</h2><p>生成后可复制、下载或保存到订阅管理</p></div></div>
+            {output ? <div className="cw-generator-output">
+              <textarea className="cw-code" aria-label="生成的订阅配置" value={output} onChange={(event) => setOutput(event.target.value)} placeholder="选择节点和规则后生成配置" spellCheck={false} />
+              <div className="cw-output-actions"><IconButton label="复制配置" onClick={async () => { await copyText(output); notify("配置已复制"); }}><Copy size={16} /></IconButton><IconButton label="下载配置" onClick={() => downloadText("subscription.yaml", output)}><Download size={16} /></IconButton></div>
+            </div> : null}
+            <div className="cw-card-actions cw-generator-actions">
+              <Button onClick={() => void generate()} disabled={working || selectedNodes.size === 0}>{working ? <Spinner label="正在生成" /> : <><WandSparkles size={16} />生成订阅文件</>}</Button>
+              <Button variant="secondary" onClick={() => setOutput("")}>清空</Button>
+              <Button variant="secondary" disabled={!output} onClick={() => setShowSave(true)}><Save size={16} />保存订阅</Button>
+            </div>
+          </section>
+        </Surface>
       )}
       {showSave ? <SaveGeneratedDialog content={output} onClose={() => setShowSave(false)} onSaved={() => { setShowSave(false); notify("订阅已保存"); }} /> : null}
     </section>
@@ -1293,18 +1293,22 @@ export function TemplatesWorkbenchPage({ notify = noNotify }: ContentPageProps) 
 
   return (
     <section className="cw-page">
-      <PageHeader title="模板管理" description="维护订阅生成器使用的 V3 规则模板，支持结构化设计、导入、转换、预览和 YAML 编辑。" actions={<><IconButton label="刷新模板" onClick={() => void load()}><RefreshCw size={18} /></IconButton><Button variant="secondary" onClick={() => setShowVisual(true)}><WandSparkles size={16} />可视化设计</Button><Button onClick={() => setShowCreate(true)}><Plus size={16} />新建模板</Button></>} />
-      {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
-      {loading ? <Surface className="cw-loading"><Spinner /></Surface> : templates.length === 0 ? (
-        <Surface><EmptyState icon={<FileCode2 size={24} />} title="暂无模板" description="上传 YAML、粘贴内容或从订阅生成模板。" action={<Button onClick={() => setShowCreate(true)}><Plus size={16} />新建模板</Button>} /></Surface>
-      ) : (
-        <div className="cw-template-list">
-          {templates.map((filename) => {
-            const owner = owners[filename];
-            return <Surface className="cw-template" key={filename}><div className="cw-template-title"><span className="cw-file-icon"><FileCode2 size={17} /></span><span><strong>{filename.replace(/\.ya?ml$/i, "").replaceAll("_", " ")}</strong><small>{filename}</small></span>{defaultTemplate === filename ? <Badge tone="good">默认</Badge> : owner ? <Badge tone={owner === username ? "info" : "neutral"}>{owner === username ? "我的" : owner}</Badge> : <Badge>内置</Badge>}</div><div className="cw-card-actions">{isAdmin ? <Button aria-label={defaultTemplate === filename ? undefined : `将 ${filename} 设为默认模板`} variant={defaultTemplate === filename ? "ghost" : "secondary"} disabled={working || defaultTemplate === filename} onClick={() => void makeDefault(filename)}>{defaultTemplate === filename ? <Check size={15} /> : <Star size={15} />}{defaultTemplate === filename ? "默认模板" : "设为默认"}</Button> : null}<Button variant="secondary" onClick={() => setPreviewing(filename)}><Sparkles size={15} />预览</Button>{canModify(filename) ? <><IconButton label={`编辑 ${filename}`} onClick={() => setEditing(filename)}><Pencil size={16} /></IconButton><IconButton label={`删除 ${filename}`} disabled={working || defaultTemplate === filename} onClick={() => setDeleting(filename)}><Trash2 size={16} /></IconButton></> : null}</div></Surface>;
-          })}
+      <Surface className="table-surface cw-compact-table cw-template-panel">
+        <div className="surface-heading">
+          <div><h2>模板管理</h2><small>管理 V3 规则模板，支持结构化设计、导入、转换、预览和 YAML 编辑</small></div>
+          <div className="page-actions"><IconButton label="刷新模板" onClick={() => void load()}><RefreshCw size={18} /></IconButton><Button variant="secondary" onClick={() => setShowVisual(true)}><WandSparkles size={16} />可视化设计</Button><Button onClick={() => setShowCreate(true)}><Plus size={16} />新建模板</Button></div>
         </div>
-      )}
+        {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
+        {loading ? <div className="cw-loading"><Spinner /></div> : templates.length === 0 ? (
+          <EmptyState icon={<FileCode2 size={24} />} title="暂无模板" description="上传 YAML、粘贴内容或从订阅生成模板。" action={<Button onClick={() => setShowCreate(true)}><Plus size={16} />新建模板</Button>} />
+        ) : (
+          <div className="table-wrap cw-template-table"><table><thead><tr><th>模板名称</th><th>归属 / 状态</th><th>操作</th></tr></thead><tbody>{templates.map((filename) => {
+            const owner = owners[filename];
+            const isDefault = defaultTemplate === filename;
+            return <tr key={filename}><td><div className="cw-file-name"><span className="cw-file-icon"><FileCode2 size={17} /></span><span><strong>{filename}</strong><small>{filename.replace(/\.ya?ml$/i, "").replaceAll("_", " ")}</small></span></div></td><td>{isDefault ? <Badge tone="good">默认模板</Badge> : owner ? <Badge tone={owner === username ? "info" : "neutral"}>{owner === username ? "我的模板" : owner}</Badge> : <Badge>内置模板</Badge>}</td><td><div className="cw-table-actions">{isAdmin ? <IconButton label={isDefault ? "默认模板" : `将 ${filename} 设为默认模板`} disabled={working || isDefault} onClick={() => void makeDefault(filename)}>{isDefault ? <Check size={16} /> : <Star size={16} />}</IconButton> : null}<IconButton label="预览" title={`预览 ${filename}`} onClick={() => setPreviewing(filename)}><Sparkles size={16} /></IconButton>{canModify(filename) ? <><IconButton label={`编辑 ${filename}`} onClick={() => setEditing(filename)}><Pencil size={16} /></IconButton><IconButton label={`删除 ${filename}`} disabled={working || isDefault} onClick={() => setDeleting(filename)}><Trash2 size={16} /></IconButton></> : null}</div></td></tr>;
+          })}</tbody></table></div>
+        )}
+      </Surface>
       {showCreate ? <CreateTemplateDialog onClose={() => setShowCreate(false)} onComplete={async () => { setShowCreate(false); notify("模板已创建"); await load(); }} /> : null}
       {showVisual ? <VisualTemplateDialog onClose={() => setShowVisual(false)} onComplete={async () => { setShowVisual(false); notify("可视化模板已保存"); await load(); }} /> : null}
       {previewing ? <TemplatePreviewDialog filename={previewing} onClose={() => setPreviewing(null)} /> : null}
@@ -1630,12 +1634,8 @@ export function CertificatesWorkbenchPage({ notify = noNotify }: ContentPageProp
     finally { setWorking(false); }
   };
 
-  const expiring = certificates.filter((item) => item.expiry_date && new Date(item.expiry_date).getTime() - Date.now() < 30 * 86400_000 && new Date(item.expiry_date).getTime() > Date.now()).length;
-  const valid = certificates.filter((item) => item.status === "valid").length;
-  const failed = certificates.filter((item) => item.status === "failed" || item.status === "expired").length;
   return <section className="cw-page">
-    <PageHeader title="证书管理" description="集中管理 ACME 证书、部署策略和可复用的 DNS 验证凭据。" actions={<><IconButton label="刷新证书" onClick={() => void load()}><RefreshCw size={18} /></IconButton>{tab === "certificates" ? <><Button variant="secondary" onClick={() => setShowUpload(true)}><Upload size={16} />上传证书</Button><Button onClick={() => setShowApply(true)}><Plus size={16} />申请证书</Button></> : <Button onClick={() => setEditingProvider("new")}><Plus size={16} />DNS 提供商</Button>}</>} />
-    <div className="cw-cert-summary"><div className="cw-summary-item"><span>证书总数</span><strong>{certificates.length}</strong></div><div className="cw-summary-item"><span>有效</span><strong>{valid}</strong></div><div className="cw-summary-item"><span>30 天内到期</span><strong>{expiring}</strong></div><div className="cw-summary-item"><span>异常</span><strong>{failed}</strong></div></div>
+    <PageHeader title="SSL/TLS 证书管理" description="管理 ACME 证书，支持通配符、DNS 验证、多 CA 和自动部署。" actions={<><IconButton label="刷新证书" onClick={() => void load()}><RefreshCw size={18} /></IconButton>{tab === "certificates" ? <><Button onClick={() => setShowApply(true)}><Plus size={16} />申请证书</Button><Button variant="secondary" onClick={() => setShowUpload(true)}><Upload size={16} />上传证书</Button></> : <Button onClick={() => setEditingProvider("new")}><Plus size={16} />DNS 提供商</Button>}</>} />
     <div className="cw-tabs" role="tablist" aria-label="证书管理分类"><button type="button" role="tab" aria-selected={tab === "certificates"} className={tab === "certificates" ? "is-active" : ""} onClick={() => setTab("certificates")}><Award size={16} />证书 <span>{certificates.length}</span></button><button type="button" role="tab" aria-selected={tab === "providers"} className={tab === "providers" ? "is-active" : ""} onClick={() => setTab("providers")}><KeyRound size={16} />DNS 提供商 <span>{providers.length}</span></button></div>
     {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
     {loading ? <Surface className="cw-loading"><Spinner /></Surface> : tab === "certificates" ? <CertificateTable items={certificates} working={working} onApply={() => setShowApply(true)} onRenew={(item) => void renew(item)} onToggle={(item, key, value) => void toggleCertificate(item, key, value)} onDeploy={setDeploying} onDelete={(item) => setPending({ kind: "certificate", item })} /> : <DNSProviderTable items={providers} onCreate={() => setEditingProvider("new")} onEdit={setEditingProvider} onDelete={(item) => setPending({ kind: "provider", item })} />}

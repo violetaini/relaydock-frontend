@@ -65,7 +65,7 @@ describe("settings workbench", () => {
 
     const url = await screen.findByRole("textbox", { name: "公开 URL" });
     fireEvent.change(url, { target: { value: "https://new.example.com/" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存当前分区" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存基础设置" }));
 
     await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/system-settings/master-url", { master_url: "https://new.example.com" }));
     expect(put).toHaveBeenCalledWith("/api/admin/system-settings/intervals", expect.objectContaining({ report_interval: 5 }));
@@ -78,12 +78,11 @@ describe("settings workbench", () => {
     const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
     render(<SettingsWorkbenchPage notify={vi.fn()} />);
 
-    fireEvent.click(await screen.findByRole("tab", { name: "订阅" }));
-    expect(screen.getByRole("combobox", { name: "节点匹配规则" })).toHaveValue("server_port");
+    expect(await screen.findByRole("combobox", { name: "节点匹配规则" })).toHaveValue("server_port");
     expect(screen.getByRole("spinbutton", { name: "缓存有效期（分钟）" })).toHaveValue(30);
     fireEvent.change(screen.getByRole("combobox", { name: "同步范围" }), { target: { value: "all" } });
     fireEvent.click(screen.getByRole("switch", { name: "节点名称附加剩余流量与到期信息" }));
-    fireEvent.click(screen.getByRole("button", { name: "保存当前分区" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存订阅设置" }));
 
     await waitFor(() => expect(put).toHaveBeenCalledWith("/api/user/config", expect.objectContaining({
       force_sync_external: true,
@@ -117,8 +116,8 @@ describe("settings workbench", () => {
     const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
     render(<SettingsWorkbenchPage notify={vi.fn()} />);
 
-    fireEvent.click(await screen.findByRole("tab", { name: "安全" }));
-    fireEvent.click(screen.getByRole("button", { name: "保存当前分区" }));
+    await screen.findByRole("heading", { name: "安全设置" });
+    fireEvent.click(screen.getByRole("button", { name: "保存安全设置" }));
 
     await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/security-settings", expect.objectContaining({
       login_rate_max_attempts: 7,
@@ -133,7 +132,7 @@ describe("settings workbench", () => {
 
     expect(await screen.findByText("setting unavailable")).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "公开 URL" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "保存当前分区" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "保存基础设置" })).not.toBeInTheDocument();
     expect(put).not.toHaveBeenCalled();
   });
 });

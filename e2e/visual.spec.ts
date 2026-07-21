@@ -323,11 +323,13 @@ test("desktop navigation follows the upstream primary and secondary hierarchy", 
 
     const primaryLabels = page.locator(".sidebar-nav .nav-primary .nav-item > span");
     const utilityItems = page.locator(".sidebar-nav .nav-utility .nav-item");
+    const utilityLabels = page.locator(".sidebar-nav .nav-utility .nav-item > span");
     await expect(primaryLabels).toHaveCount(7);
     await expect(utilityItems).toHaveCount(4);
+    await expect(utilityLabels).toHaveCount(4);
     await expect(page.locator(".sidebar-nav .nav-secondary")).toBeHidden();
     await expect(page.getByRole("button", { name: "更多功能", exact: true })).toBeVisible();
-    const clipped = await primaryLabels.evaluateAll((elements) => elements.flatMap((element) => {
+    const clipped = await primaryLabels.or(utilityLabels).evaluateAll((elements) => elements.flatMap((element) => {
       const label = element.textContent?.trim() || "<empty>";
       const style = window.getComputedStyle(element);
       const rect = element.getBoundingClientRect();
@@ -338,10 +340,10 @@ test("desktop navigation follows the upstream primary and secondary hierarchy", 
         : [];
     }));
 
-    expect(clipped, `${width}px primary navigation labels must remain visible`).toEqual([]);
+    expect(clipped, `${width}px desktop navigation labels must remain visible`).toEqual([]);
     const navOverflow = await page.locator(".sidebar-nav").evaluate((nav) => nav.scrollWidth - nav.clientWidth);
     expect(navOverflow, `${width}px desktop navigation must not require horizontal scrolling`).toBeLessThanOrEqual(1);
-    const renderedRows = await page.locator(".sidebar-nav .nav-primary .nav-item, .sidebar-nav .nav-utility .nav-item").evaluateAll((elements) => new Set(elements.map((element) => Math.round(element.getBoundingClientRect().top))).size);
+    const renderedRows = await page.locator(".sidebar-nav .nav-primary .nav-item, .sidebar-nav .nav-utility .nav-item").evaluateAll((elements) => new Set(elements.map((element) => Math.round(element.getBoundingClientRect().top / 2) * 2)).size);
     expect(renderedRows, `${width}px desktop navigation row count`).toBeLessThanOrEqual(width >= 1360 ? 1 : 2);
     const headerHeight = await page.locator(".sidebar").evaluate((header) => header.getBoundingClientRect().height);
     expect(headerHeight, `${width}px desktop navigation uses its stable height`).toBeLessThanOrEqual(width >= 1360 ? 65 : 104);
@@ -536,7 +538,7 @@ for (const viewport of [
       { route: "nodes", heading: "节点管理", marker: "HK Reality 01" },
       { route: "traffic", heading: "流量明细", marker: "用户汇总" },
       { route: "users", heading: "用户管理", marker: "Alice" },
-      { route: "packages", heading: "套餐管理", marker: "标准套餐" },
+      { route: "packages", heading: "套餐模板管理", marker: "标准套餐" },
       { route: "certificates", heading: "证书管理", marker: "edge.example.com" },
       { route: "templates", heading: "模板管理", marker: "balanced_v3.yaml" },
       { route: "subscribeFiles", heading: "订阅管理", marker: "日常订阅" },
@@ -589,7 +591,7 @@ for (const viewport of [
 
     await page.goto("/#/generator");
     await page.getByRole("button", { name: "全选" }).click();
-    await page.getByRole("main").getByRole("button", { name: "生成订阅" }).click();
+    await page.getByRole("main").getByRole("button", { name: "生成订阅文件" }).click();
     await expect(page.getByLabel("生成的订阅配置")).not.toHaveValue("");
     await page.getByRole("button", { name: "保存订阅" }).click();
     await expect(page.getByRole("dialog", { name: "保存生成的订阅" })).toBeVisible();
@@ -679,8 +681,15 @@ for (const viewport of [
     await expect(page.getByRole("dialog", { name: "新建用户" })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} user create`);
     await closeDialog(page);
+    await page.getByRole("button", { name: "用户设置 alice" }).click();
+    const userSettings = page.getByRole("dialog", { name: "用户设置 · alice" });
+    await expect(userSettings.getByRole("combobox", { name: "用户套餐" })).toBeVisible();
+    await expect(userSettings.getByRole("button", { name: /服务器授权与自建节点/ })).toBeVisible();
+    await expectViewportIntegrity(page, `${viewport.name} unified user settings`);
+    await closeDialog(page);
 
     await page.goto("/#/packages");
+    await expect(page.getByText("用户套餐分配")).toHaveCount(0);
     await page.getByRole("button", { name: "创建套餐" }).click();
     await expect(page.getByRole("dialog", { name: "创建套餐" })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} package create`);
@@ -744,19 +753,18 @@ for (const viewport of [
     await closeDialog(page);
 
     await page.goto("/#/settings");
-    for (const [tab, marker] of [
-      ["基础", "控制端与采集"],
-      ["订阅", "生成能力"],
-      ["安全", "登录限流"],
+    for (const [group, marker] of [
+      ["基础设置", "控制端与采集"],
+      ["订阅设置", "生成能力"],
+      ["安全设置", "登录限流"],
       ["用户权限", "普通用户页面"],
-      ["通知", "Telegram"],
+      ["通知设置", "Telegram"],
       ["账户与 API", "管理 API Token"],
     ]) {
-      await page.getByRole("tab", { name: tab, exact: true }).click();
+      await expect(page.getByRole("heading", { name: group, exact: true })).toBeVisible();
       await expect(page.getByRole("heading", { name: marker, exact: true })).toBeVisible();
-      await expectViewportIntegrity(page, `${viewport.name} settings ${tab}`);
+      await expectViewportIntegrity(page, `${viewport.name} settings ${group}`);
     }
-    await page.getByRole("tab", { name: "订阅", exact: true }).click();
     await page.getByRole("button", { name: "打开迁移向导" }).click();
     const migrationDialog = page.getByRole("dialog", { name: "从妙妙屋迁移" });
     await expect(migrationDialog.getByRole("tab", { name: "远程拉取" })).toBeVisible();

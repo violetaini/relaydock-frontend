@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import {
   CalendarPlus,
+  ChevronRight,
   Copy,
   Gauge,
   KeyRound,
   Link2,
   Mail,
+  Package as PackageIcon,
   Pencil,
   Plus,
   RefreshCw,
@@ -22,7 +24,7 @@ import {
 } from "lucide-react";
 import { api } from "./api";
 import { ServerGrantsDialog } from "./server-grants";
-import type { NodeItem, NodeListResponse, UserItem } from "./types";
+import type { NodeItem, NodeListResponse, PackageItem, UserItem } from "./types";
 import {
   Badge,
   Button,
@@ -78,6 +80,7 @@ interface Subaccount {
 
 type Editor =
   | { kind: "create" }
+  | { kind: "manage"; user: ManagedUser }
   | { kind: "profile"; user: ManagedUser }
   | { kind: "password"; user: ManagedUser }
   | { kind: "extend"; user: ManagedUser }
@@ -203,21 +206,19 @@ export function UsersWorkbenchPage({ notify }: { notify: Notify }) {
             const effectiveSpeed = user.speed_limit_override ?? user.speed_limit_mbps;
             const effectiveDevices = user.device_limit_override ?? user.device_limit;
             return <tr key={user.username}>
-              <td><div className="primary-cell"><span className="user-avatar">{(user.nickname || user.username).slice(0, 1).toUpperCase()}</span><span><strong>{user.nickname || user.username}</strong><small>{user.username}{user.email ? ` · ${user.email}` : ""}</small>{user.remark ? <small className="user-remark">{user.remark}</small> : null}</span></div></td>
-              <td><Badge tone={user.is_active ? "good" : "bad"}>{user.is_active ? "启用" : "停用"}</Badge>{isAdmin ? <Badge tone="info">管理员</Badge> : user.is_over_limit ? <Badge tone="warn">流量超限</Badge> : null}</td>
-              <td><strong>{user.package_name || "未分配套餐"}</strong><small className="cell-note">{user.package_end_date ? `到期 ${user.package_end_date}` : "无到期日"}</small></td>
-              <td><strong>{formatBytes(user.traffic_used)}</strong><small className="cell-note">{user.traffic_limit ? `流量 ${formatBytes(user.traffic_limit)}` : "流量不限"} · {effectiveSpeed ? `${effectiveSpeed} Mbps` : "不限速"} · {effectiveDevices ? `${effectiveDevices} 设备` : "设备不限"}</small></td>
-              <td>{user.user_short_code ? <button className="inline-copy" onClick={() => copyText(user.user_short_code ?? "", notify, "短码")}><code>{user.user_short_code}</code><Copy size={13} /></button> : <span className="muted">未生成</span>}<small className="cell-note">{user.custom_user_short_code ? "自定义短码" : "系统短码"}</small></td>
-              <td><div className="user-actions">
-                <IconButton label={`编辑 ${user.username}`} onClick={() => setEditor({ kind: "profile", user })}><Pencil size={16} /></IconButton>
-                {!isAdmin ? <><IconButton label={`续期 ${user.username}`} onClick={() => setEditor({ kind: "extend", user })} disabled={!user.package_id}><CalendarPlus size={16} /></IconButton><IconButton label={`限额 ${user.username}`} onClick={() => setEditor({ kind: "limits", user })}><Gauge size={16} /></IconButton><IconButton label={`服务器授权 ${user.username}`} onClick={() => setEditor({ kind: "server-grants", user })}><Server size={16} /></IconButton><IconButton label={`订阅 ${user.username}`} onClick={() => setEditor({ kind: "subscriptions", user })}><Link2 size={16} /></IconButton><IconButton label={`子账号 ${user.username}`} onClick={() => setEditor({ kind: "subaccounts", user })}><UserCog size={16} /></IconButton><IconButton label={`重置 ${user.username} 密码`} onClick={() => setEditor({ kind: "password", user })}><KeyRound size={16} /></IconButton><IconButton label={user.is_active ? `停用 ${user.username}` : `启用 ${user.username}`} onClick={() => void toggleStatus(user)} disabled={workingUser === user.username}>{user.is_active ? <UserRoundX size={16} /> : <UserRoundCheck size={16} />}</IconButton><IconButton label={`删除 ${user.username}`} onClick={() => setPendingDelete(user)}><Trash2 size={16} /></IconButton></> : null}
-              </div></td>
+              <td data-label="用户"><div className="primary-cell"><span className="user-avatar">{(user.nickname || user.username).slice(0, 1).toUpperCase()}</span><span><strong>{user.nickname || user.username}</strong><small>{user.username}{user.email ? ` · ${user.email}` : ""}</small>{user.remark ? <small className="user-remark">{user.remark}</small> : null}</span></div></td>
+              <td data-label="状态"><Badge tone={user.is_active ? "good" : "bad"}>{user.is_active ? "启用" : "停用"}</Badge>{isAdmin ? <Badge tone="info">管理员</Badge> : user.is_over_limit ? <Badge tone="warn">流量超限</Badge> : null}</td>
+              <td data-label="套餐与到期"><strong>{user.package_name || "未分配套餐"}</strong><small className="cell-note">{user.package_end_date ? `到期 ${user.package_end_date}` : "无到期日"}</small></td>
+              <td data-label="限额"><strong>{formatBytes(user.traffic_used)}</strong><small className="cell-note">{user.traffic_limit ? `流量 ${formatBytes(user.traffic_limit)}` : "流量不限"} · {effectiveSpeed ? `${effectiveSpeed} Mbps` : "不限速"} · {effectiveDevices ? `${effectiveDevices} 设备` : "设备不限"}</small></td>
+              <td data-label="订阅短码">{user.user_short_code ? <button className="inline-copy" onClick={() => copyText(user.user_short_code ?? "", notify, "短码")}><code>{user.user_short_code}</code><Copy size={13} /></button> : <span className="muted">未生成</span>}<small className="cell-note">{user.custom_user_short_code ? "自定义短码" : "系统短码"}</small></td>
+              <td data-label="操作"><div className="user-actions"><Button variant="secondary" aria-label={`用户设置 ${user.username}`} onClick={() => setEditor({ kind: "manage", user })}><UserCog size={16} />用户设置<ChevronRight size={15} /></Button></div></td>
             </tr>;
           })}</tbody></table></div>
         )}
       </Surface>
 
       {editor?.kind === "create" ? <CreateUserDialog notify={notify} onClose={() => setEditor(null)} onComplete={completed} /> : null}
+      {editor?.kind === "manage" ? <UserSettingsDialog user={editor.user} working={workingUser === editor.user.username} onClose={() => setEditor(null)} onOpen={(kind) => setEditor({ kind, user: editor.user } as Editor)} onComplete={completed} onToggleStatus={async () => { await toggleStatus(editor.user); setEditor(null); }} onDelete={() => { setEditor(null); setPendingDelete(editor.user); }} /> : null}
       {editor?.kind === "profile" ? <ProfileDialog user={editor.user} onClose={() => setEditor(null)} onComplete={completed} /> : null}
       {editor?.kind === "password" ? <PasswordDialog user={editor.user} notify={notify} onClose={() => setEditor(null)} /> : null}
       {editor?.kind === "extend" ? <ExtendDialog user={editor.user} onClose={() => setEditor(null)} onComplete={completed} /> : null}
@@ -227,6 +228,145 @@ export function UsersWorkbenchPage({ notify }: { notify: Notify }) {
       {editor?.kind === "subaccounts" ? <SubaccountsDialog user={editor.user} onClose={() => setEditor(null)} /> : null}
       {pendingDelete ? <ConfirmDialog title="删除用户" description={`确认删除 ${pendingDelete.username}？该用户在所有节点上的客户端、私有路由、订阅关联和登录数据都会清理，此操作无法撤销。`} confirmLabel="确认删除" working={workingUser === pendingDelete.username} onCancel={() => setPendingDelete(null)} onConfirm={() => void remove()} /> : null}
     </>
+  );
+}
+
+type UserEditorKind = Exclude<Editor["kind"], "create" | "manage">;
+
+interface PackageMutationResponse {
+  success?: boolean;
+  message?: string;
+  error?: string;
+  warnings?: string[];
+}
+
+function UserSettingsDialog({
+  user,
+  working,
+  onClose,
+  onOpen,
+  onComplete,
+  onToggleStatus,
+  onDelete,
+}: {
+  user: ManagedUser;
+  working: boolean;
+  onClose: () => void;
+  onOpen: (kind: UserEditorKind) => void;
+  onComplete: (message: string) => Promise<void>;
+  onToggleStatus: () => Promise<void>;
+  onDelete: () => void;
+}) {
+  const [packages, setPackages] = useState<PackageItem[]>([]);
+  const [packageID, setPackageID] = useState(String(user.package_id ?? ""));
+  const [startDate, setStartDate] = useState("");
+  const [expireDate, setExpireDate] = useState(user.package_end_date ?? "");
+  const [packageLoading, setPackageLoading] = useState(user.role !== "admin");
+  const [packageWorking, setPackageWorking] = useState(false);
+  const [packageError, setPackageError] = useState("");
+
+  useEffect(() => {
+    if (user.role === "admin") return;
+    api.get<{ packages?: PackageItem[] }>("/api/admin/packages")
+      .then((response) => setPackages(response.packages ?? []))
+      .catch((reason) => setPackageError(messageOf(reason, "套餐列表加载失败")))
+      .finally(() => setPackageLoading(false));
+  }, [user.role]);
+
+  const selectedPackage = packages.find((item) => item.id === Number(packageID));
+
+  const assignPackage = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!packageID) {
+      setPackageError("请选择套餐");
+      return;
+    }
+    if (startDate && expireDate && expireDate < startDate) {
+      setPackageError("到期日期不能早于开始日期");
+      return;
+    }
+    setPackageWorking(true);
+    setPackageError("");
+    try {
+      const response = await api.post<PackageMutationResponse>("/api/admin/packages/assign", {
+        username: user.username,
+        package_id: Number(packageID),
+        ...(startDate ? { start_date: startDate } : {}),
+        ...(expireDate ? { expire_date: expireDate } : {}),
+      });
+      if (response.success === false) throw new Error(response.error || response.message || "套餐分配失败");
+      const warning = response.warnings?.length ? `，有 ${response.warnings.length} 项节点下发警告` : "";
+      await onComplete(`已为 ${user.username} ${user.package_id ? "更新" : "分配"}“${selectedPackage?.name ?? "套餐"}”${warning}`);
+    } catch (reason) {
+      setPackageError(messageOf(reason, "套餐分配失败"));
+    } finally {
+      setPackageWorking(false);
+    }
+  };
+
+  const unassignPackage = async () => {
+    setPackageWorking(true);
+    setPackageError("");
+    try {
+      const response = await api.post<PackageMutationResponse>("/api/admin/packages/unassign", { username: user.username });
+      if (response.success === false) throw new Error(response.error || response.message || "解绑套餐失败");
+      await onComplete(`已解绑 ${user.username} 的套餐`);
+    } catch (reason) {
+      setPackageError(messageOf(reason, "解绑套餐失败"));
+    } finally {
+      setPackageWorking(false);
+    }
+  };
+
+  const action = (kind: UserEditorKind, label: string, icon: ReactNode) => (
+    <button type="button" className="user-setting-row" onClick={() => onOpen(kind)}>
+      <span className="user-setting-row-icon">{icon}</span><span><strong>{label}</strong><small>打开对应设置</small></span><ChevronRight size={16} />
+    </button>
+  );
+
+  return (
+    <Dialog title={`用户设置 · ${user.username}`} description="用户资料、套餐、节点权限和订阅都从这里管理" onClose={onClose} wide>
+      <div className="user-settings-dialog">
+        <div className="user-settings-summary">
+          <span className="user-settings-avatar">{(user.nickname || user.username).slice(0, 1).toUpperCase()}</span>
+          <span><strong>{user.nickname || user.username}</strong><small>{user.email || "未填写邮箱"} · {user.is_active ? "账号已启用" : "账号已停用"}</small></span>
+          <Badge tone={user.role === "admin" ? "info" : user.is_active ? "good" : "bad"}>{user.role === "admin" ? "管理员" : user.is_active ? "启用" : "停用"}</Badge>
+        </div>
+
+        {user.role !== "admin" ? (
+          <section className="user-settings-section">
+            <div className="user-settings-section-heading"><div><h2>套餐与有效期</h2><p>分配套餐后，节点凭据和订阅会按套餐同步</p></div><PackageIcon size={19} /></div>
+            {packageError ? <ErrorState message={packageError} /> : null}
+            {packageLoading ? <div className="user-settings-loading"><Spinner label="正在加载套餐" /></div> : <form className="user-package-form" onSubmit={(event) => void assignPackage(event)}>
+              <Field label="套餐"><select aria-label="用户套餐" required value={packageID} onChange={(event) => setPackageID(event.target.value)}><option value="">请选择套餐</option>{packages.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.traffic_limit_gb} GB / {item.cycle_days} 天</option>)}</select></Field>
+              <Field label="开始日期" hint="留空表示今天"><input type="date" aria-label="套餐开始日期" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></Field>
+              <Field label="到期日期" hint={`留空表示开始后 ${selectedPackage?.cycle_days ?? 30} 天`}><input type="date" aria-label="套餐到期日期" value={expireDate} onChange={(event) => setExpireDate(event.target.value)} /></Field>
+              <div className="user-package-actions"><Button type="submit" disabled={packageWorking || !packageID}>{packageWorking ? <Spinner label="正在下发" /> : <><PackageIcon size={16} />{user.package_id ? "更新套餐" : "分配套餐"}</>}</Button>{user.package_id ? <Button type="button" variant="ghost" onClick={() => void unassignPackage()} disabled={packageWorking}>解绑套餐</Button> : null}</div>
+            </form>}
+            {user.package_id ? <div className="user-package-current"><span>当前套餐：<strong>{user.package_name || `套餐 #${user.package_id}`}</strong></span><span>{user.package_end_date ? `到期 ${user.package_end_date}` : "未设置到期日"}</span><Button type="button" variant="ghost" onClick={() => onOpen("extend")}><CalendarPlus size={15} />续期</Button></div> : null}
+          </section>
+        ) : null}
+
+        <section className="user-settings-section">
+          <div className="user-settings-section-heading"><div><h2>账号资料</h2><p>集中编辑可公开显示的用户信息</p></div><Pencil size={18} /></div>
+          {action("profile", "资料、备注与订阅短码", <Pencil size={17} />)}
+          {user.role !== "admin" ? action("password", "重置登录密码", <KeyRound size={17} />) : null}
+        </section>
+
+        {user.role !== "admin" ? <section className="user-settings-section">
+          <div className="user-settings-section-heading"><div><h2>节点与订阅</h2><p>所有授权和下发内容统一从用户设置进入</p></div><Server size={18} /></div>
+          {action("server-grants", "服务器授权与自建节点", <Server size={17} />)}
+          {action("limits", "流量、限速与设备数", <Gauge size={17} />)}
+          {action("subscriptions", "订阅文件分配", <Link2 size={17} />)}
+          {action("subaccounts", "查看节点子账号", <UserCog size={17} />)}
+        </section> : null}
+
+        <section className="user-settings-danger">
+          <Button type="button" variant="secondary" onClick={() => void onToggleStatus()} disabled={working}>{user.is_active ? <><UserRoundX size={16} />停用用户</> : <><UserRoundCheck size={16} />启用用户</>}</Button>
+          {user.role !== "admin" ? <Button type="button" variant="danger" onClick={onDelete} disabled={working}><Trash2 size={16} />删除用户</Button> : null}
+        </section>
+      </div>
+    </Dialog>
   );
 }
 

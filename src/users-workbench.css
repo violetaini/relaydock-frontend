@@ -11,7 +11,8 @@
 .users-table-surface td:nth-child(2) { min-width: 96px; }
 .users-table-surface td:nth-child(3), .users-table-surface td:nth-child(4) { min-width: 170px; }
 .user-remark { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.user-actions { min-width: 276px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px; }
+.user-actions { min-width: 132px; display: flex; justify-content: flex-end; }
+.user-actions .button { white-space: nowrap; }
 .inline-copy { padding: 4px 6px; display: inline-flex; align-items: center; gap: 6px; color: var(--text); background: var(--surface-muted); border: 1px solid var(--border); }
 .inline-copy code { font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; }
 .quick-days { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
@@ -31,6 +32,30 @@
 .subaccount-icon { width: 38px; height: 38px; display: inline-flex; align-items: center; justify-content: center; color: var(--accent); background: var(--accent-soft); }
 .subaccount-list > div > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .subaccount-list code { max-width: 100%; overflow: hidden; text-overflow: ellipsis; color: var(--text-soft); font-size: 10px; white-space: nowrap; }
+.user-settings-dialog { display: flex; flex-direction: column; gap: 14px; }
+.user-settings-summary { min-height: 68px; padding: 12px 14px; display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 11px; border: 1px solid var(--border); background: var(--surface-muted); }
+.user-settings-avatar { width: 42px; height: 42px; display: grid; place-items: center; color: #fff; background: var(--accent); font-size: 17px; font-weight: 800; }
+.user-settings-summary > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.user-settings-summary small { overflow: hidden; color: var(--text-soft); text-overflow: ellipsis; white-space: nowrap; }
+.user-settings-section { overflow: hidden; border: 1px solid var(--border-strong); background: var(--surface); }
+.user-settings-section-heading { min-height: 62px; padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border); background: var(--surface-muted); }
+.user-settings-section-heading h2 { font-size: 14px; }
+.user-settings-section-heading p { margin-top: 4px; color: var(--text-soft); font-size: 10px; }
+.user-settings-section-heading > svg { flex: 0 0 auto; color: var(--accent); }
+.user-setting-row { width: 100%; min-height: 54px; padding: 9px 12px; display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 10px; color: var(--text); background: var(--surface); border: 0; border-bottom: 1px solid var(--border); text-align: left; }
+.user-setting-row:last-child { border-bottom: 0; }
+.user-setting-row:hover { background: var(--surface-hover); }
+.user-setting-row-icon { width: 34px; height: 34px; display: grid; place-items: center; color: var(--accent); background: var(--accent-soft); }
+.user-setting-row > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.user-setting-row small { color: var(--text-soft); font-size: 10px; }
+.user-setting-row > svg { color: var(--text-faint); }
+.user-package-form { padding: 14px; display: grid; grid-template-columns: minmax(180px, 1.2fr) repeat(2, minmax(150px, .8fr)); align-items: end; gap: 10px; }
+.user-package-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 7px; }
+.user-settings-loading { min-height: 92px; display: grid; place-items: center; }
+.user-package-current { min-height: 48px; padding: 8px 14px; display: flex; align-items: center; flex-wrap: wrap; gap: 12px; color: var(--text-soft); border-top: 1px solid var(--border); font-size: 11px; }
+.user-package-current span:first-child { color: var(--text); }
+.user-package-current .button { margin-left: auto; }
+.user-settings-danger { padding-top: 3px; display: flex; justify-content: flex-end; gap: 8px; }
 @media (max-width: 780px) {
   .users-toolbar { align-items: stretch; flex-direction: column; }
   .segmented-control { width: 100%; }
@@ -40,4 +65,28 @@
   .node-limit-list > div { grid-template-columns: 1fr 1fr; }
   .node-limit-list > div > span { grid-column: 1 / -1; }
   .quick-days { grid-template-columns: repeat(2, 1fr); }
+  .user-package-form { grid-template-columns: 1fr; }
+  .user-package-actions { grid-column: auto; justify-content: stretch; }
+  .user-package-actions .button { flex: 1; }
+  .user-package-current { align-items: flex-start; flex-direction: column; }
+  .user-package-current .button { margin-left: 0; }
+  .user-settings-danger { align-items: stretch; flex-direction: column; }
+  .users-table-surface { overflow: visible; border: 0 !important; background: transparent !important; box-shadow: none !important; }
+  .users-table-surface .table-wrap { overflow: visible; }
+  .users-table-surface table,
+  .users-table-surface tbody,
+  .users-table-surface tr,
+  .users-table-surface td { width: 100%; min-width: 0 !important; display: block; }
+  .users-table-surface table { min-width: 0; }
+  .users-table-surface thead { display: none; }
+  .users-table-surface tbody { display: grid; gap: 12px; }
+  .users-table-surface tr { padding: 14px; border: 1px solid var(--border-strong); background: var(--surface); box-shadow: var(--shadow-low); }
+  .users-table-surface td { min-height: 0; padding: 8px 0; border: 0; border-bottom: 1px solid var(--border); }
+  .users-table-surface td:last-child { padding-bottom: 0; border-bottom: 0; }
+  .users-table-surface td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 5px; color: var(--text-faint); font-size: 10px; font-weight: 700; }
+  .users-table-surface td[data-label="用户"]::before { display: none; }
+  .users-table-surface .primary-cell { align-items: center; }
+  .users-table-surface .user-actions,
+  .users-table-surface .user-actions .button { width: 100%; }
+  .users-table-surface .user-actions { justify-content: stretch; }
 }

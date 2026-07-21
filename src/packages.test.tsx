@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
 import { PackagesPage } from "./packages";
-import type { NodeItem, PackageItem, UserItem } from "./types";
+import type { NodeItem, PackageItem } from "./types";
 
 vi.hoisted(() => {
   (globalThis as unknown as { process: { env: { NODE_ENV?: string } } }).process.env.NODE_ENV = "test";
@@ -41,16 +41,10 @@ const nodes: NodeItem[] = [
   { id: 2, node_name: "东京 B", protocol: "trojan", raw_url: "", clash_config: "", parsed_config: "", enabled: true, tag: "jp", original_server: "edge-jp", inbound_tag: "in-b", node_type: "physical", updated_at: "" },
 ];
 
-const users: UserItem[] = [
-  { username: "alice", email: "alice@example.com", nickname: "Alice", role: "user", is_active: true, remark: "", traffic_used: 0, traffic_limit: 0, is_over_limit: false, speed_limit_mbps: 0, device_limit: 0 },
-  { username: "admin", email: "", nickname: "Admin", role: "admin", is_active: true, remark: "", traffic_used: 0, traffic_limit: 0, is_over_limit: false, speed_limit_mbps: 0, device_limit: 0 },
-];
-
 function mockLoads() {
   return vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
     if (path === "/api/admin/packages") return { packages: [packageItem] } as T;
     if (path === "/api/admin/nodes") return { nodes } as T;
-    if (path === "/api/admin/users") return { users } as T;
     throw new Error(`unexpected GET ${path}`);
   });
 }
@@ -86,21 +80,13 @@ describe("package management", () => {
     expect(notify).toHaveBeenCalledWith("套餐已更新，节点关联正在同步");
   });
 
-  it("assigns only ordinary users and omits optional dates and reset overrides", async () => {
+  it("keeps user assignment out of the package workbench", async () => {
     mockLoads();
-    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true, message: "Package assigned successfully" });
     render(<PackagesPage notify={vi.fn()} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "为 标准套餐 分配用户" }));
-    const userSelect = screen.getByRole("combobox", { name: "普通用户" });
-    expect(userSelect).toHaveTextContent("alice");
-    expect(userSelect).not.toHaveTextContent("admin");
-    fireEvent.click(screen.getByRole("button", { name: "确认分配" }));
-
-    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/packages/assign", {
-      username: "alice",
-      package_id: 9,
-    }));
+    expect(await screen.findByRole("heading", { name: "套餐模板管理" })).toBeInTheDocument();
+    expect(screen.queryByText("用户套餐分配")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /分配套餐|分配用户/ })).not.toBeInTheDocument();
   });
 
   it("edits node overrides and the package template through visible controls", async () => {
@@ -121,26 +107,13 @@ describe("package management", () => {
     })));
   });
 
-  it("keeps the assignment dialog open for an HTTP 200 success:false response", async () => {
-    mockLoads();
-    vi.spyOn(api, "post").mockResolvedValue({ success: false, message: "节点凭据下发失败" });
-    render(<PackagesPage notify={vi.fn()} />);
-
-    fireEvent.click(await screen.findByRole("button", { name: "为 标准套餐 分配用户" }));
-    fireEvent.click(screen.getByRole("button", { name: "确认分配" }));
-
-    expect(await screen.findByText("节点凭据下发失败")).toBeInTheDocument();
-    expect(screen.getByRole("dialog", { name: "分配用户套餐" })).toBeInTheDocument();
-  });
-
   it("keeps package actions available in the compact list view", async () => {
     mockLoads();
     render(<PackagesPage notify={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "列表视图" }));
     expect(screen.getByRole("columnheader", { name: "流量 / 周期" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "为 标准套餐 分配用户" }));
-    expect(screen.getByRole("dialog", { name: "分配用户套餐" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "编辑 标准套餐" })).toBeInTheDocument();
   });
 
   it("does not delete a package before the confirmation action", async () => {

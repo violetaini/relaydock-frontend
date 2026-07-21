@@ -10,12 +10,10 @@ import {
   Plus,
   RefreshCw,
   Route,
-  Search,
   Trash2,
-  Unlink,
 } from "lucide-react";
 import { api } from "./api";
-import type { AutoSpeedLimitRule, NodeItem, NodeListResponse, PackageItem, UserItem } from "./types";
+import type { AutoSpeedLimitRule, NodeItem, NodeListResponse, PackageItem } from "./types";
 import {
   Badge,
   Button,
@@ -29,7 +27,6 @@ import {
   Spinner,
   Surface,
   Toggle,
-  formatBytes,
 } from "./ui";
 import "./packages.css";
 
@@ -48,10 +45,6 @@ interface ApiEnvelope {
 
 interface PackageListResponse extends ApiEnvelope {
   packages?: PackageItem[];
-}
-
-interface UserListResponse extends ApiEnvelope {
-  users?: UserItem[];
 }
 
 interface MutationResponse extends ApiEnvelope {
@@ -78,9 +71,7 @@ interface PackageFormState {
   autoSpeedRules: AutoSpeedLimitRule[];
 }
 
-type PendingAction =
-  | { kind: "delete-package"; item: PackageItem }
-  | { kind: "unassign-user"; user: UserItem };
+type PendingAction = { kind: "delete-package"; item: PackageItem };
 
 function assertSuccessful<T extends ApiEnvelope>(response: T, fallback: string): T {
   if (response?.success === false) {
@@ -141,36 +132,26 @@ function packagePayload(form: PackageFormState, original?: PackageItem): Record<
   return payload;
 }
 
-function packageName(packages: PackageItem[], packageID?: number): string {
-  if (!packageID) return "未分配";
-  return packages.find((item) => item.id === packageID)?.name ?? `套餐 #${packageID}`;
-}
-
 export function PackagesPage({ notify }: PackagesPageProps) {
   const [packages, setPackages] = useState<PackageItem[]>([]);
   const [nodes, setNodes] = useState<NodeItem[]>([]);
-  const [users, setUsers] = useState<UserItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [editor, setEditor] = useState<PackageItem | "create" | null>(null);
-  const [assignment, setAssignment] = useState<{ user?: UserItem; packageID?: number } | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [actionWorking, setActionWorking] = useState(false);
-  const [userSearch, setUserSearch] = useState("");
   const [packageView, setPackageView] = useState<PackageView>("cards");
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const [packageResult, nodeResult, userResult] = await Promise.all([
+      const [packageResult, nodeResult] = await Promise.all([
         api.get<PackageListResponse>("/api/admin/packages"),
         api.get<NodeListResponse & ApiEnvelope>("/api/admin/nodes"),
-        api.get<UserListResponse>("/api/admin/users"),
       ]);
       setPackages(assertSuccessful(packageResult, "套餐列表加载失败").packages ?? []);
       setNodes(assertSuccessful(nodeResult, "节点列表加载失败").nodes ?? []);
-      setUsers(assertSuccessful(userResult, "用户列表加载失败").users ?? []);
     } catch (reason) {
       setError(errorMessage(reason, "套餐数据加载失败"));
     } finally {
@@ -180,17 +161,6 @@ export function PackagesPage({ notify }: PackagesPageProps) {
 
   useEffect(() => { void load(); }, [load]);
 
-  const regularUsers = useMemo(
-    () => users.filter((user) => user.role !== "admin"),
-    [users],
-  );
-  const filteredUsers = useMemo(() => {
-    const query = userSearch.trim().toLowerCase();
-    if (!query) return regularUsers;
-    return regularUsers.filter((user) => [user.username, user.nickname, user.email, user.package_name]
-      .some((value) => value?.toLowerCase().includes(query)));
-  }, [regularUsers, userSearch]);
-
   const reloadAfterMutation = () => { void load(); };
 
   const completePackageMutation = (message: string) => {
@@ -199,30 +169,16 @@ export function PackagesPage({ notify }: PackagesPageProps) {
     reloadAfterMutation();
   };
 
-  const completeAssignment = (message: string, tone: NotifyTone = "success") => {
-    setAssignment(null);
-    notify(message, tone);
-    reloadAfterMutation();
-  };
-
   const confirmAction = async () => {
     if (!pendingAction) return;
     setActionWorking(true);
     try {
-      if (pendingAction.kind === "delete-package") {
-        const response = assertSuccessful(
-          await api.delete<MutationResponse>(`/api/admin/packages/${pendingAction.item.id}`),
-          "删除套餐失败",
-        );
-        const affected = Number(response.unbound_users ?? 0);
-        notify(affected > 0 ? `套餐已删除，同时解绑 ${affected} 位用户` : "套餐已删除");
-      } else {
-        assertSuccessful(
-          await api.post<MutationResponse>("/api/admin/packages/unassign", { username: pendingAction.user.username }),
-          "解绑套餐失败",
-        );
-        notify(`已解绑 ${pendingAction.user.username} 的套餐`);
-      }
+      const response = assertSuccessful(
+        await api.delete<MutationResponse>(`/api/admin/packages/${pendingAction.item.id}`),
+        "删除套餐失败",
+      );
+      const affected = Number(response.unbound_users ?? 0);
+      notify(affected > 0 ? `套餐已删除，同时解绑 ${affected} 位用户` : "套餐已删除");
       setPendingAction(null);
       reloadAfterMutation();
     } catch (reason) {
@@ -232,13 +188,11 @@ export function PackagesPage({ notify }: PackagesPageProps) {
     }
   };
 
-  const boundCount = (packageID: number) => regularUsers.filter((user) => user.package_id === packageID).length;
-
   return (
     <>
       <PageHeader
-        title="套餐管理"
-        description={`${packages.length} 个套餐模板 · ${regularUsers.filter((user) => user.package_id).length} 位用户已分配`}
+        title="套餐模板管理"
+        description="管理流量套餐模板，可在用户管理中为用户分配套餐"
         actions={(
           <>
             <div className="packages-view-switch" role="group" aria-label="套餐视图">
@@ -246,9 +200,6 @@ export function PackagesPage({ notify }: PackagesPageProps) {
               <IconButton className={packageView === "list" ? "is-active" : ""} label="列表视图" aria-pressed={packageView === "list"} onClick={() => setPackageView("list")}><List size={18} /></IconButton>
             </div>
             <IconButton label="刷新套餐数据" onClick={() => void load()} disabled={loading}><RefreshCw size={18} /></IconButton>
-            <Button variant="secondary" onClick={() => setAssignment({})} disabled={loading || packages.length === 0 || regularUsers.length === 0}>
-              <CircleUserRound size={17} />分配套餐
-            </Button>
             <Button onClick={() => setEditor("create")} disabled={loading}><Plus size={17} />创建套餐</Button>
           </>
         )}
@@ -257,7 +208,7 @@ export function PackagesPage({ notify }: PackagesPageProps) {
       {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
 
       {loading ? (
-        <Surface className="center-state"><Spinner label="正在加载套餐、节点和用户" /></Surface>
+        <Surface className="center-state"><Spinner label="正在加载套餐和节点" /></Surface>
       ) : (
         <div className="advanced-stack">
           {packages.length === 0 ? <div className="package-grid">
@@ -265,7 +216,7 @@ export function PackagesPage({ notify }: PackagesPageProps) {
                 <EmptyState
                   icon={<PackageIcon size={24} />}
                   title="暂无套餐"
-                  description="创建套餐后可关联节点并分配给普通用户"
+                  description="创建套餐后可配置流量、限速并关联节点"
                   action={<Button onClick={() => setEditor("create")}><Plus size={16} />创建套餐</Button>}
                 />
               </Surface>
@@ -295,15 +246,9 @@ export function PackagesPage({ notify }: PackagesPageProps) {
                     <span title={names.join("、")}><Route size={15} />{itemNodes.length} 个节点</span>
                     <span><CalendarDays size={15} />{item.is_reset ? `每月 ${item.reset_day} 日重置` : "周期重置"}</span>
                   </div>
-                  <div className="dialog-actions">
-                    <Button aria-label={`为 ${item.name} 分配用户`} variant="ghost" onClick={() => setAssignment({ packageID: item.id })} disabled={regularUsers.length === 0}>
-                      <CircleUserRound size={16} />分配用户
-                    </Button>
-                    <Badge tone={boundCount(item.id) ? "good" : "neutral"}>{boundCount(item.id)} 位用户</Badge>
-                  </div>
                 </Surface>
               );
-            })}</div> : <Surface className="table-surface packages-list-surface"><div className="table-wrap"><table><thead><tr><th>套餐</th><th>计费</th><th>流量 / 周期</th><th>速度 / 设备</th><th>节点</th><th>用户</th><th aria-label="操作" /></tr></thead><tbody>{packages.map((item) => {
+            })}</div> : <Surface className="table-surface packages-list-surface"><div className="table-wrap"><table><thead><tr><th>套餐</th><th>计费</th><th>流量 / 周期</th><th>速度 / 设备</th><th>节点</th><th aria-label="操作" /></tr></thead><tbody>{packages.map((item) => {
               const itemNodes = item.nodes ?? [];
               const names = itemNodes.map((id) => nodes.find((node) => node.id === id)?.node_name ?? `#${id}`);
               return <tr key={item.id}>
@@ -312,64 +257,9 @@ export function PackagesPage({ notify }: PackagesPageProps) {
                 <td><strong>{item.traffic_limit_gb} GB</strong><small className="cell-note">{item.cycle_days} 天 · {item.is_reset ? `每月 ${item.reset_day} 日重置` : "周期重置"}</small></td>
                 <td><strong>{item.speed_limit_mbps ? `${item.speed_limit_mbps} Mbps` : "不限速"}</strong><small className="cell-note">{item.device_limit ? `${item.device_limit} 台设备` : "设备不限"}</small></td>
                 <td><strong title={names.join("、")}>{itemNodes.length} 个节点</strong><small className="cell-note">{names.slice(0, 2).join("、") || "未关联"}</small></td>
-                <td><Badge tone={boundCount(item.id) ? "good" : "neutral"}>{boundCount(item.id)} 位用户</Badge></td>
-                <td><div className="packages-list-actions"><Button aria-label={`为 ${item.name} 分配用户`} variant="ghost" onClick={() => setAssignment({ packageID: item.id })} disabled={regularUsers.length === 0}><CircleUserRound size={15} />分配</Button><IconButton label={`编辑 ${item.name}`} onClick={() => setEditor(item)}><Pencil size={16} /></IconButton><IconButton label={`删除 ${item.name}`} onClick={() => setPendingAction({ kind: "delete-package", item })}><Trash2 size={16} /></IconButton></div></td>
+                <td><div className="packages-list-actions"><IconButton label={`编辑 ${item.name}`} onClick={() => setEditor(item)}><Pencil size={16} /></IconButton><IconButton label={`删除 ${item.name}`} onClick={() => setPendingAction({ kind: "delete-package", item })}><Trash2 size={16} /></IconButton></div></td>
               </tr>;
             })}</tbody></table></div></Surface>}
-
-          <Surface className="table-surface">
-            <div className="surface-heading table-title">
-              <div><h2>用户套餐分配</h2></div>
-              <div className="search-box">
-                <Search size={17} />
-                <input value={userSearch} onChange={(event) => setUserSearch(event.target.value)} placeholder="搜索普通用户" aria-label="搜索普通用户" />
-              </div>
-            </div>
-            {regularUsers.length === 0 ? (
-              <EmptyState icon={<CircleUserRound size={23} />} title="暂无普通用户" description="管理员账号不会参与套餐分配" />
-            ) : filteredUsers.length === 0 ? (
-              <EmptyState icon={<Search size={23} />} title="没有匹配的用户" />
-            ) : (
-              <div className="table-wrap">
-                <table>
-                  <thead><tr><th>用户</th><th>当前套餐</th><th>到期日期</th><th>本期用量</th><th aria-label="操作" /></tr></thead>
-                  <tbody>
-                    {filteredUsers.map((user) => (
-                      <tr key={user.username}>
-                        <td>
-                          <div className="primary-cell">
-                            <span className="user-avatar">{(user.nickname || user.username).slice(0, 1).toUpperCase()}</span>
-                            <span><strong>{user.nickname || user.username}</strong><small>{user.username}{user.email ? ` · ${user.email}` : ""}</small></span>
-                          </div>
-                        </td>
-                        <td>
-                          <strong>{user.package_name || packageName(packages, user.package_id)}</strong>
-                          <small className="cell-note">{user.package_id ? `套餐 ID ${user.package_id}` : "尚未绑定"}</small>
-                        </td>
-                        <td>{user.package_end_date || <span className="muted">未设置</span>}</td>
-                        <td>
-                          <strong>{formatBytes(user.traffic_used)}</strong>
-                          <small className="cell-note">{user.traffic_limit ? `限额 ${formatBytes(user.traffic_limit)}` : "不限额"}</small>
-                        </td>
-                        <td>
-                          <div className="page-actions">
-                            <Button variant="ghost" onClick={() => setAssignment({ user, packageID: user.package_id })} disabled={packages.length === 0}>
-                              {user.package_id ? "更换" : "分配"}
-                            </Button>
-                            {user.package_id ? (
-                              <IconButton label={`解绑 ${user.username} 的套餐`} onClick={() => setPendingAction({ kind: "unassign-user", user })}>
-                                <Unlink size={16} />
-                              </IconButton>
-                            ) : null}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </Surface>
         </div>
       )}
 
@@ -382,24 +272,11 @@ export function PackagesPage({ notify }: PackagesPageProps) {
         />
       ) : null}
 
-      {assignment ? (
-        <AssignmentDialog
-          packages={packages}
-          users={regularUsers}
-          initialUser={assignment.user}
-          initialPackageID={assignment.packageID}
-          onClose={() => setAssignment(null)}
-          onComplete={completeAssignment}
-        />
-      ) : null}
-
       {pendingAction ? (
         <ConfirmDialog
-          title={pendingAction.kind === "delete-package" ? "删除套餐" : "解绑套餐"}
-          description={pendingAction.kind === "delete-package"
-            ? `确认删除“${pendingAction.item.name}”？${boundCount(pendingAction.item.id) > 0 ? `当前绑定的 ${boundCount(pendingAction.item.id)} 位用户也会被解绑，并移除已下发的节点凭据。` : "此操作无法撤销。"}`
-            : `确认解绑 ${pendingAction.user.username} 的套餐？节点凭据与套餐订阅会一并清理。`}
-          confirmLabel={pendingAction.kind === "delete-package" ? "确认删除" : "确认解绑"}
+          title="删除套餐"
+          description={`确认删除“${pendingAction.item.name}”？已绑定用户的套餐关系和节点凭据也会由服务器同步清理。此操作无法撤销。`}
+          confirmLabel="确认删除"
           working={actionWorking}
           onCancel={() => !actionWorking && setPendingAction(null)}
           onConfirm={() => void confirmAction()}
@@ -617,89 +494,6 @@ function PackageEditorDialog({ item, nodes, onClose, onComplete }: {
           <Button type="button" variant="secondary" onClick={onClose} disabled={working}>取消</Button>
           <Button type="submit" disabled={working}>
             {working ? <Spinner label={item ? "正在更新" : "正在创建"} /> : item ? <><Pencil size={16} />保存更改</> : <><Plus size={16} />创建套餐</>}
-          </Button>
-        </div>
-      </form>
-    </Dialog>
-  );
-}
-
-function AssignmentDialog({ packages, users, initialUser, initialPackageID, onClose, onComplete }: {
-  packages: PackageItem[];
-  users: UserItem[];
-  initialUser?: UserItem;
-  initialPackageID?: number;
-  onClose: () => void;
-  onComplete: (message: string, tone?: NotifyTone) => void;
-}) {
-  const [username, setUsername] = useState(initialUser?.username ?? users[0]?.username ?? "");
-  const [packageID, setPackageID] = useState(String(initialPackageID ?? packages[0]?.id ?? ""));
-  const [startDate, setStartDate] = useState("");
-  const [expireDate, setExpireDate] = useState(initialUser?.package_end_date ?? "");
-  const [working, setWorking] = useState(false);
-  const [error, setError] = useState("");
-
-  const selectedPackage = packages.find((item) => item.id === Number(packageID));
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (startDate && expireDate && expireDate < startDate) {
-      setError("到期日期不能早于开始日期");
-      return;
-    }
-    setWorking(true);
-    setError("");
-    try {
-      const response = assertSuccessful(
-        await api.post<MutationResponse>("/api/admin/packages/assign", {
-          username,
-          package_id: Number(packageID),
-          ...(startDate ? { start_date: startDate } : {}),
-          ...(expireDate ? { expire_date: expireDate } : {}),
-        }),
-        "分配套餐失败",
-      );
-      if (response.warnings?.length) {
-        onComplete(`套餐已分配，但有 ${response.warnings.length} 项节点下发警告：${response.warnings.join("；")}`, "error");
-      } else {
-        onComplete(`已为 ${username} 分配“${selectedPackage?.name ?? "套餐"}”`);
-      }
-    } catch (reason) {
-      setError(errorMessage(reason, "分配套餐失败"));
-    } finally {
-      setWorking(false);
-    }
-  };
-
-  return (
-    <Dialog title={initialUser?.package_id ? "更换用户套餐" : "分配用户套餐"} description="留空日期时由服务器按套餐周期自动计算" onClose={() => !working && onClose()}>
-      <form onSubmit={submit} className="form-stack">
-        {error ? <ErrorState message={error} /> : null}
-        <Field label="普通用户">
-          <select required value={username} onChange={(event) => setUsername(event.target.value)} disabled={Boolean(initialUser)}>
-            {users.map((user) => <option key={user.username} value={user.username}>{user.nickname || user.username}（{user.username}）</option>)}
-          </select>
-        </Field>
-        <Field label="套餐">
-          <select required value={packageID} onChange={(event) => setPackageID(event.target.value)}>
-            {packages.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.traffic_limit_gb} GB / {item.cycle_days} 天</option>)}
-          </select>
-        </Field>
-        <div className="form-grid">
-          <Field label="开始日期（可选）" hint="留空表示今天"><input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></Field>
-          <Field label="到期日期（可选）" hint={`留空表示开始后 ${selectedPackage?.cycle_days ?? 30} 天`}><input type="date" value={expireDate} onChange={(event) => setExpireDate(event.target.value)} /></Field>
-        </div>
-        <div className="import-summary">
-          <span className="summary-icon"><PackageIcon size={20} /></span>
-          <span>
-            <strong>{selectedPackage?.name ?? "请选择套餐"}</strong>
-            <small>{selectedPackage ? `${selectedPackage.nodes?.length ?? 0} 个节点 · ${selectedPackage.speed_limit_mbps ? `${selectedPackage.speed_limit_mbps} Mbps` : "不限速"} · ${selectedPackage.device_limit ? `${selectedPackage.device_limit} 台设备` : "设备不限"}` : ""}</small>
-          </span>
-        </div>
-        <div className="dialog-actions">
-          <Button type="button" variant="secondary" onClick={onClose} disabled={working}>取消</Button>
-          <Button type="submit" disabled={working || !username || !packageID}>
-            {working ? <Spinner label="正在下发套餐" /> : <><CircleUserRound size={16} />确认分配</>}
           </Button>
         </div>
       </form>

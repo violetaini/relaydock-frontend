@@ -17,6 +17,19 @@ const alice = {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe("users workbench", () => {
+  it("does not expose destructive account actions for an administrator", async () => {
+    const admin = { ...alice, username: "admin", nickname: "管理员", role: "admin" };
+    vi.spyOn(api, "get").mockResolvedValue({ users: [admin] });
+    const post = vi.spyOn(api, "post");
+    render(<UsersWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "用户设置 admin" }));
+
+    expect(screen.queryByRole("button", { name: "停用用户" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "删除用户" })).not.toBeInTheDocument();
+    expect(post).not.toHaveBeenCalled();
+  });
+
   it("toggles a user's active state through the provisioning endpoint", async () => {
     vi.spyOn(api, "get").mockResolvedValue({ users: [alice] });
     const post = vi.spyOn(api, "post").mockResolvedValue({ status: "updated" });

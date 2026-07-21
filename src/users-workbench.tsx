@@ -361,10 +361,10 @@ function UserSettingsDialog({
           {action("subaccounts", "查看节点子账号", <UserCog size={17} />)}
         </section> : null}
 
-        <section className="user-settings-danger">
+        {user.role !== "admin" ? <section className="user-settings-danger">
           <Button type="button" variant="secondary" onClick={() => void onToggleStatus()} disabled={working}>{user.is_active ? <><UserRoundX size={16} />停用用户</> : <><UserRoundCheck size={16} />启用用户</>}</Button>
-          {user.role !== "admin" ? <Button type="button" variant="danger" onClick={onDelete} disabled={working}><Trash2 size={16} />删除用户</Button> : null}
-        </section>
+          <Button type="button" variant="danger" onClick={onDelete} disabled={working}><Trash2 size={16} />删除用户</Button>
+        </section> : null}
       </div>
     </Dialog>
   );

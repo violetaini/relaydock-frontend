@@ -386,6 +386,39 @@ test("dashboard uses the upstream desktop canvas and card scale", async ({ page 
   await expectViewportIntegrity(page, "dashboard upstream scale");
 });
 
+test("mobile dashboard keeps the period selector readable", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockAPI(page);
+  await page.goto("/#/dashboard");
+  await expect(page.locator(".dashboard-period button")).toHaveCount(3);
+
+  const measurements = await page.evaluate(() => {
+    const tools = document.querySelector<HTMLElement>(".dashboard-chart-tools");
+    const period = document.querySelector<HTMLElement>(".dashboard-period");
+    const buttons = [...document.querySelectorAll<HTMLElement>(".dashboard-period button")];
+    if (!tools || !period || buttons.length !== 3) throw new Error("dashboard period controls are missing");
+    const periodStyle = getComputedStyle(period);
+    return {
+      toolsDisplay: getComputedStyle(tools).display,
+      gridColumnStart: periodStyle.gridColumnStart,
+      gridColumnEnd: periodStyle.gridColumnEnd,
+      labels: buttons.map((button) => button.textContent?.trim()),
+      whiteSpace: buttons.map((button) => getComputedStyle(button).whiteSpace),
+      overflows: buttons.map((button) => button.scrollWidth - button.clientWidth),
+      rows: new Set(buttons.map((button) => Math.round(button.getBoundingClientRect().top))).size,
+    };
+  });
+
+  expect(measurements.toolsDisplay).toBe("grid");
+  expect(measurements.gridColumnStart).toBe("1");
+  expect(measurements.gridColumnEnd).toBe("-1");
+  expect(measurements.labels).toEqual(["今天", "本周", "本月"]);
+  expect(measurements.whiteSpace).toEqual(["nowrap", "nowrap", "nowrap"]);
+  expect(measurements.overflows.every((overflow) => overflow <= 1)).toBe(true);
+  expect(measurements.rows).toBe(1);
+  await expectViewportIntegrity(page, "mobile dashboard period selector");
+});
+
 test("desktop layout switch preserves navigation and preference", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockAPI(page);

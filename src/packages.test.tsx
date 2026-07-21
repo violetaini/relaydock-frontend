@@ -91,7 +91,7 @@ describe("package management", () => {
     const post = vi.spyOn(api, "post").mockResolvedValue({ success: true, message: "Package assigned successfully" });
     render(<PackagesPage notify={vi.fn()} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "分配套餐" }));
+    fireEvent.click(await screen.findByRole("button", { name: "为 标准套餐 分配用户" }));
     const userSelect = screen.getByRole("combobox", { name: "普通用户" });
     expect(userSelect).toHaveTextContent("alice");
     expect(userSelect).not.toHaveTextContent("admin");
@@ -126,10 +126,20 @@ describe("package management", () => {
     vi.spyOn(api, "post").mockResolvedValue({ success: false, message: "节点凭据下发失败" });
     render(<PackagesPage notify={vi.fn()} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "分配套餐" }));
+    fireEvent.click(await screen.findByRole("button", { name: "为 标准套餐 分配用户" }));
     fireEvent.click(screen.getByRole("button", { name: "确认分配" }));
 
     expect(await screen.findByText("节点凭据下发失败")).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "分配用户套餐" })).toBeInTheDocument();
+  });
+
+  it("keeps package actions available in the compact list view", async () => {
+    mockLoads();
+    render(<PackagesPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "列表视图" }));
+    expect(screen.getByRole("columnheader", { name: "流量 / 周期" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "为 标准套餐 分配用户" }));
     expect(screen.getByRole("dialog", { name: "分配用户套餐" })).toBeInTheDocument();
   });
 

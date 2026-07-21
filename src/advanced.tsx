@@ -108,7 +108,7 @@ export function AdvancedPage({ notify }: { notify: Notify }) {
         ))}
       </div>
       {tab === "tunnels" ? <TunnelsPanel notify={notify} /> : null}
-      {tab === "warp" ? <WarpPanel /> : null}
+      {tab === "warp" ? <WarpPanel notify={notify} /> : null}
       {tab === "federation" ? <FederationPanel notify={notify} /> : null}
       {tab === "speedtest" ? <SpeedTestPanel notify={notify} /> : null}
       {tab === "backup" ? <BackupPanel notify={notify} /> : null}
@@ -303,12 +303,16 @@ function CreateTunnelDialog({ servers, onClose, onCreated }: { servers: RemoteSe
   );
 }
 
-export function WarpPanel() {
+export function WarpPanel({ notify }: { notify?: Notify } = {}) {
   const [servers, setServers] = useState<RemoteServer[]>([]);
   const [serverID, setServerID] = useState(0);
   const [status, setStatus] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(true);
   const [statusLoading, setStatusLoading] = useState(false);
+  const [working, setWorking] = useState<"install" | "license" | "remove" | null>(null);
+  const [pendingAction, setPendingAction] = useState<"install" | "remove" | null>(null);
+  const [licenseOpen, setLicenseOpen] = useState(false);
+  const [license, setLicense] = useState("");
   const [error, setError] = useState("");
   const statusRequest = useRef(0);
 
@@ -348,9 +352,44 @@ export function WarpPanel() {
 
   useEffect(() => { void loadServers(); }, [loadServers]);
   useEffect(() => {
+    setLicense("");
+    setLicenseOpen(false);
+    setPendingAction(null);
+  }, [serverID]);
+  useEffect(() => {
     void loadStatus();
     return () => { statusRequest.current++; };
   }, [loadStatus]);
+
+  const closeLicense = () => {
+    setLicense("");
+    setLicenseOpen(false);
+  };
+
+  const runAction = async (action: "install" | "license" | "remove") => {
+    if (!serverID || working) return;
+    setWorking(action);
+    setError("");
+    try {
+      const body = action === "license" ? { license: license.trim() } : undefined;
+      const response = await api.post<RemoteActionResponse>(`/api/admin/remote/warp/${action}?server_id=${serverID}`, body);
+      assertRemoteActionSucceeded(response, "WARP 操作失败");
+      setPendingAction(null);
+      if (action === "license") {
+        closeLicense();
+      }
+      await loadStatus();
+      notify?.(action === "install" ? "WARP 已安装" : action === "license" ? "WARP License 已更新" : "WARP 已移除");
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "WARP 操作失败";
+      setPendingAction(null);
+      if (action === "license") closeLicense();
+      await loadStatus();
+      setError(message);
+    } finally {
+      setWorking(null);
+    }
+  };
 
   const selectedServer = servers.find((server) => server.id === serverID);
   const installed = Boolean(status?.installed ?? status?.warp_installed ?? status?.registered ?? status?.enabled ?? selectedServer?.warp_installed);
@@ -367,9 +406,30 @@ export function WarpPanel() {
           <div className="warp-layout">
             <div className={`warp-state ${installed ? "is-ready" : ""}`}><span><Cloud size={30} /></span><div><Badge tone={installed ? "good" : "neutral"}>{installed ? "已注册" : "未注册"}</Badge><h3>{selectedServer?.name}</h3><p>{stateLabel || (installed ? "WARP 账户已注册" : "尚未注册 WARP")}</p></div></div>
             <div className="warp-facts"><div><small>IPv4</small><strong>{addressV4 || "-"}</strong></div><div><small>IPv6</small><strong>{addressV6 || "-"}</strong></div><div><small>账户类型</small><strong>{account || "-"}</strong></div></div>
+            <div className="warp-actions">
+              {!installed ? <Button disabled={working !== null || selectedServer?.status !== "connected"} onClick={() => setPendingAction("install")}><Cloud size={16} />安装 WARP</Button> : <>
+                <Button variant="secondary" disabled={working !== null} onClick={() => setLicenseOpen(true)}><TicketCheck size={16} />更新 License</Button>
+                <Button variant="danger" disabled={working !== null} onClick={() => setPendingAction("remove")}><Trash2 size={16} />移除 WARP</Button>
+              </>}
+            </div>
           </div>
         )}
       </Surface>
+      {licenseOpen ? <Dialog title="更新 WARP License" description={`应用到 ${selectedServer?.name ?? "当前服务器"}`} onClose={closeLicense} dismissible={working !== "license"}>
+        <form className="form-stack" onSubmit={(event) => { event.preventDefault(); void runAction("license"); }}>
+          <Field label="License Key" hint="密钥只会发送给当前服务器，不会显示在状态页"><input autoFocus required type="password" autoComplete="off" value={license} onChange={(event) => setLicense(event.target.value)} /></Field>
+          <div className="dialog-actions"><Button type="button" variant="secondary" disabled={working !== null} onClick={closeLicense}>取消</Button><Button type="submit" disabled={working !== null || !license.trim()}>{working === "license" ? <Spinner label="正在更新" /> : "确认更新"}</Button></div>
+        </form>
+      </Dialog> : null}
+      {pendingAction ? <ConfirmDialog
+        title={pendingAction === "install" ? "安装 WARP" : "移除 WARP"}
+        description={pendingAction === "install" ? `将在 ${selectedServer?.name ?? "当前服务器"} 注册 WARP，并写入 warp-v4 与 warp-v6 出站。` : `将从 ${selectedServer?.name ?? "当前服务器"} 注销 WARP，并移除对应 Xray 出站。使用这些出站的路由会失效。`}
+        confirmLabel={pendingAction === "install" ? "确认安装" : "确认移除"}
+        tone={pendingAction === "install" ? "primary" : "danger"}
+        working={working !== null}
+        onCancel={() => setPendingAction(null)}
+        onConfirm={() => void runAction(pendingAction)}
+      /> : null}
     </div>
   );
 }

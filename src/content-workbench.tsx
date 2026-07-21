@@ -27,6 +27,7 @@ import {
   Settings2,
   ShieldCheck,
   Sparkles,
+  Star,
   Trash2,
   Upload,
   WandSparkles,
@@ -1241,6 +1242,7 @@ export function TemplatesWorkbenchPage({ notify = noNotify }: ContentPageProps) 
   const [previewing, setPreviewing] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [defaultTemplate, setDefaultTemplate] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true); setError("");
@@ -1250,6 +1252,13 @@ export function TemplatesWorkbenchPage({ notify = noNotify }: ContentPageProps) 
       setOwners(payload.owners ?? {});
       setUsername(payload.username ?? "");
       setIsAdmin(Boolean(payload.is_admin));
+      if (payload.is_admin) {
+        const current = await api.get<{ default_template_filename?: string }>("/api/admin/system-settings/default-template")
+          .catch(() => ({ default_template_filename: "" }));
+        setDefaultTemplate(current.default_template_filename ?? "");
+      } else {
+        setDefaultTemplate("");
+      }
     } catch (reason) { setError(fail(reason, "加载模板失败")); }
     finally { setLoading(false); }
   }, []);
@@ -1257,8 +1266,23 @@ export function TemplatesWorkbenchPage({ notify = noNotify }: ContentPageProps) 
   useEffect(() => { void load(); }, [load]);
   const canModify = (filename: string) => isAdmin || Boolean(username && owners[filename] === username);
 
+  const makeDefault = async (filename: string) => {
+    setWorking(true); setError("");
+    try {
+      await api.put("/api/admin/system-settings/default-template", { default_template_filename: filename });
+      setDefaultTemplate(filename);
+      notify(`已将 ${filename} 设为默认模板`);
+    } catch (reason) { setError(fail(reason, "默认模板设置失败")); }
+    finally { setWorking(false); }
+  };
+
   const remove = async () => {
     if (!deleting) return;
+    if (deleting === defaultTemplate) {
+      setDeleting(null);
+      setError("默认模板不能删除，请先将其他模板设为默认");
+      return;
+    }
     setWorking(true); setError("");
     try {
       await api.delete(`/api/admin/rule-templates/${encodeURIComponent(deleting)}`);
@@ -1277,7 +1301,7 @@ export function TemplatesWorkbenchPage({ notify = noNotify }: ContentPageProps) 
         <div className="cw-template-list">
           {templates.map((filename) => {
             const owner = owners[filename];
-            return <Surface className="cw-template" key={filename}><div className="cw-template-title"><span className="cw-file-icon"><FileCode2 size={17} /></span><span><strong>{filename.replace(/\.ya?ml$/i, "").replaceAll("_", " ")}</strong><small>{filename}</small></span>{owner ? <Badge tone={owner === username ? "info" : "neutral"}>{owner === username ? "我的" : owner}</Badge> : <Badge>内置</Badge>}</div><div className="cw-card-actions"><Button variant="secondary" onClick={() => setPreviewing(filename)}><Sparkles size={15} />预览</Button>{canModify(filename) ? <><IconButton label={`编辑 ${filename}`} onClick={() => setEditing(filename)}><Pencil size={16} /></IconButton><IconButton label={`删除 ${filename}`} onClick={() => setDeleting(filename)}><Trash2 size={16} /></IconButton></> : null}</div></Surface>;
+            return <Surface className="cw-template" key={filename}><div className="cw-template-title"><span className="cw-file-icon"><FileCode2 size={17} /></span><span><strong>{filename.replace(/\.ya?ml$/i, "").replaceAll("_", " ")}</strong><small>{filename}</small></span>{defaultTemplate === filename ? <Badge tone="good">默认</Badge> : owner ? <Badge tone={owner === username ? "info" : "neutral"}>{owner === username ? "我的" : owner}</Badge> : <Badge>内置</Badge>}</div><div className="cw-card-actions">{isAdmin ? <Button aria-label={defaultTemplate === filename ? undefined : `将 ${filename} 设为默认模板`} variant={defaultTemplate === filename ? "ghost" : "secondary"} disabled={working || defaultTemplate === filename} onClick={() => void makeDefault(filename)}>{defaultTemplate === filename ? <Check size={15} /> : <Star size={15} />}{defaultTemplate === filename ? "默认模板" : "设为默认"}</Button> : null}<Button variant="secondary" onClick={() => setPreviewing(filename)}><Sparkles size={15} />预览</Button>{canModify(filename) ? <><IconButton label={`编辑 ${filename}`} onClick={() => setEditing(filename)}><Pencil size={16} /></IconButton><IconButton label={`删除 ${filename}`} disabled={working || defaultTemplate === filename} onClick={() => setDeleting(filename)}><Trash2 size={16} /></IconButton></> : null}</div></Surface>;
           })}
         </div>
       )}

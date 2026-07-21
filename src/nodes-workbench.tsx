@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import {
   Activity,
   ArrowDown,
@@ -329,6 +329,8 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
   const [working, setWorking] = useState(false);
   const [showTools, setShowTools] = useState(false);
   const [userView, setUserView] = useState<"mine" | "catalog">("mine");
+  const toolMenuRef = useRef<HTMLDivElement>(null);
+  const toolButtonRef = useRef<HTMLButtonElement>(null);
 
   const load = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -361,6 +363,73 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
   }, [isAdmin]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (!showTools) return;
+    const closeOnPointerDown = (event: PointerEvent) => {
+      if (!toolMenuRef.current?.contains(event.target as Node)) setShowTools(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setShowTools(false);
+      window.requestAnimationFrame(() => toolButtonRef.current?.focus());
+    };
+    document.addEventListener("pointerdown", closeOnPointerDown);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnPointerDown);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [showTools]);
+  const focusToolItem = useCallback((last = false) => {
+    window.requestAnimationFrame(() => {
+      const items = Array.from(toolMenuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []);
+      if (!items.length) return;
+      (last ? items[items.length - 1] : items[0]).focus();
+    });
+  }, []);
+  const openTools = useCallback((last = false) => {
+    setShowTools(true);
+    focusToolItem(last);
+  }, [focusToolItem]);
+  const chooseTool = useCallback((next: Exclude<WorkbenchDialog, null>) => {
+    // Dialog focus restoration uses the active trigger as its opener.
+    toolButtonRef.current?.focus();
+    setShowTools(false);
+    setDialog(next);
+  }, []);
+  const onToolMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
+    if (!items.length) return;
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    switch (event.key) {
+      case "ArrowDown":
+        event.preventDefault();
+        items[(current + 1 + items.length) % items.length].focus();
+        break;
+      case "ArrowUp":
+        event.preventDefault();
+        items[(current - 1 + items.length) % items.length].focus();
+        break;
+      case "Home":
+        event.preventDefault();
+        items[0].focus();
+        break;
+      case "End":
+        event.preventDefault();
+        items[items.length - 1].focus();
+        break;
+      case "Escape":
+        event.preventDefault();
+        setShowTools(false);
+        toolButtonRef.current?.focus();
+        break;
+      case "Tab":
+        setShowTools(false);
+        break;
+      default:
+        break;
+    }
+  };
   const hasRunning = Object.values(latest).some((result) => result.status === "running");
   useEffect(() => {
     if (!hasRunning) return;
@@ -581,20 +650,33 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
           <div className="search-box nw-search"><Search size={17} /><input aria-label="搜索节点" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="名称、地址、协议、标签或服务器" /></div>
           <Field label="排序"><select aria-label="节点排序" value={sort} onChange={(event) => setSort(event.target.value as SortMode)}><option value="recent">最近更新</option><option value="custom">自定义顺序</option><option value="name">节点名称</option><option value="protocol">协议</option><option value="server">服务器地址</option><option value="latency">延迟</option><option value="speed">下载速度</option></select></Field>
           <label className="nw-compact-check"><input type="checkbox" checked={enabledOnly} onChange={(event) => setEnabledOnly(event.target.checked)} />仅启用</label>
-          <div className="nw-tool-menu">
-            <Button variant="secondary" onClick={() => setShowTools((value) => !value)}><Settings2 size={16} />工具<ChevronDown size={14} /></Button>
-            {showTools ? <div className="nw-tool-popover">
-              {isAdmin ? <button onClick={() => { setDialog({ kind: "speed", nodeIDs: selectedNodes.map((node) => node.id) }); setShowTools(false); }}><Gauge size={16} />节点测速</button> : null}
-              {isAdmin ? <button onClick={() => { setDialog({ kind: "history" }); setShowTools(false); }}><History size={16} />测速结果</button> : null}
-              {isAdmin ? <button onClick={() => { setDialog({ kind: "testers" }); setShowTools(false); }}><Wifi size={16} />测速端管理</button> : null}
-              {isAdmin ? <button onClick={() => { setDialog({ kind: "uris" }); setShowTools(false); }}><Link2 size={16} />URI 管理器</button> : null}
-              <button onClick={() => { setDialog({ kind: "subscriptions" }); setShowTools(false); }}><Globe2 size={16} />外部订阅</button>
-              {isAdmin ? <button onClick={() => { setDialog({ kind: "tunnels" }); setShowTools(false); }}><Cable size={16} />Tunnel 管理</button> : null}
-              {isAdmin ? <button onClick={() => { deleteDuplicates(); setShowTools(false); }}><ListFilter size={16} />删除重复</button> : null}
+          <div className="nw-tool-menu" ref={toolMenuRef}>
+            <button ref={toolButtonRef} type="button" className="button button-secondary" aria-haspopup="menu" aria-expanded={showTools} onClick={() => showTools ? setShowTools(false) : openTools()} onKeyDown={(event) => {
+              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault();
+                openTools(event.key === "ArrowUp");
+              }
+            }}><Settings2 size={16} />工具<ChevronDown size={14} /></button>
+            {showTools ? <div className="nw-tool-popover" role="menu" aria-label="节点工具" onKeyDown={onToolMenuKeyDown}>
+              {isAdmin ? <button role="menuitem" onClick={() => chooseTool({ kind: "speed", nodeIDs: selectedNodes.map((node) => node.id) })}><Gauge size={16} />节点测速</button> : null}
+              {isAdmin ? <button role="menuitem" onClick={() => chooseTool({ kind: "history" })}><History size={16} />测速结果</button> : null}
+              {isAdmin ? <button role="menuitem" onClick={() => chooseTool({ kind: "testers" })}><Wifi size={16} />测速端管理</button> : null}
+              {isAdmin ? <button role="menuitem" onClick={() => chooseTool({ kind: "uris" })}><Link2 size={16} />URI 管理器</button> : null}
+              <button role="menuitem" onClick={() => chooseTool({ kind: "subscriptions" })}><Globe2 size={16} />外部订阅</button>
+              {isAdmin ? <button role="menuitem" onClick={() => chooseTool({ kind: "tunnels" })}><Cable size={16} />Tunnel 管理</button> : null}
+              {isAdmin ? <button role="menuitem" onClick={() => { toolButtonRef.current?.focus(); setShowTools(false); deleteDuplicates(); }}><ListFilter size={16} />删除重复</button> : null}
               {!isAdmin && userRouted ? <span className="nw-tool-status"><Route size={15} />私有出站 {userRouted.quota.used}/{userRouted.quota.max} · 今日 {userRouted.daily.used}/{userRouted.daily.max}</span> : null}
             </div> : null}
           </div>
         </div>
+        {isAdmin ? <div className="nw-parity-actions" role="toolbar" aria-label="节点快捷操作">
+          <Button aria-label="切换节点自定义排序" variant={sort === "custom" ? "primary" : "secondary"} onClick={() => setSort(sort === "custom" ? "recent" : "custom")}><ListFilter size={16} />排序模式</Button>
+          <Button aria-label="打开 Tunnel 工作台" variant="secondary" onClick={() => setDialog({ kind: "tunnels" })}><Cable size={16} />Tunnel 管理</Button>
+          <Button aria-label="创建节点路由出站" variant="secondary" onClick={() => selectedNodes.length === 1 ? setDialog({ kind: "route", node: selectedNodes[0] }) : notify("请先选择一个基础节点创建路由出站", "error")}><Route size={16} />路由出站</Button>
+          <Button aria-label="打开测速工作台" variant="secondary" onClick={() => setDialog({ kind: "speed", nodeIDs: selectedNodes.map((node) => node.id) })}><Gauge size={16} />节点测速</Button>
+          <Button aria-label="打开分享 URI 工具" variant="secondary" onClick={() => setDialog({ kind: "uris" })}><Link2 size={16} />URI 管理</Button>
+          <Button aria-label="打开订阅同步工作台" variant="secondary" onClick={() => setDialog({ kind: "subscriptions" })}><Globe2 size={16} />同步外部订阅</Button>
+        </div> : null}
         <div className="nw-filter-group" aria-label="协议筛选">
           <button className={protocol === "all" ? "is-active" : ""} onClick={() => setProtocol("all")}>全部 <span>{nodes.length}</span></button>
           {protocols.filter((item) => protocolCounts[item]).map((item) => <button key={item} className={protocol === item ? "is-active" : ""} onClick={() => setProtocol(item)}>{item.toUpperCase()} <span>{protocolCounts[item]}</span></button>)}

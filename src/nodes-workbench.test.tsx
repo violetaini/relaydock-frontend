@@ -141,11 +141,11 @@ describe("node workbench permissions", () => {
     expect(await screen.findByText("香港 A")).toBeInTheDocument();
     expect(get).not.toHaveBeenCalledWith("/api/admin/speedtest/results?latest=1");
     fireEvent.click(screen.getByRole("button", { name: "工具" }));
-    expect(screen.queryByRole("button", { name: "节点测速" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "测速结果" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "测速端管理" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "URI 管理器" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "外部订阅" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "节点测速" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "测速结果" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "测速端管理" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "URI 管理器" })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "外部订阅" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("checkbox", { name: "选择 香港 A" }));
     const toolbar = screen.getByRole("toolbar", { name: "批量操作" });
@@ -153,6 +153,30 @@ describe("node workbench permissions", () => {
     expect(toolbar).not.toHaveTextContent("测速");
     expect(toolbar).toHaveTextContent("延迟");
     expect(toolbar).toHaveTextContent("临时订阅");
+  });
+
+  it("supports roving keyboard focus in the tools menu and restores the trigger", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [node(1, "香港 A")] } as T;
+      if (path === "/api/admin/speedtest/results?latest=1") return { results: [] } as T;
+      if (path === "/api/user/config") return userConfig([1]) as T;
+      if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    render(<NodesWorkbench isAdmin notify={vi.fn()} />);
+
+    const trigger = await screen.findByRole("button", { name: "工具" });
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    const menu = await screen.findByRole("menu", { name: "节点工具" });
+    const items = screen.getAllByRole("menuitem");
+    await waitFor(() => expect(document.activeElement).toBe(items[0]));
+    fireEvent.keyDown(items[0], { key: "ArrowDown" });
+    expect(document.activeElement).toBe(items[1]);
+    fireEvent.keyDown(items[1], { key: "End" });
+    expect(document.activeElement).toBe(items[items.length - 1]);
+    fireEvent.keyDown(menu, { key: "Escape" });
+    expect(screen.queryByRole("menu", { name: "节点工具" })).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(trigger);
   });
 });
 

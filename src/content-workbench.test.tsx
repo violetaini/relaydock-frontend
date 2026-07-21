@@ -39,6 +39,23 @@ function subscribeLoad(path: string, files: unknown[] = [], external: unknown[] 
 }
 
 describe("content workbench templates", () => {
+  it("marks the current default template and can change it in place", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/rule-templates") return { templates: ["edge_v3.yaml", "private.yaml"], owners: {}, username: "admin", is_admin: true } as T;
+      if (path === "/api/admin/system-settings/default-template") return { default_template_filename: "edge_v3.yaml" } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const put = vi.spyOn(api, "put").mockResolvedValue({});
+
+    render(<TemplatesWorkbenchPage notify={vi.fn()} />);
+    expect(await screen.findByRole("button", { name: "默认模板" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "删除 edge_v3.yaml" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "将 private.yaml 设为默认模板" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/system-settings/default-template", { default_template_filename: "private.yaml" }));
+    expect(screen.getByRole("button", { name: "默认模板" })).toBeDisabled();
+  });
+
   it("loads a template and previews it through the V3 preview endpoint", async () => {
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
       if (path === "/api/admin/rule-templates") return { templates: ["edge_v3.yaml"], owners: {}, username: "admin", is_admin: true } as T;

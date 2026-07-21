@@ -225,6 +225,25 @@
   justify-content: flex-end;
 }
 
+.warp-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+@media (max-width: 560px) {
+  .warp-actions,
+  .warp-actions .button {
+    width: 100%;
+  }
+
+  .warp-actions {
+    flex-direction: column;
+  }
+}
+
 @media (max-width: 900px) {
   .ops-two-column {
     grid-template-columns: 1fr;

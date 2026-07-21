@@ -223,6 +223,20 @@
 .service-address-panel dt { color: var(--text-soft); }
 .service-address-panel dd { margin: 0; overflow-wrap: anywhere; text-align: right; }
 
+.service-ddns-panel { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+.service-ddns-head { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.service-ddns-head > span:first-child { min-width: 0; display: flex; align-items: center; gap: 9px; }
+.service-ddns-head > span:first-child > svg { flex: 0 0 auto; color: var(--accent); }
+.service-ddns-head > span:first-child > span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.service-ddns-head strong { font-size: 13px; }
+.service-ddns-head small { overflow: hidden; color: var(--text-soft); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.service-ddns-panel dl { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }
+.service-ddns-panel dl > div { min-width: 0; padding: 9px 0; display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 8px; border-top: 1px solid var(--border); font-size: 11px; }
+.service-ddns-panel dt { color: var(--text-soft); }
+.service-ddns-panel dd { margin: 0; overflow-wrap: anywhere; text-align: right; }
+.service-ddns-panel dd.is-error { color: var(--red); }
+.service-ddns-actions { display: flex; justify-content: flex-end; padding-top: 2px; }
+
 .service-control-stack { display: flex; flex-direction: column; gap: 10px; }
 .service-control-card { min-width: 0; padding: 14px; display: flex; align-items: center; gap: 12px; }
 .service-control-icon { width: 40px; height: 40px; flex: 0 0 40px; display: flex; align-items: center; justify-content: center; border-radius: 6px; color: var(--accent); background: var(--accent-soft); }
@@ -265,6 +279,70 @@
 .xray-resource-editor-head { padding-bottom: 10px; border-bottom: 1px solid var(--border); }
 .xray-resource-json { min-height: 250px; }
 .xray-resource-editor > .xray-resource-json { min-height: 360px; }
+
+.secure-inbound-presets {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.secure-inbound-presets > button {
+  min-width: 0;
+  min-height: 58px;
+  padding: 9px 11px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-soft);
+  background: var(--surface-muted);
+  text-align: left;
+}
+.secure-inbound-presets > button:hover { color: var(--text); border-color: var(--border-strong); }
+.secure-inbound-presets > button.is-active { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.secure-inbound-presets > button > svg { flex: 0 0 auto; }
+.secure-inbound-presets > button > span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.secure-inbound-presets strong,
+.secure-inbound-presets small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.secure-inbound-presets strong { color: inherit; font-size: 12px; }
+.secure-inbound-presets small { font-size: 10px; }
+
+.secure-inbound-reference {
+  min-height: 34px;
+  padding: 7px 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-muted);
+}
+.secure-inbound-reference > span { min-width: 0; display: flex; align-items: center; gap: 8px; }
+.secure-inbound-reference strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.secure-inbound-reference > small,
+.secure-inline-error { color: var(--amber); font-size: 10px; }
+
+.secure-field-action { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.secure-key-status { min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.secure-key-status .button { min-height: 34px; }
+.secure-encryption-row {
+  min-height: 44px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-muted);
+}
+.secure-encryption-row > span { display: flex; align-items: center; gap: 6px; }
+.secure-inbound-preview { border: 1px solid var(--border); border-radius: 6px; background: var(--surface-muted); }
+.secure-inbound-preview summary { padding: 10px 12px; color: var(--text-soft); font-size: 11px; font-weight: 700; cursor: pointer; }
+.secure-inbound-preview[open] summary { border-bottom: 1px solid var(--border); }
+.secure-inbound-preview textarea { min-height: 280px; border: 0; border-radius: 0 0 6px 6px; }
+.secure-inbound-preview > small { padding: 12px; display: block; }
 
 .routing-rule-list { display: flex; flex-direction: column; gap: 9px; }
 .routing-rule-row { min-width: 0; padding: 13px; display: flex; flex-direction: column; gap: 11px; }
@@ -333,14 +411,20 @@
   .service-metrics > span:nth-child(2) { border-right: 0; }
   .service-metrics > span:last-child { grid-column: 1 / -1; border-top: 1px solid var(--border); }
   .service-toggle-grid,
-  .service-address-panel dl { grid-template-columns: 1fr; }
+  .service-address-panel dl,
+  .service-ddns-panel dl { grid-template-columns: 1fr; }
   .service-operation-tabs { overflow-x: auto; }
   .service-operation-tabs button { flex: 0 0 auto; }
-  .service-address-panel dl > div { grid-template-columns: 74px 1fr; }
+  .service-address-panel dl > div,
+  .service-ddns-panel dl > div { grid-template-columns: 74px minmax(0, 1fr); }
   .service-share-create { grid-template-columns: 1fr; }
   .xray-resource-row { align-items: flex-start; flex-wrap: wrap; }
   .xray-resource-main { min-width: calc(100% - 42px); }
   .xray-resource-row > .badge { margin-left: 42px; }
   .xray-resource-actions { width: 100%; justify-content: flex-end; padding-top: 7px; border-top: 1px solid var(--border); }
+  .secure-inbound-presets { grid-template-columns: 1fr; }
+  .secure-inbound-reference,
+  .secure-encryption-row { align-items: stretch; flex-direction: column; }
+  .secure-encryption-row > span { justify-content: space-between; }
   .upgrade-summary strong { font-size: 18px; }
 }

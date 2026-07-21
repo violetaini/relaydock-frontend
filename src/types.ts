@@ -86,6 +86,7 @@ export interface UserItem {
   traffic_used: number;
   traffic_limit: number;
   traffic_limit_gb?: number;
+  traffic_limit_override_gb?: number | null;
   is_over_limit: boolean;
   speed_limit_mbps: number;
   device_limit: number;

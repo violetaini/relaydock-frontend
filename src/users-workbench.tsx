@@ -286,6 +286,7 @@ function ExtendDialog({ user, onClose, onComplete }: { user: ManagedUser; onClos
 
 function LimitsDialog({ user, onClose, onComplete }: { user: ManagedUser; onClose: () => void; onComplete: (message: string) => void }) {
   const [nodes, setNodes] = useState<NodeItem[]>([]);
+  const [traffic, setTraffic] = useState(user.traffic_limit_override_gb == null ? "" : String(user.traffic_limit_override_gb));
   const [speed, setSpeed] = useState(user.speed_limit_override == null ? "" : String(user.speed_limit_override));
   const [devices, setDevices] = useState(user.device_limit_override == null ? "" : String(user.device_limit_override));
   const [nodeSpeed, setNodeSpeed] = useState<Record<string, string>>(() => Object.fromEntries(Object.entries(user.node_speed_limit_overrides ?? {}).map(([key, value]) => [key, String(value)])));
@@ -295,13 +296,39 @@ function LimitsDialog({ user, onClose, onComplete }: { user: ManagedUser; onClos
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setWorking(true); setError("");
     const numericMap = (source: Record<string, string>) => Object.fromEntries(Object.entries(source).filter(([, value]) => value !== "").map(([key, value]) => [key, Number(value)]));
+    const completed: string[] = [];
+    const saveStep = async (path: string, body: unknown, label: string) => {
+      const response = await api.put<{ success?: boolean; message?: string }>(path, body);
+      if (response?.success === false) throw new Error(response.message || `${label}保存失败`);
+      completed.push(label);
+    };
     try {
-      await api.put("/api/admin/users/limits", { username: user.username, speed_limit_override: speed === "" ? null : Number(speed), device_limit_override: devices === "" ? null : Number(devices) });
-      await api.put("/api/admin/users/node-limits", { username: user.username, node_speed_overrides: numericMap(nodeSpeed), node_device_overrides: numericMap(nodeDevices) });
+      await saveStep("/api/admin/users/traffic-limit", { username: user.username, traffic_limit_override_gb: traffic === "" ? null : Number(traffic) }, "总流量");
+      await saveStep("/api/admin/users/limits", { username: user.username, speed_limit_override: speed === "" ? null : Number(speed), device_limit_override: devices === "" ? null : Number(devices) }, "用户限速与设备数");
+      await saveStep("/api/admin/users/node-limits", { username: user.username, node_speed_overrides: numericMap(nodeSpeed), node_device_overrides: numericMap(nodeDevices) }, "节点级限额");
       onComplete(`${user.username} 的限额已下发`);
-    } catch (reason) { setError(messageOf(reason, "限额保存失败")); } finally { setWorking(false); }
+    } catch (reason) {
+      const suffix = completed.length ? `；已保存：${completed.join("、")}。后续步骤未完成，请关闭后重新打开核对再重试` : "";
+      setError(`${messageOf(reason, "限额保存失败")}${suffix}`);
+    } finally { setWorking(false); }
   };
-  return <Dialog title={`${user.username} 的限速与设备数`} description="留空继承套餐；节点覆盖优先于用户覆盖和套餐值" onClose={onClose} wide><form className="form-stack" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}<div className="form-grid"><Field label="用户限速覆盖（Mbps）" hint={`套餐值 ${user.speed_limit_mbps || 0}，留空继承`}><input type="number" min="0" step="0.1" value={speed} onChange={(e) => setSpeed(e.target.value)} placeholder="继承套餐" /></Field><Field label="用户设备数覆盖" hint={`套餐值 ${user.device_limit || 0}，留空继承`}><input type="number" min="0" step="1" value={devices} onChange={(e) => setDevices(e.target.value)} placeholder="继承套餐" /></Field></div><div className="surface-heading compact-heading"><div><h2>节点级覆盖</h2><small>0 表示该节点显式不限，留空表示继承</small></div></div><div className="node-limit-list">{nodes.length === 0 ? <span className="muted">当前没有可配置节点</span> : nodes.map((node) => <div key={node.id}><span><strong>{node.node_name}</strong><small>#{node.id} · {node.protocol}</small></span><Field label="Mbps"><input aria-label={`${node.node_name} 限速`} type="number" min="0" step="0.1" value={nodeSpeed[String(node.id)] ?? ""} onChange={(e) => setNodeSpeed({ ...nodeSpeed, [node.id]: e.target.value })} /></Field><Field label="设备"><input aria-label={`${node.node_name} 设备数`} type="number" min="0" step="1" value={nodeDevices[String(node.id)] ?? ""} onChange={(e) => setNodeDevices({ ...nodeDevices, [node.id]: e.target.value })} /></Field></div>)}</div><div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在下发" /> : <><SlidersHorizontal size={16} />保存并下发</>}</Button></div></form></Dialog>;
+  return (
+    <Dialog title={`${user.username} 的用户限额`} description="总流量只覆盖套餐额度；每台服务器授权的额度继续独立计算" onClose={onClose} wide>
+      <form className="form-stack" onSubmit={submit}>
+        {error ? <ErrorState message={error} /> : null}
+        <Field label="总流量覆盖（GB）" hint={user.package_id ? "留空继承套餐；0 表示当前套餐显式不限流量" : "请先分配套餐；服务器授权额度在授权入口单独设置"}>
+          <input type="number" min="0" step="0.01" value={traffic} onChange={(e) => setTraffic(e.target.value)} placeholder="继承套餐" disabled={!user.package_id} />
+        </Field>
+        <div className="form-grid">
+          <Field label="用户限速覆盖（Mbps）" hint={`套餐值 ${user.speed_limit_mbps || 0}，留空继承`}><input type="number" min="0" step="0.1" value={speed} onChange={(e) => setSpeed(e.target.value)} placeholder="继承套餐" /></Field>
+          <Field label="用户设备数覆盖" hint={`套餐值 ${user.device_limit || 0}，留空继承`}><input type="number" min="0" step="1" value={devices} onChange={(e) => setDevices(e.target.value)} placeholder="继承套餐" /></Field>
+        </div>
+        <div className="surface-heading compact-heading"><div><h2>节点级覆盖</h2><small>0 表示该节点显式不限，留空表示继承</small></div></div>
+        <div className="node-limit-list">{nodes.length === 0 ? <span className="muted">当前没有可配置节点</span> : nodes.map((node) => <div key={node.id}><span><strong>{node.node_name}</strong><small>#{node.id} · {node.protocol}</small></span><Field label="Mbps"><input aria-label={`${node.node_name} 限速`} type="number" min="0" step="0.1" value={nodeSpeed[String(node.id)] ?? ""} onChange={(e) => setNodeSpeed({ ...nodeSpeed, [node.id]: e.target.value })} /></Field><Field label="设备"><input aria-label={`${node.node_name} 设备数`} type="number" min="0" step="1" value={nodeDevices[String(node.id)] ?? ""} onChange={(e) => setNodeDevices({ ...nodeDevices, [node.id]: e.target.value })} /></Field></div>)}</div>
+        <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在下发" /> : <><SlidersHorizontal size={16} />保存并下发</>}</Button></div>
+      </form>
+    </Dialog>
+  );
 }
 
 function SubscriptionsDialog({ user, onClose, onComplete }: { user: ManagedUser; onClose: () => void; onComplete: (message: string) => void }) {

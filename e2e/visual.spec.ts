@@ -216,9 +216,13 @@ async function mockAPI(
       "/api/admin/remote/services/status": { success: true, xray: { installed: true, running: true, version: "25.6.8" }, nginx: { installed: true, running: true, version: "1.26.3" } },
       "/api/admin/remote/agent/version-info": { success: true, current: "0.3.4", latest: "0.3.4", upgrade_available: false },
       "/api/admin/remote/system/info": { success: true, hostname: "edge-hk-01", uptime: 86400, loadavg: "0.12 0.18 0.20", memory: { MemAvailable: "1.8 GiB" } },
+      "/api/admin/servers/1/ddns-status": { success: true, id: 1, name: "Hong Kong Edge", ddns_enabled: false, ddns_provider_id: 0, ddns_pending: false, pull_address: "" },
       "/api/admin/remote/inbounds": { success: true, inbounds: [{ tag: "vless-in", listen: "0.0.0.0", port: 443, protocol: "vless", settings: { clients: [] }, _runtime_status: "running" }] },
       "/api/admin/remote/outbounds": { success: true, outbounds: [{ tag: "direct", protocol: "freedom", settings: {} }] },
       "/api/admin/remote/routing": { success: true, routing: { domainStrategy: "IPIfNonMatch", rules: [{ type: "field", domain: ["domain:google.com"], network: "tcp", outboundTag: "direct" }] } },
+      "/api/admin/xray-examples": { success: true, combinations: [{ dir_name: "VLESS-TCP-XTLS-Vision-REALITY", protocol: "vless", transport: "tcp", security: "reality", has_config: true }] },
+      "/api/admin/xray/generate-x25519": { privateKey: "A".repeat(43), publicKey: "B".repeat(43) },
+      "/api/admin/remote/reality-domains": { success: true, domains: [{ domain: "www.cloudflare.com", target: "www.cloudflare.com:443", success: true, latency_ms: 18 }] },
       "/api/admin/nodes": { nodes },
       "/api/admin/managed-node-offers": { offers: [] },
       "/api/traffic/summary": trafficResponse,
@@ -312,7 +316,7 @@ async function closeDialog(page: Page) {
 test("desktop navigation keeps every menu label visible", async ({ page }) => {
   await mockAPI(page);
 
-  for (const width of [1440, 1050]) {
+  for (const width of [1440, 1360, 1359, 1280, 1219, 1050, 1041]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto("/#/dashboard");
     await expect(page.getByRole("navigation", { name: "主导航" })).toBeVisible();
@@ -333,10 +337,33 @@ test("desktop navigation keeps every menu label visible", async ({ page }) => {
     expect(clipped, `${width}px desktop navigation labels must remain visible`).toEqual([]);
     const navOverflow = await page.locator(".sidebar-nav").evaluate((nav) => nav.scrollWidth - nav.clientWidth);
     expect(navOverflow, `${width}px desktop navigation must not require horizontal scrolling`).toBeLessThanOrEqual(1);
+    const renderedRows = await labels.evaluateAll((elements) => new Set(elements.map((element) => Math.round(element.closest(".nav-item")!.getBoundingClientRect().top))).size);
+    expect(renderedRows, `${width}px desktop navigation row count`).toBeLessThanOrEqual(width >= 1360 ? 1 : 2);
     const headerHeight = await page.locator(".sidebar").evaluate((header) => header.getBoundingClientRect().height);
-    expect(headerHeight, `${width}px desktop navigation must stay within two rows`).toBeLessThanOrEqual(112);
+    expect(headerHeight, `${width}px desktop navigation uses its stable height`).toBeLessThanOrEqual(width >= 1360 ? 64 : 104);
     await expectViewportIntegrity(page, `${width}px desktop navigation`);
   }
+});
+
+test("desktop layout switch preserves navigation and preference", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockAPI(page);
+  await page.goto("/#/dashboard");
+
+  await page.getByRole("button", { name: "切换到侧边栏" }).click();
+  await expect(page.locator(".console-layout")).toHaveClass(/layout-side/);
+  await expect(page.locator(".topbar")).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "主导航" })).toBeVisible();
+  await expect(page.locator(".sidebar-nav .nav-item > span")).toHaveCount(15);
+  expect(await page.locator(".sidebar").evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(244);
+  await expectViewportIntegrity(page, "desktop side navigation");
+
+  await page.reload();
+  await expect(page.locator(".console-layout")).toHaveClass(/layout-side/);
+  await page.getByRole("button", { name: "切换到顶部栏" }).click();
+  await expect(page.locator(".console-layout")).toHaveClass(/layout-top/);
+  await expect(page.locator(".topbar")).toBeHidden();
+  await expectViewportIntegrity(page, "desktop top navigation after switch");
 });
 
 test("advanced workflows render without runtime errors", async ({ page }) => {
@@ -506,8 +533,13 @@ for (const viewport of [
     await serverDialog.getByRole("tab", { name: "入站" }).click();
     await expect(serverDialog.getByText("vless-in", { exact: true })).toBeVisible();
     await serverDialog.getByRole("button", { name: "添加入站" }).first().click();
+    await expect(serverDialog.getByRole("tab", { name: /VLESS \+ Reality/ })).toHaveAttribute("aria-selected", "true");
+    await expect(serverDialog.getByRole("combobox", { name: "Reality 伪装域名" })).toBeVisible();
+    await expect(serverDialog.getByText("已生成", { exact: true })).toBeVisible();
+    await expectViewportIntegrity(page, `${viewport.name} secure inbound wizard`);
+    await serverDialog.getByRole("tab", { name: /高级 JSON/ }).click();
     await expect(serverDialog.getByLabel("入站高级 JSON")).toBeVisible();
-    await expectViewportIntegrity(page, `${viewport.name} structured inbound editor`);
+    await expectViewportIntegrity(page, `${viewport.name} advanced inbound editor`);
     await serverDialog.locator(".xray-resource-editor").getByRole("button", { name: "关闭" }).click();
     await serverDialog.getByRole("tab", { name: "出站" }).click();
     await expect(serverDialog.getByText("direct", { exact: true })).toBeVisible();
@@ -530,12 +562,12 @@ for (const viewport of [
     await expectViewportIntegrity(page, `${viewport.name} node import`);
     await closeDialog(page);
     await page.getByRole("button", { name: "工具", exact: true }).click();
-    await page.getByRole("button", { name: "节点测速" }).click();
+    await page.getByRole("menuitem", { name: "节点测速" }).click();
     await expect(page.getByRole("dialog", { name: "节点测速工作台" })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} speed test workbench`);
     await closeDialog(page);
     await page.getByRole("button", { name: "工具", exact: true }).click();
-    await page.getByRole("button", { name: "URI 管理器" }).click();
+    await page.getByRole("menuitem", { name: "URI 管理器" }).click();
     await expect(page.getByRole("dialog", { name: "URI 管理器" }).getByText("vless://masked@example.com:443")).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} URI manager`);
     await closeDialog(page);
@@ -636,6 +668,13 @@ for (const viewport of [
       await expect(page.getByRole("heading", { name: marker, exact: true })).toBeVisible();
       await expectViewportIntegrity(page, `${viewport.name} settings ${tab}`);
     }
+    await page.getByRole("tab", { name: "订阅", exact: true }).click();
+    await page.getByRole("button", { name: "打开迁移向导" }).click();
+    const migrationDialog = page.getByRole("dialog", { name: "从妙妙屋迁移" });
+    await expect(migrationDialog.getByRole("tab", { name: "远程拉取" })).toBeVisible();
+    await expect(migrationDialog.getByRole("tab", { name: "上传备份" })).toBeVisible();
+    await expectViewportIntegrity(page, `${viewport.name} MMW migration wizard`);
+    await closeDialog(page);
 
     await page.goto("/#/account");
     await expect(page.getByRole("heading", { name: "个人资料" })).toBeVisible();

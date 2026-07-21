@@ -60,4 +60,47 @@ describe("users workbench", () => {
     await waitFor(() => expect(get).toHaveBeenCalledWith("/api/admin/users/alice/server-grants"));
     expect(get).toHaveBeenCalledWith("/api/admin/users/alice/managed-nodes");
   });
+
+  it("saves an explicit unlimited package traffic override without changing server grants", async () => {
+    vi.spyOn(api, "get").mockImplementation(async (path) => {
+      if (path === "/api/admin/users") return { users: [{ ...alice, traffic_limit_override_gb: 12.5 }] };
+      if (path === "/api/admin/nodes") return { nodes: [] };
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
+    const notify = vi.fn();
+    render(<UsersWorkbenchPage notify={notify} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "限额 alice" }));
+    const traffic = screen.getByRole("spinbutton", { name: /^总流量覆盖（GB）/ });
+    expect(traffic).toHaveValue(12.5);
+    fireEvent.change(traffic, { target: { value: "0" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存并下发" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/users/traffic-limit", {
+      username: "alice",
+      traffic_limit_override_gb: 0,
+    }));
+    expect(put.mock.calls.some(([path]) => String(path).includes("server-grants"))).toBe(false);
+  });
+
+  it("reports which limit steps were saved when a later push fails", async () => {
+    vi.spyOn(api, "get").mockImplementation(async (path) => {
+      if (path === "/api/admin/users") return { users: [alice] };
+      if (path === "/api/admin/nodes") return { nodes: [] };
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const put = vi.spyOn(api, "put").mockImplementation(async (path) => {
+      if (path === "/api/admin/users/limits") throw new Error("Agent 暂时不可用");
+      return { success: true };
+    });
+    render(<UsersWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "限额 alice" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存并下发" }));
+
+    expect(await screen.findByText(/Agent 暂时不可用.*已保存：总流量/)).toBeInTheDocument();
+    expect(put).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("dialog", { name: "alice 的用户限额" })).toBeInTheDocument();
+  });
 });

@@ -16,9 +16,13 @@ import {
   Link2,
   LogOut,
   Menu,
+  MessageSquareWarning,
+  Monitor,
   Moon,
   Network,
   Package,
+  PanelLeft,
+  PanelTop,
   Plus,
   RefreshCw,
   Route,
@@ -51,6 +55,7 @@ import { CustomRulesWorkbenchPage, RulesConfigWorkbenchPage } from "./rules-work
 import { ServicesWorkbenchPage } from "./services-workbench";
 import { SettingsWorkbenchPage } from "./settings-workbench";
 import { TrafficWorkbenchPage } from "./traffic-workbench";
+import { nextThemeMode, normalizeThemeMode, resolveThemeMode, type ThemeMode } from "./theme";
 import { TwoFactorSettings } from "./two-factor";
 import { UsersWorkbenchPage } from "./users-workbench";
 import type {
@@ -85,6 +90,7 @@ import {
 type PageKey = "dashboard" | "subscriptions" | "generator" | "servers" | "nodes" | "traffic" | "users" | "packages" | "certificates" | "templates" | "subscribeFiles" | "customRules" | "rulesConfig" | "advanced" | "settings" | "account";
 
 interface ToastState { message: string; tone: "success" | "error" }
+type LayoutMode = "top" | "side";
 
 const pageTitles: Record<PageKey, string> = {
   dashboard: "流量信息",
@@ -131,7 +137,9 @@ function pageAllowed(page: PageKey, isAdmin: boolean, permissions: string[] | nu
 export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: () => void }) {
   const [page, setPage] = useState<PageKey>(() => resolvePage(profile.is_admin));
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => normalizeThemeMode(localStorage.getItem("arcway-theme")));
   const [theme, setTheme] = useState<Theme>(() => document.documentElement.dataset.theme === "dark" ? "dark" : "light");
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>(() => localStorage.getItem("arcway-layout") === "side" ? "side" : "top");
   const [toast, setToast] = useState<ToastState | null>(null);
   const [userPages, setUserPages] = useState<string[] | null>(profile.is_admin ? [] : null);
   const [identity, setIdentity] = useState(profile);
@@ -179,17 +187,42 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
     setSidebarOpen(false);
   };
 
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      const resolved = resolveThemeMode(themeMode, media.matches);
+      setTheme(resolved);
+      document.documentElement.dataset.theme = resolved;
+    };
+    apply();
+    if (themeMode !== "system") return;
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, [themeMode]);
+
   const toggleTheme = () => {
-    const next = theme === "dark" ? "light" : "dark";
-    setTheme(next);
+    const next = nextThemeMode(themeMode);
+    setThemeMode(next);
     localStorage.setItem("arcway-theme", next);
-    document.documentElement.dataset.theme = next;
+  };
+
+  const themeLabel = themeMode === "light"
+    ? "主题模式：亮色；点击切换暗色"
+    : themeMode === "dark"
+      ? "主题模式：暗色；点击切换跟随系统"
+      : `主题模式：跟随系统（当前${theme === "dark" ? "暗色" : "亮色"}）；点击切换亮色`;
+  const themeIcon = themeMode === "system" ? <Monitor size={18} /> : themeMode === "dark" ? <Moon size={18} /> : <Sun size={18} />;
+
+  const toggleLayout = () => {
+    const next = layoutMode === "top" ? "side" : "top";
+    setLayoutMode(next);
+    localStorage.setItem("arcway-layout", next);
   };
 
   const notify = (message: string, tone: ToastState["tone"] = "success") => setToast({ message, tone });
 
   return (
-    <div className="console-layout">
+    <div className={`console-layout layout-${layoutMode}`}>
       {sidebarOpen ? <button className="sidebar-scrim" aria-label="关闭导航" onClick={() => setSidebarOpen(false)} /> : null}
       <aside className={`sidebar ${sidebarOpen ? "is-open" : ""}`}>
         <div className="sidebar-brand brand"><span className="brand-mark"><Network size={20} /></span><span>Arcway</span><IconButton className="sidebar-close" label="关闭导航" onClick={() => setSidebarOpen(false)}><X size={19} /></IconButton></div>
@@ -223,7 +256,7 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
           ) : <NavGroup label="记录"><NavItem active={page === "traffic"} icon={<LayoutDashboard size={18} />} label="流量明细" onClick={() => navigate("traffic")} /></NavGroup>}
         </nav>
         <div className="sidebar-footer">
-          <IconButton label={theme === "dark" ? "切换亮色主题" : "切换暗色主题"} onClick={toggleTheme}>{theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}</IconButton>
+          <IconButton label={themeLabel} onClick={toggleTheme}>{themeIcon}</IconButton>
           <button type="button" className={`account-block ${page === "account" ? "is-active" : ""}`} aria-label="账户中心" title="账户中心" onClick={() => navigate("account")}>
             <span className="account-avatar">{(identity.nickname || identity.username).slice(0, 1).toUpperCase()}</span>
             <span><strong>{identity.nickname || identity.username}</strong><small>{profile.is_admin ? "管理员" : "用户"}</small></span>
@@ -241,7 +274,7 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
           </div>
           <div className="topbar-actions">
             <span className="control-state"><span className="status-dot status-good" />控制端在线</span>
-            <IconButton label={theme === "dark" ? "切换亮色主题" : "切换暗色主题"} onClick={toggleTheme}>{theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}</IconButton>
+            <IconButton label={themeLabel} onClick={toggleTheme}>{themeIcon}</IconButton>
             <button type="button" className="topbar-avatar" aria-label="账户中心" title="账户中心" onClick={() => navigate("account")}>{(identity.nickname || identity.username).slice(0, 1).toUpperCase()}</button>
           </div>
         </header>
@@ -263,6 +296,10 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
           {page === "settings" && profile.is_admin ? <SettingsWorkbenchPage notify={notify} /> : null}
           {page === "account" ? <AccountWorkbenchPage notify={notify} /> : null}
         </main>
+      </div>
+      <div className="floating-tools" aria-label="界面工具">
+        <IconButton className="layout-switch" label={layoutMode === "top" ? "切换到侧边栏" : "切换到顶部栏"} onClick={toggleLayout}>{layoutMode === "top" ? <PanelLeft size={18} /> : <PanelTop size={18} />}</IconButton>
+        <a className="icon-button" href="https://github.com/violetaini/arcway-frontend/issues" target="_blank" rel="noreferrer" aria-label="反馈问题" title="反馈问题"><MessageSquareWarning size={18} /></a>
       </div>
       {toast ? <Toast {...toast} onClose={() => setToast(null)} /> : null}
     </div>
@@ -344,8 +381,8 @@ function DashboardPage({ profile, navigate }: { profile: Profile; navigate: (pag
       <Surface className="chart-surface dashboard-chart">
         <div className="surface-heading"><div><h2>每日流量消耗</h2><small>最近记录的日度流量趋势</small></div><span className="chart-total">{periodUsed.toFixed(1)} GB</span></div>
         {loading ? <div className="center-state"><Spinner /></div> : history.length === 0 ? <EmptyState icon={<Activity size={22} />} title="暂无历史记录" /> : (
-          <div className="bar-chart" aria-label="每日流量消耗图">
-            {history.map((item) => <div className="bar-column" key={item.date} title={`${item.date}: ${item.used_gb} GB`}><span className="bar-value">{item.used_gb > 0 ? item.used_gb : ""}</span><span className="bar" style={{ height: `${Math.max(4, item.used_gb / maxHistory * 100)}%` }} /><small>{item.date.slice(5)}</small></div>)}
+          <div className={`bar-chart period-${period}`} aria-label="每日流量消耗图">
+            {history.map((item) => <div className="bar-column" key={item.date} title={`${item.date}: ${item.used_gb} GB`}><span className="bar-value">{item.used_gb > 0 ? item.used_gb : ""}</span><span className="bar" style={{ height: `${Math.max(4, item.used_gb / maxHistory * 100)}%` }} /><small>{item.date.slice(-2)}</small></div>)}
           </div>
         )}
       </Surface>

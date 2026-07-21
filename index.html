@@ -9,10 +9,11 @@
     <script>
       (() => {
         const saved = localStorage.getItem("arcway-theme");
-        const dark = saved === "dark" || (!saved && matchMedia("(prefers-color-scheme: dark)").matches);
+        const followsSystem = !saved || saved === "system";
+        const dark = saved === "dark" || (followsSystem && matchMedia("(prefers-color-scheme: dark)").matches);
         document.documentElement.dataset.theme = dark ? "dark" : "light";
         const serverStyle = document.documentElement.dataset.serverTheme;
-        document.documentElement.dataset.styleTheme = ["flat", "pixel", "anime"].includes(serverStyle) ? serverStyle : "pixel";
+        document.documentElement.dataset.styleTheme = ["flat", "pixel", "anime"].includes(serverStyle) ? serverStyle : "flat";
       })();
     </script>
   </head>

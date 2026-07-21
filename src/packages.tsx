@@ -3,6 +3,8 @@ import {
   CalendarDays,
   CircleUserRound,
   Gauge,
+  Grid2X2,
+  List,
   Package as PackageIcon,
   Pencil,
   Plus,
@@ -29,8 +31,10 @@ import {
   Toggle,
   formatBytes,
 } from "./ui";
+import "./packages.css";
 
 type NotifyTone = "success" | "error";
+type PackageView = "cards" | "list";
 
 interface PackagesPageProps {
   notify: (message: string, tone?: NotifyTone) => void;
@@ -153,6 +157,7 @@ export function PackagesPage({ notify }: PackagesPageProps) {
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [actionWorking, setActionWorking] = useState(false);
   const [userSearch, setUserSearch] = useState("");
+  const [packageView, setPackageView] = useState<PackageView>("cards");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -236,6 +241,10 @@ export function PackagesPage({ notify }: PackagesPageProps) {
         description={`${packages.length} 个套餐模板 · ${regularUsers.filter((user) => user.package_id).length} 位用户已分配`}
         actions={(
           <>
+            <div className="packages-view-switch" role="group" aria-label="套餐视图">
+              <IconButton className={packageView === "cards" ? "is-active" : ""} label="卡片视图" aria-pressed={packageView === "cards"} onClick={() => setPackageView("cards")}><Grid2X2 size={17} /></IconButton>
+              <IconButton className={packageView === "list" ? "is-active" : ""} label="列表视图" aria-pressed={packageView === "list"} onClick={() => setPackageView("list")}><List size={18} /></IconButton>
+            </div>
             <IconButton label="刷新套餐数据" onClick={() => void load()} disabled={loading}><RefreshCw size={18} /></IconButton>
             <Button variant="secondary" onClick={() => setAssignment({})} disabled={loading || packages.length === 0 || regularUsers.length === 0}>
               <CircleUserRound size={17} />分配套餐
@@ -251,8 +260,7 @@ export function PackagesPage({ notify }: PackagesPageProps) {
         <Surface className="center-state"><Spinner label="正在加载套餐、节点和用户" /></Surface>
       ) : (
         <div className="advanced-stack">
-          <div className="package-grid">
-            {packages.length === 0 ? (
+          {packages.length === 0 ? <div className="package-grid">
               <Surface>
                 <EmptyState
                   icon={<PackageIcon size={24} />}
@@ -261,7 +269,7 @@ export function PackagesPage({ notify }: PackagesPageProps) {
                   action={<Button onClick={() => setEditor("create")}><Plus size={16} />创建套餐</Button>}
                 />
               </Surface>
-            ) : packages.map((item) => {
+            </div> : packageView === "cards" ? <div className="package-grid">{packages.map((item) => {
               const itemNodes = item.nodes ?? [];
               const names = itemNodes.map((id) => nodes.find((node) => node.id === id)?.node_name ?? `#${id}`);
               return (
@@ -288,15 +296,26 @@ export function PackagesPage({ notify }: PackagesPageProps) {
                     <span><CalendarDays size={15} />{item.is_reset ? `每月 ${item.reset_day} 日重置` : "周期重置"}</span>
                   </div>
                   <div className="dialog-actions">
-                    <Button variant="ghost" onClick={() => setAssignment({ packageID: item.id })} disabled={regularUsers.length === 0}>
+                    <Button aria-label={`为 ${item.name} 分配用户`} variant="ghost" onClick={() => setAssignment({ packageID: item.id })} disabled={regularUsers.length === 0}>
                       <CircleUserRound size={16} />分配用户
                     </Button>
                     <Badge tone={boundCount(item.id) ? "good" : "neutral"}>{boundCount(item.id)} 位用户</Badge>
                   </div>
                 </Surface>
               );
-            })}
-          </div>
+            })}</div> : <Surface className="table-surface packages-list-surface"><div className="table-wrap"><table><thead><tr><th>套餐</th><th>计费</th><th>流量 / 周期</th><th>速度 / 设备</th><th>节点</th><th>用户</th><th aria-label="操作" /></tr></thead><tbody>{packages.map((item) => {
+              const itemNodes = item.nodes ?? [];
+              const names = itemNodes.map((id) => nodes.find((node) => node.id === id)?.node_name ?? `#${id}`);
+              return <tr key={item.id}>
+                <td><strong>{item.name}</strong><small className="cell-note">{item.description || "无套餐说明"}</small></td>
+                <td><Badge tone={item.traffic_mode === "twoway" ? "info" : "neutral"}>{item.traffic_mode === "twoway" ? "双向计费" : "单向计费"}</Badge></td>
+                <td><strong>{item.traffic_limit_gb} GB</strong><small className="cell-note">{item.cycle_days} 天 · {item.is_reset ? `每月 ${item.reset_day} 日重置` : "周期重置"}</small></td>
+                <td><strong>{item.speed_limit_mbps ? `${item.speed_limit_mbps} Mbps` : "不限速"}</strong><small className="cell-note">{item.device_limit ? `${item.device_limit} 台设备` : "设备不限"}</small></td>
+                <td><strong title={names.join("、")}>{itemNodes.length} 个节点</strong><small className="cell-note">{names.slice(0, 2).join("、") || "未关联"}</small></td>
+                <td><Badge tone={boundCount(item.id) ? "good" : "neutral"}>{boundCount(item.id)} 位用户</Badge></td>
+                <td><div className="packages-list-actions"><Button aria-label={`为 ${item.name} 分配用户`} variant="ghost" onClick={() => setAssignment({ packageID: item.id })} disabled={regularUsers.length === 0}><CircleUserRound size={15} />分配</Button><IconButton label={`编辑 ${item.name}`} onClick={() => setEditor(item)}><Pencil size={16} /></IconButton><IconButton label={`删除 ${item.name}`} onClick={() => setPendingAction({ kind: "delete-package", item })}><Trash2 size={16} /></IconButton></div></td>
+              </tr>;
+            })}</tbody></table></div></Surface>}
 
           <Surface className="table-surface">
             <div className="surface-heading table-title">

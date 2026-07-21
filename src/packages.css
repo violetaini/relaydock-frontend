@@ -1,0 +1,38 @@
+.packages-view-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+}
+
+.packages-view-switch .icon-button {
+  width: 34px;
+  height: 34px;
+  flex-basis: 34px;
+}
+
+.packages-view-switch .icon-button.is-active {
+  color: var(--accent-strong);
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
+  background: var(--accent-soft);
+}
+
+.packages-list-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+}
+
+.packages-list-surface table {
+  min-width: 930px;
+}
+
+@media (max-width: 560px) {
+  .packages-view-switch {
+    order: -1;
+  }
+}

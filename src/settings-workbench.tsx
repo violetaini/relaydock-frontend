@@ -5,6 +5,7 @@ import {
   Clipboard,
   Code2,
   Copy,
+  Database,
   Eye,
   FileJson,
   Gauge,
@@ -21,6 +22,7 @@ import {
   Users,
 } from "lucide-react";
 import { api } from "./api";
+import { MmwMigrationDialog } from "./migration-workbench";
 import { TwoFactorSettings } from "./two-factor";
 import type { RemoteServer, ServerListResponse } from "./types";
 import { Button, ConfirmDialog, ErrorState, Field, IconButton, PageHeader, Spinner, Surface, Toggle } from "./ui";
@@ -202,6 +204,7 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
   const [userSubscription, setUserSubscription] = useState<UserSubscriptionConfig>(defaultUserSubscription);
   const [apiToken, setApiToken] = useState("");
   const [confirmTokenReset, setConfirmTokenReset] = useState(false);
+  const [showMigration, setShowMigration] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true); setLoaded(false); setError("");
@@ -347,6 +350,9 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
           <Toggle checked={features} onChange={setFeatures} label="启用高级订阅功能" /><Toggle checked={overrideScripts} onChange={setOverrideScripts} label="允许覆写脚本" /><Toggle checked={agentLog} onChange={setAgentLog} label="记录 Agent 调试日志" />
           <Field label="默认规则模板"><select value={defaultTemplate} onChange={(e) => setDefaultTemplate(e.target.value)}><option value="">系统默认</option>{templates.map((name) => <option key={name} value={name}>{name}</option>)}</select></Field>
         </SettingSection>
+        <SettingSection icon={<Database size={19} />} title="妙妙屋数据迁移" description="从旧面板导入用户、节点、订阅、模板和覆写">
+          <Button type="button" variant="secondary" onClick={() => setShowMigration(true)}><Database size={16} />打开迁移向导</Button>
+        </SettingSection>
         <SettingSection icon={<RefreshCw size={19} />} title="外部订阅同步" description="节点匹配、缓存与流量同步策略">
           <Toggle checked={userSubscription.force_sync_external} onChange={(force_sync_external) => setUserSubscription({ ...userSubscription, force_sync_external })} label="订阅访问时强制同步外部订阅" />
           <Toggle checked={userSubscription.keep_node_name} onChange={(keep_node_name) => setUserSubscription({ ...userSubscription, keep_node_name })} label="同步时保留现有节点名称" />
@@ -400,6 +406,7 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
       </div> : null}
     </> : null}
     {confirmTokenReset ? <ConfirmDialog title="重新生成 API Token" description="所有使用当前 Token 的脚本和集成都会立即失效，需要逐一替换。" confirmLabel="确认重新生成" working={saving === "token"} onCancel={() => setConfirmTokenReset(false)} onConfirm={() => void regenerateToken()} /> : null}
+    {showMigration ? <MmwMigrationDialog notify={notify} onClose={() => setShowMigration(false)} /> : null}
   </>;
 }
 

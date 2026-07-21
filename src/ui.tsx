@@ -1,5 +1,8 @@
-import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from "react";
+import { useEffect, useId, useRef, type ButtonHTMLAttributes, type HTMLAttributes, type ReactNode } from "react";
 import { AlertCircle, CheckCircle2, LoaderCircle, TriangleAlert, X } from "lucide-react";
+
+let dialogScrollLocks = 0;
+let bodyOverflowBeforeDialogs = "";
 
 export function Button({ className = "", variant = "primary", ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "danger" | "ghost" }) {
   return <button className={`button button-${variant} ${className}`} {...props} />;
@@ -38,14 +41,89 @@ export function ErrorState({ message, onRetry }: { message: string; onRetry?: ()
   );
 }
 
-export function Dialog({ title, description, children, onClose, wide = false, dismissible = true }: { title: string; description?: string; children: ReactNode; onClose: () => void; wide?: boolean; dismissible?: boolean }) {
+export function Dialog({ title, description, children, onClose, wide = false, dismissible = true, describedBy }: { title: string; description?: string; children: ReactNode; onClose: () => void; wide?: boolean; dismissible?: boolean; describedBy?: string }) {
+  const titleId = useId();
+  const descriptionId = useId();
+  const dialogRef = useRef<HTMLElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (dialogScrollLocks === 0) bodyOverflowBeforeDialogs = document.body.style.overflow;
+    dialogScrollLocks += 1;
+    document.body.style.overflow = "hidden";
+
+    const focusableElements = () => dialog
+      ? Array.from(dialog.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [contenteditable="true"], [tabindex]:not([tabindex="-1"])',
+      )).filter((element) => {
+        const style = window.getComputedStyle(element);
+        const hasLayout = navigator.userAgent.includes("jsdom") || element.getClientRects().length > 0;
+        return !element.hidden && element.getAttribute("aria-hidden") !== "true" && style.display !== "none" && style.visibility !== "hidden" && hasLayout;
+      })
+      : [];
+
+    const focusFrame = window.requestAnimationFrame(() => {
+      if (!dialog || dialog.contains(document.activeElement)) return;
+      (focusableElements()[0] ?? dialog).focus();
+    });
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!dialog) return;
+      const openDialogs = Array.from(document.querySelectorAll<HTMLElement>('.dialog-backdrop [role="dialog"]'));
+      if (openDialogs.at(-1) !== dialog) return;
+      if (event.key === "Escape" && dismissible) {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const focusable = focusableElements();
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("keydown", handleKeyDown);
+      dialogScrollLocks = Math.max(0, dialogScrollLocks - 1);
+      if (dialogScrollLocks === 0) document.body.style.overflow = bodyOverflowBeforeDialogs;
+      previousFocus?.focus();
+    };
+  }, [dismissible]);
+
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => dismissible && event.target === event.currentTarget && onClose()}>
-      <section className={`dialog ${wide ? "dialog-wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+      <section
+        ref={dialogRef}
+        className={`dialog ${wide ? "dialog-wide" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={describedBy ?? (description ? descriptionId : undefined)}
+        tabIndex={-1}
+      >
         <header className="dialog-header">
           <div>
-            <h2 id="dialog-title">{title}</h2>
-            {description ? <p>{description}</p> : null}
+            <h2 id={titleId}>{title}</h2>
+            {description ? <p id={descriptionId}>{description}</p> : null}
           </div>
           {dismissible ? <IconButton label="关闭" onClick={onClose}><X size={19} /></IconButton> : null}
         </header>
@@ -64,11 +142,12 @@ export function ConfirmDialog({ title, description, confirmLabel, tone = "danger
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const bodyDescriptionId = useId();
   return (
-    <Dialog title={title} description="请确认操作影响" onClose={onCancel}>
+    <Dialog title={title} onClose={onCancel} dismissible={!working} describedBy={bodyDescriptionId}>
       <div className="confirm-content">
         <span className="confirm-icon"><TriangleAlert size={22} /></span>
-        <p>{description}</p>
+        <p id={bodyDescriptionId}>{description}</p>
       </div>
       <div className="dialog-actions">
         <Button type="button" variant="secondary" onClick={onCancel} disabled={working}>取消</Button>
@@ -82,7 +161,7 @@ export function ConfirmDialog({ title, description, confirmLabel, tone = "danger
 
 export function Toast({ message, tone, onClose }: { message: string; tone: "success" | "error"; onClose: () => void }) {
   return (
-    <div className={`toast toast-${tone}`} role="status">
+    <div className={`toast toast-${tone}`} role={tone === "error" ? "alert" : "status"}>
       {tone === "success" ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
       <span>{message}</span>
       <IconButton label="关闭提示" onClick={onClose}><X size={16} /></IconButton>

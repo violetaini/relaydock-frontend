@@ -82,6 +82,54 @@ describe("WARP status", () => {
     expect(screen.queryByText("1.1.1.1")).not.toBeInTheDocument();
     expect(screen.getByText("2.2.2.2")).toBeInTheDocument();
   });
+
+  it("installs WARP only after confirmation and refreshes the status", async () => {
+    let installed = false;
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/remote-servers") return { servers: [server(1, "东京")] } as T;
+      if (path === "/api/admin/remote/warp/status?server_id=1") return { installed } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(): Promise<T> => {
+      installed = true;
+      return { success: true } as T;
+    });
+    const notify = vi.fn();
+
+    render(<WarpPanel notify={notify} />);
+    fireEvent.click(await screen.findByRole("button", { name: "安装 WARP" }));
+    expect(post).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "确认安装" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote/warp/install?server_id=1", undefined));
+    expect(await screen.findByText("已注册")).toBeInTheDocument();
+    expect(notify).toHaveBeenCalledWith("WARP 已安装");
+  });
+
+  it("updates the license and confirms removal for an installed account", async () => {
+    let installed = true;
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/remote-servers") return { servers: [server(2, "香港")] } as T;
+      if (path === "/api/admin/remote/warp/status?server_id=2") return { installed } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path.includes("/remove")) installed = false;
+      return { success: true } as T;
+    });
+
+    render(<WarpPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "更新 License" }));
+    fireEvent.change(screen.getByLabelText(/License Key/), { target: { value: "license-secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认更新" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote/warp/license?server_id=2", { license: "license-secret" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "移除 WARP" }));
+    expect(post).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "确认移除" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote/warp/remove?server_id=2", undefined));
+    expect(await screen.findByRole("button", { name: "安装 WARP" })).toBeInTheDocument();
+  });
 });
 
 function renderRoutedTunnel(postHandler: (path: string) => unknown) {

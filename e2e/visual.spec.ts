@@ -460,25 +460,86 @@ test("mobile dashboard keeps the period selector readable", async ({ page }) => 
   await expectViewportIntegrity(page, "mobile dashboard period selector");
 });
 
-test("desktop layout switch preserves navigation and preference", async ({ page }) => {
+test("desktop layout switch stays visible in both chrome modes and preserves navigation", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockAPI(page);
   await page.goto("/#/dashboard");
 
-  await page.getByRole("button", { name: "切换到侧边栏" }).click();
+  await expect(page.locator(".sidebar-footer .top-layout-switch")).toBeVisible();
+  await page.locator(".sidebar-footer .top-layout-switch").click();
   await expect(page.locator(".console-layout")).toHaveClass(/layout-side/);
   await expect(page.locator(".topbar")).toBeVisible();
   await expect(page.getByRole("navigation", { name: "主导航" })).toBeVisible();
   await expect(page.locator(".sidebar-nav .nav-item > span")).toHaveCount(11);
-  expect(await page.locator(".sidebar").evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(244);
+  await expect(page.locator(".sidebar-brand .sidebar-layout-switch")).toBeVisible();
+  await expect(page.locator(".topbar-actions .topbar-layout-switch")).toBeVisible();
+  expect(await page.locator(".sidebar").evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(224);
+  expect(await page.locator(".console-layout").evaluate((element) => getComputedStyle(element).getPropertyValue("--app-header-height").trim())).toBe("68px");
+  const chrome = await page.evaluate(() => {
+    const nav = document.querySelector<HTMLElement>(".layout-side .sidebar-nav .nav-item");
+    const sidebar = document.querySelector<HTMLElement>(".layout-side .sidebar");
+    const title = document.querySelector<HTMLElement>(".layout-side .topbar-page-title");
+    const actions = Array.from(document.querySelectorAll<HTMLElement>(".layout-side .topbar-actions .icon-button, .layout-side .topbar-account"))
+      .filter((action) => getComputedStyle(action).display !== "none");
+    if (!nav || !sidebar || !title || !actions.length) throw new Error("desktop side chrome is missing");
+    const navRect = nav.getBoundingClientRect();
+    const sidebarRect = sidebar.getBoundingClientRect();
+    const actionRects = actions.map((action) => action.getBoundingClientRect());
+    return {
+      navWidth: navRect.width,
+      sidebarWidth: sidebarRect.width,
+      navFont: Number.parseFloat(getComputedStyle(nav).fontSize),
+      navShadow: getComputedStyle(nav).boxShadow,
+      titleFont: Number.parseFloat(getComputedStyle(title).fontSize),
+      actionSizes: actionRects.map((rect) => ({ width: rect.width, height: rect.height })),
+      actionGaps: actionRects.slice(1).map((rect, index) => rect.left - actionRects[index].right),
+    };
+  });
+  expect(chrome.navWidth).toBeGreaterThanOrEqual(chrome.sidebarWidth - 28);
+  expect(chrome.navFont).toBeGreaterThanOrEqual(14);
+  expect(chrome.navShadow).not.toBe("none");
+  expect(chrome.titleFont).toBeGreaterThanOrEqual(18);
+  expect(chrome.actionSizes.every((size) => size.width >= 38 && size.height >= 38)).toBe(true);
+  expect(chrome.actionGaps.every((gap) => gap >= 8)).toBe(true);
   await expectViewportIntegrity(page, "desktop side navigation");
 
   await page.reload();
   await expect(page.locator(".console-layout")).toHaveClass(/layout-side/);
-  await page.getByRole("button", { name: "切换到顶部栏" }).click();
+  await page.locator(".sidebar-brand .sidebar-layout-switch").click();
   await expect(page.locator(".console-layout")).toHaveClass(/layout-top/);
   await expect(page.locator(".topbar")).toBeHidden();
+
+  await page.locator(".sidebar-footer .top-layout-switch").click();
+  await expect(page.locator(".console-layout")).toHaveClass(/layout-side/);
+  await page.locator(".topbar-actions .topbar-layout-switch").click();
+  await expect(page.locator(".console-layout")).toHaveClass(/layout-top/);
+  const topChrome = await page.evaluate(() => {
+    const controls = Array.from(document.querySelectorAll<HTMLElement>(".layout-top .sidebar-footer > .icon-button, .layout-top .sidebar-footer > .account-block"));
+    if (!controls.length) throw new Error("desktop top chrome is missing");
+    const rects = controls.map((control) => control.getBoundingClientRect());
+    return {
+      sizes: rects.map((rect) => ({ width: rect.width, height: rect.height })),
+      gaps: rects.slice(1).map((rect, index) => rect.left - rects[index].right),
+    };
+  });
+  expect(topChrome.sizes.every((size) => size.width >= 36 && size.height >= 36)).toBe(true);
+  expect(topChrome.gaps.every((gap) => gap >= 8)).toBe(true);
   await expectViewportIntegrity(page, "desktop top navigation after switch");
+});
+
+test("desktop side navigation keeps a return control in alternate themes", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockAPI(page);
+  await page.goto("/#/dashboard");
+
+  await page.locator(".sidebar-footer .top-layout-switch").click();
+  await expect(page.locator(".console-layout")).toHaveClass(/layout-side/);
+  await page.evaluate(() => { document.documentElement.dataset.styleTheme = "pixel"; });
+
+  await expect(page.locator(".sidebar-brand .sidebar-layout-switch")).toBeVisible();
+  await expect(page.locator(".topbar-actions .topbar-layout-switch")).toBeVisible();
+  await page.locator(".topbar-actions .topbar-layout-switch").click();
+  await expect(page.locator(".console-layout")).toHaveClass(/layout-top/);
 });
 
 test("advanced workflows render without runtime errors", async ({ page }) => {
@@ -723,6 +784,13 @@ for (const viewport of [
     await page.getByRole("button", { name: "用户设置 alice" }).click();
     const userSettings = page.getByRole("dialog", { name: "用户设置 · alice" });
     await expect(userSettings.getByRole("combobox", { name: "用户套餐" })).toBeVisible();
+    await expect(userSettings.getByRole("button", { name: /服务器授权与自建节点/ })).toBeVisible();
+    await userSettings.getByRole("button", { name: /资料、备注与订阅短码/ }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(1);
+    await expect(userSettings.getByRole("tab", { name: "资料与短码" })).toHaveAttribute("aria-selected", "true");
+    await expect(userSettings.locator('input[pattern="[A-Za-z0-9_-]{2,16}"]')).toBeVisible();
+    await userSettings.getByRole("button", { name: "返回设置总览" }).first().click();
+    await expect(userSettings.getByRole("tab", { name: "设置总览" })).toHaveAttribute("aria-selected", "true");
     await expect(userSettings.getByRole("button", { name: /服务器授权与自建节点/ })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} unified user settings`);
     await closeDialog(page);

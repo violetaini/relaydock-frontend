@@ -37,6 +37,16 @@
 .user-settings-avatar { width: 42px; height: 42px; display: grid; place-items: center; color: #fff; background: var(--accent); font-size: 17px; font-weight: 800; }
 .user-settings-summary > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .user-settings-summary small { overflow: hidden; color: var(--text-soft); text-overflow: ellipsis; white-space: nowrap; }
+.user-settings-tabs { padding: 7px; display: flex; flex-wrap: wrap; gap: 7px; border: 1px solid var(--border-strong); background: var(--surface-muted); }
+.user-settings-tabs button { min-height: 34px; padding: 0 10px; color: var(--text-soft); border: 1px solid var(--border); background: var(--surface); font-size: 12px; font-weight: 700; }
+.user-settings-tabs button:hover { color: var(--text); background: var(--surface-hover); }
+.user-settings-tabs button.is-active { color: var(--accent-strong); border-color: color-mix(in srgb, var(--accent) 48%, var(--border-strong)); background: var(--accent-soft); }
+.user-settings-panel { min-width: 0; }
+.user-settings-panel-frame { padding: 14px; border: 1px solid var(--border-strong); background: var(--surface); }
+.user-settings-panel-heading { min-height: 54px; margin-bottom: 16px; padding-bottom: 12px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border); }
+.user-settings-panel-heading h3 { font-size: 15px; }
+.user-settings-panel-heading p { max-width: 560px; margin-top: 4px; color: var(--text-soft); font-size: 11px; line-height: 1.5; }
+.user-settings-panel-heading .button { flex: 0 0 auto; }
 .user-settings-section { overflow: hidden; border: 1px solid var(--border-strong); background: var(--surface); }
 .user-settings-section-heading { min-height: 62px; padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border); background: var(--surface-muted); }
 .user-settings-section-heading h2 { font-size: 14px; }
@@ -71,6 +81,11 @@
   .user-package-current { align-items: flex-start; flex-direction: column; }
   .user-package-current .button { margin-left: 0; }
   .user-settings-danger { align-items: stretch; flex-direction: column; }
+  .user-settings-tabs { flex-wrap: nowrap; overflow-x: auto; }
+  .user-settings-tabs button { flex: 0 0 auto; }
+  .user-settings-panel-frame { padding: 12px; }
+  .user-settings-panel-heading { align-items: flex-start; flex-direction: column; }
+  .user-settings-panel-heading .button { width: 100%; }
   .users-table-surface { overflow: visible; border: 0 !important; background: transparent !important; box-shadow: none !important; }
   .users-table-surface .table-wrap { overflow: visible; }
   .users-table-surface table,

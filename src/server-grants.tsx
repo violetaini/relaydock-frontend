@@ -205,7 +205,7 @@ function grantPayload(grant: ServerGrant, patch: Partial<ReturnType<typeof paylo
   };
 }
 
-export function ServerGrantsDialog({ username, notify, onClose }: { username: string; notify: Notify; onClose: () => void }) {
+export function ServerGrantsPanel({ username, notify }: { username: string; notify: Notify }) {
   const [tab, setTab] = useState<GrantTab>("grants");
   const [grants, setGrants] = useState<ServerGrant[]>([]);
   const [nodes, setNodes] = useState<ManagedNodeSelection[]>([]);
@@ -285,37 +285,39 @@ export function ServerGrantsDialog({ username, notify, onClose }: { username: st
 
   return (
     <>
-      <Dialog title={`服务器授权 · ${username}`} description="授权用户在指定服务器的发布节点上开通自己的凭据" onClose={onClose} wide>
-        <div className="sg-layout">
-          <div className="sg-tabs" role="tablist" aria-label="服务器授权视图">
-            <button role="tab" aria-selected={tab === "grants"} className={tab === "grants" ? "is-active" : ""} onClick={() => setTab("grants")}><Server size={16} />服务器授权 <span>{grants.length}</span></button>
-            <button role="tab" aria-selected={tab === "nodes"} className={tab === "nodes" ? "is-active" : ""} onClick={() => setTab("nodes")}><Gauge size={16} />已开通节点 <span>{nodes.length}</span></button>
-            <IconButton label="刷新服务器授权" onClick={() => void load()} disabled={loading}><RefreshCw size={17} /></IconButton>
-          </div>
-
-          {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
-          {loading ? <div className="sg-center"><Spinner label="正在加载授权" /></div> : tab === "grants" ? (
-            <div className="sg-stack">
-              <div className="sg-section-actions"><span>每台服务器单独计算有效期和流量</span><Button onClick={() => setEditor("new")} disabled={!availableServers.length}><Plus size={16} />新增授权</Button></div>
-              {!grants.length ? <EmptyState icon={<Server size={23} />} title="尚未授权服务器" description="新增授权后，用户才能看到该服务器的可开通节点" /> : (
-                <div className="sg-card-list">{grants.map((grant) => <GrantCard key={grant.id} grant={grant} busy={working === `grant-${grant.id}`} onEdit={() => setEditor(grant)} onToggle={() => void updateEnabled(grant)} onRetry={() => void retry(grant.id, "grant")} onRemove={() => setRemoveGrant(grant)} />)}</div>
-              )}
-            </div>
-          ) : (
-            <div className="sg-stack">
-              {!nodes.length ? <EmptyState icon={<Unplug size={23} />} title="用户尚未开通节点" description="用户从获授权服务器的目录开通后会显示在这里" /> : (
-                <div className="sg-node-list">{nodes.map((node) => <ManagedNodeRow key={node.id} node={node} busy={working === `node-${node.id}`} onLimits={() => setLimitsEditor(node)} onRetry={() => void retry(node.id, "node")} />)}</div>
-              )}
-            </div>
-          )}
+      <div className="sg-layout">
+        <div className="sg-tabs" role="tablist" aria-label="服务器授权视图">
+          <button role="tab" aria-selected={tab === "grants"} className={tab === "grants" ? "is-active" : ""} onClick={() => setTab("grants")}><Server size={16} />服务器授权 <span>{grants.length}</span></button>
+          <button role="tab" aria-selected={tab === "nodes"} className={tab === "nodes" ? "is-active" : ""} onClick={() => setTab("nodes")}><Gauge size={16} />已开通节点 <span>{nodes.length}</span></button>
+          <IconButton label="刷新服务器授权" onClick={() => void load()} disabled={loading}><RefreshCw size={17} /></IconButton>
         </div>
-      </Dialog>
+
+        {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
+        {loading ? <div className="sg-center"><Spinner label="正在加载授权" /></div> : tab === "grants" ? (
+          <div className="sg-stack">
+            <div className="sg-section-actions"><span>每台服务器单独计算有效期和流量</span><Button onClick={() => setEditor("new")} disabled={!availableServers.length}><Plus size={16} />新增授权</Button></div>
+            {!grants.length ? <EmptyState icon={<Server size={23} />} title="尚未授权服务器" description="新增授权后，用户才能看到该服务器的可开通节点" /> : (
+              <div className="sg-card-list">{grants.map((grant) => <GrantCard key={grant.id} grant={grant} busy={working === `grant-${grant.id}`} onEdit={() => setEditor(grant)} onToggle={() => void updateEnabled(grant)} onRetry={() => void retry(grant.id, "grant")} onRemove={() => setRemoveGrant(grant)} />)}</div>
+            )}
+          </div>
+        ) : (
+          <div className="sg-stack">
+            {!nodes.length ? <EmptyState icon={<Unplug size={23} />} title="用户尚未开通节点" description="用户从获授权服务器的目录开通后会显示在这里" /> : (
+              <div className="sg-node-list">{nodes.map((node) => <ManagedNodeRow key={node.id} node={node} busy={working === `node-${node.id}`} onLimits={() => setLimitsEditor(node)} onRetry={() => void retry(node.id, "node")} />)}</div>
+            )}
+          </div>
+        )}
+      </div>
 
       {editor ? <GrantEditorDialog username={username} grant={editor === "new" ? undefined : editor} servers={editor === "new" ? availableServers : servers} onClose={() => setEditor(null)} onSaved={async (message) => { setEditor(null); notify(message); await load(true); }} /> : null}
       {limitsEditor ? <SelectionLimitsDialog username={username} node={limitsEditor} onClose={() => setLimitsEditor(null)} onSaved={async () => { setLimitsEditor(null); notify("节点覆盖限制已保存"); await load(true); }} /> : null}
       {removeGrant ? <ConfirmDialog title="撤销服务器授权" description={`撤销 ${removeGrant.server_name} 的授权后，本地访问会立即失效，并清理该用户在此服务器已开通的 ${removeGrant.active_node_count} 个节点。`} confirmLabel="确认撤销" working={working === `grant-${removeGrant.id}`} onCancel={() => !working && setRemoveGrant(null)} onConfirm={() => void remove()} /> : null}
     </>
   );
+}
+
+export function ServerGrantsDialog({ username, notify, onClose }: { username: string; notify: Notify; onClose: () => void }) {
+  return <Dialog title={`服务器授权 · ${username}`} description="授权用户在指定服务器的发布节点上开通自己的凭据" onClose={onClose} wide><ServerGrantsPanel username={username} notify={notify} /></Dialog>;
 }
 
 function GrantCard({ grant, busy, onEdit, onToggle, onRetry, onRemove }: { grant: ServerGrant; busy: boolean; onEdit: () => void; onToggle: () => void; onRetry: () => void; onRemove: () => void }) {

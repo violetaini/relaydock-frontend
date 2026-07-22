@@ -72,9 +72,35 @@ describe("users workbench", () => {
     fireEvent.click(await screen.findByRole("button", { name: "用户设置 alice" }));
     fireEvent.click(await screen.findByRole("button", { name: /服务器授权与自建节点/ }));
 
-    expect(await screen.findByRole("dialog", { name: "服务器授权 · alice" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "用户设置 · alice" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "服务器授权" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tablist", { name: "服务器授权视图" })).toBeInTheDocument();
     await waitFor(() => expect(get).toHaveBeenCalledWith("/api/admin/users/alice/server-grants"));
     expect(get).toHaveBeenCalledWith("/api/admin/users/alice/managed-nodes");
+  });
+
+  it("keeps one user settings dialog and restores its overview after a child setting", async () => {
+    vi.spyOn(api, "get").mockResolvedValue({ users: [alice] });
+    render(<UsersWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "用户设置 alice" }));
+    const dialog = screen.getByRole("dialog", { name: "用户设置 · alice" });
+    fireEvent.click(screen.getByRole("button", { name: /资料、备注与订阅短码/ }));
+
+    expect(screen.getByRole("dialog", { name: "用户设置 · alice" })).toBe(dialog);
+    expect(screen.getByRole("tab", { name: "资料与短码" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("资料、备注与订阅短码", { exact: true })).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "返回设置总览" })[0]);
+
+    expect(screen.getByRole("tab", { name: "设置总览" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("button", { name: /资料、备注与订阅短码/ })).toBeInTheDocument();
+
+    fireEvent.keyDown(screen.getByRole("tab", { name: "设置总览" }), { key: "End" });
+    expect(screen.getByRole("tab", { name: "节点子账号" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "节点子账号" })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole("tab", { name: "节点子账号" }), { key: "Home" });
+    expect(screen.getByRole("tab", { name: "设置总览" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "设置总览" })).toHaveFocus();
   });
 
   it("saves an explicit unlimited package traffic override without changing server grants", async () => {
@@ -100,6 +126,8 @@ describe("users workbench", () => {
       traffic_limit_override_gb: 0,
     }));
     expect(put.mock.calls.some(([path]) => String(path).includes("server-grants"))).toBe(false);
+    await waitFor(() => expect(screen.getByRole("tab", { name: "设置总览" })).toHaveAttribute("aria-selected", "true"));
+    expect(screen.getByRole("dialog", { name: "用户设置 · alice" })).toBeInTheDocument();
   });
 
   it("reports which limit steps were saved when a later push fails", async () => {
@@ -121,7 +149,8 @@ describe("users workbench", () => {
 
     expect(await screen.findByText(/Agent 暂时不可用.*已保存：总流量/)).toBeInTheDocument();
     expect(put).toHaveBeenCalledTimes(2);
-    expect(screen.getByRole("dialog", { name: "alice 的用户限额" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "用户设置 · alice" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "流量与限额" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("assigns a package and expiry from the unified user settings", async () => {

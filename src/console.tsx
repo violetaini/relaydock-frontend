@@ -223,7 +223,7 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
     <div className={`console-layout layout-${layoutMode}`}>
       {sidebarOpen ? <button className="sidebar-scrim" aria-label="关闭导航" onClick={() => setSidebarOpen(false)} /> : null}
       <aside className={`sidebar ${sidebarOpen ? "is-open" : ""}`}>
-        <div className="sidebar-brand brand"><BrandMark size={24} /><span>{BRAND_NAME}</span><IconButton className="sidebar-close" label="关闭导航" onClick={() => setSidebarOpen(false)}><X size={19} /></IconButton></div>
+        <div className="sidebar-brand brand"><BrandMark size={24} /><span>{BRAND_NAME}</span><IconButton className="sidebar-layout-switch" label="切换到顶部栏" onClick={toggleLayout}><PanelTop size={19} /></IconButton><IconButton className="sidebar-close" label="关闭导航" onClick={() => setSidebarOpen(false)}><X size={19} /></IconButton></div>
         <nav className="sidebar-nav" aria-label="主导航">
           <NavGroup label="主导航" className="nav-primary">
             <NavItem active={page === "dashboard"} icon={<Activity size={18} />} label="流量信息" onClick={() => navigate("dashboard")} />
@@ -244,6 +244,7 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
           </NavGroup>
         </nav>
         <div className="sidebar-footer">
+          <IconButton className="top-layout-switch" label="切换到侧边栏" onClick={toggleLayout}><PanelLeft size={18} /></IconButton>
           <IconButton label={themeLabel} onClick={toggleTheme}>{themeIcon}</IconButton>
           <button type="button" className={`account-block ${page === "account" ? "is-active" : ""}`} aria-label="账户中心" title="账户中心" onClick={() => navigate("account")}>
             <span className="account-avatar">{(identity.nickname || identity.username).slice(0, 1).toUpperCase()}</span>
@@ -262,9 +263,10 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
           </div>
           <div className="topbar-actions">
             <span className="control-state"><span className="status-dot status-good" />控制端在线</span>
+            <IconButton className="topbar-layout-switch" label="切换到顶部栏" onClick={toggleLayout}><PanelTop size={19} /></IconButton>
             <IconButton className="mobile-page-shortcut" label="返回流量信息" onClick={() => navigate("dashboard")}><Activity size={18} /></IconButton>
             <IconButton label={themeLabel} onClick={toggleTheme}>{themeIcon}</IconButton>
-            <button type="button" className="topbar-avatar" aria-label="账户中心" title="账户中心" onClick={() => navigate("account")}>{(identity.nickname || identity.username).slice(0, 1).toUpperCase()}</button>
+            <button type="button" className="topbar-account" aria-label="账户中心" title="账户中心" onClick={() => navigate("account")}><span className="topbar-avatar">{(identity.nickname || identity.username).slice(0, 1).toUpperCase()}</span><span className="topbar-account-copy"><strong>{identity.nickname || identity.username}</strong><small>{profile.is_admin ? "管理员" : "用户"}</small></span></button>
           </div>
         </header>
         <main className={`page-content page-${page}`}>
@@ -286,8 +288,7 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
           {page === "account" ? <AccountWorkbenchPage notify={notify} /> : null}
         </main>
       </div>
-      <div className="floating-tools" aria-label="界面工具">
-        <IconButton className="layout-switch" label={layoutMode === "top" ? "切换到侧边栏" : "切换到顶部栏"} onClick={toggleLayout}>{layoutMode === "top" ? <PanelLeft size={18} /> : <PanelTop size={18} />}</IconButton>
+      <div className="floating-tools" aria-label="反馈工具">
         <a className="icon-button" href="https://github.com/violetaini/relaydock-frontend/issues" target="_blank" rel="noreferrer" aria-label="反馈问题" title="反馈问题"><MessageSquareWarning size={18} /></a>
       </div>
       {toast ? <Toast {...toast} onClose={() => setToast(null)} /> : null}

@@ -9,12 +9,12 @@
 
 RelayDock 多服务器 Xray 控制面板的 React Web 控制台。
 
-[后端与安装](https://github.com/violetaini/relaydock-backend) · [问题反馈](https://github.com/violetaini/relaydock-frontend/issues) · [参与贡献](#参与贡献)
+[主仓库与安装](https://github.com/violetaini/relaydock) · [问题反馈](https://github.com/violetaini/relaydock-frontend/issues) · [参与贡献](#参与贡献)
 </div>
 
 ## 项目简介
 
-RelayDock Console 是 [RelayDock Backend](https://github.com/violetaini/relaydock-backend) 的管理界面，面向多服务器节点运营、用户授权和订阅交付场景。前端通过同源 `/api` 与后端通信，正式版本由后端内嵌并作为一个服务发布，因此普通用户只需安装后端，无需单独部署前端。
+RelayDock Console 是 [RelayDock](https://github.com/violetaini/relaydock) 主仓库的管理界面，面向多服务器节点运营、用户授权和订阅交付场景。前端通过同源 `/api` 与后端通信，正式版本由主仓库内嵌并作为一个服务发布，因此普通用户只需安装主仓库版本，无需单独部署前端。
 
 ## 主要功能
 
@@ -30,7 +30,7 @@ RelayDock Console 是 [RelayDock Backend](https://github.com/violetaini/relaydoc
 
 ### 安装完整面板
 
-生产环境请直接安装 [RelayDock Backend](https://github.com/violetaini/relaydock-backend)。后端发行包已经包含本控制台，安装完成后即可通过浏览器使用。
+生产环境请直接安装 [RelayDock](https://github.com/violetaini/relaydock)。主仓库发行包已经包含本控制台，安装完成后即可通过浏览器使用。
 
 ### 本地开发
 

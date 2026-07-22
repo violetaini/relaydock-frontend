@@ -39,7 +39,7 @@ jobs:
       - name: Upload production bundle
         uses: actions/upload-artifact@v4
         with:
-          name: arcway-frontend-dist
+          name: relaydock-frontend-dist
           path: dist/
           if-no-files-found: error
           retention-days: 7

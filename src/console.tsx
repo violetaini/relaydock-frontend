@@ -337,7 +337,7 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
       </div>
       <div className="floating-tools" aria-label="界面工具">
         <IconButton className="layout-switch" label={layoutMode === "top" ? "切换到侧边栏" : "切换到顶部栏"} onClick={toggleLayout}>{layoutMode === "top" ? <PanelLeft size={18} /> : <PanelTop size={18} />}</IconButton>
-        <a className="icon-button" href="https://github.com/violetaini/arcway-frontend/issues" target="_blank" rel="noreferrer" aria-label="反馈问题" title="反馈问题"><MessageSquareWarning size={18} /></a>
+        <a className="icon-button" href="https://github.com/violetaini/relaydock-frontend/issues" target="_blank" rel="noreferrer" aria-label="反馈问题" title="反馈问题"><MessageSquareWarning size={18} /></a>
       </div>
       {toast ? <Toast {...toast} onClose={() => setToast(null)} /> : null}
     </div>

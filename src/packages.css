@@ -31,6 +31,16 @@
   min-width: 930px;
 }
 
+.page-packages .advanced-stack,
+.page-packages .package-grid,
+.page-packages .packages-list-surface {
+  width: 100%;
+}
+
+.page-packages .package-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+}
+
 @media (max-width: 560px) {
   .packages-view-switch {
     order: -1;

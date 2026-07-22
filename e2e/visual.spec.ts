@@ -927,6 +927,25 @@ test("dashboard reports when every configured server is offline", async ({ page 
   await expect(page.getByRole("button", { name: "在线服务器 0 / 2" })).toBeVisible();
 });
 
+test("a single package fills the package management canvas", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockAPI(page);
+  await page.goto("/#/packages");
+  await expect(page.locator(".page-packages .package-item")).toBeVisible();
+
+  const widths = await page.evaluate(() => {
+    const grid = document.querySelector<HTMLElement>(".page-packages .package-grid");
+    const item = document.querySelector<HTMLElement>(".page-packages .package-item");
+    if (!grid || !item) throw new Error("package grid is missing");
+    return {
+      grid: grid.getBoundingClientRect().width,
+      item: item.getBoundingClientRect().width,
+    };
+  });
+  expect(widths.item).toBeCloseTo(widths.grid, 0);
+  await expectViewportIntegrity(page, "full-width package card");
+});
+
 for (const viewport of [
   { name: "desktop", width: 1440, height: 900 },
   { name: "mobile", width: 390, height: 844 },

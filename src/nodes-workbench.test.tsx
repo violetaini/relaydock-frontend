@@ -262,6 +262,8 @@ describe("managed server node creation", () => {
     fireEvent.change(await screen.findByRole("textbox", { name: "节点名称" }), { target: { value: "香港 Reality 02" } });
     fireEvent.change(screen.getByRole("combobox", { name: /^伪装目标域名 \/ SNI/ }), { target: { value: "www.cloudflare.com" } });
     expect(screen.getByRole("spinbutton", { name: "监听端口" })).toHaveValue(8443);
+    expect(screen.getByRole("combobox", { name: "Reality 流控" })).toHaveValue("xtls-rprx-vision");
+    expect(screen.getByRole("option", { name: "xtls-rprx-vision（推荐）" })).toBeInTheDocument();
     fireEvent.change(screen.getByRole("combobox", { name: "Reality 流控" }), { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     fireEvent.click(screen.getByRole("button", { name: "创建节点" }));

@@ -50,6 +50,7 @@ import {
 import { NodesWorkbench } from "./nodes-workbench";
 import { PackagesPage } from "./packages";
 import { CustomRulesWorkbenchPage, RulesConfigWorkbenchPage } from "./rules-workbench";
+import { ForwardingManagement } from "./forwarding-management";
 import { ServicesWorkbenchPage } from "./services-workbench";
 import { SettingsWorkbenchPage } from "./settings-workbench";
 import { TrafficWorkbenchPage } from "./traffic-workbench";
@@ -85,7 +86,7 @@ import {
   statusTone,
 } from "./ui";
 
-type PageKey = "dashboard" | "subscriptions" | "generator" | "servers" | "nodes" | "traffic" | "users" | "packages" | "certificates" | "templates" | "subscribeFiles" | "customRules" | "rulesConfig" | "advanced" | "settings" | "account";
+type PageKey = "dashboard" | "subscriptions" | "generator" | "servers" | "nodes" | "forwarding" | "traffic" | "users" | "packages" | "certificates" | "templates" | "subscribeFiles" | "customRules" | "rulesConfig" | "advanced" | "settings" | "account";
 
 interface ToastState { message: string; tone: "success" | "error" }
 type LayoutMode = "top" | "side";
@@ -96,6 +97,7 @@ const pageTitles: Record<PageKey, string> = {
   generator: "生成订阅",
   servers: "服务管理",
   nodes: "节点管理",
+  forwarding: "转发管理",
   traffic: "流量明细",
   users: "用户管理",
   packages: "套餐管理",
@@ -111,7 +113,7 @@ const pageTitles: Record<PageKey, string> = {
 
 function resolvePage(isAdmin: boolean): PageKey {
   const candidate = location.hash.replace(/^#\/?/, "").split("?")[0] as PageKey;
-  const known: PageKey[] = ["dashboard", "subscriptions", "generator", "servers", "nodes", "traffic", "users", "packages", "certificates", "templates", "subscribeFiles", "customRules", "rulesConfig", "advanced", "settings", "account"];
+  const known: PageKey[] = ["dashboard", "subscriptions", "generator", "servers", "nodes", "forwarding", "traffic", "users", "packages", "certificates", "templates", "subscribeFiles", "customRules", "rulesConfig", "advanced", "settings", "account"];
   if (!known.includes(candidate)) return "dashboard";
   if (!isAdmin && ["servers", "users", "packages", "certificates", "rulesConfig", "advanced", "settings"].includes(candidate)) return "dashboard";
   return candidate;
@@ -132,7 +134,7 @@ const permissionKey: Partial<Record<PageKey, string>> = {
 };
 
 function pageAllowed(page: PageKey, isAdmin: boolean, permissions: string[] | null): boolean {
-  if (isAdmin || page === "dashboard" || page === "traffic" || page === "account") return true;
+  if (isAdmin || page === "dashboard" || page === "forwarding" || page === "traffic" || page === "account") return true;
   const key = permissionKey[page];
   return Boolean(key && permissions?.includes(key));
 }
@@ -241,6 +243,7 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
             {pageAllowed("subscriptions", profile.is_admin, userPages) ? <NavItem active={page === "subscriptions"} icon={<Link2 size={18} />} label="订阅链接" onClick={() => navigate("subscriptions")} /> : null}
             {pageAllowed("generator", profile.is_admin, userPages) ? <NavItem active={page === "generator"} icon={<Wrench size={18} />} label="生成订阅" onClick={() => navigate("generator")} /> : null}
             {pageAllowed("nodes", profile.is_admin, userPages) ? <NavItem active={page === "nodes"} icon={<Route size={18} />} label="节点管理" onClick={() => navigate("nodes")} /> : null}
+            <NavItem active={page === "forwarding"} icon={<Network size={18} />} label="转发管理" onClick={() => navigate("forwarding")} />
             {profile.is_admin ? <>
               <NavItem active={page === "servers"} icon={<Server size={18} />} label="服务管理" onClick={() => navigate("servers")} />
               <NavItem active={page === "users"} icon={<Users size={18} />} label="用户管理" onClick={() => navigate("users")} />
@@ -286,6 +289,7 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
           {page === "generator" && pageAllowed(page, profile.is_admin, userPages) ? <SubscriptionGeneratorPage notify={notify} /> : null}
           {page === "servers" && profile.is_admin ? <ServicesWorkbenchPage notify={notify} onOpenAdvanced={() => navigate("advanced")} /> : null}
           {page === "nodes" && pageAllowed(page, profile.is_admin, userPages) ? <NodesWorkbench isAdmin={profile.is_admin} notify={notify} /> : null}
+          {page === "forwarding" ? <ForwardingManagement isAdmin={profile.is_admin} notify={notify} /> : null}
           {page === "traffic" ? <TrafficWorkbenchPage profile={profile} /> : null}
           {page === "users" && profile.is_admin ? <UsersWorkbenchPage notify={notify} initialScope={usersScope} /> : null}
           {page === "packages" && profile.is_admin ? <PackagesPage notify={notify} /> : null}

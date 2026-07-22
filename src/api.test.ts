@@ -26,6 +26,17 @@ describe("api client", () => {
     await expect(api.get<{ ok: boolean }>("/api/test")).resolves.toEqual({ ok: true });
   });
 
+  it("sends an idempotency key for retry-safe writes", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (_path, init) => {
+      expect(new Headers(init?.headers).get("Idempotency-Key")).toBe("request-123");
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }));
+    await expect(api.post<{ ok: boolean }>("/api/test", {}, { idempotencyKey: "request-123" })).resolves.toEqual({ ok: true });
+  });
+
   it("does not expire the session when an authenticated challenge rejects its input", async () => {
     const unauthorized = vi.fn();
     window.addEventListener("arcway:unauthorized", unauthorized);

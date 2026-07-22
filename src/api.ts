@@ -12,6 +12,7 @@ export class ApiError extends Error {
 
 interface RequestOptions {
   suppressUnauthorizedEvent?: boolean;
+  idempotencyKey?: string;
 }
 
 export function getToken(): string {
@@ -30,6 +31,7 @@ export async function request<T>(path: string, init: RequestInit = {}, options: 
   const headers = new Headers(init.headers);
   const token = getToken();
   if (token) headers.set("MM-Authorization", token);
+  if (options.idempotencyKey && !headers.has("Idempotency-Key")) headers.set("Idempotency-Key", options.idempotencyKey);
   if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }

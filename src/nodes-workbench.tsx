@@ -740,12 +740,13 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
           : userView === "mine" ? `${nodes.length} 个可用节点 · ${nodes.filter((node) => node.enabled).length} 个启用` : "按服务器授权开通独立节点凭据"}
         actions={isAdmin || userView === "mine" ? <>
           <IconButton label="刷新节点数据" onClick={() => void load()} disabled={loading}><RefreshCw size={18} /></IconButton>
+          <Button variant="secondary" onClick={() => { location.hash = "/forwarding"; }}><Network size={17} />转发管理</Button>
           <Button variant="secondary" onClick={() => setDialog({ kind: "import" })}><Upload size={17} />导入已有节点</Button>
           {isAdmin ? <Button onClick={() => setDialog({ kind: "managed-create" })}><Server size={17} />在服务器创建</Button> : null}
         </> : undefined}
       />
 
-      {!isAdmin ? <div className="nw-user-views segmented-control" role="tablist" aria-label="用户节点视图"><button role="tab" aria-selected={userView === "mine"} className={userView === "mine" ? "is-active" : ""} onClick={() => setUserView("mine")}><Route size={15} />我的节点</button><button role="tab" aria-selected={userView === "catalog"} className={userView === "catalog" ? "is-active" : ""} onClick={() => setUserView("catalog")}><Plus size={15} />可开通节点</button></div> : null}
+      {!isAdmin ? <div className="nw-user-views segmented-control" role="tablist" aria-label="用户节点视图"><button role="tab" aria-selected={userView === "mine"} className={userView === "mine" ? "is-active" : ""} onClick={() => setUserView("mine")}><Route size={15} />我的节点</button><button role="tab" aria-selected={userView === "catalog"} className={userView === "catalog" ? "is-active" : ""} onClick={() => setUserView("catalog")}><Plus size={15} />可开通节点</button><button role="tab" aria-selected={false} onClick={() => { location.hash = "/forwarding"; }}><Network size={15} />转发管理</button></div> : null}
 
       {!isAdmin && userView === "catalog" ? <SelfServiceNodes view="catalog" notify={notify} onChanged={() => load(true)} /> : <>
       {!isAdmin ? <SelfServiceNodes view="mine" notify={notify} onChanged={() => load(true)} /> : null}

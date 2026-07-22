@@ -1,6 +1,6 @@
-# Arcway Console
+# RelayDock Console
 
-Arcway control-plane web console. The application is built with React, TypeScript, and Vite.
+RelayDock control-plane web console. The application is built with React, TypeScript, and Vite.
 
 ## Requirements
 

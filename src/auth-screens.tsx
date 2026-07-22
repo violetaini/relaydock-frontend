@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Activity, ArrowDown, ArrowRight, ArrowUp, Check, KeyRound, LockKeyhole, LogIn, Network, Server, ShieldCheck, Wifi, WifiOff } from "lucide-react";
 import { api, ApiError, setToken } from "./api";
-import { BrandMark } from "./brand";
+import { BRAND_NAME, BrandMark } from "./brand";
 import type { Session } from "./types";
 import { Badge, Button, ErrorState, Field, IconButton, Spinner, Surface, formatBytes } from "./ui";
 
@@ -16,8 +16,8 @@ declare global {
 
 function AuthVisual({ mode }: { mode: "setup" | "login" }) {
   return (
-    <aside className="auth-visual" aria-label="Arcway 控制端">
-      <div className="brand brand-auth"><BrandMark size={27} /><span>Arcway</span></div>
+    <aside className="auth-visual" aria-label={`${BRAND_NAME} 控制端`}>
+      <div className="brand brand-auth"><BrandMark size={27} /><span>{BRAND_NAME}</span></div>
       <div className="topology" aria-hidden="true">
         <div className="topology-line line-a" />
         <div className="topology-line line-b" />
@@ -85,7 +85,7 @@ export function SetupScreen({ onComplete }: { onComplete: () => void }) {
       <AuthVisual mode="setup" />
       <section className="auth-panel">
         <div className="auth-form-wrap">
-          <div className="mobile-brand brand"><BrandMark size={24} /><span>Arcway</span></div>
+          <div className="mobile-brand brand"><BrandMark size={24} /><span>{BRAND_NAME}</span></div>
           <span className="auth-step">初始化</span>
           <h2>创建首位管理员</h2>
           <p className="auth-subtitle">完成后即可接入服务器和节点。</p>
@@ -254,7 +254,7 @@ export function LoginScreen({ onLogin, wallpaper = "" }: { onLogin: (session: Se
       <AuthVisual mode="login" />
       <section className="auth-panel">
         <div className="auth-form-wrap">
-          <div className="mobile-brand brand"><BrandMark size={24} /><span>Arcway</span></div>
+          <div className="mobile-brand brand"><BrandMark size={24} /><span>{BRAND_NAME}</span></div>
           <span className="auth-step">安全登录</span>
           <h2>{pending2FA ? "验证第二因素" : "进入控制台"}</h2>
           <p className="auth-subtitle">{pending2FA ? "输入验证器代码或恢复码。" : "使用管理端账号继续。"}</p>

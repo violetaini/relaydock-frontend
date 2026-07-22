@@ -329,6 +329,7 @@ test("desktop navigation follows the upstream primary and secondary hierarchy", 
     await expect(utilityLabels).toHaveCount(4);
     await expect(page.locator(".sidebar-nav .nav-secondary")).toBeHidden();
     await expect(page.getByRole("button", { name: "更多功能", exact: true })).toBeVisible();
+    await expect(page.locator(".sidebar-brand")).toContainText("RelayDock");
     const clipped = await primaryLabels.or(utilityLabels).evaluateAll((elements) => elements.flatMap((element) => {
       const label = element.textContent?.trim() || "<empty>";
       const style = window.getComputedStyle(element);
@@ -343,6 +344,26 @@ test("desktop navigation follows the upstream primary and secondary hierarchy", 
     expect(clipped, `${width}px desktop navigation labels must remain visible`).toEqual([]);
     const navOverflow = await page.locator(".sidebar-nav").evaluate((nav) => nav.scrollWidth - nav.clientWidth);
     expect(navOverflow, `${width}px desktop navigation must not require horizontal scrolling`).toBeLessThanOrEqual(1);
+    const spacing = await page.locator(".sidebar-nav .nav-primary .nav-item, .sidebar-nav .nav-utility .nav-item").evaluateAll((elements) => {
+      const rows = new Map<number, DOMRect[]>();
+      for (const element of elements) {
+        const rect = element.getBoundingClientRect();
+        const row = Math.round(rect.top);
+        rows.set(row, [...(rows.get(row) ?? []), rect]);
+      }
+      const gaps = Array.from(rows.values()).flatMap((items) => items
+        .sort((left, right) => left.left - right.left)
+        .slice(1)
+        .map((item, index) => item.left - items[index].right));
+      const firstItem = elements[0]?.getBoundingClientRect();
+      const brand = document.querySelector<HTMLElement>(".sidebar-brand")?.getBoundingClientRect();
+      return {
+        brandGap: firstItem && brand ? firstItem.left - brand.right : 0,
+        minimumButtonGap: gaps.length ? Math.min(...gaps) : 0,
+      };
+    });
+    expect(spacing.brandGap, `${width}px brand must remain separate from navigation`).toBeGreaterThanOrEqual(10);
+    expect(spacing.minimumButtonGap, `${width}px navigation buttons must retain visible spacing`).toBeGreaterThanOrEqual(9);
     const renderedRows = await page.locator(".sidebar-nav .nav-primary .nav-item, .sidebar-nav .nav-utility .nav-item").evaluateAll((elements) => new Set(elements.map((element) => Math.round(element.getBoundingClientRect().top / 2) * 2)).size);
     expect(renderedRows, `${width}px desktop navigation row count`).toBeLessThanOrEqual(width >= 1360 ? 1 : 2);
     const headerHeight = await page.locator(".sidebar").evaluate((header) => header.getBoundingClientRect().height);

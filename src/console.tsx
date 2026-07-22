@@ -44,7 +44,7 @@ import {
 import { AdvancedPage } from "./advanced";
 import { AccountWorkbenchPage } from "./account-workbench";
 import { api, openDashboardSocket } from "./api";
-import { BrandMark } from "./brand";
+import { BRAND_NAME, BrandMark } from "./brand";
 import {
   CertificatesWorkbenchPage,
   SubscribeFilesPage,
@@ -257,7 +257,7 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
     <div className={`console-layout layout-${layoutMode}`}>
       {sidebarOpen ? <button className="sidebar-scrim" aria-label="关闭导航" onClick={() => setSidebarOpen(false)} /> : null}
       <aside className={`sidebar ${sidebarOpen ? "is-open" : ""}`}>
-        <div className="sidebar-brand brand"><BrandMark size={24} /><span>Arcway</span><IconButton className="sidebar-close" label="关闭导航" onClick={() => setSidebarOpen(false)}><X size={19} /></IconButton></div>
+        <div className="sidebar-brand brand"><BrandMark size={24} /><span>{BRAND_NAME}</span><IconButton className="sidebar-close" label="关闭导航" onClick={() => setSidebarOpen(false)}><X size={19} /></IconButton></div>
         <nav className="sidebar-nav" aria-label="主导航">
           <NavGroup label="主导航" className="nav-primary">
             <NavItem active={page === "dashboard"} icon={<Activity size={18} />} label="流量信息" onClick={() => navigate("dashboard")} />
@@ -305,7 +305,7 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
       <div className="console-main">
         <header className="topbar">
           <div className="topbar-leading">
-            <span className="mobile-topbar-brand"><BrandMark size={22} /><strong>Arcway</strong></span>
+            <span className="mobile-topbar-brand"><BrandMark size={22} /><strong>{BRAND_NAME}</strong></span>
             <IconButton className="mobile-menu" label="打开导航" onClick={() => setSidebarOpen(true)}><Menu size={20} /></IconButton>
             <span className="topbar-page-title">{pageTitles[page]}</span>
           </div>

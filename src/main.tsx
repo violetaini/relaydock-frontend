@@ -2,7 +2,7 @@ import { StrictMode, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { api, ApiError, getToken, setToken } from "./api";
 import { LoginScreen, PublicProbeScreen, SetupScreen, type PublicProbeState } from "./auth-screens";
-import { BrandMark } from "./brand";
+import { BRAND_NAME, BrandMark } from "./brand";
 import { ConsoleApp } from "./console";
 import type { Profile, Session } from "./types";
 import { Button, ErrorState, Spinner } from "./ui";
@@ -99,7 +99,7 @@ export function App() {
   };
 
   if (state === "loading") {
-    return <main className="boot-screen"><BrandMark className="brand-mark-large" size={32} /><strong>Arcway</strong><Spinner label="正在连接控制端" /></main>;
+    return <main className="boot-screen"><BrandMark className="brand-mark-large" size={32} /><strong>{BRAND_NAME}</strong><Spinner label="正在连接控制端" /></main>;
   }
   if (state === "error") {
     return <main className="boot-screen boot-error"><BrandMark className="brand-mark-large" size={32} /><ErrorState message={error} /><Button onClick={() => void bootstrap()}>重新连接</Button></main>;

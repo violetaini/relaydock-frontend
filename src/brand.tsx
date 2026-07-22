@@ -3,6 +3,8 @@ interface BrandMarkProps {
   size?: number;
 }
 
+export const BRAND_NAME = "RelayDock";
+
 export function BrandMark({ className = "", size = 20 }: BrandMarkProps) {
   return (
     <span className={`brand-mark ${className}`.trim()} aria-hidden="true">

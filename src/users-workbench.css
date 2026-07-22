@@ -11,8 +11,10 @@
 .users-table-surface td:nth-child(2) { min-width: 96px; }
 .users-table-surface td:nth-child(3), .users-table-surface td:nth-child(4) { min-width: 170px; }
 .user-remark { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.user-actions { min-width: 132px; display: flex; justify-content: flex-end; }
+.user-actions { min-width: 132px; display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
 .user-actions .button { white-space: nowrap; }
+.user-renew-actions { display: inline-flex; gap: 5px; }
+.user-renew-actions .button { min-width: 44px; padding-inline: 8px; }
 .inline-copy { padding: 4px 6px; display: inline-flex; align-items: center; gap: 6px; color: var(--text); background: var(--surface-muted); border: 1px solid var(--border); }
 .inline-copy code { font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; }
 .quick-days { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
@@ -60,6 +62,10 @@
 .user-setting-row small { color: var(--text-soft); font-size: 10px; }
 .user-setting-row > svg { color: var(--text-faint); }
 .user-package-form { padding: 14px; display: grid; grid-template-columns: minmax(180px, 1.2fr) repeat(2, minmax(150px, .8fr)); align-items: end; gap: 10px; }
+.user-package-reset { grid-column: 1 / -1; padding: 10px 12px; display: grid; grid-template-columns: minmax(0, 1fr) 132px; align-items: end; gap: 14px; border: 1px solid var(--border); background: var(--surface-muted); }
+.user-package-reset > div { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.user-package-reset small { color: var(--text-soft); font-size: 10px; line-height: 1.45; }
+.user-package-reset .field { min-width: 0; }
 .user-package-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 7px; }
 .user-settings-loading { min-height: 92px; display: grid; place-items: center; }
 .user-package-current { min-height: 48px; padding: 8px 14px; display: flex; align-items: center; flex-wrap: wrap; gap: 12px; color: var(--text-soft); border-top: 1px solid var(--border); font-size: 11px; }
@@ -76,6 +82,7 @@
   .node-limit-list > div > span { grid-column: 1 / -1; }
   .quick-days { grid-template-columns: repeat(2, 1fr); }
   .user-package-form { grid-template-columns: 1fr; }
+  .user-package-reset { grid-column: auto; grid-template-columns: 1fr; }
   .user-package-actions { grid-column: auto; justify-content: stretch; }
   .user-package-actions .button { flex: 1; }
   .user-package-current { align-items: flex-start; flex-direction: column; }
@@ -103,5 +110,7 @@
   .users-table-surface .primary-cell { align-items: center; }
   .users-table-surface .user-actions,
   .users-table-surface .user-actions .button { width: 100%; }
-  .users-table-surface .user-actions { justify-content: stretch; }
+  .users-table-surface .user-actions { align-items: stretch; flex-direction: column; justify-content: stretch; }
+  .users-table-surface .user-renew-actions { width: 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+  .users-table-surface .user-renew-actions .button { min-width: 0; }
 }

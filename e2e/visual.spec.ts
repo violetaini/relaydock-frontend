@@ -204,6 +204,7 @@ async function mockAPI(
   page: Page,
   trafficResponse: typeof traffic | { metrics: typeof traffic.metrics; history: null } = traffic,
   unknownPaths?: string[],
+  responseOverrides: Record<string, unknown> = {},
 ) {
   await page.addInitScript(() => localStorage.setItem("arcway-session-token", "visual-test-token"));
   await page.route("**/api/**", async (route) => {
@@ -275,6 +276,7 @@ async function mockAPI(
         { username: "alice", nickname: "Alice", email: "alice@example.com", role: "user", is_active: true, package_id: 1, package_name: "标准套餐", package_end_date: "2026-08-19", traffic_used: 26843545600, traffic_limit: 322122547200, speed_limit_mbps: 100, device_limit: 5 },
         { username: "bob", nickname: "Bob", role: "user", is_active: true, traffic_used: 5368709120 },
       ] },
+      ...responseOverrides,
     };
     if (!(pathname in responses)) unknownPaths?.push(`${route.request().method()} ${pathname}`);
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(responses[pathname] ?? {}) });
@@ -382,6 +384,11 @@ test("secondary workflows remain available from their owning pages", async ({ pa
   await expect(page).toHaveURL(/#\/traffic$/);
   await expect(page.getByRole("heading", { name: "流量明细" })).toBeVisible();
 
+  await page.goto("/#/dashboard");
+  await page.getByRole("button", { name: /待续期用户/ }).click();
+  await expect(page).toHaveURL(/#\/users\?view=renewal$/);
+  await expect(page.getByRole("button", { name: "续期工作台" })).toHaveClass(/is-active/);
+
   await page.goto("/#/servers");
   await page.getByRole("button", { name: "高级运维" }).click();
   await expect(page).toHaveURL(/#\/advanced$/);
@@ -477,16 +484,19 @@ test("desktop layout switch stays visible in both chrome modes and preserves nav
   expect(await page.locator(".console-layout").evaluate((element) => getComputedStyle(element).getPropertyValue("--app-header-height").trim())).toBe("68px");
   const chrome = await page.evaluate(() => {
     const nav = document.querySelector<HTMLElement>(".layout-side .sidebar-nav .nav-item");
+    const navContainer = document.querySelector<HTMLElement>(".layout-side .sidebar-nav");
     const sidebar = document.querySelector<HTMLElement>(".layout-side .sidebar");
     const title = document.querySelector<HTMLElement>(".layout-side .topbar-page-title");
     const actions = Array.from(document.querySelectorAll<HTMLElement>(".layout-side .topbar-actions .icon-button, .layout-side .topbar-account"))
       .filter((action) => getComputedStyle(action).display !== "none");
-    if (!nav || !sidebar || !title || !actions.length) throw new Error("desktop side chrome is missing");
+    if (!nav || !navContainer || !sidebar || !title || !actions.length) throw new Error("desktop side chrome is missing");
     const navRect = nav.getBoundingClientRect();
+    const navContainerRect = navContainer.getBoundingClientRect();
     const sidebarRect = sidebar.getBoundingClientRect();
     const actionRects = actions.map((action) => action.getBoundingClientRect());
     return {
       navWidth: navRect.width,
+      firstNavOffset: navRect.top - navContainerRect.top,
       sidebarWidth: sidebarRect.width,
       navFont: Number.parseFloat(getComputedStyle(nav).fontSize),
       navShadow: getComputedStyle(nav).boxShadow,
@@ -496,6 +506,7 @@ test("desktop layout switch stays visible in both chrome modes and preserves nav
     };
   });
   expect(chrome.navWidth).toBeGreaterThanOrEqual(chrome.sidebarWidth - 28);
+  expect(chrome.firstNavOffset).toBeLessThanOrEqual(58);
   expect(chrome.navFont).toBeGreaterThanOrEqual(14);
   expect(chrome.navShadow).not.toBe("none");
   expect(chrome.titleFont).toBeGreaterThanOrEqual(18);
@@ -631,7 +642,7 @@ for (const viewport of [
     await mockAPI(page, traffic, unknownPaths);
 
     const routes = [
-      { route: "dashboard", heading: "流量信息", marker: "Hong Kong Edge", hiddenHeading: true },
+      { route: "dashboard", heading: "流量信息", marker: "运行概览", hiddenHeading: true },
       { route: "subscriptions", heading: "订阅链接", marker: "日常订阅" },
       { route: "generator", heading: "订阅生成器", marker: "最终订阅配置" },
       { route: "servers", heading: "服务管理", marker: "US West Edge" },
@@ -898,6 +909,24 @@ test("dashboard accepts an empty traffic history", async ({ page }) => {
   await expect(page.getByText("暂无历史记录")).toBeVisible();
 });
 
+test("dashboard preserves the displayed rate when usage exceeds the limit", async ({ page }) => {
+  await mockAPI(page, { ...traffic, metrics: { ...traffic.metrics, usage_percentage: 145.2 } });
+  await page.goto("/#/dashboard");
+  await expect(page.getByText("145.2%", { exact: true })).toBeVisible();
+  await expect(page.locator(".metric-progress > span")).toHaveAttribute("style", /width: 100%/);
+});
+
+test("dashboard reports when every configured server is offline", async ({ page }) => {
+  const offlineServers = servers.map((server) => ({ ...server, status: "offline", ws_connected: false }));
+  await mockAPI(page, traffic, undefined, {
+    "/api/admin/remote-servers": { success: true, servers: offlineServers },
+  });
+  await page.goto("/#/dashboard");
+
+  await expect(page.getByText("服务器全部离线", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "在线服务器 0 / 2" })).toBeVisible();
+});
+
 for (const viewport of [
   { name: "desktop", width: 1440, height: 900 },
   { name: "mobile", width: 390, height: 844 },
@@ -907,7 +936,8 @@ for (const viewport of [
     await mockAPI(page);
     await page.goto("/#/dashboard");
     await expect(page.getByRole("heading", { name: "流量信息" })).toBeAttached();
-    await expect(page.getByText("Hong Kong Edge")).toBeVisible();
+    await expect(page.getByText("使用率", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: /在线服务器/ })).toBeVisible();
     const hasViewportOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
     expect(hasViewportOverflow).toBe(false);
     const screenshot = path.resolve("../docs/change-records/assets/MMX-010", `dashboard-${viewport.name}.png`);

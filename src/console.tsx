@@ -110,11 +110,16 @@ const pageTitles: Record<PageKey, string> = {
 };
 
 function resolvePage(isAdmin: boolean): PageKey {
-  const candidate = location.hash.replace(/^#\/?/, "") as PageKey;
+  const candidate = location.hash.replace(/^#\/?/, "").split("?")[0] as PageKey;
   const known: PageKey[] = ["dashboard", "subscriptions", "generator", "servers", "nodes", "traffic", "users", "packages", "certificates", "templates", "subscribeFiles", "customRules", "rulesConfig", "advanced", "settings", "account"];
   if (!known.includes(candidate)) return "dashboard";
   if (!isAdmin && ["servers", "users", "packages", "certificates", "rulesConfig", "advanced", "settings"].includes(candidate)) return "dashboard";
   return candidate;
+}
+
+function resolveUsersScope(): "all" | "renewal" {
+  const query = location.hash.split("?")[1] ?? "";
+  return new URLSearchParams(query).get("view") === "renewal" ? "renewal" : "all";
 }
 
 const permissionKey: Partial<Record<PageKey, string>> = {
@@ -134,6 +139,7 @@ function pageAllowed(page: PageKey, isAdmin: boolean, permissions: string[] | nu
 
 export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: () => void }) {
   const [page, setPage] = useState<PageKey>(() => resolvePage(profile.is_admin));
+  const [usersScope, setUsersScope] = useState<"all" | "renewal">(resolveUsersScope);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => normalizeThemeMode(localStorage.getItem("arcway-theme")));
   const [theme, setTheme] = useState<Theme>(() => document.documentElement.dataset.theme === "dark" ? "dark" : "light");
@@ -152,7 +158,10 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
   }, []);
 
   useEffect(() => {
-    const onHash = () => setPage(resolvePage(profile.is_admin));
+    const onHash = () => {
+      setPage(resolvePage(profile.is_admin));
+      setUsersScope(resolveUsersScope());
+    };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, [profile.is_admin]);
@@ -179,9 +188,11 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  const navigate = (next: PageKey) => {
-    location.hash = `/${next}`;
+  const navigate = (next: PageKey, options?: { usersScope?: "all" | "renewal" }) => {
+    const usersView = next === "users" ? options?.usersScope ?? "all" : "all";
+    location.hash = `/${next}${usersView === "renewal" ? "?view=renewal" : ""}`;
     setPage(next);
+    setUsersScope(usersView);
     setSidebarOpen(false);
   };
 
@@ -276,7 +287,7 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
           {page === "servers" && profile.is_admin ? <ServicesWorkbenchPage notify={notify} onOpenAdvanced={() => navigate("advanced")} /> : null}
           {page === "nodes" && pageAllowed(page, profile.is_admin, userPages) ? <NodesWorkbench isAdmin={profile.is_admin} notify={notify} /> : null}
           {page === "traffic" ? <TrafficWorkbenchPage profile={profile} /> : null}
-          {page === "users" && profile.is_admin ? <UsersWorkbenchPage notify={notify} /> : null}
+          {page === "users" && profile.is_admin ? <UsersWorkbenchPage notify={notify} initialScope={usersScope} /> : null}
           {page === "packages" && profile.is_admin ? <PackagesPage notify={notify} /> : null}
           {page === "certificates" && profile.is_admin ? <CertificatesWorkbenchPage notify={notify} /> : null}
           {page === "templates" && pageAllowed(page, profile.is_admin, userPages) ? <TemplatesWorkbenchPage notify={notify} /> : null}
@@ -304,7 +315,7 @@ function NavItem({ icon, label, active, onClick }: { icon: ReactNode; label: str
   return <button className={`nav-item ${active ? "is-active" : ""}`} aria-label={label} title={label} onClick={onClick}>{icon}<span>{label}</span><ChevronRight size={15} /></button>;
 }
 
-function DashboardPage({ profile, navigate }: { profile: Profile; navigate: (page: PageKey) => void }) {
+function DashboardPage({ profile, navigate }: { profile: Profile; navigate: (page: PageKey, options?: { usersScope?: "all" | "renewal" }) => void }) {
   const [servers, setServers] = useState<RemoteServer[]>([]);
   const [nodes, setNodes] = useState<NodeItem[]>([]);
   const [users, setUsers] = useState<UserItem[]>([]);
@@ -354,8 +365,24 @@ function DashboardPage({ profile, navigate }: { profile: Profile; navigate: (pag
   const periodUsed = history.reduce((total, item) => total + item.used_gb, 0);
   const uploadSpeed = servers.reduce((total, server) => total + Number(server.current_upload_speed || 0), 0);
   const downloadSpeed = servers.reduce((total, server) => total + Number(server.current_download_speed || 0), 0);
+  const usagePercent = Math.max(0, Number(traffic?.metrics.usage_percentage ?? 0));
+  const enabledNodes = nodes.filter((node) => node.enabled).length;
+  const renewalEdge = Date.now() + 14 * 86_400_000;
+  const renewalAttention = users.filter((user) => {
+    if (user.role === "admin" || !user.package_id || !user.package_end_date) return false;
+    const end = new Date(`${user.package_end_date}T23:59:59`).getTime();
+    return Number.isFinite(end) && end <= renewalEdge;
+  }).length;
   const periodDescription = period === "today" ? "今天 00:00 起" : period === "week" ? "最近 7 天" : "自本月 1 日 00:00 起";
-  const sortedUsers = [...users].sort((left, right) => Number(right.traffic_used || 0) - Number(left.traffic_used || 0));
+  const healthState = error
+    ? { className: "is-error", label: "待检查" }
+    : loading
+      ? { className: "is-syncing", label: "同步中" }
+      : profile.is_admin && servers.length === 0
+        ? { className: "is-syncing", label: "尚未接入服务器" }
+        : profile.is_admin && online === 0
+          ? { className: "is-error", label: "服务器全部离线" }
+          : { className: "is-online", label: "运行正常" };
 
   return (
     <>
@@ -365,7 +392,7 @@ function DashboardPage({ profile, navigate }: { profile: Profile; navigate: (pag
         <Metric tone="info" icon={<ArrowUpFromLine size={22} />} label="总流量配额" value={loading ? "--" : `${traffic?.metrics.total_limit_gb ?? 0} GB`} detail="所有节点的总配额" />
         <Metric tone="accent" icon={<Activity size={22} />} label="已用流量" value={loading ? "--" : `${traffic?.metrics.total_used_gb ?? 0} GB`} detail="所有节点累计消耗" />
         <Metric tone="good" icon={<Boxes size={22} />} label="剩余流量" value={loading ? "--" : `${traffic?.metrics.total_remaining_gb ?? 0} GB`} detail="仍可分配的余量" />
-        <Metric tone="warn" icon={<Gauge size={22} />} label="实时网速" value={loading ? "--" : <span className="speed-summary"><span>↑ {formatBytes(uploadSpeed, true)}</span><span>↓ {formatBytes(downloadSpeed, true)}</span></span>} detail="所有服务器汇总" />
+        <Metric tone="warn" icon={<Gauge size={22} />} label="使用率" value={loading ? "--" : `${usagePercent.toFixed(1)}%`} detail={loading ? "正在汇总服务器流量" : `实时 ↑ ${formatBytes(uploadSpeed, true)} · ↓ ${formatBytes(downloadSpeed, true)}`} progress={loading ? undefined : usagePercent} />
       </div>
 
       <Surface className={`chart-surface dashboard-chart ${!loading && history.length === 0 ? "is-empty" : ""}`}>
@@ -388,32 +415,21 @@ function DashboardPage({ profile, navigate }: { profile: Profile; navigate: (pag
         )}
       </Surface>
 
-      <div className="dashboard-summary-grid">
-        <Surface className="summary-surface">
-          <div className="surface-heading"><div><h2><Route size={17} />节点视图</h2><small>按可用状态展示</small></div><IconButton label="查看节点" onClick={() => navigate("nodes")}><ChevronRight size={17} /></IconButton></div>
-          <div className="health-list">{loading ? <div className="center-state"><Spinner /></div> : nodes.length === 0 ? <EmptyState icon={<Route size={22} />} title="暂无数据" /> : nodes.slice(0, 5).map((node) => <div className="health-row" key={node.id}><span className={`server-icon ${node.enabled ? "is-online" : ""}`}><Route size={17} /></span><span className="health-name"><strong>{node.node_name}</strong><small>{node.protocol || "未知协议"}</small></span><Badge tone={node.enabled ? "good" : "neutral"}>{node.enabled ? "启用" : "停用"}</Badge></div>)}</div>
-        </Surface>
-        {profile.is_admin ? <Surface className="summary-surface">
-          <div className="surface-heading"><div><h2><Users size={17} />用户视图</h2><small>按累计流量排序</small></div><IconButton label="查看用户" onClick={() => navigate("users")}><ChevronRight size={17} /></IconButton></div>
-          <div className="health-list">{loading ? <div className="center-state"><Spinner /></div> : sortedUsers.length === 0 ? <EmptyState icon={<Users size={22} />} title="暂无数据" /> : sortedUsers.slice(0, 5).map((user) => <div className="health-row" key={user.username}><span className="user-avatar">{(user.nickname || user.username).slice(0, 1).toUpperCase()}</span><span className="health-name"><strong>{user.nickname || user.username}</strong><small>{user.username}</small></span><strong>{formatBytes(user.traffic_used)}</strong></div>)}</div>
-        </Surface> : null}
-      </div>
-
-      {profile.is_admin ? <Surface className="server-overview">
-        <div className="surface-heading"><div><h2><Server size={17} />服务器概览</h2><small>{online} / {servers.length} 在线</small></div><IconButton label="查看服务器" onClick={() => navigate("servers")}><ChevronRight size={17} /></IconButton></div>
-        <div className="health-list">{loading ? <div className="center-state"><Spinner /></div> : servers.length === 0 ? <EmptyState icon={<Server size={22} />} title="暂无服务器" /> : servers.slice(0, 6).map((server) => <ServerHealthRow key={server.id} server={server} />)}</div>
-      </Surface> : null}
+      <Surface className="dashboard-health-strip">
+        <div className="surface-heading"><div><h2>运行概览</h2><small>从这里进入需要处理的运营事项</small></div><span className={`dashboard-live-state ${healthState.className}`}><span />{healthState.label}</span></div>
+        <div className={`dashboard-health-items ${profile.is_admin ? "is-admin" : ""}`}>
+          <button type="button" className="dashboard-health-item" onClick={() => navigate("nodes")}><span className="dashboard-health-icon"><Route size={18} /></span><span><small>已启用节点</small><strong>{loading ? "--" : `${enabledNodes} / ${nodes.length}`}</strong></span><ChevronRight size={18} /></button>
+          {profile.is_admin ? <button type="button" className="dashboard-health-item" onClick={() => navigate("servers")}><span className="dashboard-health-icon"><Server size={18} /></span><span><small>在线服务器</small><strong>{loading ? "--" : `${online} / ${servers.length}`}</strong></span><ChevronRight size={18} /></button> : null}
+          {profile.is_admin ? <button type="button" className="dashboard-health-item" onClick={() => navigate("users", { usersScope: "renewal" })}><span className="dashboard-health-icon"><Users size={18} /></span><span><small>待续期用户</small><strong>{loading ? "--" : renewalAttention}</strong></span><ChevronRight size={18} /></button> : null}
+        </div>
+      </Surface>
     </>
   );
 }
 
-function Metric({ icon, label, value, detail, tone = "accent" }: { icon: ReactNode; label: string; value: ReactNode; detail: string; tone?: "accent" | "good" | "info" | "warn" }) {
-  return <Surface className={`metric metric-${tone}`}><div className="metric-top"><span className="metric-icon">{icon}</span><span className="metric-copy"><span>{label}</span><small>{detail}</small></span></div><strong>{value}</strong></Surface>;
-}
-
-function ServerHealthRow({ server }: { server: RemoteServer }) {
-  const connected = server.ws_connected || server.status === "connected" || server.status === "online";
-  return <div className="health-row"><span className={`server-icon ${connected ? "is-online" : ""}`}>{connected ? <Wifi size={17} /> : <WifiOff size={17} />}</span><span className="health-name"><strong>{server.name}</strong><small>{server.ip_address || server.domain || "地址待上报"}</small></span><span className="health-speed"><small>下行</small><strong>{formatBytes(server.current_download_speed, true)}</strong></span><Badge tone={connected ? "good" : "bad"}>{connected ? "在线" : "离线"}</Badge></div>;
+function Metric({ icon, label, value, detail, tone = "accent", progress }: { icon: ReactNode; label: string; value: ReactNode; detail: string; tone?: "accent" | "good" | "info" | "warn"; progress?: number }) {
+  const safeProgress = progress == null ? undefined : Math.min(100, Math.max(0, progress));
+  return <Surface className={`metric metric-${tone}`}><div className="metric-top"><span className="metric-icon">{icon}</span><span className="metric-copy"><span>{label}</span><small>{detail}</small></span></div><strong>{value}</strong>{safeProgress != null ? <span className="metric-progress" aria-label={`${label} ${safeProgress.toFixed(1)}%`}><span style={{ width: `${safeProgress}%` }} /></span> : null}</Surface>;
 }
 
 function ServersPage({ notify }: { notify: (message: string, tone?: ToastState["tone"]) => void }) {

@@ -38,6 +38,7 @@ import {
   PageHeader,
   Spinner,
   Surface,
+  Toggle,
   formatBytes,
 } from "./ui";
 import "./users-workbench.css";
@@ -94,12 +95,32 @@ function copyText(value: string, notify: Notify, label = "内容") {
   );
 }
 
-export function UsersWorkbenchPage({ notify }: { notify: Notify }) {
+type ExpiryState = { label: string; tone: "good" | "warn" | "bad" | "neutral"; sortValue: number };
+
+function expiryState(value?: string): ExpiryState {
+  if (!value) return { label: "未设置到期日", tone: "neutral", sortValue: Number.POSITIVE_INFINITY };
+  const end = new Date(`${value}T23:59:59`);
+  if (!Number.isFinite(end.getTime())) return { label: "到期日无效", tone: "bad", sortValue: Number.POSITIVE_INFINITY };
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const days = Math.floor((end.getTime() - today.getTime()) / 86_400_000);
+  if (days < 0) return { label: `已过期 ${Math.abs(days)} 天`, tone: "bad", sortValue: days };
+  if (days === 0) return { label: "今日到期", tone: "bad", sortValue: days };
+  if (days <= 7) return { label: `剩余 ${days} 天`, tone: "warn", sortValue: days };
+  return { label: `剩余 ${days} 天`, tone: "good", sortValue: days };
+}
+
+function normalizeResetDay(value?: number) {
+  const day = Math.floor(Number(value) || 1);
+  return Math.min(31, Math.max(1, day));
+}
+
+export function UsersWorkbenchPage({ notify, initialScope = "all" }: { notify: Notify; initialScope?: "all" | "renewal" }) {
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
-  const [scope, setScope] = useState<"all" | "renewal">("all");
+  const [scope, setScope] = useState<"all" | "renewal">(initialScope);
   const [status, setStatus] = useState<"all" | "active" | "disabled">("all");
   const [editor, setEditor] = useState<Editor | null>(null);
   const [pendingDelete, setPendingDelete] = useState<ManagedUser | null>(null);
@@ -122,22 +143,22 @@ export function UsersWorkbenchPage({ notify }: { notify: Notify }) {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { setScope(initialScope); }, [initialScope]);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    const today = new Date();
-    const renewalEdge = new Date(today.getTime() + 14 * 86400_000);
-    return users.filter((user) => {
+    const matching = users.filter((user) => {
       if (status === "active" && !user.is_active) return false;
       if (status === "disabled" && user.is_active) return false;
       if (scope === "renewal") {
-        if (!user.package_id || !user.package_end_date) return false;
-        const end = new Date(`${user.package_end_date}T23:59:59`);
-        if (!Number.isFinite(end.getTime()) || end > renewalEdge) return false;
+        if (user.role === "admin" || !user.package_id) return false;
       }
       return !needle || [user.username, user.nickname, user.email, user.remark, user.package_name, user.user_short_code]
         .some((value) => value?.toLowerCase().includes(needle));
     });
+    return scope === "renewal"
+      ? matching.sort((left, right) => expiryState(left.package_end_date).sortValue - expiryState(right.package_end_date).sortValue)
+      : matching;
   }, [query, scope, status, users]);
 
   const regularUsers = users.filter((user) => user.role !== "admin");
@@ -172,14 +193,34 @@ export function UsersWorkbenchPage({ notify }: { notify: Notify }) {
     }
   };
 
+  const renew = async (user: ManagedUser, days: number) => {
+    setWorkingUser(user.username);
+    try {
+      const response = await api.post<{ success?: boolean; end_date?: string; message?: string; warnings?: string[] }>("/api/admin/users/extend", { username: user.username, days });
+      if (response.success === false) throw new Error(response.message || "续期失败");
+      const result = `${user.username} 已续期${response.end_date ? `至 ${response.end_date}` : ` ${days} 天`}`;
+      if (response.warnings?.length) {
+        notify(`${result}；${response.warnings.length} 项节点截止日下发失败，请到服务管理检查`, "error");
+      } else {
+        notify(result);
+      }
+      await load();
+    } catch (reason) {
+      notify(messageOf(reason, "续期失败"), "error");
+    } finally {
+      setWorkingUser("");
+    }
+  };
+
   const completed = async (message: string) => {
     setEditor(null);
     notify(message);
     await load();
   };
 
-  const completedInSettings = async (username: string, message: string) => {
-    notify(message);
+  const completedInSettings = async (username: string, message: string, tone?: "success" | "error") => {
+    if (tone) notify(message, tone);
+    else notify(message);
     const refreshedUsers = await load();
     if (!refreshedUsers) return;
     const refreshedUser = refreshedUsers.find((user) => user.username === username);
@@ -199,7 +240,7 @@ export function UsersWorkbenchPage({ notify }: { notify: Notify }) {
       <div className="users-toolbar">
         <div className="segmented-control" aria-label="用户视图">
           <button className={scope === "all" ? "is-active" : ""} onClick={() => setScope("all")}>完整视图</button>
-          <button className={scope === "renewal" ? "is-active" : ""} onClick={() => setScope("renewal")}>续期视图</button>
+          <button className={scope === "renewal" ? "is-active" : ""} onClick={() => setScope("renewal")}>续期工作台</button>
         </div>
         <div className="users-toolbar-right">
           <Field label="状态" className="compact-field"><select value={status} onChange={(event) => setStatus(event.target.value as typeof status)}><option value="all">全部状态</option><option value="active">已启用</option><option value="disabled">已停用</option></select></Field>
@@ -215,17 +256,17 @@ export function UsersWorkbenchPage({ notify }: { notify: Notify }) {
             return <tr key={user.username}>
               <td data-label="用户"><div className="primary-cell"><span className="user-avatar">{(user.nickname || user.username).slice(0, 1).toUpperCase()}</span><span><strong>{user.nickname || user.username}</strong><small>{user.username}{user.email ? ` · ${user.email}` : ""}</small>{user.remark ? <small className="user-remark">{user.remark}</small> : null}</span></div></td>
               <td data-label="状态"><Badge tone={user.is_active ? "good" : "bad"}>{user.is_active ? "启用" : "停用"}</Badge>{isAdmin ? <Badge tone="info">管理员</Badge> : user.is_over_limit ? <Badge tone="warn">流量超限</Badge> : null}</td>
-              <td data-label="套餐与到期"><strong>{user.package_name || "未分配套餐"}</strong><small className="cell-note">{user.package_end_date ? `到期 ${user.package_end_date}` : "无到期日"}</small></td>
+              <td data-label="套餐与到期"><strong>{user.package_name || "未分配套餐"}</strong><small className="cell-note">{user.package_end_date ? `到期 ${user.package_end_date}` : "无到期日"}</small>{scope === "renewal" ? <Badge tone={expiryState(user.package_end_date).tone}>{expiryState(user.package_end_date).label}</Badge> : null}</td>
               <td data-label="限额"><strong>{formatBytes(user.traffic_used)}</strong><small className="cell-note">{user.traffic_limit ? `流量 ${formatBytes(user.traffic_limit)}` : "流量不限"} · {effectiveSpeed ? `${effectiveSpeed} Mbps` : "不限速"} · {effectiveDevices ? `${effectiveDevices} 设备` : "设备不限"}</small></td>
               <td data-label="订阅短码">{user.user_short_code ? <button className="inline-copy" onClick={() => copyText(user.user_short_code ?? "", notify, "短码")}><code>{user.user_short_code}</code><Copy size={13} /></button> : <span className="muted">未生成</span>}<small className="cell-note">{user.custom_user_short_code ? "自定义短码" : "系统短码"}</small></td>
-              <td data-label="操作"><div className="user-actions"><Button variant="secondary" aria-label={`用户设置 ${user.username}`} onClick={() => setEditor({ kind: "manage", user })}><UserCog size={16} />用户设置<ChevronRight size={15} /></Button></div></td>
+              <td data-label="操作"><div className="user-actions">{scope === "renewal" && !isAdmin && user.package_id ? <div className="user-renew-actions"><Button type="button" variant="secondary" aria-label={`为 ${user.username} 续期 30 天`} disabled={workingUser !== ""} onClick={() => void renew(user, 30)}>{workingUser === user.username ? <Spinner label="续期中" /> : "+30"}</Button><Button type="button" variant="secondary" aria-label={`为 ${user.username} 续期 60 天`} disabled={workingUser !== ""} onClick={() => void renew(user, 60)}>+60</Button><Button type="button" variant="secondary" aria-label={`为 ${user.username} 续期 90 天`} disabled={workingUser !== ""} onClick={() => void renew(user, 90)}>+90</Button></div> : null}<Button variant="secondary" aria-label={`用户设置 ${user.username}`} onClick={() => setEditor({ kind: "manage", user })}><UserCog size={16} />用户设置<ChevronRight size={15} /></Button></div></td>
             </tr>;
           })}</tbody></table></div>
         )}
       </Surface>
 
       {editor?.kind === "create" ? <CreateUserDialog notify={notify} onClose={() => setEditor(null)} onComplete={completed} /> : null}
-      {editor?.kind === "manage" ? <UserSettingsDialog user={editor.user} notify={notify} working={workingUser === editor.user.username} onClose={() => setEditor(null)} onComplete={(message) => completedInSettings(editor.user.username, message)} onToggleStatus={async () => { await toggleStatus(editor.user); setEditor(null); }} onDelete={() => { setEditor(null); setPendingDelete(editor.user); }} /> : null}
+      {editor?.kind === "manage" ? <UserSettingsDialog user={editor.user} notify={notify} working={workingUser === editor.user.username} onClose={() => setEditor(null)} onComplete={(message, tone) => completedInSettings(editor.user.username, message, tone)} onToggleStatus={async () => { await toggleStatus(editor.user); setEditor(null); }} onDelete={() => { setEditor(null); setPendingDelete(editor.user); }} /> : null}
       {pendingDelete ? <ConfirmDialog title="删除用户" description={`确认删除 ${pendingDelete.username}？该用户在所有节点上的客户端、私有路由、订阅关联和登录数据都会清理，此操作无法撤销。`} confirmLabel="确认删除" working={workingUser === pendingDelete.username} onCancel={() => setPendingDelete(null)} onConfirm={() => void remove()} /> : null}
     </>
   );
@@ -253,7 +294,7 @@ function UserSettingsDialog({
   notify: Notify;
   working: boolean;
   onClose: () => void;
-  onComplete: (message: string) => Promise<void>;
+  onComplete: (message: string, tone?: "success" | "error") => Promise<void>;
   onToggleStatus: () => Promise<void>;
   onDelete: () => void;
 }) {
@@ -262,6 +303,9 @@ function UserSettingsDialog({
   const [packageID, setPackageID] = useState(String(user.package_id ?? ""));
   const [startDate, setStartDate] = useState("");
   const [expireDate, setExpireDate] = useState(user.package_end_date ?? "");
+  const [resetEnabled, setResetEnabled] = useState(Boolean(user.is_reset));
+  const [resetDay, setResetDay] = useState(String(normalizeResetDay(user.reset_day)));
+  const [resetOverrideDirty, setResetOverrideDirty] = useState(Boolean(user.package_id));
   const [packageLoading, setPackageLoading] = useState(user.role !== "admin");
   const [packageWorking, setPackageWorking] = useState(false);
   const [packageError, setPackageError] = useState("");
@@ -270,7 +314,10 @@ function UserSettingsDialog({
   useEffect(() => {
     setPackageID(String(user.package_id ?? ""));
     setExpireDate(user.package_end_date ?? "");
-  }, [user.package_end_date, user.package_id]);
+    setResetEnabled(Boolean(user.is_reset));
+    setResetDay(String(normalizeResetDay(user.reset_day)));
+    setResetOverrideDirty(Boolean(user.package_id));
+  }, [user.is_reset, user.package_end_date, user.package_id, user.reset_day]);
 
   useEffect(() => {
     if (user.role === "admin") return;
@@ -282,9 +329,26 @@ function UserSettingsDialog({
 
   const selectedPackage = packages.find((item) => item.id === Number(packageID));
 
-  const completePanel = async (message: string) => {
+  const selectPackage = (value: string) => {
+    setPackageID(value);
+    const nextPackage = packages.find((item) => item.id === Number(value));
+    if (!nextPackage) return;
+    if (Number(value) === user.package_id) {
+      setResetEnabled(Boolean(user.is_reset));
+      setResetDay(String(normalizeResetDay(user.reset_day)));
+      setResetOverrideDirty(true);
+      return;
+    }
+    setResetEnabled(nextPackage.is_reset);
+    setResetDay(String(normalizeResetDay(nextPackage.reset_day)));
+    // A new package should initially follow its own billing policy. Editing either
+    // setting below intentionally turns it into a user-specific override.
+    setResetOverrideDirty(false);
+  };
+
+  const completePanel = async (message: string, tone?: "success" | "error") => {
     setActivePanel("overview");
-    await onComplete(message);
+    await onComplete(message, tone);
   };
 
   const assignPackage = async (event: FormEvent) => {
@@ -297,6 +361,10 @@ function UserSettingsDialog({
       setPackageError("到期日期不能早于开始日期");
       return;
     }
+    if (resetOverrideDirty && resetEnabled && (Number(resetDay) < 1 || Number(resetDay) > 31)) {
+      setPackageError("重置日必须在 1 到 31 之间");
+      return;
+    }
     setPackageWorking(true);
     setPackageError("");
     try {
@@ -305,10 +373,15 @@ function UserSettingsDialog({
         package_id: Number(packageID),
         ...(startDate ? { start_date: startDate } : {}),
         ...(expireDate ? { expire_date: expireDate } : {}),
+        ...(resetOverrideDirty ? { is_reset: resetEnabled, ...(resetEnabled ? { reset_day: Number(resetDay) } : {}) } : {}),
       });
       if (response.success === false) throw new Error(response.error || response.message || "套餐分配失败");
-      const warning = response.warnings?.length ? `，有 ${response.warnings.length} 项节点下发警告` : "";
-      await completePanel(`已为 ${user.username} ${user.package_id ? "更新" : "分配"}“${selectedPackage?.name ?? "套餐"}”${warning}`);
+      const result = `已为 ${user.username} ${user.package_id ? "更新" : "分配"}“${selectedPackage?.name ?? "套餐"}”`;
+      if (response.warnings?.length) {
+        await completePanel(`${result}；${response.warnings.length} 项节点下发失败，请到服务管理检查`, "error");
+      } else {
+        await completePanel(result);
+      }
     } catch (reason) {
       setPackageError(messageOf(reason, "套餐分配失败"));
     } finally {
@@ -386,9 +459,10 @@ function UserSettingsDialog({
               <div className="user-settings-section-heading"><div><h2>套餐与有效期</h2><p>分配套餐后，节点凭据和订阅会按套餐同步</p></div><PackageIcon size={19} /></div>
               {packageError ? <ErrorState message={packageError} /> : null}
               {packageLoading ? <div className="user-settings-loading"><Spinner label="正在加载套餐" /></div> : <form className="user-package-form" onSubmit={(event) => void assignPackage(event)}>
-                <Field label="套餐"><select aria-label="用户套餐" required value={packageID} onChange={(event) => setPackageID(event.target.value)}><option value="">请选择套餐</option>{packages.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.traffic_limit_gb} GB / {item.cycle_days} 天</option>)}</select></Field>
+                <Field label="套餐"><select aria-label="用户套餐" required value={packageID} onChange={(event) => selectPackage(event.target.value)}><option value="">请选择套餐</option>{packages.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.traffic_limit_gb} GB / {item.cycle_days} 天 · {item.is_reset ? `每月 ${item.reset_day} 日重置` : "按周期重置"}</option>)}</select></Field>
                 <Field label="开始日期" hint="留空表示今天"><input type="date" aria-label="套餐开始日期" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></Field>
                 <Field label="到期日期" hint={`留空表示开始后 ${selectedPackage?.cycle_days ?? 30} 天`}><input type="date" aria-label="套餐到期日期" value={expireDate} onChange={(event) => setExpireDate(event.target.value)} /></Field>
+                <div className="user-package-reset"><div><Toggle checked={resetEnabled} onChange={(value) => { setResetEnabled(value); setResetOverrideDirty(true); }} label="按自然月重置该用户流量" /><small>{resetOverrideDirty ? "已使用用户级策略，不再跟随套餐默认值" : selectedPackage?.is_reset ? `默认每月 ${selectedPackage.reset_day} 日重置` : "默认按套餐周期重置"}</small></div><Field label="重置日" hint="每月 1 到 31 日"><input aria-label="套餐流量重置日" type="number" min="1" max="31" step="1" disabled={!resetEnabled} value={resetDay} onChange={(event) => { setResetDay(event.target.value); setResetOverrideDirty(true); }} /></Field></div>
                 <div className="user-package-actions"><Button type="submit" disabled={packageWorking || !packageID}>{packageWorking ? <Spinner label="正在下发" /> : <><PackageIcon size={16} />{user.package_id ? "更新套餐" : "分配套餐"}</>}</Button>{user.package_id ? <Button type="button" variant="ghost" onClick={() => setConfirmUnassign(true)} disabled={packageWorking}>解绑套餐</Button> : null}</div>
               </form>}
               {user.package_id ? <div className="user-package-current"><span>当前套餐：<strong>{user.package_name || `套餐 #${user.package_id}`}</strong></span><span>{user.package_end_date ? `到期 ${user.package_end_date}` : "未设置到期日"}</span><Button type="button" variant="ghost" onClick={() => setActivePanel("extend")}><CalendarPlus size={15} />续期</Button></div> : null}
@@ -489,9 +563,9 @@ function PasswordSettingsPanel({ user, notify, onBack }: { user: ManagedUser; no
   return result ? <div className="form-stack"><div className="secret-box"><code>{result}</code><IconButton label="复制新密码" onClick={() => copyText(result, notify, "新密码")}><Copy size={16} /></IconButton></div><div className="dialog-actions"><Button onClick={onBack}>返回用户设置</Button></div></div> : <form className="form-stack" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}<Field label="新密码"><input autoFocus type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="留空自动生成" /></Field><div className="dialog-actions"><Button type="button" variant="secondary" onClick={onBack}>返回设置总览</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在重置" /> : <><KeyRound size={16} />重置密码</>}</Button></div></form>;
 }
 
-function ExtendSettingsPanel({ user, onBack, onComplete }: { user: ManagedUser; onBack: () => void; onComplete: (message: string) => void }) {
+function ExtendSettingsPanel({ user, onBack, onComplete }: { user: ManagedUser; onBack: () => void; onComplete: (message: string, tone?: "success" | "error") => void }) {
   const [days, setDays] = useState("30"); const [working, setWorking] = useState(false); const [error, setError] = useState("");
-  const submit = async (event: FormEvent) => { event.preventDefault(); setWorking(true); setError(""); try { const response = await api.post<{ end_date: string }>("/api/admin/users/extend", { username: user.username, days: Number(days) }); onComplete(`${user.username} 已续期至 ${response.end_date}`); } catch (reason) { setError(messageOf(reason, "续期失败")); } finally { setWorking(false); } };
+  const submit = async (event: FormEvent) => { event.preventDefault(); setWorking(true); setError(""); try { const response = await api.post<{ success?: boolean; end_date: string; message?: string; warnings?: string[] }>("/api/admin/users/extend", { username: user.username, days: Number(days) }); if (response.success === false) throw new Error(response.message || "续期失败"); const result = `${user.username} 已续期至 ${response.end_date}`; onComplete(response.warnings?.length ? `${result}；${response.warnings.length} 项节点截止日下发失败，请到服务管理检查` : result, response.warnings?.length ? "error" : undefined); } catch (reason) { setError(messageOf(reason, "续期失败")); } finally { setWorking(false); } };
   return <form className="form-stack" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}<Field label="延长天数"><input autoFocus type="number" min="1" max="3650" value={days} onChange={(e) => setDays(e.target.value)} /></Field><div className="quick-days">{[30, 90, 180, 365].map((value) => <Button key={value} type="button" variant={days === String(value) ? "primary" : "secondary"} onClick={() => setDays(String(value))}>{value} 天</Button>)}</div><div className="dialog-actions"><Button type="button" variant="secondary" onClick={onBack}>返回设置总览</Button><Button type="submit" disabled={working || Number(days) < 1}>{working ? <Spinner label="正在续期" /> : <><CalendarPlus size={16} />确认续期</>}</Button></div></form>;
 }
 

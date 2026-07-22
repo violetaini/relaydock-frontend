@@ -175,6 +175,87 @@ describe("users workbench", () => {
     }));
   });
 
+  it("lets an administrator override the selected package reset policy", async () => {
+    const unassigned = { ...alice, package_id: undefined, package_name: undefined, package_end_date: undefined };
+    vi.spyOn(api, "get").mockImplementation(async (path) => {
+      if (path === "/api/admin/users") return { users: [unassigned] };
+      if (path === "/api/admin/packages") return { packages: [{ id: 9, name: "月付套餐", traffic_limit_gb: 200, cycle_days: 30, is_reset: true, reset_day: 8 }] };
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<UsersWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "用户设置 alice" }));
+    fireEvent.change(await screen.findByRole("combobox", { name: "用户套餐" }), { target: { value: "9" } });
+    fireEvent.click(screen.getByRole("switch", { name: "按自然月重置该用户流量" }));
+    fireEvent.click(screen.getByRole("button", { name: "分配套餐" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/packages/assign", {
+      username: "alice",
+      package_id: 9,
+      is_reset: false,
+    }));
+  });
+
+  it("shows every package user in the renewal workbench and supports quick renewal", async () => {
+    const expired = { ...alice, package_end_date: "2020-01-01" };
+    const later = { ...alice, username: "later", nickname: "Later", package_end_date: "2035-12-31" };
+    vi.spyOn(api, "get").mockResolvedValue({ users: [later, expired] });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true, end_date: "2026-09-29" });
+    const notify = vi.fn();
+    render(<UsersWorkbenchPage notify={notify} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "续期工作台" }));
+    expect(await screen.findByText(/已过期/)).toBeInTheDocument();
+    expect(screen.getByText("Later", { exact: true })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "为 alice 续期 30 天" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/users/extend", { username: "alice", days: 30 }));
+    expect(notify).toHaveBeenCalledWith("alice 已续期至 2026-09-29");
+  });
+
+  it("reports provisioning warnings after a successful quick renewal", async () => {
+    vi.spyOn(api, "get").mockResolvedValue({ users: [alice] });
+    vi.spyOn(api, "post").mockResolvedValue({
+      success: true,
+      end_date: "2026-09-29",
+      warnings: ["HK Reality: agent unavailable"],
+    });
+    const notify = vi.fn();
+    render(<UsersWorkbenchPage notify={notify} initialScope="renewal" />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "为 alice 续期 30 天" }));
+
+    await waitFor(() => expect(notify).toHaveBeenCalledWith(
+      "alice 已续期至 2026-09-29；1 项节点截止日下发失败，请到服务管理检查",
+      "error",
+    ));
+  });
+
+  it("reports provisioning warnings from the settings renewal panel", async () => {
+    vi.spyOn(api, "get").mockImplementation(async (path) => {
+      if (path === "/api/admin/users") return { users: [alice] };
+      if (path === "/api/admin/packages") return { packages: [] };
+      throw new Error(`unexpected GET ${path}`);
+    });
+    vi.spyOn(api, "post").mockResolvedValue({
+      success: true,
+      end_date: "2026-09-29",
+      warnings: ["HK Reality: agent unavailable"],
+    });
+    const notify = vi.fn();
+    render(<UsersWorkbenchPage notify={notify} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "用户设置 alice" }));
+    fireEvent.click(await screen.findByRole("button", { name: "续期" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认续期" }));
+
+    await waitFor(() => expect(notify).toHaveBeenCalledWith(
+      "alice 已续期至 2026-09-29；1 项节点截止日下发失败，请到服务管理检查",
+      "error",
+    ));
+  });
+
   it("requires confirmation before unassigning a package", async () => {
     vi.spyOn(api, "get").mockImplementation(async (path) => {
       if (path === "/api/admin/users") return { users: [alice] };

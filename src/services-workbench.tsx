@@ -473,7 +473,7 @@ function parseRoutingValues(value: string): string[] {
   return value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
 }
 
-export function ServicesWorkbenchPage({ notify }: { notify: Notify }) {
+export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Notify; onOpenAdvanced?: () => void }) {
   const [servers, setServers] = useState<ManagedServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -603,6 +603,7 @@ export function ServicesWorkbenchPage({ notify }: { notify: Notify }) {
         description={`${servers.length} 台服务器 · ${online.length} 台在线 · ${servers.length - online.length} 台离线`}
         actions={<>
           <IconButton label="刷新服务器" onClick={() => void load()} disabled={loading}><RefreshCw size={18} /></IconButton>
+          {onOpenAdvanced ? <Button variant="secondary" onClick={onOpenAdvanced}><Wrench size={17} />高级运维</Button> : null}
           <Button variant="secondary" onClick={() => void runUpgrade(upgradeTargets)} disabled={!upgradeTargets.length || Boolean(upgrade?.running)}><UploadCloud size={17} />{upgradeLabel}</Button>
           <Button variant="secondary" onClick={() => setSharedOpen(true)}><Cloud size={17} />添加共享服务器</Button>
           <Button onClick={() => setCreateOpen(true)}><Plus size={17} />添加服务器</Button>

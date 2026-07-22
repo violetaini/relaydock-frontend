@@ -107,6 +107,16 @@ afterEach(() => {
 });
 
 describe("service management workbench", () => {
+  it("keeps advanced operations reachable from service management", async () => {
+    const onOpenAdvanced = vi.fn();
+    mockServerReads();
+    render(<ServicesWorkbenchPage notify={vi.fn()} onOpenAdvanced={onOpenAdvanced} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "高级运维" }));
+
+    expect(onOpenAdvanced).toHaveBeenCalledOnce();
+  });
+
   it("filters servers and switches between card and table views", async () => {
     mockServerReads();
     render(<ServicesWorkbenchPage notify={vi.fn()} />);

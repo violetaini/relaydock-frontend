@@ -1,19 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import {
   Activity,
   ArrowDownToLine,
   ArrowUpFromLine,
   Boxes,
-  Braces,
   Check,
   ChevronRight,
   Clipboard,
   Copy,
-  Ellipsis,
   FileText,
-  FileCode2,
   Gauge,
-  LayoutDashboard,
   Link2,
   LogOut,
   Menu,
@@ -39,7 +35,6 @@ import {
   WifiOff,
   Wrench,
   X,
-  type LucideIcon,
 } from "lucide-react";
 import { AdvancedPage } from "./advanced";
 import { AccountWorkbenchPage } from "./account-workbench";
@@ -94,7 +89,6 @@ type PageKey = "dashboard" | "subscriptions" | "generator" | "servers" | "nodes"
 
 interface ToastState { message: string; tone: "success" | "error" }
 type LayoutMode = "top" | "side";
-interface SecondaryNavItem { page: PageKey; label: string; icon: LucideIcon }
 
 const pageTitles: Record<PageKey, string> = {
   dashboard: "流量信息",
@@ -144,11 +138,9 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => normalizeThemeMode(localStorage.getItem("arcway-theme")));
   const [theme, setTheme] = useState<Theme>(() => document.documentElement.dataset.theme === "dark" ? "dark" : "light");
   const [layoutMode, setLayoutMode] = useState<LayoutMode>(() => localStorage.getItem("arcway-layout") === "side" ? "side" : "top");
-  const [moreOpen, setMoreOpen] = useState(false);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [userPages, setUserPages] = useState<string[] | null>(profile.is_admin ? [] : null);
   const [identity, setIdentity] = useState(profile);
-  const moreMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const updateIdentity = (event: Event) => {
@@ -191,24 +183,7 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
     location.hash = `/${next}`;
     setPage(next);
     setSidebarOpen(false);
-    setMoreOpen(false);
   };
-
-  useEffect(() => {
-    if (!moreOpen) return;
-    const closeOnPointerDown = (event: PointerEvent) => {
-      if (!moreMenuRef.current?.contains(event.target as Node)) setMoreOpen(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMoreOpen(false);
-    };
-    document.addEventListener("pointerdown", closeOnPointerDown);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", closeOnPointerDown);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [moreOpen]);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -243,15 +218,6 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
   };
 
   const notify = (message: string, tone: ToastState["tone"] = "success") => setToast({ message, tone });
-  const secondaryNavItems: SecondaryNavItem[] = [
-    ...(pageAllowed("customRules", profile.is_admin, userPages) ? [{ page: "customRules" as const, label: "覆写管理", icon: Braces }] : []),
-    ...(profile.is_admin ? [
-      { page: "rulesConfig" as const, label: "规则配置", icon: FileCode2 },
-      { page: "traffic" as const, label: "流量明细", icon: LayoutDashboard },
-      { page: "advanced" as const, label: "高级管理", icon: Wrench },
-    ] : [{ page: "traffic" as const, label: "流量明细", icon: LayoutDashboard }]),
-  ];
-  const secondaryActive = secondaryNavItems.some((item) => item.page === page);
 
   return (
     <div className={`console-layout layout-${layoutMode}`}>
@@ -276,23 +242,8 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
             {pageAllowed("subscribeFiles", profile.is_admin, userPages) ? <NavItem active={page === "subscribeFiles"} icon={<FileText size={18} />} label="订阅管理" onClick={() => navigate("subscribeFiles")} /> : null}
             {profile.is_admin ? <NavItem active={page === "settings"} icon={<Settings size={18} />} label="系统设置" onClick={() => navigate("settings")} /> : null}
           </NavGroup>
-          <NavGroup label="更多功能" className="nav-secondary">
-            {secondaryNavItems.map((item) => {
-              const ItemIcon = item.icon;
-              return <NavItem key={item.page} active={page === item.page} icon={<ItemIcon size={18} />} label={item.label} onClick={() => navigate(item.page)} />;
-            })}
-          </NavGroup>
         </nav>
         <div className="sidebar-footer">
-          {secondaryNavItems.length ? <div className="nav-overflow" ref={moreMenuRef}>
-            <IconButton className={`nav-overflow-trigger ${secondaryActive ? "is-active" : ""}`} label="更多功能" onClick={() => setMoreOpen((current) => !current)}><Ellipsis size={19} /></IconButton>
-            {moreOpen ? <div className="nav-overflow-menu" role="menu" aria-label="更多功能">
-              {secondaryNavItems.map((item) => {
-                const ItemIcon = item.icon;
-                return <button key={item.page} type="button" role="menuitem" className={page === item.page ? "is-active" : ""} onClick={() => navigate(item.page)}><ItemIcon size={17} /><span>{item.label}</span></button>;
-              })}
-            </div> : null}
-          </div> : null}
           <IconButton label={themeLabel} onClick={toggleTheme}>{themeIcon}</IconButton>
           <button type="button" className={`account-block ${page === "account" ? "is-active" : ""}`} aria-label="账户中心" title="账户中心" onClick={() => navigate("account")}>
             <span className="account-avatar">{(identity.nickname || identity.username).slice(0, 1).toUpperCase()}</span>
@@ -320,14 +271,14 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
           {page === "dashboard" ? <DashboardPage profile={profile} navigate={navigate} /> : null}
           {page === "subscriptions" && pageAllowed(page, profile.is_admin, userPages) ? <SubscriptionLinksPage notify={notify} /> : null}
           {page === "generator" && pageAllowed(page, profile.is_admin, userPages) ? <SubscriptionGeneratorPage notify={notify} /> : null}
-          {page === "servers" && profile.is_admin ? <ServicesWorkbenchPage notify={notify} /> : null}
+          {page === "servers" && profile.is_admin ? <ServicesWorkbenchPage notify={notify} onOpenAdvanced={() => navigate("advanced")} /> : null}
           {page === "nodes" && pageAllowed(page, profile.is_admin, userPages) ? <NodesWorkbench isAdmin={profile.is_admin} notify={notify} /> : null}
           {page === "traffic" ? <TrafficWorkbenchPage profile={profile} /> : null}
           {page === "users" && profile.is_admin ? <UsersWorkbenchPage notify={notify} /> : null}
           {page === "packages" && profile.is_admin ? <PackagesPage notify={notify} /> : null}
           {page === "certificates" && profile.is_admin ? <CertificatesWorkbenchPage notify={notify} /> : null}
           {page === "templates" && pageAllowed(page, profile.is_admin, userPages) ? <TemplatesWorkbenchPage notify={notify} /> : null}
-          {page === "subscribeFiles" && pageAllowed(page, profile.is_admin, userPages) ? <SubscribeFilesPage notify={notify} /> : null}
+          {page === "subscribeFiles" && pageAllowed(page, profile.is_admin, userPages) ? <SubscribeFilesPage notify={notify} onOpenCustomRules={pageAllowed("customRules", profile.is_admin, userPages) ? () => navigate("customRules") : undefined} onOpenRulesConfig={profile.is_admin ? () => navigate("rulesConfig") : undefined} /> : null}
           {page === "customRules" && pageAllowed(page, profile.is_admin, userPages) ? <CustomRulesWorkbenchPage notify={notify} /> : null}
           {page === "rulesConfig" && profile.is_admin ? <RulesConfigWorkbenchPage notify={notify} /> : null}
           {page === "advanced" && profile.is_admin ? <AdvancedPage notify={notify} /> : null}
@@ -421,6 +372,7 @@ function DashboardPage({ profile, navigate }: { profile: Profile; navigate: (pag
           <div><h2>每日流量消耗</h2><small>{periodDescription}</small></div>
           <div className="dashboard-chart-tools">
             <span className={`dashboard-live-state ${error ? "is-error" : loading ? "is-syncing" : "is-online"}`}><span />{error ? "数据异常" : loading ? "同步中" : "实时数据"}</span>
+            <IconButton label="查看流量明细" onClick={() => navigate("traffic")}><ChevronRight size={17} /></IconButton>
             <IconButton label="刷新流量概览" onClick={() => void load()} disabled={loading}><RefreshCw className={loading ? "is-spinning" : ""} size={17} /></IconButton>
             <span className="chart-total">{periodUsed.toFixed(1)} GB</span>
             <div className="dashboard-period" role="tablist" aria-label="流量周期">

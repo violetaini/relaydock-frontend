@@ -313,7 +313,7 @@ async function closeDialog(page: Page) {
   await expect(dialog).toBeHidden();
 }
 
-test("desktop navigation follows the upstream primary and secondary hierarchy", async ({ page }) => {
+test("desktop navigation follows the upstream hierarchy", async ({ page }) => {
   await mockAPI(page);
 
   for (const width of [1440, 1360, 1359, 1280, 1219, 1050, 1041]) {
@@ -327,8 +327,8 @@ test("desktop navigation follows the upstream primary and secondary hierarchy", 
     await expect(primaryLabels).toHaveCount(7);
     await expect(utilityItems).toHaveCount(4);
     await expect(utilityLabels).toHaveCount(4);
-    await expect(page.locator(".sidebar-nav .nav-secondary")).toBeHidden();
-    await expect(page.getByRole("button", { name: "更多功能", exact: true })).toBeVisible();
+    await expect(page.locator(".sidebar-nav .nav-secondary")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "更多功能", exact: true })).toHaveCount(0);
     await expect(page.locator(".sidebar-brand")).toContainText("RelayDock");
     const clipped = await primaryLabels.or(utilityLabels).evaluateAll((elements) => elements.flatMap((element) => {
       const label = element.textContent?.trim() || "<empty>";
@@ -371,13 +371,31 @@ test("desktop navigation follows the upstream primary and secondary hierarchy", 
     await expectViewportIntegrity(page, `${width}px desktop navigation`);
   }
 
+});
+
+test("secondary workflows remain available from their owning pages", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
+  await mockAPI(page);
+
   await page.goto("/#/dashboard");
-  await page.getByRole("button", { name: "更多功能", exact: true }).click();
-  const moreMenu = page.getByRole("menu", { name: "更多功能" });
-  await expect(moreMenu).toBeVisible();
-  await expect(moreMenu.getByRole("menuitem")).toHaveCount(4);
-  await expect(moreMenu.getByRole("menuitem", { name: "高级管理" })).toBeVisible();
+  await page.getByRole("button", { name: "查看流量明细" }).click();
+  await expect(page).toHaveURL(/#\/traffic$/);
+  await expect(page.getByRole("heading", { name: "流量明细" })).toBeVisible();
+
+  await page.goto("/#/servers");
+  await page.getByRole("button", { name: "高级运维" }).click();
+  await expect(page).toHaveURL(/#\/advanced$/);
+  await expect(page.getByRole("heading", { name: "高级管理" })).toBeVisible();
+
+  await page.goto("/#/subscribeFiles");
+  await page.getByRole("button", { name: "覆写规则" }).click();
+  await expect(page).toHaveURL(/#\/customRules$/);
+  await expect(page.getByRole("heading", { name: "覆写管理" })).toBeVisible();
+
+  await page.goto("/#/subscribeFiles");
+  await page.getByRole("button", { name: "规则配置" }).click();
+  await expect(page).toHaveURL(/#\/rulesConfig$/);
+  await expect(page.getByRole("heading", { name: "规则配置" })).toBeVisible();
 });
 
 test("dashboard uses the upstream desktop canvas and card scale", async ({ page }) => {
@@ -451,7 +469,7 @@ test("desktop layout switch preserves navigation and preference", async ({ page 
   await expect(page.locator(".console-layout")).toHaveClass(/layout-side/);
   await expect(page.locator(".topbar")).toBeVisible();
   await expect(page.getByRole("navigation", { name: "主导航" })).toBeVisible();
-  await expect(page.locator(".sidebar-nav .nav-item > span")).toHaveCount(15);
+  await expect(page.locator(".sidebar-nav .nav-item > span")).toHaveCount(11);
   expect(await page.locator(".sidebar").evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(244);
   await expectViewportIntegrity(page, "desktop side navigation");
 

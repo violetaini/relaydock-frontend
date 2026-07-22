@@ -3,6 +3,7 @@ import {
   ArrowDown,
   ArrowUp,
   Award,
+  Braces,
   Check,
   Clipboard,
   CloudDownload,
@@ -52,7 +53,11 @@ import {
 import "./content-workbench.css";
 
 export type ContentNotify = (message: string, tone?: "success" | "error") => void;
-export interface ContentPageProps { notify?: ContentNotify }
+export interface ContentPageProps {
+  notify?: ContentNotify;
+  onOpenCustomRules?: () => void;
+  onOpenRulesConfig?: () => void;
+}
 
 interface Envelope { success?: boolean; message?: string; error?: string }
 interface SubscriptionItem {
@@ -811,7 +816,7 @@ type FilePendingAction =
   | { kind: "delete-external"; item: ExternalSubscription }
   | { kind: "delete-provider"; item: ProxyProviderConfig };
 
-export function SubscribeFilesPage({ notify = noNotify }: ContentPageProps) {
+export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpenRulesConfig }: ContentPageProps) {
   const [tab, setTab] = useState<"files" | "external" | "providers">("files");
   const [files, setFiles] = useState<SubscribeFile[]>([]);
   const [external, setExternal] = useState<ExternalSubscription[]>([]);
@@ -921,7 +926,7 @@ export function SubscribeFilesPage({ notify = noNotify }: ContentPageProps) {
 
   return (
     <section className="cw-page">
-      <PageHeader title="订阅管理" description="维护订阅文件、第三方订阅源和 Mihomo Proxy Provider。" actions={<><IconButton label="刷新订阅管理" onClick={() => void load()}><RefreshCw size={18} /></IconButton>{tab === "files" ? <Button onClick={() => setShowImport(true)}><Plus size={16} />添加订阅</Button> : tab === "external" ? <><Button variant="secondary" onClick={() => void syncExternal()} disabled={working || external.length === 0}><RotateCw size={16} />同步全部</Button><Button onClick={() => setEditingExternal("new")}><Plus size={16} />外部订阅</Button></> : <Button onClick={() => setEditingProvider("new")}><Plus size={16} />Proxy Provider</Button>}</>} />
+      <PageHeader title="订阅管理" description="维护订阅文件、第三方订阅源和 Mihomo Proxy Provider。" actions={<>{onOpenCustomRules ? <Button variant="secondary" onClick={onOpenCustomRules}><Braces size={16} />覆写规则</Button> : null}{onOpenRulesConfig ? <Button variant="secondary" onClick={onOpenRulesConfig}><FileCode2 size={16} />规则配置</Button> : null}<IconButton label="刷新订阅管理" onClick={() => void load()}><RefreshCw size={18} /></IconButton>{tab === "files" ? <Button onClick={() => setShowImport(true)}><Plus size={16} />添加订阅</Button> : tab === "external" ? <><Button variant="secondary" onClick={() => void syncExternal()} disabled={working || external.length === 0}><RotateCw size={16} />同步全部</Button><Button onClick={() => setEditingExternal("new")}><Plus size={16} />外部订阅</Button></> : <Button onClick={() => setEditingProvider("new")}><Plus size={16} />Proxy Provider</Button>}</>} />
       <div className="cw-tabs cw-tabs-three" role="tablist" aria-label="订阅管理分类"><button type="button" role="tab" aria-selected={tab === "files"} className={tab === "files" ? "is-active" : ""} onClick={() => setTab("files")}><FileText size={16} />订阅列表 <span>{files.length}</span></button><button type="button" role="tab" aria-selected={tab === "external"} className={tab === "external" ? "is-active" : ""} onClick={() => setTab("external")}><CloudDownload size={16} />外部订阅 <span>{external.length}</span></button><button type="button" role="tab" aria-selected={tab === "providers"} className={tab === "providers" ? "is-active" : ""} onClick={() => setTab("providers")}><Server size={16} />Provider <span>{providers.length}</span></button></div>
       {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
       {loading ? <Surface className="cw-loading"><Spinner /></Surface> : tab === "files" ? (

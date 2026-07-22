@@ -1132,44 +1132,7 @@
   }
 }
 
-/* Keep the desktop chrome aligned with the upstream hierarchy and scale. */
-.nav-overflow { display: none; position: relative; }
-.nav-overflow-menu {
-  position: absolute;
-  top: calc(100% + 10px);
-  right: 0;
-  z-index: 80;
-  width: 210px;
-  padding: 6px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-high);
-}
-.nav-overflow-menu button {
-  width: 100%;
-  min-height: 42px;
-  padding: 0 11px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  color: var(--text-soft);
-  background: transparent;
-  font-size: 13px;
-  font-weight: 650;
-  text-align: left;
-}
-.nav-overflow-menu button:hover { color: var(--text); background: var(--surface-hover); }
-.nav-overflow-menu button.is-active { color: var(--accent-strong); border-color: var(--border); background: var(--accent-soft); }
-.nav-overflow-menu button svg { color: var(--accent); }
-
 @media (min-width: 1041px) {
-  .console-layout.layout-top .nav-secondary { display: none !important; }
-  .console-layout.layout-top .nav-overflow { display: block; }
-  .console-layout.layout-side .nav-overflow { display: none; }
-
   .console-layout.layout-top .nav-utility .nav-item {
     width: auto;
     min-width: max-content;
@@ -1260,14 +1223,10 @@
   :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-footer { min-width: 154px; }
 }
 
-@media (max-width: 1040px) {
-  .nav-overflow { display: none !important; }
-}
-
 @media (max-width: 760px) {
   :root[data-style-theme="flat"] .dashboard-chart-tools {
     display: grid;
-    grid-template-columns: auto 36px minmax(0, 1fr);
+    grid-template-columns: auto 36px 36px minmax(0, 1fr);
     align-items: center;
   }
   :root[data-style-theme="flat"] .dashboard-chart-tools .chart-total { justify-self: end; }
@@ -1356,7 +1315,6 @@
     color: var(--text);
   }
   :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-footer > .icon-button,
-  :root[data-style-theme="flat"] .console-layout.layout-top .nav-overflow-trigger,
   :root[data-style-theme="flat"] .console-layout.layout-top .account-block {
     color: var(--text);
     border: 1px solid var(--border-strong);

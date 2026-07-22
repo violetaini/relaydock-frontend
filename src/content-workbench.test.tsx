@@ -169,6 +169,20 @@ describe("content workbench templates", () => {
 });
 
 describe("content workbench subscriptions", () => {
+  it("keeps rule management entry points with subscription management", async () => {
+    const onOpenCustomRules = vi.fn();
+    const onOpenRulesConfig = vi.fn();
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path) as T);
+
+    render(<SubscribeFilesPage onOpenCustomRules={onOpenCustomRules} onOpenRulesConfig={onOpenRulesConfig} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "覆写规则" }));
+    fireEvent.click(screen.getByRole("button", { name: "规则配置" }));
+
+    expect(onOpenCustomRules).toHaveBeenCalledOnce();
+    expect(onOpenRulesConfig).toHaveBeenCalledOnce();
+  });
+
   it("exposes real Clash and Clash Meta deep links for the resolved subscription URL", async () => {
     qrMock.mockResolvedValue("data:image/png;base64,LOCAL_QR");
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {

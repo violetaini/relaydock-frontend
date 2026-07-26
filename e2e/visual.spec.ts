@@ -277,6 +277,7 @@ async function mockAPI(
       "/api/admin/remote/reality-domains": { success: true, domains: [{ domain: "www.cloudflare.com", target: "www.cloudflare.com:443", success: true, latency_ms: 18 }] },
       "/api/admin/nodes": { nodes },
       "/api/admin/managed-node-offers": { offers: [] },
+      "/api/admin/managed-inbound-resources": { success: true, resources: [] },
       "/api/traffic/summary": trafficResponse,
       "/api/admin/tunnels": tunnels,
       "/api/admin/remote/warp/status": { installed: true, license_active: true, addr_v4: "172.16.0.2", addr_v6: "2606:4700:110:8765::2" },
@@ -1027,6 +1028,20 @@ test("dashboard preserves the displayed rate when usage exceeds the limit", asyn
   await page.goto("/#/dashboard");
   await expect(page.getByText("145.2%", { exact: true })).toBeVisible();
   await expect(page.locator(".metric-progress > span")).toHaveAttribute("style", /width: 100%/);
+});
+
+test("a normal user sees quota progress on the dashboard and traffic page", async ({ page }) => {
+  await mockAPI(page, traffic, undefined, {
+    "/api/user/profile": { ...profile, username: "alice", nickname: "Alice", role: "user", is_admin: false },
+    "/api/user/permissions": { pages: [] },
+  });
+
+  await page.goto("/#/dashboard");
+  await expect(page.getByRole("progressbar", { name: "使用率" })).toHaveAttribute("aria-valuetext", "21.6%");
+
+  await page.goto("/#/traffic");
+  await expect(page.getByRole("progressbar", { name: "本期流量使用率" })).toHaveAttribute("aria-valuetext", "21.6%");
+  await expect(page.getByRole("tablist", { name: "流量汇总维度" })).toHaveCount(0);
 });
 
 test("dashboard reports when every configured server is offline", async ({ page }) => {

@@ -603,7 +603,7 @@ test("creates a user, preserves the one-time password, and disables it", async (
 
   await row.getByRole("button", { name: "用户设置 carol" }).click();
   await page.getByRole("dialog", { name: "用户设置 · carol" }).getByRole("button", { name: "停用用户" }).click();
-  await expect(row.getByText("停用", { exact: true })).toBeVisible();
+  await expect(row.getByRole("switch", { name: "启用用户 carol" })).toHaveAttribute("aria-checked", "false");
   expect(mock.callsFor("POST", "/api/admin/users/status").map((call) => call.body)).toEqual([
     { username: "carol", is_active: false },
   ]);

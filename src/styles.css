@@ -269,10 +269,16 @@ small { color: var(--text-soft); }
 .metric-grid { margin-bottom: 18px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .metric { min-height: 126px; padding: 16px; position: relative; overflow: hidden; display: flex; flex-direction: column; }
 .metric::after { content: ""; position: absolute; right: 0; top: 0; width: 3px; height: 100%; background: var(--border-strong); }
+.metric-good { --metric-color: var(--green); --metric-soft: var(--green-soft); }
+.metric-info { --metric-color: var(--blue); --metric-soft: var(--blue-soft); }
+.metric-accent { --metric-color: var(--accent); --metric-soft: var(--accent-soft); }
+.metric-warn { --metric-color: var(--amber); --metric-soft: var(--amber-soft); }
+.metric-bad { --metric-color: var(--red); --metric-soft: var(--red-soft); }
 .metric-good::after { background: var(--green); }
 .metric-info::after { background: var(--blue); }
 .metric-accent::after { background: var(--accent); }
 .metric-warn::after { background: var(--amber); }
+.metric-bad::after { background: var(--red); }
 .metric-top { display: flex; align-items: center; gap: 8px; color: var(--text-soft); font-size: 11px; font-weight: 650; }
 .metric-icon, .settings-icon { width: 31px; height: 31px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; color: var(--accent); background: var(--accent-soft); }
 .metric > strong { margin-top: 16px; font-size: 24px; line-height: 1.1; font-weight: 720; }
@@ -817,7 +823,7 @@ h2 { font-size: 16px; }
 .metric > small { order: 2; margin-top: 4px; font-size: 10px; }
 .metric > strong { order: 3; margin-top: 20px; font-size: 28px; line-height: 1.12; }
 .speed-summary { display: flex; flex-direction: column; gap: 3px; font-size: 18px; }
-.metric-progress { width: 100%; height: 6px; margin-top: 10px; overflow: hidden; background: var(--surface-muted); border: 1px solid var(--border); }
+.metric-progress { width: 100%; height: 6px; margin-top: 10px; overflow: hidden; background: var(--metric-soft, var(--surface-muted)); border: 1px solid var(--border); }
 .metric-progress > span { display: block; height: 100%; background: var(--metric-color, var(--accent)); transition: width .2s ease; }
 .dashboard-chart { min-height: 390px; margin-bottom: 0; }
 .dashboard-chart .bar-chart { height: 314px; padding: 38px 20px 18px; }

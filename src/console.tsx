@@ -54,6 +54,7 @@ import { ForwardingManagement } from "./forwarding-management";
 import { ServicesWorkbenchPage } from "./services-workbench";
 import { SettingsWorkbenchPage } from "./settings-workbench";
 import { TrafficWorkbenchPage } from "./traffic-workbench";
+import { trafficProgressState } from "./traffic-progress";
 import { nextThemeMode, normalizeThemeMode, resolveThemeMode, type ThemeMode } from "./theme";
 import { TwoFactorSettings } from "./two-factor";
 import { UsersWorkbenchPage } from "./users-workbench";
@@ -369,7 +370,10 @@ function DashboardPage({ profile, navigate }: { profile: Profile; navigate: (pag
   const periodUsed = history.reduce((total, item) => total + item.used_gb, 0);
   const uploadSpeed = servers.reduce((total, server) => total + Number(server.current_upload_speed || 0), 0);
   const downloadSpeed = servers.reduce((total, server) => total + Number(server.current_download_speed || 0), 0);
-  const usagePercent = Math.max(0, Number(traffic?.metrics.usage_percentage ?? 0));
+  const rawUsagePercent = Number(traffic?.metrics.usage_percentage ?? 0);
+  const usagePercent = Number.isFinite(rawUsagePercent) ? Math.max(0, rawUsagePercent) : 0;
+  const usageState = trafficProgressState(usagePercent, Number(traffic?.metrics.total_limit_gb || 0) > 0 ? 100 : 0);
+  const usageTone = usageState.tone === "neutral" ? "info" : usageState.tone;
   const enabledNodes = nodes.filter((node) => node.enabled).length;
   const renewalEdge = Date.now() + 14 * 86_400_000;
   const renewalAttention = users.filter((user) => {
@@ -396,7 +400,7 @@ function DashboardPage({ profile, navigate }: { profile: Profile; navigate: (pag
         <Metric tone="info" icon={<ArrowUpFromLine size={22} />} label="总流量配额" value={loading ? "--" : `${traffic?.metrics.total_limit_gb ?? 0} GB`} detail="所有节点的总配额" />
         <Metric tone="accent" icon={<Activity size={22} />} label="已用流量" value={loading ? "--" : `${traffic?.metrics.total_used_gb ?? 0} GB`} detail="所有节点累计消耗" />
         <Metric tone="good" icon={<Boxes size={22} />} label="剩余流量" value={loading ? "--" : `${traffic?.metrics.total_remaining_gb ?? 0} GB`} detail="仍可分配的余量" />
-        <Metric tone="warn" icon={<Gauge size={22} />} label="使用率" value={loading ? "--" : `${usagePercent.toFixed(1)}%`} detail={loading ? "正在汇总服务器流量" : `实时 ↑ ${formatBytes(uploadSpeed, true)} · ↓ ${formatBytes(downloadSpeed, true)}`} progress={loading ? undefined : usagePercent} />
+        <Metric tone={usageTone} icon={<Gauge size={22} />} label="使用率" value={loading ? "--" : `${usagePercent.toFixed(1)}%`} detail={loading ? "正在汇总服务器流量" : `实时 ↑ ${formatBytes(uploadSpeed, true)} · ↓ ${formatBytes(downloadSpeed, true)}`} progress={loading ? undefined : usagePercent} />
       </div>
 
       <Surface className={`chart-surface dashboard-chart ${!loading && history.length === 0 ? "is-empty" : ""}`}>
@@ -431,9 +435,11 @@ function DashboardPage({ profile, navigate }: { profile: Profile; navigate: (pag
   );
 }
 
-function Metric({ icon, label, value, detail, tone = "accent", progress }: { icon: ReactNode; label: string; value: ReactNode; detail: string; tone?: "accent" | "good" | "info" | "warn"; progress?: number }) {
-  const safeProgress = progress == null ? undefined : Math.min(100, Math.max(0, progress));
-  return <Surface className={`metric metric-${tone}`}><div className="metric-top"><span className="metric-icon">{icon}</span><span className="metric-copy"><span>{label}</span><small>{detail}</small></span></div><strong>{value}</strong>{safeProgress != null ? <span className="metric-progress" aria-label={`${label} ${safeProgress.toFixed(1)}%`}><span style={{ width: `${safeProgress}%` }} /></span> : null}</Surface>;
+function Metric({ icon, label, value, detail, tone = "accent", progress }: { icon: ReactNode; label: string; value: ReactNode; detail: string; tone?: "accent" | "good" | "info" | "warn" | "bad"; progress?: number }) {
+  const validProgress = progress != null && Number.isFinite(progress) ? Math.max(0, progress) : undefined;
+  const safeProgress = validProgress == null ? undefined : Math.min(100, validProgress);
+  const progressText = validProgress == null ? "" : `${validProgress.toFixed(1)}%`;
+  return <Surface className={`metric metric-${tone}`}><div className="metric-top"><span className="metric-icon">{icon}</span><span className="metric-copy"><span>{label}</span><small>{detail}</small></span></div><strong>{value}</strong>{safeProgress != null ? <span className="metric-progress" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={safeProgress} aria-valuetext={progressText}><span style={{ width: `${safeProgress}%` }} /></span> : null}</Surface>;
 }
 
 function ServersPage({ notify }: { notify: (message: string, tone?: ToastState["tone"]) => void }) {

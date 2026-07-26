@@ -1,5 +1,11 @@
 .traffic-workbench { display: flex; flex-direction: column; }
 .traffic-workbench-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.member-traffic-progress { min-height: 108px; margin-bottom: 20px; padding: 17px 20px; display: grid; grid-template-columns: minmax(190px, .42fr) minmax(280px, 1fr); align-items: center; gap: 28px; }
+.member-traffic-progress-heading { min-width: 0; display: flex; align-items: center; gap: 11px; }
+.member-traffic-progress-heading > span:first-child { width: 38px; height: 38px; flex: 0 0 38px; display: grid; place-items: center; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border)); border-radius: 7px; background: var(--accent-soft); }
+.member-traffic-progress-heading > span:last-child { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.member-traffic-progress-heading strong { font-size: 14px; }
+.member-traffic-progress-heading small { color: var(--text-soft); font-size: 10px; }
 
 .traffic-history-surface { min-height: 410px; margin-bottom: 20px; overflow: hidden; }
 .traffic-history-surface .surface-heading h2 { display: flex; align-items: center; gap: 7px; }
@@ -31,6 +37,7 @@
 
 @media (max-width: 760px) {
   .traffic-workbench-metrics { grid-template-columns: 1fr; }
+  .member-traffic-progress { padding: 16px; grid-template-columns: 1fr; gap: 16px; }
   .traffic-history-surface { min-height: 365px; }
   .traffic-range { flex-wrap: wrap; padding: 10px 12px; }
   .traffic-range .button { min-width: 0; flex: 1 1 calc(50% - 4px); }

@@ -116,6 +116,9 @@ describe("traffic workbench", () => {
     render(<TrafficWorkbenchPage profile={member} />);
 
     expect(await screen.findByText("25%")).toBeInTheDocument();
+    const progress = screen.getByRole("progressbar", { name: "本期流量使用率" });
+    expect(progress).toHaveAttribute("aria-valuenow", "25");
+    expect(progress.closest(".traffic-progress")).toHaveAttribute("data-tone", "good");
     expect(screen.queryByRole("tablist", { name: "流量汇总维度" })).not.toBeInTheDocument();
     expect(get).toHaveBeenCalledTimes(1);
     expect(get).toHaveBeenCalledWith("/api/traffic/summary");

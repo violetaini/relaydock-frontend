@@ -8,10 +8,35 @@
 .compact-field select { height: 42px; }
 .users-search { width: 300px; height: 42px; }
 .users-search input { height: 42px; }
-.users-table-surface td:nth-child(2) { min-width: 96px; }
-.users-table-surface td:nth-child(3), .users-table-surface td:nth-child(4) { min-width: 170px; }
+.users-table-surface table { min-width: 1040px; }
+.users-table-surface th,
+.users-table-surface td { padding-inline: 16px; }
+.users-table-surface th:nth-child(1), .users-table-surface td:nth-child(1) { width: 22%; min-width: 210px; }
+.users-table-surface th:nth-child(2), .users-table-surface td:nth-child(2) { width: 14%; min-width: 135px; }
+.users-table-surface th:nth-child(3), .users-table-surface td:nth-child(3) { width: 25%; min-width: 230px; }
+.users-table-surface th:nth-child(4), .users-table-surface td:nth-child(4) { width: 16%; min-width: 160px; }
+.users-table-surface th:nth-child(5), .users-table-surface td:nth-child(5) { width: 9%; min-width: 92px; }
+.users-table-surface th:nth-child(6), .users-table-surface td:nth-child(6) { width: 14%; min-width: 132px; }
+.user-list-identity { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.user-list-identity strong { max-width: 240px; overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.user-list-identity > span { max-width: 260px; overflow: hidden; color: var(--text-soft); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .user-remark { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.user-actions { min-width: 132px; display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
+.user-package-chip { min-height: 28px; width: fit-content; max-width: 150px; padding: 4px 8px; display: inline-flex; align-items: center; gap: 6px; overflow: hidden; color: var(--text); border: 1px solid var(--border); background: var(--surface-muted); font-size: 11px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }
+.user-package-chip svg { flex: 0 0 auto; color: var(--accent); }
+.user-package-chip.is-empty { color: var(--text-faint); background: transparent; }
+.user-limit-note { max-width: 230px; margin-top: 6px; display: block; overflow: hidden; color: var(--text-faint); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.user-expiry { display: inline-flex; align-items: center; gap: 8px; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.user-expiry > svg { flex: 0 0 auto; color: var(--text-faint); }
+.user-expiry > span { display: flex; flex-direction: column; gap: 3px; }
+.user-expiry strong { font-size: 11px; }
+.user-expiry small { color: var(--text-faint); font-size: 9px; }
+.user-status-toggle { min-height: 28px; display: flex; align-items: center; }
+.user-status-toggle .toggle-row { position: relative; }
+.user-status-toggle .toggle-row > span:last-child { width: 1px; height: 1px; margin: -1px; padding: 0; position: absolute; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.user-status-toggle + .badge { margin-top: 5px; }
+.user-actions { min-width: 116px; display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
+.user-actions > .icon-button { width: 34px; height: 34px; flex: 0 0 34px; background: var(--surface); border-color: var(--border); }
+.user-actions > .icon-button.is-danger { color: var(--red); }
 .user-actions .button { white-space: nowrap; }
 .user-renew-actions { display: inline-flex; gap: 5px; }
 .user-renew-actions .button { min-width: 44px; padding-inline: 8px; }
@@ -99,6 +124,7 @@
   .users-table-surface tbody,
   .users-table-surface tr,
   .users-table-surface td { width: 100%; min-width: 0 !important; display: block; }
+  .users-table-surface tr > td { width: 100% !important; }
   .users-table-surface table { min-width: 0; }
   .users-table-surface thead { display: none; }
   .users-table-surface tbody { display: grid; gap: 12px; }
@@ -107,10 +133,8 @@
   .users-table-surface td:last-child { padding-bottom: 0; border-bottom: 0; }
   .users-table-surface td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 5px; color: var(--text-faint); font-size: 10px; font-weight: 700; }
   .users-table-surface td[data-label="用户"]::before { display: none; }
-  .users-table-surface .primary-cell { align-items: center; }
-  .users-table-surface .user-actions,
-  .users-table-surface .user-actions .button { width: 100%; }
-  .users-table-surface .user-actions { align-items: stretch; flex-direction: column; justify-content: stretch; }
-  .users-table-surface .user-renew-actions { width: 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+  .users-table-surface .user-actions { width: 100%; min-width: 0; flex-wrap: wrap; justify-content: flex-start; }
+  .users-table-surface .user-renew-actions { width: 100%; flex: 1 0 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
   .users-table-surface .user-renew-actions .button { min-width: 0; }
+  .users-table-surface .traffic-progress { max-width: 100%; }
 }

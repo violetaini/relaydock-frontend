@@ -13,6 +13,7 @@ import {
   Users,
 } from "lucide-react";
 import { api, openDashboardSocket } from "./api";
+import { TrafficProgress } from "./traffic-progress";
 import type { Profile, TrafficSummary } from "./types";
 import {
   Badge,
@@ -310,6 +311,11 @@ export function TrafficWorkbenchPage({ profile }: { profile: Profile }) {
         <TrafficMetric icon={<ArrowDownToLine size={19} />} label="剩余流量" value={loading ? "--" : `${summary?.metrics.total_remaining_gb ?? 0} GB`} detail="不低于 0 GB" tone="good" />
         <TrafficMetric icon={<Gauge size={19} />} label={profile.is_admin ? "实时连接" : "使用率"} value={loading ? "--" : profile.is_admin ? String(activeConnections) : `${summary?.metrics.usage_percentage ?? 0}%`} detail={profile.is_admin ? `${activeUsers} 个活跃用户` : "当前周期"} tone="warn" />
       </div>
+
+      {!profile.is_admin ? <Surface className="member-traffic-progress">
+        <div className="member-traffic-progress-heading"><span><Gauge size={18} /></span><span><strong>本期流量</strong><small>当前账号套餐用量</small></span></div>
+        {loading ? <Spinner label="正在汇总流量" /> : <TrafficProgress used={Number(summary?.metrics.total_used_gb || 0) * 1024 ** 3} limit={Number(summary?.metrics.total_limit_gb || 0) * 1024 ** 3} label="本期流量使用率" />}
+      </Surface> : null}
 
       <Surface className="traffic-history-surface">
         <div className="surface-heading">

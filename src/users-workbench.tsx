@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import {
   ArrowLeft,
+  CalendarDays,
   CalendarPlus,
   ChevronRight,
   Copy,
@@ -25,6 +26,7 @@ import {
 } from "lucide-react";
 import { api } from "./api";
 import { ServerGrantsPanel } from "./server-grants";
+import { TrafficProgress } from "./traffic-progress";
 import type { NodeItem, NodeListResponse, PackageItem, UserItem } from "./types";
 import {
   Badge,
@@ -249,19 +251,50 @@ export function UsersWorkbenchPage({ notify, initialScope = "all" }: { notify: N
       </div>
       <Surface className="table-surface users-table-surface">
         {loading ? <div className="center-state"><Spinner label="正在加载用户" /></div> : filtered.length === 0 ? <EmptyState icon={<Users size={24} />} title={users.length ? "没有匹配的用户" : "暂无用户"} /> : (
-          <div className="table-wrap"><table><thead><tr><th>用户</th><th>状态</th><th>套餐与到期</th><th>限额</th><th>订阅短码</th><th>操作</th></tr></thead><tbody>{filtered.map((user) => {
-            const isAdmin = user.role === "admin";
-            const effectiveSpeed = user.speed_limit_override ?? user.speed_limit_mbps;
-            const effectiveDevices = user.device_limit_override ?? user.device_limit;
-            return <tr key={user.username}>
-              <td data-label="用户"><div className="primary-cell"><span className="user-avatar">{(user.nickname || user.username).slice(0, 1).toUpperCase()}</span><span><strong>{user.nickname || user.username}</strong><small>{user.username}{user.email ? ` · ${user.email}` : ""}</small>{user.remark ? <small className="user-remark">{user.remark}</small> : null}</span></div></td>
-              <td data-label="状态"><Badge tone={user.is_active ? "good" : "bad"}>{user.is_active ? "启用" : "停用"}</Badge>{isAdmin ? <Badge tone="info">管理员</Badge> : user.is_over_limit ? <Badge tone="warn">流量超限</Badge> : null}</td>
-              <td data-label="套餐与到期"><strong>{user.package_name || "未分配套餐"}</strong><small className="cell-note">{user.package_end_date ? `到期 ${user.package_end_date}` : "无到期日"}</small>{scope === "renewal" ? <Badge tone={expiryState(user.package_end_date).tone}>{expiryState(user.package_end_date).label}</Badge> : null}</td>
-              <td data-label="限额"><strong>{formatBytes(user.traffic_used)}</strong><small className="cell-note">{user.traffic_limit ? `流量 ${formatBytes(user.traffic_limit)}` : "流量不限"} · {effectiveSpeed ? `${effectiveSpeed} Mbps` : "不限速"} · {effectiveDevices ? `${effectiveDevices} 设备` : "设备不限"}</small></td>
-              <td data-label="订阅短码">{user.user_short_code ? <button className="inline-copy" onClick={() => copyText(user.user_short_code ?? "", notify, "短码")}><code>{user.user_short_code}</code><Copy size={13} /></button> : <span className="muted">未生成</span>}<small className="cell-note">{user.custom_user_short_code ? "自定义短码" : "系统短码"}</small></td>
-              <td data-label="操作"><div className="user-actions">{scope === "renewal" && !isAdmin && user.package_id ? <div className="user-renew-actions"><Button type="button" variant="secondary" aria-label={`为 ${user.username} 续期 30 天`} disabled={workingUser !== ""} onClick={() => void renew(user, 30)}>{workingUser === user.username ? <Spinner label="续期中" /> : "+30"}</Button><Button type="button" variant="secondary" aria-label={`为 ${user.username} 续期 60 天`} disabled={workingUser !== ""} onClick={() => void renew(user, 60)}>+60</Button><Button type="button" variant="secondary" aria-label={`为 ${user.username} 续期 90 天`} disabled={workingUser !== ""} onClick={() => void renew(user, 90)}>+90</Button></div> : null}<Button variant="secondary" aria-label={`用户设置 ${user.username}`} onClick={() => setEditor({ kind: "manage", user })}><UserCog size={16} />用户设置<ChevronRight size={15} /></Button></div></td>
-            </tr>;
-          })}</tbody></table></div>
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>用户</th><th>套餐</th><th>流量用量</th><th>到期</th><th>启用</th><th aria-label="操作">操作</th></tr></thead>
+              <tbody>{filtered.map((user) => {
+                const isAdmin = user.role === "admin";
+                const effectiveSpeed = user.speed_limit_override ?? user.speed_limit_mbps;
+                const effectiveDevices = user.device_limit_override ?? user.device_limit;
+                const expiry = expiryState(user.package_end_date);
+                const identityDetail = [user.nickname && user.nickname !== user.username ? user.username : "", user.email].filter(Boolean).join(" · ") || "未填写邮箱";
+                const rowWorking = workingUser === user.username;
+                return <tr key={user.username}>
+                  <td data-label="用户">
+                    <div className="user-list-identity">
+                      <strong>{user.nickname || user.username}</strong>
+                      <span>{identityDetail}</span>
+                      {user.remark ? <small className="user-remark" title={user.remark}>{user.remark}</small> : null}
+                    </div>
+                  </td>
+                  <td data-label="套餐">
+                    {isAdmin ? <Badge tone="info">管理员</Badge> : <span className={`user-package-chip ${user.package_name ? "" : "is-empty"}`}><PackageIcon size={14} />{user.package_name || "未绑定"}</span>}
+                  </td>
+                  <td data-label="流量用量">
+                    <TrafficProgress compact used={user.traffic_used} limit={user.traffic_limit} label={`${user.username} 流量使用率`} />
+                    <small className="user-limit-note">{effectiveSpeed ? `${effectiveSpeed} Mbps` : "不限速"} · {effectiveDevices ? `${effectiveDevices} 台设备` : "设备不限"}</small>
+                  </td>
+                  <td data-label="到期">
+                    <span className="user-expiry"><CalendarDays size={15} /><span><strong>{user.package_end_date || "-"}</strong><small>{user.package_end_date ? expiry.label : "未设置到期日"}</small></span></span>
+                  </td>
+                  <td data-label="启用">
+                    {isAdmin ? <Badge tone="info">管理员</Badge> : <div className="user-status-toggle"><Toggle checked={user.is_active} onChange={() => void toggleStatus(user)} label={`${user.is_active ? "停用" : "启用"}用户 ${user.username}`} disabled={rowWorking} /></div>}
+                    {user.is_over_limit ? <Badge tone="bad">流量超限</Badge> : null}
+                  </td>
+                  <td data-label="操作">
+                    <div className="user-actions">
+                      {scope === "renewal" && !isAdmin && user.package_id ? <div className="user-renew-actions"><Button type="button" variant="secondary" aria-label={`为 ${user.username} 续期 30 天`} disabled={workingUser !== ""} onClick={() => void renew(user, 30)}>{rowWorking ? <Spinner label="续期中" /> : "+30"}</Button><Button type="button" variant="secondary" aria-label={`为 ${user.username} 续期 60 天`} disabled={workingUser !== ""} onClick={() => void renew(user, 60)}>+60</Button><Button type="button" variant="secondary" aria-label={`为 ${user.username} 续期 90 天`} disabled={workingUser !== ""} onClick={() => void renew(user, 90)}>+90</Button></div> : null}
+                      {!isAdmin ? <IconButton label={`复制订阅短码 ${user.username}`} disabled={rowWorking || !user.user_short_code} onClick={() => copyText(user.user_short_code ?? "", notify, "订阅短码")}><Link2 size={16} /></IconButton> : null}
+                      <IconButton label={`用户设置 ${user.username}`} disabled={rowWorking} onClick={() => setEditor({ kind: "manage", user })}><Pencil size={16} /></IconButton>
+                      {!isAdmin ? <IconButton className="is-danger" label={`删除用户 ${user.username}`} disabled={rowWorking} onClick={() => setPendingDelete(user)}><Trash2 size={16} /></IconButton> : null}
+                    </div>
+                  </td>
+                </tr>;
+              })}</tbody>
+            </table>
+          </div>
         )}
       </Surface>
 

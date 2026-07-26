@@ -260,6 +260,7 @@
 :root[data-style-theme="flat"] .metric-good { --metric-color: var(--green); --metric-soft: var(--green-soft); }
 :root[data-style-theme="flat"] .metric-info { --metric-color: var(--blue); --metric-soft: var(--blue-soft); }
 :root[data-style-theme="flat"] .metric-warn { --metric-color: var(--amber); --metric-soft: var(--amber-soft); }
+:root[data-style-theme="flat"] .metric-bad { --metric-color: var(--red); --metric-soft: var(--red-soft); }
 
 :root[data-style-theme="flat"] .metric-top {
   justify-content: flex-start;

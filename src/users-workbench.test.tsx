@@ -17,6 +17,23 @@ const alice = {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe("users workbench", () => {
+  it("shows quota progress and keeps common row actions directly available", async () => {
+    const quotaUser = { ...alice, traffic_used: 60 * 1024 ** 3, traffic_limit: 100 * 1024 ** 3 };
+    vi.spyOn(api, "get").mockResolvedValue({ users: [quotaUser] });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ status: "updated" });
+    render(<UsersWorkbenchPage notify={vi.fn()} />);
+
+    const progress = await screen.findByRole("progressbar", { name: "alice 流量使用率" });
+    expect(progress).toHaveAttribute("aria-valuenow", "60");
+    expect(progress.closest(".traffic-progress")).toHaveAttribute("data-tone", "warn");
+    expect(screen.getByRole("button", { name: "复制订阅短码 alice" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "用户设置 alice" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除用户 alice" })).toHaveClass("is-danger");
+
+    fireEvent.click(screen.getByRole("switch", { name: "停用用户 alice" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/users/status", { username: "alice", is_active: false }));
+  });
+
   it("does not expose destructive account actions for an administrator", async () => {
     const admin = { ...alice, username: "admin", nickname: "管理员", role: "admin" };
     vi.spyOn(api, "get").mockResolvedValue({ users: [admin] });

@@ -61,4 +61,60 @@ describe("self-service nodes", () => {
     fireEvent.click(screen.getByRole("button", { name: "确认停用" }));
     await waitFor(() => expect(remove).toHaveBeenCalledWith("/api/user/managed-nodes/88"));
   });
+
+  it("shows only catalog protocols allowed by the server grant", async () => {
+    vi.spyOn(api, "get").mockResolvedValue({
+      grants: [{ id: 7, server_id: 3, server_name: "香港入口", state: "active", allowed_protocols: ["vless"] }],
+      selected: [],
+      catalog: [
+        { offer_id: 45, node_id: 9, node_name: "允许的 VLESS", server_id: 3, server_name: "香港入口", protocol: "vless", grant_id: 7, grant_state: "active", can_create: true },
+        { offer_id: 46, node_id: 10, node_name: "未授权的 VMess", server_id: 3, server_name: "香港入口", protocol: "vmess", grant_id: 7, grant_state: "active", can_create: true },
+      ],
+    });
+    render(<SelfServiceNodes view="catalog" notify={vi.fn()} />);
+
+    expect(await screen.findByText("允许的 VLESS")).toBeInTheDocument();
+    expect(screen.queryByText("未授权的 VMess")).not.toBeInTheDocument();
+  });
+
+  it("matches common catalog aliases against canonical grant protocols", async () => {
+    vi.spyOn(api, "get").mockResolvedValue({
+      grants: [{ id: 7, server_id: 3, server_name: "香港入口", state: "active", allowed_protocols: ["hysteria", "socks", "shadowsocks"] }],
+      selected: [],
+      catalog: [
+        { offer_id: 45, node_id: 9, node_name: "HY2", server_id: 3, server_name: "香港入口", protocol: "hysteria2", grant_id: 7, grant_state: "active", can_create: true },
+        { offer_id: 46, node_id: 10, node_name: "SOCKS", server_id: 3, server_name: "香港入口", protocol: "socks5", grant_id: 7, grant_state: "active", can_create: true },
+        { offer_id: 47, node_id: 11, node_name: "SS2022", server_id: 3, server_name: "香港入口", protocol: "ss", grant_id: 7, grant_state: "active", can_create: true },
+      ],
+    });
+    render(<SelfServiceNodes view="catalog" notify={vi.fn()} />);
+
+    expect(await screen.findByText("HY2")).toBeInTheDocument();
+    expect(screen.getByText("SOCKS")).toBeInTheDocument();
+    expect(screen.getByText("SS2022")).toBeInTheDocument();
+  });
+
+  it("filters catalog entries by their exact protocol combination", async () => {
+    vi.spyOn(api, "get").mockResolvedValue({
+      grants: [{
+        id: 7,
+        server_id: 3,
+        server_name: "香港入口",
+        state: "active",
+        allowed_protocols: ["vless"],
+        allowed_protocol_profiles: ["vless-reality"],
+      }],
+      selected: [],
+      catalog: [
+        { offer_id: 45, node_id: 9, node_name: "允许的 Reality", server_id: 3, server_name: "香港入口", protocol: "vless", protocol_profile: "vless-reality", grant_id: 7, grant_state: "active", can_create: true },
+        { offer_id: 46, node_id: 10, node_name: "未授权的 TCP TLS", server_id: 3, server_name: "香港入口", protocol: "vless", protocol_profile: "vless-tcp-tls", grant_id: 7, grant_state: "active", can_create: true },
+        { offer_id: 47, node_id: 11, node_name: "无法识别的组合", server_id: 3, server_name: "香港入口", protocol: "vless", grant_id: 7, grant_state: "active", can_create: true },
+      ],
+    });
+    render(<SelfServiceNodes view="catalog" notify={vi.fn()} />);
+
+    expect(await screen.findByText("允许的 Reality")).toBeInTheDocument();
+    expect(screen.queryByText("未授权的 TCP TLS")).not.toBeInTheDocument();
+    expect(screen.queryByText("无法识别的组合")).not.toBeInTheDocument();
+  });
 });

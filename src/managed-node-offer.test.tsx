@@ -46,7 +46,7 @@ describe("managed node offer editor", () => {
   it("disables publishing when the node is not bound to a managed inbound", () => {
     render(<NodeEditor node={{ ...managedNode, original_server: "", inbound_tag: "" }} onClose={vi.fn()} onComplete={vi.fn()} />);
     expect(screen.getByRole("switch", { name: "允许获授权用户自助开通" })).toBeDisabled();
-    expect(screen.getByText("需要受管服务器和入站标签后才能发布。")).toBeInTheDocument();
+    expect(screen.getByText("需要受管服务器和入站标识（Tag）后才能发布。")).toBeInTheDocument();
   });
 
   it("pauses an existing offer without deleting its identity", async () => {

@@ -49,9 +49,11 @@ const offlineServer: RemoteServer = {
 function mockServerReads(servers: RemoteServer[] = [onlineServer, offlineServer], resources: {
   inbounds?: Record<string, unknown>[];
   outbounds?: Record<string, unknown>[];
-  routing?: { rules?: Record<string, unknown>[]; domainStrategy?: string };
+  routing?: { rules?: Record<string, unknown>[]; domainStrategy?: string; balancers?: Record<string, unknown>[] };
   dnsProviders?: Record<string, unknown>[];
   ddnsStatuses?: Record<string, unknown>[];
+  lineSpeedtestTargets?: Record<string, unknown>[];
+  certificates?: Record<string, unknown>[];
 } = {}) {
   let ddnsStatusRead = 0;
   return vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
@@ -88,6 +90,8 @@ function mockServerReads(servers: RemoteServer[] = [onlineServer, offlineServer]
     if (path === "/api/admin/remote/inbounds?server_id=11") return { success: true, inbounds: resources.inbounds ?? [] } as T;
     if (path === "/api/admin/remote/outbounds?server_id=11") return { success: true, outbounds: resources.outbounds ?? [] } as T;
     if (path === "/api/admin/remote/routing?server_id=11") return { success: true, routing: resources.routing ?? { rules: [] } } as T;
+    if (path === "/api/admin/line-speedtest/targets") return { success: true, targets: resources.lineSpeedtestTargets ?? [] } as T;
+    if (path === "/api/admin/certificates/valid") return { success: true, certificates: resources.certificates ?? [] } as T;
     if (path === "/api/admin/xray-examples") return { success: true, combinations: [
       { dir_name: "VLESS-TCP-XTLS-Vision-REALITY", protocol: "vless", transport: "tcp", security: "reality", has_config: true },
       { dir_name: "VLESS-WSS-Nginx", protocol: "vless", transport: "wss", security: "tls", has_config: true },
@@ -268,6 +272,37 @@ describe("service management workbench", () => {
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote/services/control?server_id=11", { service: "xray", action: "restart" }));
   });
 
+  it("runs Ookla Speedtest for the server currently open in service management", async () => {
+    mockServerReads([onlineServer], { lineSpeedtestTargets: [{
+      key: "remote:11",
+      kind: "remote",
+      server_id: 11,
+      name: "Edge Hong Kong",
+      online: true,
+      installed: true,
+      managed: true,
+      license_accepted: true,
+      implementation: "Ookla Speedtest CLI",
+      version: "1.2.0",
+      running: false,
+      last_result: { ping_ms: 0.6, download_mbps: 603.4, upload_mbps: 1881.5, isp: "HKBN", test_server: "Sonic" },
+    }] });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true, job_id: "job-11", status: "running" });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(dialog).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(dialog).getByRole("tab", { name: "Speedtest" }));
+
+    expect(await within(dialog).findByText("↓ 603.4 Mbps")).toBeInTheDocument();
+    expect(within(dialog).getByText("↑ 1881.5 Mbps")).toBeInTheDocument();
+    expect(within(dialog).getByText("Sonic")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "开始测速" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/line-speedtest/run", { kind: "remote", server_id: 11 }));
+  });
+
   it("preserves the masked Agent token when editing an address", async () => {
     const serverWithPullAddress = { ...onlineServer, pull_address: "agent-hk.example.com", pull_port: 23889 } as RemoteServer;
     mockServerReads([serverWithPullAddress]);
@@ -380,6 +415,7 @@ describe("service management workbench", () => {
     await waitFor(() => expect(within(dialog).getByText("0.3.0")).toBeInTheDocument());
     fireEvent.click(within(dialog).getByRole("tab", { name: "入站" }));
     fireEvent.click(await within(dialog).findByRole("button", { name: "添加入站" }));
+    expect(await screen.findByRole("dialog", { name: "添加入站" })).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("tab", { name: /高级 JSON/ }));
     fireEvent.change(within(dialog).getByRole("textbox", { name: "入站 Tag" }), { target: { value: "socks-private" } });
     fireEvent.change(within(dialog).getByRole("spinbutton", { name: "入站监听端口" }), { target: { value: "2080" } });
@@ -546,6 +582,165 @@ describe("service management workbench", () => {
     expect(post).not.toHaveBeenCalledWith("/api/admin/remote/inbounds?server_id=11", expect.anything());
   });
 
+  it("creates WireGuard with two generated keypairs and keeps the one-time client config open", async () => {
+    mockServerReads([onlineServer], { inbounds: [] });
+    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/xray/generate-x25519") return { privateKey: "A".repeat(43), publicKey: "B".repeat(43) } as T;
+      if (path === "/api/admin/managed-inbound-resources/wireguard?server_id=11") return { success: true, message: "added" } as T;
+      throw new Error(`unexpected POST ${path}`);
+    });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const operations = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(operations).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(operations).getByRole("tab", { name: "入站" }));
+    fireEvent.click(within(operations).getAllByRole("button", { name: "添加入站" })[0]);
+    const dialog = await screen.findByRole("dialog", { name: "添加入站" });
+    fireEvent.click(within(dialog).getByRole("tab", { name: /WireGuard/ }));
+
+    await within(dialog).findByText("两组密钥已生成");
+    expect(within(dialog).getByRole("textbox", { name: "入站 Tag" })).toHaveValue("wireguard-in");
+    expect(within(dialog).getByRole("spinbutton", { name: "入站监听端口" })).toHaveValue(51820);
+    expect(within(dialog).getByRole("textbox", { name: "WireGuard 客户端 Endpoint" })).toHaveValue("hk.example.com:51820");
+    fireEvent.click(within(dialog).getByRole("button", { name: "创建入站" }));
+
+    await within(dialog).findByRole("status", { name: "WireGuard 已创建" });
+    const inboundCall = post.mock.calls.find(([path]) => path === "/api/admin/managed-inbound-resources/wireguard?server_id=11");
+    expect(inboundCall?.[1]).toMatchObject({
+      action: "add",
+      display_name: "wireguard-in",
+      inbound: {
+        tag: "wireguard-in",
+        port: 51820,
+        protocol: "wireguard",
+        settings: {
+          address: ["10.66.66.1/32"],
+          peers: [{ allowedIPs: ["10.66.66.2/32"], keepAlive: 25 }],
+        },
+      },
+    });
+    const clientConfig = within(dialog).getByRole("textbox", { name: "WireGuard 客户端配置" }) as HTMLTextAreaElement;
+    const clientPrivateKey = clientConfig.value.match(/^PrivateKey = (.+)$/m)?.[1];
+    expect(clientPrivateKey).toMatch(/^[A-Za-z0-9+/]{43}=$/);
+    expect(JSON.stringify(inboundCall?.[1])).not.toContain(clientPrivateKey);
+    expect(clientConfig.value).toMatch(/^PublicKey = [A-Za-z0-9+/]{43}=$/m);
+    expect(clientConfig.value).toContain("Endpoint = hk.example.com:51820");
+    expect(within(dialog).queryByRole("button", { name: "创建入站" })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "关闭" })).not.toBeInTheDocument();
+  });
+
+  it("generates WireGuard keys in the browser instead of requesting them from the backend", async () => {
+    mockServerReads([onlineServer], { inbounds: [] });
+    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/xray/generate-x25519") return { privateKey: "A".repeat(43), publicKey: "B".repeat(43) } as T;
+      throw new Error(`unexpected POST ${path}`);
+    });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const operations = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    fireEvent.click(within(operations).getByRole("tab", { name: "入站" }));
+    fireEvent.click(await within(operations).findByRole("button", { name: "添加入站" }));
+    const dialog = await screen.findByRole("dialog", { name: "添加入站" });
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/xray/generate-x25519"));
+    const callsBeforeWireGuard = post.mock.calls.length;
+    fireEvent.click(within(dialog).getByRole("tab", { name: /WireGuard/ }));
+    await within(dialog).findByText("两组密钥已生成");
+    expect(post.mock.calls).toHaveLength(callsBeforeWireGuard);
+  });
+
+  it("creates Trojan TCP TLS on 8443 with only global and current-server certificates", async () => {
+    const get = mockServerReads([onlineServer], { inbounds: [], certificates: [
+      { id: 9, domain: "global.example.com", remote_server_id: 0 },
+      { id: 10, domain: "hk.example.com", remote_server_id: 11, remote_server_name: "Edge Hong Kong" },
+      { id: 12, domain: "tokyo.example.com", remote_server_id: 12, remote_server_name: "Edge Tokyo" },
+    ] });
+    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/xray/generate-x25519") return { privateKey: "A".repeat(43), publicKey: "B".repeat(43) } as T;
+      if (path === "/api/admin/remote/inbounds?server_id=11") return { success: true } as T;
+      throw new Error(`unexpected POST ${path}`);
+    });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const operations = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(operations).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(operations).getByRole("tab", { name: "入站" }));
+    fireEvent.click(await within(operations).findByRole("button", { name: "添加入站" }));
+    const dialog = await screen.findByRole("dialog", { name: "添加入站" });
+    fireEvent.click(within(dialog).getByRole("tab", { name: /^Trojan/ }));
+
+    const certificate = await within(dialog).findByRole("combobox", { name: "Trojan TLS 证书" });
+    expect(get).toHaveBeenCalledWith("/api/admin/certificates/valid");
+    expect(within(certificate).getByRole("option", { name: /global\.example\.com/ })).toBeInTheDocument();
+    expect(within(certificate).getByRole("option", { name: /hk\.example\.com/ })).toBeInTheDocument();
+    expect(within(certificate).queryByRole("option", { name: /tokyo\.example\.com/ })).not.toBeInTheDocument();
+    expect(certificate).toHaveValue("10");
+    expect(within(dialog).getByRole("spinbutton", { name: "入站监听端口" })).toHaveValue(8443);
+    fireEvent.change(certificate, { target: { value: "10" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "创建入站" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote/inbounds?server_id=11", {
+      action: "add",
+      inbound: expect.objectContaining({
+        tag: "trojan-in",
+        port: 8443,
+        protocol: "trojan",
+        cert_id: 10,
+        streamSettings: expect.objectContaining({ network: "tcp", security: "tls" }),
+      }),
+    }));
+  });
+
+  it("creates Trojan TCP Reality on 443 with probed SNI and generated X25519 keys", async () => {
+    mockServerReads([onlineServer], { inbounds: [] });
+    let keypairIndex = 0;
+    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/xray/generate-x25519") {
+        keypairIndex += 1;
+        return { privateKey: (keypairIndex === 1 ? "A" : "C").repeat(43), publicKey: (keypairIndex === 1 ? "B" : "D").repeat(43) } as T;
+      }
+      if (path === "/api/admin/remote/inbounds?server_id=11") return { success: true } as T;
+      throw new Error(`unexpected POST ${path}`);
+    });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const operations = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(operations).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(operations).getByRole("tab", { name: "入站" }));
+    fireEvent.click(await within(operations).findByRole("button", { name: "添加入站" }));
+    const dialog = await screen.findByRole("dialog", { name: "添加入站" });
+    fireEvent.click(within(dialog).getByRole("tab", { name: /^Trojan/ }));
+    fireEvent.change(await within(dialog).findByRole("combobox", { name: "Trojan 传输与安全" }), { target: { value: "tcp-reality" } });
+
+    await waitFor(() => expect(within(dialog).getByRole("combobox", { name: "Trojan Reality 伪装目标 / SNI" })).toHaveValue(""));
+    expect(within(dialog).getByRole("spinbutton", { name: "入站监听端口" })).toHaveValue(443);
+    fireEvent.change(within(dialog).getByRole("combobox", { name: "Trojan Reality 伪装目标 / SNI" }), { target: { value: "www.cloudflare.com" } });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Trojan Reality Short ID" }), { target: { value: "a1b2c3d4" } });
+    await waitFor(() => expect(keypairIndex).toBeGreaterThanOrEqual(2));
+    fireEvent.click(within(dialog).getByRole("button", { name: "创建入站" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote/inbounds?server_id=11", {
+      action: "add",
+      inbound: expect.objectContaining({
+        tag: "trojan-in",
+        port: 443,
+        protocol: "trojan",
+        streamSettings: {
+          network: "tcp",
+          security: "reality",
+          realitySettings: expect.objectContaining({
+            target: "www.cloudflare.com:443",
+            privateKey: "C".repeat(43),
+            shortIds: ["a1b2c3d4"],
+          }),
+        },
+      }),
+    }));
+  });
+
   it("edits an outbound through the real remove-then-add contract on one server", async () => {
     const original = { tag: "proxy-old", protocol: "socks", settings: { servers: [{ address: "old.example", port: 1080 }] } };
     mockServerReads([onlineServer], { outbounds: [original] });
@@ -612,7 +807,7 @@ describe("service management workbench", () => {
   });
 
   it("shows common routing match fields and creates a rule through add_rule", async () => {
-    mockServerReads([onlineServer], { routing: { domainStrategy: "IPIfNonMatch", rules: [{
+    mockServerReads([onlineServer], { outbounds: [{ tag: "media-out", protocol: "freedom" }, { tag: "proxy-google", protocol: "shadowsocks" }], routing: { domainStrategy: "IPIfNonMatch", balancers: [{ tag: "fallback" }], rules: [{
       type: "field",
       domain: ["domain:google.com"],
       ip: ["8.8.8.8"],
@@ -637,7 +832,16 @@ describe("service management workbench", () => {
     expect(within(dialog).getByText(/IPIfNonMatch/)).toBeInTheDocument();
 
     fireEvent.click(within(dialog).getByRole("button", { name: "添加规则" }));
-    fireEvent.change(within(dialog).getByRole("textbox", { name: "路由出站 Tag" }), { target: { value: "media-out" } });
+    expect(await screen.findByRole("dialog", { name: "添加路由规则" })).toBeInTheDocument();
+    const outboundInput = within(dialog).getByLabelText("路由出站 Tag");
+    const balancerInput = within(dialog).getByLabelText("路由负载均衡 Tag");
+    const outboundOptions = document.getElementById(outboundInput.getAttribute("list") || "");
+    const balancerOptions = document.getElementById(balancerInput.getAttribute("list") || "");
+    expect(outboundOptions).not.toBeNull();
+    expect(balancerOptions).not.toBeNull();
+    expect([...outboundOptions!.querySelectorAll("option")].map((option) => option.value)).toEqual(expect.arrayContaining(["media-out", "proxy-google"]));
+    expect([...balancerOptions!.querySelectorAll("option")].map((option) => option.value)).toContain("fallback");
+    fireEvent.change(outboundInput, { target: { value: "media-out" } });
     fireEvent.change(within(dialog).getByRole("textbox", { name: "路由域名" }), { target: { value: "domain:youtube.com\ngeosite:google" } });
     fireEvent.change(within(dialog).getByRole("textbox", { name: "路由 IP" }), { target: { value: "geoip:private,10.0.0.0/8" } });
     fireEvent.change(within(dialog).getByRole("textbox", { name: "路由端口" }), { target: { value: "443,8443" } });
@@ -699,11 +903,11 @@ describe("service management workbench", () => {
     fireEvent.click(within(dialog).getByRole("tab", { name: "路由规则" }));
     await within(dialog).findByRole("button", { name: "删除路由规则 1" });
     fireEvent.click(within(dialog).getByRole("button", { name: "添加规则" }));
-    fireEvent.change(within(dialog).getByRole("textbox", { name: "路由出站 Tag" }), { target: { value: "broken-out" } });
+    fireEvent.change(within(dialog).getByLabelText("路由出站 Tag"), { target: { value: "broken-out" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "创建规则" }));
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("规则语义无效");
-    expect(within(dialog).getByRole("textbox", { name: "路由出站 Tag" })).toHaveValue("broken-out");
+    expect(within(dialog).getByLabelText("路由出站 Tag")).toHaveValue("broken-out");
     expect(notify).not.toHaveBeenCalled();
   });
 });

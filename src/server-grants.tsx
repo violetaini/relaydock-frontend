@@ -14,6 +14,16 @@ import {
   Unplug,
 } from "lucide-react";
 import { api } from "./api";
+import {
+  familiesForProfiles,
+  managedGrantProtocolGroups,
+  managedGrantProtocolLabel,
+  managedGrantProtocolProfileLabel,
+  managedGrantProtocolProfiles,
+  profilesForFamilies,
+  type ManagedGrantProtocol,
+  type ManagedGrantProtocolProfile,
+} from "./managed-grant-protocols";
 import type { RemoteServer, ServerListResponse } from "./types";
 import {
   Badge,
@@ -31,6 +41,7 @@ import {
 import "./server-grants.css";
 
 export type ManagedBillingMode = "download" | "both";
+export type { ManagedGrantProtocol, ManagedGrantProtocolProfile } from "./managed-grant-protocols";
 
 export interface ServerGrant {
   id: number;
@@ -48,6 +59,8 @@ export interface ServerGrant {
   billing_mode: ManagedBillingMode;
   reset_policy: "none" | "monthly";
   reset_day: number;
+  allowed_protocols?: ManagedGrantProtocol[];
+  allowed_protocol_profiles?: ManagedGrantProtocolProfile[];
   version: number;
   state: string;
   offer_count: number;
@@ -93,6 +106,9 @@ interface GrantFormValue {
   billing: ManagedBillingMode;
   resetPolicy: "none" | "monthly";
   resetDay: string;
+  allowedProtocols: ManagedGrantProtocol[];
+  allowedProtocolProfiles: ManagedGrantProtocolProfile[];
+  protocolProfilesExplicit: boolean;
 }
 
 const stateMeta: Record<string, { label: string; tone: "good" | "warn" | "bad" | "neutral" | "info" }> = {
@@ -155,6 +171,8 @@ function limitedNumber(value: string) {
 }
 
 function formFromGrant(grant?: ServerGrant): GrantFormValue {
+  const allowedProtocols = grant?.allowed_protocols ?? [];
+  const explicitProfiles = grant?.allowed_protocol_profiles ?? [];
   return {
     serverID: grant ? String(grant.server_id) : "",
     enabled: grant?.enabled ?? true,
@@ -167,10 +185,16 @@ function formFromGrant(grant?: ServerGrant): GrantFormValue {
     billing: grant?.billing_mode ?? "download",
     resetPolicy: grant?.reset_policy ?? "none",
     resetDay: String(grant?.reset_day ?? 1),
+    allowedProtocols,
+    allowedProtocolProfiles: explicitProfiles.length ? explicitProfiles : profilesForFamilies(allowedProtocols),
+    protocolProfilesExplicit: explicitProfiles.length > 0,
   };
 }
 
 function payloadFromForm(form: GrantFormValue, version = 1) {
+  const selectedProfiles = managedGrantProtocolProfiles
+    .filter((profile) => form.allowedProtocolProfiles.includes(profile.value))
+    .map((profile) => profile.value);
   return {
     server_id: Number(form.serverID),
     enabled: form.enabled,
@@ -183,6 +207,8 @@ function payloadFromForm(form: GrantFormValue, version = 1) {
     billing_mode: form.billing,
     reset_policy: form.resetPolicy,
     reset_day: form.resetPolicy === "monthly" ? Math.min(28, Math.max(1, Math.floor(Number(form.resetDay) || 1))) : 1,
+    allowed_protocols: form.protocolProfilesExplicit ? familiesForProfiles(selectedProfiles) : form.allowedProtocols,
+    allowed_protocol_profiles: form.protocolProfilesExplicit ? selectedProfiles : [],
     version,
   };
 }
@@ -200,9 +226,28 @@ function grantPayload(grant: ServerGrant, patch: Partial<ReturnType<typeof paylo
     billing_mode: grant.billing_mode,
     reset_policy: grant.reset_policy,
     reset_day: grant.reset_day,
+    allowed_protocols: grant.allowed_protocols ?? [],
+    allowed_protocol_profiles: grant.allowed_protocol_profiles ?? [],
     version: grant.version,
     ...patch,
   };
+}
+
+function effectiveProtocolProfiles(protocols: ManagedGrantProtocol[] = [], profiles: ManagedGrantProtocolProfile[] = []): Set<ManagedGrantProtocolProfile> {
+  if (profiles.length) return new Set(profiles);
+  if (protocols.length) return new Set(profilesForFamilies(protocols));
+  return new Set(managedGrantProtocolProfiles.map((profile) => profile.value));
+}
+
+function protocolScopeNarrows(
+  currentProtocols: ManagedGrantProtocol[] = [],
+  currentProfiles: ManagedGrantProtocolProfile[] = [],
+  nextProtocols: ManagedGrantProtocol[],
+  nextProfiles: ManagedGrantProtocolProfile[],
+): boolean {
+  const current = effectiveProtocolProfiles(currentProtocols, currentProfiles);
+  const next = effectiveProtocolProfiles(nextProtocols, nextProfiles);
+  return [...current].some((profile) => !next.has(profile));
 }
 
 export function ServerGrantsPanel({ username, notify }: { username: string; notify: Notify }) {
@@ -334,6 +379,11 @@ function GrantCard({ grant, busy, onEdit, onToggle, onRetry, onRemove }: { grant
       <span><small>计费方向</small><strong>{billingLabel(grant.billing_mode)}</strong></span>
       <span><small>流量额度</small><strong>{grant.traffic_limit_bytes ? `${formatBytes(grant.billed_bytes)} / ${formatBytes(grant.traffic_limit_bytes)}` : "不限"}</strong></span>
     </div>
+    <div className="sg-protocol-summary"><small>允许组合</small><span>{grant.allowed_protocol_profiles?.length
+      ? grant.allowed_protocol_profiles.map((profile) => <Badge key={profile}>{managedGrantProtocolProfileLabel(profile)}</Badge>)
+      : grant.allowed_protocols?.length
+        ? grant.allowed_protocols.map((protocol) => <Badge key={protocol}>{managedGrantProtocolLabel(protocol)} · 全部组合</Badge>)
+        : <Badge tone="info">全部协议组合</Badge>}</span></div>
     {grant.traffic_limit_bytes ? <div className="sg-quota"><span><i style={{ width: `${quotaPercent}%` }} /></span><small>{quotaPercent.toFixed(0)}%</small></div> : null}
     {grant.last_error ? <p className="sg-item-error" title={grant.last_error}>{grant.last_error}</p> : null}
     <div className="sg-card-actions">
@@ -361,17 +411,35 @@ function GrantEditorDialog({ username, grant, servers, onClose, onSaved }: { use
   const [form, setForm] = useState(() => formFromGrant(grant));
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
+  const [pendingNarrowedPayload, setPendingNarrowedPayload] = useState<ReturnType<typeof payloadFromForm> | null>(null);
   const base = `/api/admin/users/${encodeURIComponent(username)}/server-grants`;
 
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    setError("");
-    if (!form.serverID) return setError("请选择服务器");
-    if (!form.startsAt) return setError("请选择生效时间");
-    if (form.expiresAt && new Date(form.expiresAt) <= new Date(form.startsAt)) return setError("到期时间必须晚于生效时间");
+  const toggleProtocolProfile = (profile: ManagedGrantProtocolProfile) => {
+    const nextProfiles = form.allowedProtocolProfiles.length === 0
+      ? [profile]
+      : form.allowedProtocolProfiles.includes(profile)
+        ? form.allowedProtocolProfiles.filter((item) => item !== profile)
+        : [...form.allowedProtocolProfiles, profile];
+    setError(nextProfiles.length === 0 ? "请选择至少一个协议组合，或选择“全部组合”" : "");
+    setForm({ ...form, allowedProtocolProfiles: nextProfiles, protocolProfilesExplicit: true });
+  };
+
+  const toggleProtocolFamily = (protocol: ManagedGrantProtocol) => {
+    const familyProfiles = managedGrantProtocolGroups.find((group) => group.value === protocol)?.profiles.map((profile) => profile.value) ?? [];
+    const selected = new Set(form.allowedProtocolProfiles);
+    const entireFamilySelected = form.allowedProtocolProfiles.length > 0 && familyProfiles.every((profile) => selected.has(profile));
+    const nextProfiles = form.allowedProtocolProfiles.length === 0
+      ? familyProfiles
+      : entireFamilySelected
+        ? form.allowedProtocolProfiles.filter((profile) => !familyProfiles.includes(profile))
+        : [...form.allowedProtocolProfiles, ...familyProfiles.filter((profile) => !selected.has(profile))];
+    setError(nextProfiles.length === 0 ? "请选择至少一个协议组合，或选择“全部组合”" : "");
+    setForm({ ...form, allowedProtocolProfiles: nextProfiles, protocolProfilesExplicit: true });
+  };
+
+  const save = async (payload: ReturnType<typeof payloadFromForm>) => {
     setWorking(true);
     try {
-      const payload = payloadFromForm(form, grant?.version ?? 1);
       if (grant) await api.put(`${base}/${grant.id}`, payload);
       else await api.post(base, payload);
       onSaved(grant ? `${grant.server_name} 的授权已更新` : "服务器授权已创建");
@@ -379,10 +447,33 @@ function GrantEditorDialog({ username, grant, servers, onClose, onSaved }: { use
       setError(messageOf(reason, "授权保存失败"));
     } finally {
       setWorking(false);
+      setPendingNarrowedPayload(null);
     }
   };
 
-  return <Dialog title={grant ? `编辑 ${grant.server_name} 授权` : "新增服务器授权"} description="0 表示不限；到期后用户节点会立即从订阅排除" onClose={onClose} wide>
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    setError("");
+    if (!form.serverID) return setError("请选择服务器");
+    if (!form.startsAt) return setError("请选择生效时间");
+    if (form.expiresAt && new Date(form.expiresAt) <= new Date(form.startsAt)) return setError("到期时间必须晚于生效时间");
+    if (form.protocolProfilesExplicit && form.allowedProtocolProfiles.length === 0) return setError("请选择至少一个协议组合，或选择“全部组合”");
+    const payload = payloadFromForm(form, grant?.version ?? 1);
+    if (grant && protocolScopeNarrows(
+      grant.allowed_protocols ?? [],
+      grant.allowed_protocol_profiles ?? [],
+      payload.allowed_protocols,
+      payload.allowed_protocol_profiles,
+    )) {
+      setPendingNarrowedPayload(payload);
+      return;
+    }
+    void save(payload);
+  };
+
+  const allProtocolProfilesAllowed = !form.protocolProfilesExplicit && form.allowedProtocols.length === 0 && form.allowedProtocolProfiles.length === 0;
+
+  return <><Dialog title={grant ? `编辑 ${grant.server_name} 授权` : "新增服务器授权"} description="0 表示不限；到期后用户节点会立即从订阅排除" onClose={onClose} wide>
     <form className="form-stack sg-editor" onSubmit={submit}>
       {error ? <ErrorState message={error} /> : null}
       <div className="sg-form-grid">
@@ -395,11 +486,39 @@ function GrantEditorDialog({ username, grant, servers, onClose, onSaved }: { use
         <Field label="并发连接数" hint="0 表示不限"><input type="number" min="0" step="1" value={form.connections} onChange={(event) => setForm({ ...form, connections: event.target.value })} /></Field>
         <Field label="流量额度 (GB)" hint="0 表示不限"><input type="number" min="0" step="0.01" value={form.trafficGB} onChange={(event) => setForm({ ...form, trafficGB: event.target.value })} /></Field>
       </div>
+      <fieldset className="sg-protocol-fieldset">
+        <legend>允许使用的协议组合</legend>
+        <p>可精确到传输与加密组合；选择“全部组合”表示不限制。收窄范围会立即停用未选组合的已有节点。</p>
+        <label className={`sg-protocol-all ${allProtocolProfilesAllowed ? "is-selected" : ""}`}>
+          <input type="checkbox" aria-label="全部协议组合" checked={allProtocolProfilesAllowed} onChange={() => { setError(""); setForm({ ...form, allowedProtocols: [], allowedProtocolProfiles: [], protocolProfilesExplicit: false }); }} />
+          <span><strong>全部组合</strong><small>不限制协议、传输或加密方式</small></span>
+        </label>
+        <div className="sg-protocol-groups" aria-label="允许创建的协议组合">
+          {managedGrantProtocolGroups.map((group) => {
+            const allAllowed = form.allowedProtocolProfiles.length > 0 && group.profiles.every((profile) => form.allowedProtocolProfiles.includes(profile.value));
+            return <section key={group.value} className={allAllowed ? "is-selected" : ""}>
+              <label className="sg-protocol-group-head">
+                <input type="checkbox" aria-label={`${group.label} 全部组合`} checked={allAllowed} onChange={() => toggleProtocolFamily(group.value)} />
+                <strong>{group.label}</strong><small>全部组合</small>
+              </label>
+              <div className="sg-protocol-options">
+                {group.profiles.map((profile) => {
+                  const selected = form.allowedProtocolProfiles.includes(profile.value);
+                  return <label key={profile.value} className={selected ? "is-selected" : ""}>
+                    <input type="checkbox" aria-label={`${group.label} ${profile.label}`} checked={selected} onChange={() => toggleProtocolProfile(profile.value)} />
+                    <span><strong>{profile.label}</strong><small>{profile.detail}</small></span>
+                  </label>;
+                })}
+              </div>
+            </section>;
+          })}
+        </div>
+      </fieldset>
       <Field label="流量计算方向"><div className="sg-choice" role="group" aria-label="流量计算方向"><button type="button" className={form.billing === "download" ? "is-active" : ""} onClick={() => setForm({ ...form, billing: "download" })}>仅下行</button><button type="button" className={form.billing === "both" ? "is-active" : ""} onClick={() => setForm({ ...form, billing: "both" })}>上下行</button></div></Field>
       <div className="sg-form-grid"><Field label="额度重置"><select value={form.resetPolicy} onChange={(event) => setForm({ ...form, resetPolicy: event.target.value as GrantFormValue["resetPolicy"] })}><option value="none">不自动重置</option><option value="monthly">每月重置</option></select></Field>{form.resetPolicy === "monthly" ? <Field label="每月重置日"><input type="number" min="1" max="28" value={form.resetDay} onChange={(event) => setForm({ ...form, resetDay: event.target.value })} /></Field> : <span />}</div>
       <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose} disabled={working}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在保存" /> : <><Server size={16} />保存授权</>}</Button></div>
     </form>
-  </Dialog>;
+  </Dialog>{pendingNarrowedPayload ? <ConfirmDialog title="确认收窄协议组合" description="保存后，已有的未选协议组合节点会立即停用；即使以后重新允许这些组合，用户也需要重新开通对应节点。" confirmLabel="确认收窄并保存" working={working} onCancel={() => setPendingNarrowedPayload(null)} onConfirm={() => void save(pendingNarrowedPayload)} /> : null}</>;
 }
 
 function SelectionLimitsDialog({ username, node, onClose, onSaved }: { username: string; node: ManagedNodeSelection; onClose: () => void; onSaved: () => void }) {

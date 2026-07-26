@@ -1,20 +1,32 @@
+import {
+  buildWireGuardClientConfig,
+  buildWireGuardInbound,
+  type WireGuardInboundFields,
+} from "./xray-inbound-presets";
+
 export type ManagedProtocol =
   | "vless-reality"
   | "vless-tls"
+  | "vless-grpc-tls"
   | "vless-ws"
   | "vless-wss"
   | "vmess"
   | "vmess-tls"
+  | "vmess-grpc-tls"
   | "vmess-ws"
   | "vmess-wss"
   | "trojan"
+  | "trojan-reality"
+  | "trojan-grpc-tls"
   | "trojan-wss"
   | "shadowsocks"
   | "hysteria2"
   | "socks5"
-  | "http";
+  | "http"
+  | "wireguard"
+  | "anydoor";
 
-export type ManagedProtocolFamily = "vless" | "vmess" | "trojan" | "shadowsocks" | "hysteria2" | "socks5" | "http";
+export type ManagedProtocolFamily = "vless" | "vmess" | "trojan" | "shadowsocks" | "hysteria2" | "socks5" | "http" | "wireguard" | "anydoor";
 export type ShadowsocksCipher =
   | "aes-128-gcm"
   | "aes-256-gcm"
@@ -41,8 +53,19 @@ export interface ManagedInboundDraft {
   ssCipher: ShadowsocksCipher;
   certificateId: string;
   skipCertVerify: boolean;
-  hysteriaObfsPassword: string;
   accountUsername: string;
+  wireGuardServerPrivateKey: string;
+  wireGuardServerPublicKey: string;
+  wireGuardClientPrivateKey: string;
+  wireGuardClientPublicKey: string;
+  wireGuardServerAddress: string;
+  wireGuardClientAddress: string;
+  wireGuardDNS: string;
+  wireGuardMTU: string;
+  wireGuardKeepAlive: string;
+  forwardNodeId: string;
+  targetAddress: string;
+  targetPort: string;
   publish: boolean;
   sortOrder: string;
 }
@@ -51,6 +74,10 @@ export interface ManagedInboundRequest {
   action: "add";
   node_name: string;
   ip_version: "v4" | "v6" | "both";
+  forward_node_id?: number;
+  client_options?: {
+    skip_cert_verify?: boolean;
+  };
   inbound: Record<string, unknown>;
 }
 
@@ -64,18 +91,24 @@ export const managedProtocolOptions: Array<{
 }> = [
   { value: "vless-reality", family: "vless", familyLabel: "VLESS", label: "VLESS Reality", detail: "RAW/TCP · Reality · 伪装目标 SNI 必填" },
   { value: "vless-tls", family: "vless", familyLabel: "VLESS", label: "VLESS TCP TLS", detail: "TCP · 托管 TLS 证书", requiresCertificate: true },
+  { value: "vless-grpc-tls", family: "vless", familyLabel: "VLESS", label: "VLESS gRPC TLS", detail: "gRPC · 托管 TLS 证书 · ALPN h2", requiresCertificate: true },
   { value: "vless-wss", family: "vless", familyLabel: "VLESS", label: "VLESS WSS", detail: "WebSocket · Nginx TLS · 节点域名" },
   { value: "vless-ws", family: "vless", familyLabel: "VLESS", label: "VLESS WS", detail: "WebSocket · 无 TLS · 域名可选 · 受信链路" },
   { value: "vmess-tls", family: "vmess", familyLabel: "VMess", label: "VMess TCP TLS", detail: "TCP · 托管 TLS 证书", requiresCertificate: true },
+  { value: "vmess-grpc-tls", family: "vmess", familyLabel: "VMess", label: "VMess gRPC TLS", detail: "gRPC · 托管 TLS 证书 · ALPN h2", requiresCertificate: true },
   { value: "vmess-wss", family: "vmess", familyLabel: "VMess", label: "VMess WSS", detail: "WebSocket · Nginx TLS · 节点域名" },
   { value: "vmess-ws", family: "vmess", familyLabel: "VMess", label: "VMess WS", detail: "WebSocket · 无 TLS · 域名可选" },
   { value: "vmess", family: "vmess", familyLabel: "VMess", label: "VMess TCP（兼容）", detail: "TCP · 无传输层加密" },
   { value: "trojan", family: "trojan", familyLabel: "Trojan", label: "Trojan TCP TLS", detail: "TCP · 托管 TLS 证书", requiresCertificate: true },
+  { value: "trojan-reality", family: "trojan", familyLabel: "Trojan", label: "Trojan TCP Reality", detail: "RAW/TCP · Reality · 无需证书" },
+  { value: "trojan-grpc-tls", family: "trojan", familyLabel: "Trojan", label: "Trojan gRPC TLS", detail: "gRPC · 托管 TLS 证书 · ALPN h2", requiresCertificate: true },
   { value: "trojan-wss", family: "trojan", familyLabel: "Trojan", label: "Trojan WSS", detail: "WebSocket · Nginx TLS · 节点域名" },
   { value: "shadowsocks", family: "shadowsocks", familyLabel: "Shadowsocks", label: "Shadowsocks", detail: "经典 AEAD 或 2022 多用户" },
-  { value: "hysteria2", family: "hysteria2", familyLabel: "Hysteria2", label: "Hysteria2", detail: "UDP · TLS · 可选 Salamander", requiresCertificate: true },
+  { value: "hysteria2", family: "hysteria2", familyLabel: "Hysteria2", label: "Hysteria2", detail: "UDP · TLS · Hysteria2", requiresCertificate: true },
   { value: "socks5", family: "socks5", familyLabel: "SOCKS5", label: "SOCKS5", detail: "TCP + UDP · 用户名密码" },
   { value: "http", family: "http", familyLabel: "HTTP", label: "HTTP Proxy", detail: "TCP · 用户名密码" },
+  { value: "wireguard", family: "wireguard", familyLabel: "WireGuard", label: "WireGuard", detail: "UDP · 单客户端 · 一次性配置" },
+  { value: "anydoor", family: "anydoor", familyLabel: "Tunnel", label: "Tunnel（任意门）", detail: "同时转发 TCP 与 UDP · 目标为已有节点" },
 ];
 
 export function isManagedWSSProtocol(protocol: ManagedProtocol): boolean {
@@ -86,8 +119,16 @@ export function isManagedPlainWSProtocol(protocol: ManagedProtocol): boolean {
   return protocol === "vless-ws" || protocol === "vmess-ws";
 }
 
+export function isManagedRealityProtocol(protocol: ManagedProtocol): boolean {
+  return protocol === "vless-reality" || protocol === "trojan-reality";
+}
+
+export function isManagedGRPCProtocol(protocol: ManagedProtocol): boolean {
+  return protocol === "vless-grpc-tls" || protocol === "vmess-grpc-tls" || protocol === "trojan-grpc-tls";
+}
+
 export function isManagedUUIDProtocol(protocol: ManagedProtocol): boolean {
-  return protocol === "vless-reality" || protocol === "vless-tls" || protocol === "vless-ws" || protocol === "vless-wss" || protocol === "vmess" || protocol === "vmess-tls" || protocol === "vmess-ws" || protocol === "vmess-wss";
+  return protocol === "vless-reality" || protocol === "vless-tls" || protocol === "vless-grpc-tls" || protocol === "vless-ws" || protocol === "vless-wss" || protocol === "vmess" || protocol === "vmess-tls" || protocol === "vmess-grpc-tls" || protocol === "vmess-ws" || protocol === "vmess-wss";
 }
 
 export function isShadowsocks2022Cipher(cipher: ShadowsocksCipher): boolean {
@@ -95,6 +136,7 @@ export function isShadowsocks2022Cipher(cipher: ShadowsocksCipher): boolean {
 }
 
 export function managedInboundSupportsPublishing(draft: Pick<ManagedInboundDraft, "protocol" | "ssCipher">): boolean {
+  if (draft.protocol === "anydoor" || draft.protocol === "wireguard") return false;
   return draft.protocol !== "shadowsocks" || isShadowsocks2022Cipher(draft.ssCipher);
 }
 
@@ -145,8 +187,19 @@ export function newManagedInboundDraft(): ManagedInboundDraft {
     ssCipher: "2022-blake3-aes-128-gcm",
     certificateId: "",
     skipCertVerify: false,
-    hysteriaObfsPassword: "",
     accountUsername: "admin",
+    wireGuardServerPrivateKey: "",
+    wireGuardServerPublicKey: "",
+    wireGuardClientPrivateKey: "",
+    wireGuardClientPublicKey: "",
+    wireGuardServerAddress: "10.66.66.1/32",
+    wireGuardClientAddress: "10.66.66.2/32",
+    wireGuardDNS: "1.1.1.1, 1.0.0.1",
+    wireGuardMTU: "1420",
+    wireGuardKeepAlive: "25",
+    forwardNodeId: "",
+    targetAddress: "",
+    targetPort: "2033",
     publish: false,
     sortOrder: "0",
   };
@@ -157,18 +210,24 @@ export function protocolDefaults(protocol: ManagedProtocol): Partial<ManagedInbo
   switch (protocol) {
     case "vless-reality": return { ...base, tag: "vless-reality", flow: "xtls-rprx-vision" };
     case "vless-tls": return { ...base, tag: "vless-tcp-tls", flow: "xtls-rprx-vision" };
+    case "vless-grpc-tls": return { ...base, tag: "vless-grpc-tls", flow: "", wsPath: `vless-${randomHex(12)}` };
     case "vless-ws": return { ...base, port: "8080", tag: "vless-ws", flow: "", domain: "" };
     case "vless-wss": return { ...base, tag: "vless-wss", flow: "" };
     case "vmess": return { ...base, tag: "vmess-tcp", flow: "" };
     case "vmess-tls": return { ...base, tag: "vmess-tcp-tls", flow: "" };
+    case "vmess-grpc-tls": return { ...base, tag: "vmess-grpc-tls", flow: "", wsPath: `vmess-${randomHex(12)}` };
     case "vmess-ws": return { ...base, port: "8080", tag: "vmess-ws", flow: "", domain: "" };
     case "vmess-wss": return { ...base, tag: "vmess-wss", flow: "" };
     case "trojan": return { ...base, tag: "trojan-tls", flow: "" };
+    case "trojan-reality": return { ...base, tag: "trojan-reality", flow: "", domain: "" };
+    case "trojan-grpc-tls": return { ...base, tag: "trojan-grpc-tls", flow: "", wsPath: `trojan-${randomHex(12)}` };
     case "trojan-wss": return { ...base, tag: "trojan-wss", flow: "" };
     case "shadowsocks": return { ...base, tag: "ss2022", flow: "", ssCipher: "2022-blake3-aes-128-gcm" };
     case "hysteria2": return { ...base, tag: "hysteria2", flow: "" };
     case "socks5": return { ...base, tag: "socks5", flow: "" };
     case "http": return { ...base, tag: "http-proxy", flow: "" };
+    case "wireguard": return { ...base, port: "51820", tag: "wireguard", flow: "", publish: false };
+    case "anydoor": return { ...base, port: "2033", tag: "anydoor", flow: "", publish: false };
   }
 }
 
@@ -176,6 +235,26 @@ function requirePort(value: string): number {
   const port = Number(value);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("监听端口必须在 1 到 65535 之间");
   return port;
+}
+
+function requireTargetPort(value: string): number {
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("目标端口必须在 1 到 65535 之间");
+  return port;
+}
+
+function requireForwardTargetAddress(value: string): string {
+  const address = value.trim();
+  if (!address || address.length > 253 || /[\s/?#]/.test(address) || address.includes("://")) {
+    throw new Error("目标节点地址必须是有效的域名或 IP，不含协议、端口和路径");
+  }
+  return address;
+}
+
+function requireInboundTag(value: string): string {
+  const tag = value.trim();
+  if (!tag) throw new Error("入站标识（Tag）不能为空");
+  return tag;
 }
 
 function requireUUID(value: string): string {
@@ -212,6 +291,14 @@ function requireWebSocketPath(value: string): string {
   return path;
 }
 
+function requireGRPCServiceName(value: string): string {
+  const serviceName = value.trim().replace(/^\/+/, "");
+  if (!serviceName || serviceName.length > 1023 || /[\s?#]/.test(serviceName)) {
+    throw new Error("gRPC Service Name 不能为空，且不能包含空格、查询参数或片段");
+  }
+  return serviceName;
+}
+
 function optionalWebSocketHost(value: string): string {
   const host = value.trim();
   if (!host) return "";
@@ -220,10 +307,8 @@ function optionalWebSocketHost(value: string): string {
 }
 
 function baseInbound(draft: ManagedInboundDraft, protocol: string, settings: Record<string, unknown>): Record<string, unknown> {
-  const tag = draft.tag.trim();
-  if (!tag) throw new Error("入站 Tag 不能为空");
   return {
-    tag,
+    tag: requireInboundTag(draft.tag),
     listen: "0.0.0.0",
     port: requirePort(draft.port),
     protocol,
@@ -244,7 +329,44 @@ function tlsStream(draft: ManagedInboundDraft): Record<string, unknown> {
       tlsSettings: {
         serverName: domain,
         alpn: ["h2", "http/1.1"],
-        allowInsecure: draft.skipCertVerify,
+      },
+    },
+  };
+}
+
+function grpcTLSStream(draft: ManagedInboundDraft): Record<string, unknown> {
+  const tls = tlsStream(draft);
+  const streamSettings = tls.streamSettings as Record<string, unknown>;
+  const tlsSettings = streamSettings.tlsSettings as Record<string, unknown>;
+  return {
+    ...tls,
+    streamSettings: {
+      ...streamSettings,
+      network: "grpc",
+      grpcSettings: { serviceName: requireGRPCServiceName(draft.wsPath), multiMode: false },
+      tlsSettings: { ...tlsSettings, alpn: ["h2"] },
+    },
+  };
+}
+
+function realityStream(draft: ManagedInboundDraft): Record<string, unknown> {
+  const domain = requireRealityTargetDomain(draft.domain);
+  const privateKey = draft.privateKey.trim();
+  const publicKey = draft.publicKey.trim();
+  const shortId = draft.shortId.trim().toLowerCase();
+  if (!/^[A-Za-z0-9_-]{43}$/.test(privateKey) || !/^[A-Za-z0-9_-]{43}$/.test(publicKey)) throw new Error("Reality X25519 密钥不完整，请重新生成");
+  if (!/^[0-9a-f]{2,16}$/.test(shortId) || shortId.length % 2 !== 0) throw new Error("Reality Short ID 必须是 2 到 16 位偶数长度十六进制");
+  return {
+    streamSettings: {
+      network: "tcp",
+      security: "reality",
+      realitySettings: {
+        show: false,
+        target: `${domain}:443`,
+        xver: 0,
+        serverNames: [domain],
+        privateKey,
+        shortIds: [shortId],
       },
     },
   };
@@ -271,35 +393,43 @@ function wsStream(draft: ManagedInboundDraft): Record<string, unknown> {
   };
 }
 
+export function managedWireGuardFields(draft: ManagedInboundDraft): WireGuardInboundFields {
+  return {
+    tag: draft.tag,
+    port: draft.port,
+    serverPrivateKey: draft.wireGuardServerPrivateKey,
+    serverPublicKey: draft.wireGuardServerPublicKey,
+    clientPrivateKey: draft.wireGuardClientPrivateKey,
+    clientPublicKey: draft.wireGuardClientPublicKey,
+    serverAddress: draft.wireGuardServerAddress,
+    clientAddress: draft.wireGuardClientAddress,
+    dns: draft.wireGuardDNS,
+    mtu: draft.wireGuardMTU,
+    keepAlive: draft.wireGuardKeepAlive,
+  };
+}
+
+export function buildManagedWireGuardInbound(draft: ManagedInboundDraft): Record<string, unknown> {
+  return buildWireGuardInbound(managedWireGuardFields(draft));
+}
+
+export function buildManagedWireGuardClientConfig(draft: ManagedInboundDraft, endpointHost: string): string {
+  return buildWireGuardClientConfig(managedWireGuardFields(draft), endpointHost);
+}
+
 export function buildManagedInboundRequest(draft: ManagedInboundDraft): ManagedInboundRequest {
   const name = draft.name.trim();
   if (!name) throw new Error("节点名称不能为空");
   let inbound: Record<string, unknown>;
+  let forwardNodeID: number | undefined;
 
   switch (draft.protocol) {
     case "vless-reality": {
-      const domain = requireRealityTargetDomain(draft.domain);
-      const privateKey = draft.privateKey.trim();
-      const publicKey = draft.publicKey.trim();
-      const shortId = draft.shortId.trim().toLowerCase();
-      if (!/^[A-Za-z0-9_-]{43}$/.test(privateKey) || !/^[A-Za-z0-9_-]{43}$/.test(publicKey)) throw new Error("Reality X25519 密钥不完整，请重新生成");
-      if (!/^[0-9a-f]{2,16}$/.test(shortId) || shortId.length % 2 !== 0) throw new Error("Reality Short ID 必须是 2 到 16 位偶数长度十六进制");
       const client: Record<string, unknown> = { id: requireUUID(draft.uuid), email: "admin" };
       if (draft.flow) client.flow = draft.flow;
       inbound = {
         ...baseInbound(draft, "vless", { clients: [client], decryption: "none" }),
-        streamSettings: {
-          network: "tcp",
-          security: "reality",
-          realitySettings: {
-            show: false,
-            target: `${domain}:443`,
-            xver: 0,
-            serverNames: [domain],
-            privateKey,
-            shortIds: [shortId],
-          },
-        },
+        ...realityStream(draft),
       };
       break;
     }
@@ -312,6 +442,12 @@ export function buildManagedInboundRequest(draft: ManagedInboundDraft): ManagedI
       };
       break;
     }
+    case "vless-grpc-tls":
+      inbound = {
+        ...baseInbound(draft, "vless", { clients: [{ id: requireUUID(draft.uuid), email: "admin" }], decryption: "none" }),
+        ...grpcTLSStream(draft),
+      };
+      break;
     case "vless-ws":
       inbound = {
         ...baseInbound(draft, "vless", { clients: [{ id: requireUUID(draft.uuid), email: "admin" }], decryption: "none" }),
@@ -336,6 +472,12 @@ export function buildManagedInboundRequest(draft: ManagedInboundDraft): ManagedI
         ...tlsStream(draft),
       };
       break;
+    case "vmess-grpc-tls":
+      inbound = {
+        ...baseInbound(draft, "vmess", { clients: [{ id: requireUUID(draft.uuid), email: "admin", security: draft.vmessCipher, level: 0 }] }),
+        ...grpcTLSStream(draft),
+      };
+      break;
     case "vmess-ws":
       inbound = {
         ...baseInbound(draft, "vmess", { clients: [{ id: requireUUID(draft.uuid), email: "admin", security: draft.vmessCipher, level: 0 }] }),
@@ -352,6 +494,18 @@ export function buildManagedInboundRequest(draft: ManagedInboundDraft): ManagedI
       inbound = {
         ...baseInbound(draft, "trojan", { clients: [{ password: requirePassword(draft.password), email: "admin", level: 0 }] }),
         ...tlsStream(draft),
+      };
+      break;
+    case "trojan-reality":
+      inbound = {
+        ...baseInbound(draft, "trojan", { clients: [{ password: requirePassword(draft.password), email: "admin", level: 0 }] }),
+        ...realityStream(draft),
+      };
+      break;
+    case "trojan-grpc-tls":
+      inbound = {
+        ...baseInbound(draft, "trojan", { clients: [{ password: requirePassword(draft.password), email: "admin", level: 0 }] }),
+        ...grpcTLSStream(draft),
       };
       break;
     case "trojan-wss":
@@ -389,10 +543,8 @@ export function buildManagedInboundRequest(draft: ManagedInboundDraft): ManagedI
       const tls = tlsStream(draft);
       const streamSettings = tls.streamSettings as Record<string, unknown>;
       streamSettings.network = "hysteria";
-      streamSettings.hysteriaSettings = {
-        version: 2,
-        ...(draft.hysteriaObfsPassword.trim() ? { password: draft.hysteriaObfsPassword.trim() } : {}),
-      };
+      (streamSettings.tlsSettings as Record<string, unknown>).alpn = ["h3"];
+      streamSettings.hysteriaSettings = { version: 2 };
       inbound = {
         ...baseInbound(draft, "hysteria", { version: 2, clients: [{ auth: requirePassword(draft.password), email: "admin", level: 0 }] }),
         ...tls,
@@ -413,7 +565,31 @@ export function buildManagedInboundRequest(draft: ManagedInboundDraft): ManagedI
         allowTransparent: false,
       });
       break;
+    case "wireguard":
+      throw new Error("WireGuard 必须通过一次性客户端配置创建，不能登记为受管订阅节点");
+    case "anydoor":
+      forwardNodeID = Number(draft.forwardNodeId);
+      if (!Number.isInteger(forwardNodeID) || forwardNodeID <= 0) throw new Error("请选择要转发的目标节点");
+      inbound = {
+        tag: requireInboundTag(draft.tag),
+        listen: "0.0.0.0",
+        port: requirePort(draft.port),
+        protocol: "tunnel",
+        settings: {
+          address: requireForwardTargetAddress(draft.targetAddress),
+          port: requireTargetPort(draft.targetPort),
+          network: "tcp,udp",
+        },
+      };
+      break;
   }
 
-  return { action: "add", node_name: name, ip_version: draft.ipVersion, inbound };
+  return {
+    action: "add",
+    node_name: name,
+    ip_version: draft.ipVersion,
+    ...(forwardNodeID ? { forward_node_id: forwardNodeID } : {}),
+    ...(draft.skipCertVerify ? { client_options: { skip_cert_verify: true } } : {}),
+    inbound,
+  };
 }

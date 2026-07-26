@@ -126,6 +126,56 @@ const speedResults = [{
   created_at: new Date().toISOString(),
 }];
 
+const lineSpeedTargets = [{
+  key: "master:0",
+  kind: "master",
+  server_id: 0,
+  name: "主控本机",
+  online: true,
+  supported: true,
+  installed: true,
+  managed: true,
+  owned: true,
+  running: false,
+  implementation: "Ookla Speedtest CLI",
+  version: "1.2.0.84",
+  last_result: {
+    ping_ms: 18.4,
+    download_mbps: 512.7,
+    upload_mbps: 96.3,
+    isp: "Example Transit",
+    egress_ip: "198.51.100.40",
+    test_server: "Example Network / Tokyo",
+    server_location: "Tokyo, Japan",
+    created_at: new Date().toISOString(),
+  },
+}, {
+  key: "remote:1",
+  kind: "remote",
+  server_id: 1,
+  name: "Hong Kong Edge",
+  online: true,
+  supported: true,
+  installed: true,
+  managed: true,
+  owned: true,
+  license_accepted: true,
+  running: false,
+  implementation: "Ookla Speedtest CLI",
+  version: "1.2.0.84",
+  last_result: {
+    ping_ms: 2.6,
+    jitter_ms: 0.3,
+    packet_loss_percent: 0,
+    download_mbps: 1881.5,
+    upload_mbps: 1867.1,
+    isp: "Example Transit",
+    egress_ip: "198.51.100.14",
+    test_server: "HKBN / Hong Kong",
+    created_at: new Date().toISOString(),
+  },
+}];
+
 const packages = [{
   id: 1,
   name: "标准套餐",
@@ -221,6 +271,7 @@ async function mockAPI(
       "/api/admin/remote/inbounds": { success: true, inbounds: [{ tag: "vless-in", listen: "0.0.0.0", port: 443, protocol: "vless", settings: { clients: [] }, _runtime_status: "running" }] },
       "/api/admin/remote/outbounds": { success: true, outbounds: [{ tag: "direct", protocol: "freedom", settings: {} }] },
       "/api/admin/remote/routing": { success: true, routing: { domainStrategy: "IPIfNonMatch", rules: [{ type: "field", domain: ["domain:google.com"], network: "tcp", outboundTag: "direct" }] } },
+      "/api/admin/remote/xray/config": { success: true, path: "/usr/local/etc/xray/config.json", config: "{\n  \"log\": {\n    \"loglevel\": \"warning\"\n  },\n  \"inbounds\": [],\n  \"outbounds\": []\n}" },
       "/api/admin/xray-examples": { success: true, combinations: [{ dir_name: "VLESS-TCP-XTLS-Vision-REALITY", protocol: "vless", transport: "tcp", security: "reality", has_config: true }] },
       "/api/admin/xray/generate-x25519": { privateKey: "A".repeat(43), publicKey: "B".repeat(43) },
       "/api/admin/remote/reality-domains": { success: true, domains: [{ domain: "www.cloudflare.com", target: "www.cloudflare.com:443", success: true, latency_ms: 18 }] },
@@ -233,6 +284,7 @@ async function mockAPI(
       "/api/admin/speedtest/mihomo-status": { success: true, ready: true, path: "/opt/arcway/data/bin/mihomo" },
       "/api/admin/speedtest/results": { success: true, results: speedResults },
       "/api/admin/speedtest/testers": { success: true, testers: [{ id: 1, name: "Home Fiber", online: true, created_by: "admin" }] },
+      "/api/admin/line-speedtest/targets": { success: true, targets: lineSpeedTargets },
       "/api/user/debug/status": { enabled: true, log_path: "/tmp/arcway-debug.log", started_at: new Date().toISOString(), file_size: "12 KB", duration_seconds: 42 },
       "/api/user/debug/tail": { lines: "[INFO] agent connected\n[WARN] sample retry", total_size: 12288 },
       "/api/admin/tgbot/invites": { success: true, items: [{ code: "ARCWAY-DEMO", kind: "new", created_by: "admin", package_id: 1, max_uses: 3, used_count: 1, expires_at: "2026-08-19T00:00:00Z", revoked: false, remark: "新用户邀请", created_at: "2026-07-19T00:00:00Z", usable: true, duration_months: 1 }] },
@@ -265,6 +317,7 @@ async function mockAPI(
       "/api/user/external-subscriptions": [{ id: 2, username: "admin", name: "Vendor Backup", url: "https://vendor.example/sub", node_count: 4, upload: 1024, download: 2048, total: 4096, traffic_mode: "both" }],
       "/api/user/proxy-provider-configs": [],
       "/api/admin/certificates": { success: true, certificates },
+      "/api/admin/certificates/valid": { success: true, certificates },
       "/api/admin/dns-providers": { success: true, providers: [{ id: 1, name: "Cloudflare DNS", provider_type: "cloudflare", credentials_configured: true }] },
       "/api/admin/custom-rules": customRules,
       "/api/admin/override-scripts": overrideScripts,
@@ -598,7 +651,6 @@ test("advanced mobile panels remain within the viewport", async ({ page }) => {
   const panels = [
     { tab: "WARP", heading: "WARP 出站", file: "warp" },
     { tab: "联邦分享", heading: "我分享的服务器", file: "federation" },
-    { tab: "节点测速", heading: "主控节点测速", file: "speedtest" },
     { tab: "备份恢复", heading: "数据备份", file: "backup" },
     { tab: "Debug 日志", heading: "Debug / Agent 日志", file: "debug" },
     { tab: "TG 邀请码", heading: "TG Bot 邀请码", file: "invites" },
@@ -718,26 +770,49 @@ for (const viewport of [
     const serverDialog = page.getByRole("dialog", { name: "Hong Kong Edge" });
     await expect(serverDialog.getByText("Agent 版本", { exact: true })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} server operations`);
+    await expect(serverDialog).toHaveClass(/dialog-extra-wide/);
+    await serverDialog.getByRole("tab", { name: "Speedtest" }).click();
+    await expect(serverDialog.getByText("服务器线路测速", { exact: true })).toBeVisible();
+    await expect(serverDialog.getByText("Ookla Speedtest CLI", { exact: true })).toBeVisible();
+    await expectViewportIntegrity(page, `${viewport.name} server speedtest`);
+    await serverDialog.getByRole("tab", { name: "Xray 配置" }).click();
+    await serverDialog.getByRole("button", { name: "读取配置" }).click();
+    const configEditor = serverDialog.getByLabel("Xray 配置 JSON");
+    await expect(configEditor).toHaveValue(/loglevel/);
+    const editorHeight = await configEditor.evaluate((element) => element.getBoundingClientRect().height);
+    expect(editorHeight, `${viewport.name} Xray editor should use the available dialog height`).toBeGreaterThanOrEqual(viewport.name === "desktop" ? 400 : 300);
+    await expectViewportIntegrity(page, `${viewport.name} Xray config editor`);
     await serverDialog.getByRole("tab", { name: "入站" }).click();
     await expect(serverDialog.getByText("vless-in", { exact: true })).toBeVisible();
     await serverDialog.getByRole("button", { name: "添加入站" }).first().click();
-    await expect(serverDialog.getByRole("tab", { name: /VLESS \+ Reality/ })).toHaveAttribute("aria-selected", "true");
-    await expect(serverDialog.getByRole("combobox", { name: "Reality 伪装目标 / SNI" })).toBeVisible();
-    await expect(serverDialog.getByText("已生成", { exact: true })).toBeVisible();
+    const inboundDialog = page.getByRole("dialog", { name: "添加入站" });
+    await expect(inboundDialog.getByRole("tab", { name: /VLESS \+ Reality/ })).toHaveAttribute("aria-selected", "true");
+    await expect(inboundDialog.getByRole("combobox", { name: "Reality 伪装目标 / SNI" })).toBeVisible();
+    await expect(inboundDialog.getByText("已生成", { exact: true })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} secure inbound wizard`);
-    await serverDialog.getByRole("tab", { name: /高级 JSON/ }).click();
-    await expect(serverDialog.getByLabel("入站高级 JSON")).toBeVisible();
+    await inboundDialog.getByRole("tab", { name: /^WireGuard/ }).click();
+    await expect(inboundDialog.getByText("两组密钥已生成", { exact: true })).toBeVisible();
+    await expect(inboundDialog.getByLabel("WireGuard 服务端地址")).toHaveValue("10.66.66.1/32");
+    await expect(inboundDialog.getByLabel("WireGuard 客户端地址")).toHaveValue("10.66.66.2/32");
+    await expectViewportIntegrity(page, `${viewport.name} WireGuard inbound wizard`);
+    await inboundDialog.getByRole("tab", { name: /^Trojan/ }).click();
+    await expect(inboundDialog.getByLabel("Trojan 传输与安全")).toContainText("TCP + Reality");
+    await expect(inboundDialog.getByLabel("Trojan TLS 证书")).toBeVisible();
+    await expectViewportIntegrity(page, `${viewport.name} Trojan inbound wizard`);
+    await inboundDialog.getByRole("tab", { name: /高级 JSON/ }).click();
+    await expect(inboundDialog.getByLabel("入站高级 JSON")).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} advanced inbound editor`);
-    await serverDialog.locator(".xray-resource-editor").getByRole("button", { name: "关闭" }).click();
+    await inboundDialog.getByRole("button", { name: "关闭" }).click();
     await serverDialog.getByRole("tab", { name: "出站" }).click();
     await expect(serverDialog.getByText("direct", { exact: true })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} structured outbound list`);
     await serverDialog.getByRole("tab", { name: "路由规则" }).click();
     await expect(serverDialog.getByText("domain:google.com", { exact: true })).toBeVisible();
     await serverDialog.getByRole("button", { name: "添加规则" }).first().click();
-    await expect(serverDialog.getByLabel("路由规则高级 JSON")).toBeVisible();
+    const routingDialog = page.getByRole("dialog", { name: "添加路由规则" });
+    await expect(routingDialog.getByLabel("路由规则高级 JSON")).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} structured routing editor`);
-    await serverDialog.locator(".routing-rule-editor").getByRole("button", { name: "关闭" }).click();
+    await routingDialog.getByRole("button", { name: "关闭" }).click();
     await closeDialog(page);
 
     await page.goto("/#/nodes");
@@ -764,8 +839,38 @@ for (const viewport of [
     await closeDialog(page);
     await page.getByRole("button", { name: "工具", exact: true }).click();
     await page.getByRole("menuitem", { name: "节点测速" }).click();
-    await expect(page.getByRole("dialog", { name: "节点测速工作台" })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "测速工作台" })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} speed test workbench`);
+    await page.getByRole("tab", { name: "线路 Ookla Speedtest" }).click();
+    const speedDialog = page.getByRole("dialog", { name: "测速工作台" });
+    await expect(speedDialog).toHaveClass(/dialog-extra-wide/);
+    await expect(speedDialog.getByText("Example Network / Tokyo", { exact: true })).toBeVisible();
+    const implementationFragments = await speedDialog.getByText("Ookla Speedtest CLI", { exact: true }).first().evaluate((element) => element.getClientRects().length);
+    expect(implementationFragments, "Speedtest implementation should stay on one line").toBe(1);
+    const statusLineOffsets = await speedDialog.locator(".nw-line-status").evaluateAll((groups) => groups.map((group) => {
+      const tops = Array.from(group.querySelectorAll(".badge")).map((badge) => badge.getBoundingClientRect().top);
+      return tops.length > 1 ? Math.max(...tops) - Math.min(...tops) : 0;
+    }));
+    expect(Math.max(...statusLineOffsets), "Each Speedtest status cell should stay on one line").toBeLessThanOrEqual(1);
+    const metricLineOffsets = await speedDialog.locator(".nw-line-metrics").evaluateAll((groups) => groups.map((group) => {
+      const tops = Array.from(group.children).map((metric) => metric.getBoundingClientRect().top);
+      return Math.max(...tops) - Math.min(...tops);
+    }));
+    expect(Math.max(...metricLineOffsets), "Speedtest metrics should stay on one line").toBeLessThanOrEqual(4);
+    const cellOverflows = await speedDialog.locator(".nw-line-speed-table tbody tr").evaluateAll((rows) => rows.flatMap((row) => (
+      Array.from(row.querySelectorAll<HTMLElement>(".nw-line-status, .nw-line-implementation, .nw-line-metrics, .nw-line-endpoint, .nw-row-actions"))
+        .flatMap((content) => {
+          const cell = content.closest("td");
+          if (!cell) return ["content has no table cell"];
+          const contentRect = content.getBoundingClientRect();
+          const cellRect = cell.getBoundingClientRect();
+          return contentRect.left < cellRect.left - 1 || contentRect.right > cellRect.right + 1
+            ? [`${content.className}: ${Math.round(contentRect.left)}-${Math.round(contentRect.right)} outside ${Math.round(cellRect.left)}-${Math.round(cellRect.right)}`]
+            : [];
+        })
+    )));
+    expect(cellOverflows, "Speedtest content must stay inside its own table cell").toEqual([]);
+    await expectViewportIntegrity(page, `${viewport.name} line speedtest workbench`);
     await closeDialog(page);
     await page.getByRole("button", { name: "工具", exact: true }).click();
     await page.getByRole("menuitem", { name: "URI 管理器" }).click();
@@ -796,6 +901,14 @@ for (const viewport of [
     const userSettings = page.getByRole("dialog", { name: "用户设置 · alice" });
     await expect(userSettings.getByRole("combobox", { name: "用户套餐" })).toBeVisible();
     await expect(userSettings.getByRole("button", { name: /服务器授权与自建节点/ })).toBeVisible();
+    if (viewport.name === "desktop") {
+      const packageControlTops = await userSettings.locator(".user-package-form").evaluate((form) =>
+        Array.from(form.querySelectorAll<HTMLElement>(":scope > .field > select, :scope > .field > input"))
+          .map((control) => control.getBoundingClientRect().top),
+      );
+      expect(packageControlTops).toHaveLength(3);
+      expect(Math.max(...packageControlTops) - Math.min(...packageControlTops), "package and date controls must share one row").toBeLessThanOrEqual(1);
+    }
     await userSettings.getByRole("button", { name: /资料、备注与订阅短码/ }).click();
     await expect(page.getByRole("dialog")).toHaveCount(1);
     await expect(userSettings.getByRole("tab", { name: "资料与短码" })).toHaveAttribute("aria-selected", "true");

@@ -61,7 +61,7 @@
 .user-setting-row > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .user-setting-row small { color: var(--text-soft); font-size: 10px; }
 .user-setting-row > svg { color: var(--text-faint); }
-.user-package-form { padding: 14px; display: grid; grid-template-columns: minmax(180px, 1.2fr) repeat(2, minmax(150px, .8fr)); align-items: end; gap: 10px; }
+.user-package-form { padding: 14px; display: grid; grid-template-columns: minmax(180px, 1.2fr) repeat(2, minmax(150px, .8fr)); align-items: start; gap: 10px; }
 .user-package-reset { grid-column: 1 / -1; padding: 10px 12px; display: grid; grid-template-columns: minmax(0, 1fr) 132px; align-items: end; gap: 14px; border: 1px solid var(--border); background: var(--surface-muted); }
 .user-package-reset > div { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
 .user-package-reset small { color: var(--text-soft); font-size: 10px; line-height: 1.45; }

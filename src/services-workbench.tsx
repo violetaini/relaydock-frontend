@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   Activity,
   ArrowDownToLine,
@@ -12,6 +12,7 @@ import {
   FileKey2,
   Gauge,
   Grid2X2,
+  HardDriveDownload,
   KeyRound,
   List,
   Network,
@@ -34,6 +35,15 @@ import {
 } from "lucide-react";
 import { api, request } from "./api";
 import type { RemoteServer, ServerListResponse, SharedServerToken } from "./types";
+import {
+  buildTrojanInbound,
+  buildWireGuardClientConfig,
+  buildWireGuardInbound,
+  generateWireGuardKeyPair,
+  type TrojanCombination,
+  type TrojanInboundFields,
+  type WireGuardInboundFields,
+} from "./xray-inbound-presets";
 import {
   Badge,
   Button,
@@ -83,6 +93,55 @@ interface ActionResponse {
   message?: string;
   error?: string;
   output?: string;
+}
+
+interface LineSpeedtestResult {
+  ping_ms?: number;
+  download_mbps?: number;
+  upload_mbps?: number;
+  jitter_ms?: number;
+  packet_loss_percent?: number;
+  isp?: string;
+  test_server?: string;
+  server_name?: string;
+  server_location?: string;
+  egress_ip?: string;
+  created_at?: string;
+  timestamp?: string;
+}
+
+interface LineSpeedtestJob {
+  id?: string | number;
+  job_id?: string | number;
+  status?: string;
+  error?: string;
+  result?: LineSpeedtestResult;
+  created_at?: string;
+  completed_at?: string;
+}
+
+interface LineSpeedtestJobResponse extends LineSpeedtestJob {
+  job?: LineSpeedtestJob;
+}
+
+interface LineSpeedtestTarget {
+  key: string;
+  kind: "master" | "remote";
+  server_id?: number;
+  name: string;
+  online: boolean;
+  installed: boolean;
+  managed: boolean;
+  owned?: boolean;
+  license_accepted?: boolean;
+  supported?: boolean;
+  upgrade_required?: boolean;
+  implementation?: string;
+  version?: string;
+  running: boolean;
+  last_result?: LineSpeedtestResult;
+  last_job?: LineSpeedtestJob;
+  error?: string;
 }
 
 interface DNSProviderWire {
@@ -174,6 +233,18 @@ interface XrayExamplesResponse extends ActionResponse {
 interface X25519Response extends ActionResponse {
   privateKey?: string;
   publicKey?: string;
+}
+
+interface ManagedCertificateOption {
+  id: number;
+  domain: string;
+  dns_names?: string[];
+  remote_server_id?: number;
+  remote_server_name?: string;
+}
+
+interface ValidCertificatesResponse extends ActionResponse {
+  certificates?: ManagedCertificateOption[];
 }
 
 interface VlessEncryptionResponse extends ActionResponse {
@@ -276,6 +347,33 @@ function messageFrom(reason: unknown, fallback: string): string {
   return reason instanceof Error ? reason.message : fallback;
 }
 
+function lineSpeedtestMetric(value: number | undefined, suffix: string): string {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? `${numeric.toFixed(1)} ${suffix}` : "-";
+}
+
+function lineSpeedtestServer(result: LineSpeedtestResult | undefined): string {
+  if (!result) return "-";
+  return result.test_server
+    || [result.server_name, result.server_location].filter(Boolean).join(" · ")
+    || "-";
+}
+
+function lineSpeedtestJobState(response: LineSpeedtestJobResponse): { status: string; error: string; result?: LineSpeedtestResult; job: LineSpeedtestJob } {
+  const job = response.job ?? response;
+  return {
+    status: String(job.status || response.status || "running").trim().toLowerCase(),
+    error: String(job.error || response.error || "").trim(),
+    result: response.result ?? job.result,
+    job,
+  };
+}
+
+function lineSpeedtestNeedsAgentUpgrade(target: LineSpeedtestTarget): boolean {
+  return target.upgrade_required === true
+    || /(?:升级|upgrade).{0,12}agent|agent.{0,12}(?:过旧|upgrade)|\b404\b/i.test(target.error || "");
+}
+
 function normalizeDNSProviders(items: DNSProviderWire[] = []): DNSProviderOption[] {
   return items.flatMap((item) => {
     const id = item.id ?? item.ID;
@@ -332,7 +430,8 @@ function xrayResourceProtocol(resource: XrayResource): string {
   return typeof resource.protocol === "string" ? resource.protocol : "";
 }
 
-type InboundCreationPreset = "reality" | "wss" | "advanced";
+type InboundCreationPreset = "reality" | "wss" | "wireguard" | "trojan" | "advanced";
+type VlessInboundCreationPreset = Extract<InboundCreationPreset, "reality" | "wss">;
 
 interface SecureInboundDraft {
   uuid: string;
@@ -344,6 +443,28 @@ interface SecureInboundDraft {
   enhancedEncryption: boolean;
   decryptionConfig: string;
   encryption: string;
+}
+
+type TrojanInboundDraft = Omit<TrojanInboundFields, "tag" | "port">;
+type WireGuardInboundDraft = Omit<WireGuardInboundFields, "tag" | "port">;
+
+interface WireGuardCreatedState {
+  serverPublicKey: string;
+  clientConfig: string;
+}
+
+function certificateNameMatchesHost(name: string, host: string): boolean {
+  const normalizedName = name.trim().toLowerCase().replace(/\.$/, "");
+  const normalizedHost = host.trim().toLowerCase().replace(/\.$/, "");
+  if (!normalizedName || !normalizedHost) return false;
+  if (!normalizedName.startsWith("*.")) return normalizedName === normalizedHost;
+  const suffix = normalizedName.slice(2);
+  return normalizedHost.endsWith(`.${suffix}`) && normalizedHost.split(".").length === suffix.split(".").length + 1;
+}
+
+function certificateMatchesHost(certificate: ManagedCertificateOption, host: string): boolean {
+  const names = certificate.dns_names?.length ? certificate.dns_names : [certificate.domain];
+  return names.some((name) => certificateNameMatchesHost(name, host));
 }
 
 function randomHex(length: number): string {
@@ -376,6 +497,34 @@ function newSecureInboundDraft(serverDomain = ""): SecureInboundDraft {
   };
 }
 
+function newTrojanInboundDraft(serverDomain = ""): TrojanInboundDraft {
+  return {
+    password: randomHex(32),
+    domain: serverDomain.trim().toLowerCase(),
+    combination: "tcp-tls",
+    certificateId: "",
+    path: `/trojan/${randomHex(10)}`,
+    serviceName: `trojan-${randomHex(8)}`,
+    privateKey: "",
+    publicKey: "",
+    shortId: randomHex(16),
+  };
+}
+
+function newWireGuardInboundDraft(): WireGuardInboundDraft {
+  return {
+    serverPrivateKey: "",
+    serverPublicKey: "",
+    clientPrivateKey: "",
+    clientPublicKey: "",
+    serverAddress: "10.66.66.1/32",
+    clientAddress: "10.66.66.2/32",
+    dns: "1.1.1.1, 1.0.0.1",
+    mtu: "1420",
+    keepAlive: "25",
+  };
+}
+
 function validUUID(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
@@ -394,8 +543,12 @@ function validRealityKey(value: string): boolean {
   return /^[A-Za-z0-9_-]{43}$/.test(value);
 }
 
+function validWireGuardKey(value: string): boolean {
+  return /^[A-Za-z0-9+/]{43}=$/.test(value);
+}
+
 function buildSecureInbound(
-  preset: Exclude<InboundCreationPreset, "advanced">,
+  preset: VlessInboundCreationPreset,
   fields: { tag: string; port: string },
   draft: SecureInboundDraft,
 ): XrayResource {
@@ -938,7 +1091,7 @@ function DDNSOverviewPanel({ status, working, onRetry }: { status: DDNSStatusRes
   </Surface>;
 }
 
-type OperationTab = "overview" | "services" | "inbounds" | "outbounds" | "routing" | "config" | "sharing";
+type OperationTab = "overview" | "services" | "speedtest" | "inbounds" | "outbounds" | "routing" | "config" | "sharing";
 
 function ServerOperationsDialog({ server, notify, onClose, onChanged, onUpgrade }: { server: ManagedServer; notify: Notify; onClose: () => void; onChanged: () => Promise<void>; onUpgrade: () => void }) {
   const [tab, setTab] = useState<OperationTab>("overview");
@@ -1132,6 +1285,7 @@ function ServerOperationsDialog({ server, notify, onClose, onChanged, onUpgrade 
   const tabs: Array<{ key: OperationTab; label: string; icon: ReactNode }> = [
     { key: "overview", label: "概览", icon: <Activity size={16} /> },
     { key: "services", label: "服务控制", icon: <TerminalSquare size={16} /> },
+    { key: "speedtest", label: "Speedtest", icon: <Gauge size={16} /> },
     { key: "inbounds", label: "入站", icon: <ArrowDownToLine size={16} /> },
     { key: "outbounds", label: "出站", icon: <ArrowUpFromLine size={16} /> },
     { key: "routing", label: "路由规则", icon: <Network size={16} /> },
@@ -1139,11 +1293,12 @@ function ServerOperationsDialog({ server, notify, onClose, onChanged, onUpgrade 
     ...(!server.is_federated ? [{ key: "sharing" as const, label: "服务器分享", icon: <Network size={16} /> }] : []),
   ];
 
-  return <Dialog title={server.name} description={`${server.domain || server.ip_address || "地址待上报"} · ${isConnected(server) ? "Agent 在线" : "Agent 离线"}`} onClose={() => !working && onClose()} wide><div className="service-operation-tabs" role="tablist">{tabs.map((item) => <button key={item.key} role="tab" aria-selected={tab === item.key} className={tab === item.key ? "is-active" : ""} onClick={() => setTab(item.key)}>{item.icon}{item.label}</button>)}</div>{error ? <ErrorState message={error} onRetry={() => void loadStatus()} /> : null}{loading ? <div className="center-state"><Spinner label="正在读取 Agent 状态" /></div> : null}
+  return <Dialog title={server.name} description={`${server.domain || server.ip_address || "地址待上报"} · ${isConnected(server) ? "Agent 在线" : "Agent 离线"}`} onClose={() => !working && onClose()} wide extraWide><div className="service-operation-tabs" role="tablist">{tabs.map((item) => <button key={item.key} role="tab" aria-selected={tab === item.key} className={tab === item.key ? "is-active" : ""} onClick={() => setTab(item.key)}>{item.icon}{item.label}</button>)}</div>{error ? <ErrorState message={error} onRetry={() => void loadStatus()} /> : null}{loading ? <div className="center-state"><Spinner label="正在读取 Agent 状态" /></div> : null}
     {!loading && tab === "overview" ? <div className="service-overview"><div className="service-overview-grid"><InfoTile label="连接状态" value={isConnected(server) ? "在线" : "离线"} detail={server.encrypted ? "加密 WebSocket" : server.connection_mode} icon={<Wifi size={18} />} /><InfoTile label="Agent 版本" value={version?.current || system?.agent_version || "未知"} detail={version?.latest ? `最新 ${version.latest}` : version?.latest_error || "未读取最新版本"} icon={<UploadCloud size={18} />} /><InfoTile label="主机名" value={system?.hostname || server.name} detail={system?.uptime ? `运行 ${Math.floor(Number(system.uptime) / 3600)} 小时` : relativeTime(server.last_heartbeat)} icon={<Server size={18} />} /><InfoTile label="系统负载" value={system?.loadavg?.split(" ").slice(0, 3).join(" / ") || "暂无"} detail={system?.memory?.MemAvailable ? `可用内存 ${system.memory.MemAvailable}` : "Agent 未上报内存"} icon={<Gauge size={18} />} /></div><Surface className="service-address-panel"><h3>连接与流量</h3><dl><div><dt>IPv4</dt><dd>{server.ip_address || "未上报"}</dd></div><div><dt>IPv6</dt><dd>{server.ipv6_enabled ? server.ip_address_v6 || "未上报" : "已关闭"}</dd></div><div><dt>节点域名</dt><dd>{server.domain || "未设置"}</dd></div><div><dt>Agent 端口</dt><dd>{server.listen_port || 23889}</dd></div><div><dt>统计口径</dt><dd>{server.traffic_source === "system" ? "系统网卡" : "Xray 聚合"} / {server.traffic_stats_mode || "both"}</dd></div><div><dt>本期流量</dt><dd>{formatBytes(server.traffic_used)}{server.traffic_limit ? ` / ${formatBytes(server.traffic_limit)}` : "（不限）"}</dd></div></dl></Surface><DDNSOverviewPanel status={ddnsStatus} working={working === "ddns-test"} onRetry={() => void triggerDDNS()} /><div className="dialog-actions"><Button variant="secondary" onClick={() => void loadStatus()}><RefreshCw size={16} />刷新状态</Button><Button onClick={onUpgrade} disabled={!isConnected(server)}><UploadCloud size={16} />{version?.upgrade_available ? "升级 Agent" : "重新安装 / 升级 Agent"}</Button></div></div> : null}
     {!loading && tab === "services" ? <div className="service-control-stack"><ServiceControlCard name="Xray" state={status?.xray} fallbackVersion={server.xray_version} working={working} onAction={(action) => action === "stop" ? setConfirm({ service: "xray", action }) : void serviceAction("xray", action)} onRemove={() => setConfirm({ service: "xray", action: "remove" })} /><ServiceControlCard name="Nginx" state={status?.nginx} working={working} onAction={(action) => action === "stop" ? setConfirm({ service: "nginx", action }) : void serviceAction("nginx", action)} onRemove={() => setConfirm({ service: "nginx", action: "remove" })} /></div> : null}
-    {!loading && tab === "inbounds" ? <XrayResourcesWorkbench serverId={server.id} serverDomain={server.domain} kind="inbound" notify={notify} /> : null}
-    {!loading && tab === "outbounds" ? <XrayResourcesWorkbench serverId={server.id} serverDomain={server.domain} kind="outbound" notify={notify} /> : null}
+    {!loading && tab === "speedtest" ? <ServerSpeedtestPanel server={server} notify={notify} /> : null}
+    {!loading && tab === "inbounds" ? <XrayResourcesWorkbench serverId={server.id} serverDomain={server.domain} serverIPv4={server.ip_address} serverIPv6={server.ip_address_v6} kind="inbound" notify={notify} /> : null}
+    {!loading && tab === "outbounds" ? <XrayResourcesWorkbench serverId={server.id} serverDomain={server.domain} serverIPv4={server.ip_address} serverIPv6={server.ip_address_v6} kind="outbound" notify={notify} /> : null}
     {!loading && tab === "routing" ? <XrayRoutingWorkbench serverId={server.id} notify={notify} /> : null}
     {!loading && tab === "config" ? <div className="service-config-panel">{!configLoaded ? <EmptyState icon={<Code2 size={23} />} title="读取 Agent 上的 Xray 配置" description="编辑前会从目标服务器读取当前配置，不使用本地缓存。" action={<Button onClick={() => void loadConfig()} disabled={working === "config-load"}>{working === "config-load" ? <Spinner label="正在读取" /> : <><Clipboard size={16} />读取配置</>}</Button>} /> : <><div className="service-config-head"><span><strong>{configPath || "config.json"}</strong><small>{configDirty ? "存在未保存更改" : "已与 Agent 同步"}</small></span><div><Button variant="ghost" onClick={() => void loadConfig()} disabled={Boolean(working)}><RefreshCw size={15} />重新读取</Button><Button variant="secondary" onClick={() => void testConfig()} disabled={Boolean(working) || !config.trim()}>{working === "config-test" ? <Spinner label="预检中" /> : <><ShieldCheck size={15} />预检</>}</Button><Button onClick={() => void saveConfig()} disabled={Boolean(working) || !configDirty}>{working === "config-save" ? <Spinner label="保存中" /> : <><Check size={15} />保存配置</>}</Button></div></div><textarea className="service-code-editor" aria-label="Xray 配置 JSON" spellCheck={false} value={config} onChange={(event) => { setConfig(event.target.value); setConfigDirty(true); }} /></>}</div> : null}
     {!loading && tab === "sharing" ? <div className="service-sharing"><form onSubmit={createShare} className="service-share-create"><Field label="令牌备注"><input required value={shareLabel} onChange={(event) => setShareLabel(event.target.value)} placeholder="提供给分控制端 A" /></Field><Button type="submit" disabled={working === "share-create"}>{working === "share-create" ? <Spinner label="生成中" /> : <><FileKey2 size={16} />生成分享令牌</>}</Button></form>{newShareToken ? <div className="credential-warning"><KeyRound size={19} /><span><strong>仅显示一次</strong><code>{newShareToken}</code></span><IconButton label="复制新分享令牌" onClick={() => navigator.clipboard.writeText(newShareToken).then(() => notify("分享令牌已复制")).catch(() => notify("复制失败", "error"))}><Copy size={17} /></IconButton></div> : null}<div className="service-share-list">{shares.length ? shares.map((share) => <div key={share.id}><span><strong>{share.label || `令牌 #${share.id}`}</strong><small>{share.revoked_at ? `已于 ${share.revoked_at} 吊销` : `创建于 ${share.created_at}`}</small></span><Badge tone={share.revoked_at ? "neutral" : "good"}>{share.revoked_at ? "已吊销" : "有效"}</Badge>{!share.revoked_at ? <IconButton label={`吊销 ${share.label || share.id}`} onClick={() => void revokeShare(share.id)} disabled={working === `share-${share.id}`}><Trash2 size={16} /></IconButton> : null}</div>) : <EmptyState icon={<FileKey2 size={22} />} title="暂无分享令牌" description="生成后可在其他 Arcway 控制端接入这台服务器" />}</div></div> : null}
@@ -1160,7 +1315,7 @@ function defaultXrayResource(kind: XrayResourceKind): XrayResource {
   return { tag: "", protocol: "freedom", settings: {} };
 }
 
-function XrayResourcesWorkbench({ serverId, serverDomain = "", kind, notify }: { serverId: number; serverDomain?: string; kind: XrayResourceKind; notify: Notify }) {
+function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", serverIPv6 = "", kind, notify }: { serverId: number; serverDomain?: string; serverIPv4?: string; serverIPv6?: string; kind: XrayResourceKind; notify: Notify }) {
   const plural = kind === "inbound" ? "inbounds" : "outbounds";
   const label = kind === "inbound" ? "入站" : "出站";
   const endpoint = `/api/admin/remote/${plural}?server_id=${serverId}`;
@@ -1175,6 +1330,12 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", kind, notify }: {
   const [jsonDraft, setJsonDraft] = useState("");
   const [creationPreset, setCreationPreset] = useState<InboundCreationPreset>("advanced");
   const [secureDraft, setSecureDraft] = useState<SecureInboundDraft>(() => newSecureInboundDraft());
+  const [trojanDraft, setTrojanDraft] = useState<TrojanInboundDraft>(() => newTrojanInboundDraft());
+  const [wireGuardDraft, setWireGuardDraft] = useState<WireGuardInboundDraft>(() => newWireGuardInboundDraft());
+  const [wireGuardCreated, setWireGuardCreated] = useState<WireGuardCreatedState | null>(null);
+  const [certificates, setCertificates] = useState<ManagedCertificateOption[]>([]);
+  const [certificatesLoading, setCertificatesLoading] = useState(false);
+  const [certificatesError, setCertificatesError] = useState("");
   const [examples, setExamples] = useState<XrayProtocolCombination[]>([]);
   const [examplesLoading, setExamplesLoading] = useState(false);
   const [examplesError, setExamplesError] = useState("");
@@ -1182,6 +1343,9 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", kind, notify }: {
   const [domainsLoading, setDomainsLoading] = useState(false);
   const [domainsError, setDomainsError] = useState("");
   const [keyWorking, setKeyWorking] = useState<"reality" | "encryption" | "">("");
+  const [trojanKeyWorking, setTrojanKeyWorking] = useState(false);
+  const [wireGuardKeyWorking, setWireGuardKeyWorking] = useState(false);
+  const wireGuardKeyGeneration = useRef(0);
   const [editorError, setEditorError] = useState("");
   const [working, setWorking] = useState(false);
   const [deleting, setDeleting] = useState<XrayResource | null>(null);
@@ -1200,6 +1364,7 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", kind, notify }: {
   }, [endpoint, label, plural]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => () => { wireGuardKeyGeneration.current += 1; }, []);
 
   const loadExamples = useCallback(async () => {
     setExamplesLoading(true);
@@ -1228,6 +1393,27 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", kind, notify }: {
     }
   }, [serverId]);
 
+  const loadCertificates = useCallback(async () => {
+    setCertificatesLoading(true);
+    setCertificatesError("");
+    try {
+      const result = assertSuccess(await api.get<ValidCertificatesResponse>("/api/admin/certificates/valid"), "读取托管证书失败");
+      const available = (result.certificates ?? []).filter((certificate) => {
+        const owner = Number(certificate.remote_server_id) || 0;
+        return owner === 0 || owner === serverId;
+      });
+      setCertificates(available);
+      const matchingCertificate = available.find((certificate) => certificateMatchesHost(certificate, serverDomain));
+      setTrojanDraft((current) => current.certificateId || available.length === 0
+        ? current
+        : { ...current, certificateId: matchingCertificate ? String(matchingCertificate.id) : "" });
+    } catch (reason) {
+      setCertificatesError(messageFrom(reason, "托管证书暂不可用"));
+    } finally {
+      setCertificatesLoading(false);
+    }
+  }, [serverDomain, serverId]);
+
   const generateRealityKeys = useCallback(async () => {
     setKeyWorking("reality");
     setEditorError("");
@@ -1239,6 +1425,49 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", kind, notify }: {
       setEditorError(messageFrom(reason, "生成 Reality 密钥失败"));
     } finally {
       setKeyWorking("");
+    }
+  }, []);
+
+  const generateTrojanRealityKeys = useCallback(async () => {
+    setTrojanKeyWorking(true);
+    setEditorError("");
+    try {
+      const result = assertSuccess(await api.post<X25519Response>("/api/admin/xray/generate-x25519"), "生成 Trojan Reality 密钥失败");
+      if (!result.privateKey || !result.publicKey) throw new Error("服务端未返回完整的 X25519 密钥对");
+      setTrojanDraft((current) => ({ ...current, privateKey: result.privateKey ?? "", publicKey: result.publicKey ?? "" }));
+    } catch (reason) {
+      setEditorError(messageFrom(reason, "生成 Trojan Reality 密钥失败"));
+    } finally {
+      setTrojanKeyWorking(false);
+    }
+  }, []);
+
+  const generateWireGuardKeys = useCallback(async () => {
+    const generation = ++wireGuardKeyGeneration.current;
+    setWireGuardKeyWorking(true);
+    setEditorError("");
+    try {
+      const [serverPair, clientPair] = await Promise.all([
+        generateWireGuardKeyPair(),
+        generateWireGuardKeyPair(),
+      ]);
+      if (!serverPair.privateKey || !serverPair.publicKey || !clientPair.privateKey || !clientPair.publicKey) {
+        throw new Error("浏览器未生成两组完整的 WireGuard 密钥对");
+      }
+      if (wireGuardKeyGeneration.current !== generation) return;
+      setWireGuardDraft((current) => ({
+        ...current,
+        serverPrivateKey: serverPair.privateKey,
+        serverPublicKey: serverPair.publicKey,
+        clientPrivateKey: clientPair.privateKey,
+        clientPublicKey: clientPair.publicKey,
+      }));
+    } catch (reason) {
+      if (wireGuardKeyGeneration.current === generation) {
+        setEditorError(messageFrom(reason, "生成 WireGuard 密钥失败"));
+      }
+    } finally {
+      if (wireGuardKeyGeneration.current === generation) setWireGuardKeyWorking(false);
     }
   }, []);
 
@@ -1263,11 +1492,16 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", kind, notify }: {
   }, []);
 
   const openEditor = (mode: XrayEditorMode, resource?: XrayResource) => {
+    wireGuardKeyGeneration.current += 1;
+    setWireGuardKeyWorking(false);
     const value = cleanXrayResource(resource ?? defaultXrayResource(kind));
     setEditor({ mode, original: resource });
     const secureCreate = kind === "inbound" && mode === "create";
     setCreationPreset(secureCreate ? "reality" : "advanced");
     setSecureDraft(newSecureInboundDraft());
+    setTrojanDraft(newTrojanInboundDraft(serverDomain));
+    setWireGuardDraft(newWireGuardInboundDraft());
+    setWireGuardCreated(null);
     setTag(secureCreate ? "vless-reality" : xrayResourceTag(value));
     setProtocol(secureCreate ? "vless" : xrayResourceProtocol(value));
     setListen(secureCreate ? "0.0.0.0" : typeof value.listen === "string" ? value.listen : "");
@@ -1276,6 +1510,7 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", kind, notify }: {
     setEditorError("");
     setExamplesError("");
     setDomainsError("");
+    setCertificatesError("");
     if (secureCreate) {
       void loadExamples();
       void loadRealityDomains();
@@ -1284,8 +1519,13 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", kind, notify }: {
   };
 
   const selectCreationPreset = (preset: InboundCreationPreset) => {
+    if (preset !== "wireguard") {
+      wireGuardKeyGeneration.current += 1;
+      setWireGuardKeyWorking(false);
+    }
     setCreationPreset(preset);
     setEditorError("");
+    setWireGuardCreated(null);
     if (preset === "advanced") {
       const value = defaultXrayResource("inbound");
       setTag(xrayResourceTag(value));
@@ -1295,7 +1535,27 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", kind, notify }: {
       setJsonDraft(JSON.stringify(value, null, 2));
       return;
     }
-    setTag((current) => !current || current === "vless-reality" || current === "vless-wss" || current === "" ? `vless-${preset}` : current);
+    const generatedTags = new Set(["vless-reality", "vless-wss", "wireguard-in", "trojan-in"]);
+    if (preset === "wireguard") {
+      setTag((current) => !current || generatedTags.has(current) ? "wireguard-in" : current);
+      setProtocol("wireguard");
+      setListen("0.0.0.0");
+      setPort("51820");
+      if (!validWireGuardKey(wireGuardDraft.serverPrivateKey) || !validWireGuardKey(wireGuardDraft.clientPrivateKey)) {
+        void generateWireGuardKeys();
+      }
+      return;
+    }
+    if (preset === "trojan") {
+      setTag((current) => !current || generatedTags.has(current) ? "trojan-in" : current);
+      setProtocol("trojan");
+      setListen(trojanDraft.combination === "ws-tls" ? "127.0.0.1" : "0.0.0.0");
+      setPort(trojanDraft.combination === "tcp-tls" || trojanDraft.combination === "grpc-tls" ? "8443" : "443");
+      setTrojanDraft((current) => ({ ...current, domain: current.domain || serverDomain.trim().toLowerCase() }));
+      if (trojanDraft.combination === "tcp-tls" || trojanDraft.combination === "grpc-tls") void loadCertificates();
+      return;
+    }
+    setTag((current) => !current || generatedTags.has(current) ? `vless-${preset}` : current);
     setProtocol("vless");
     setListen(preset === "reality" ? "0.0.0.0" : "127.0.0.1");
     setPort("443");
@@ -1307,14 +1567,43 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", kind, notify }: {
     }
   };
 
+  const selectTrojanCombination = (combination: TrojanCombination) => {
+    setEditorError("");
+    setTrojanDraft((current) => ({
+      ...current,
+      combination,
+      domain: combination === "tcp-reality" ? "" : current.domain || serverDomain.trim().toLowerCase(),
+    }));
+    setListen(combination === "ws-tls" ? "127.0.0.1" : "0.0.0.0");
+    setPort(combination === "tcp-tls" || combination === "grpc-tls" ? "8443" : "443");
+    if (combination === "tcp-tls" || combination === "grpc-tls") void loadCertificates();
+    if (combination === "tcp-reality") {
+      void loadRealityDomains();
+      if (!trojanDraft.privateKey || !trojanDraft.publicKey) void generateTrojanRealityKeys();
+    }
+  };
+
   const closeEditor = () => {
     if (working) return;
+    wireGuardKeyGeneration.current += 1;
+    setWireGuardKeyWorking(false);
     setEditor(null);
     setEditorError("");
+    setWireGuardCreated(null);
+    setWireGuardDraft(newWireGuardInboundDraft());
+  };
+
+  const copyGenerated = async (value: string, copyLabel: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      notify(`${copyLabel}已复制`);
+    } catch {
+      notify("复制失败，请手动选择", "error");
+    }
   };
 
   const matchingExample = useMemo(() => {
-    if (creationPreset === "advanced") return undefined;
+    if (creationPreset !== "reality" && creationPreset !== "wss") return undefined;
     return examples.find((item) => {
       const signature = `${item.dir_name} ${item.transport} ${item.security}`.toLowerCase();
       if (!item.has_config || item.protocol.toLowerCase() !== "vless") return false;
@@ -1324,17 +1613,29 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", kind, notify }: {
     });
   }, [creationPreset, examples]);
 
+  const wireGuardFields = useMemo<WireGuardInboundFields>(() => ({ ...wireGuardDraft, tag, port }), [port, tag, wireGuardDraft]);
+  const trojanFields = useMemo<TrojanInboundFields>(() => ({ ...trojanDraft, tag, port }), [port, tag, trojanDraft]);
+  const wireGuardEndpoint = serverDomain.trim() || serverIPv4.trim() || serverIPv6.trim();
+  const wireGuardEndpointDisplay = wireGuardEndpoint.includes(":") && !wireGuardEndpoint.startsWith("[") ? `[${wireGuardEndpoint}]` : wireGuardEndpoint;
+
   const securePreview = useMemo(() => {
     if (kind !== "inbound" || editor?.mode !== "create" || creationPreset === "advanced") return "";
     try {
-      return JSON.stringify(buildSecureInbound(creationPreset, { tag, port }, secureDraft), null, 2);
+      const resource = creationPreset === "wireguard"
+        ? buildWireGuardInbound(wireGuardFields)
+        : creationPreset === "trojan"
+          ? buildTrojanInbound(trojanFields)
+          : buildSecureInbound(creationPreset, { tag, port }, secureDraft);
+      return JSON.stringify(resource, null, 2);
     } catch {
       return "";
     }
-  }, [creationPreset, editor?.mode, kind, port, secureDraft, tag]);
+  }, [creationPreset, editor?.mode, kind, port, secureDraft, tag, trojanFields, wireGuardFields]);
 
   const parseDraft = (): XrayResource => {
     if (kind === "inbound" && editor?.mode === "create" && creationPreset !== "advanced") {
+      if (creationPreset === "wireguard") return buildWireGuardInbound(wireGuardFields);
+      if (creationPreset === "trojan") return buildTrojanInbound(trojanFields);
       return buildSecureInbound(creationPreset, { tag, port }, secureDraft);
     }
     const parsed = JSON.parse(jsonDraft) as unknown;
@@ -1361,8 +1662,12 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", kind, notify }: {
     if (!editor || editor.mode === "view") return;
     setEditorError("");
     let resource: XrayResource;
+    let generatedWireGuardClientConfig = "";
     try {
       resource = parseDraft();
+      if (kind === "inbound" && editor.mode === "create" && creationPreset === "wireguard") {
+        generatedWireGuardClientConfig = buildWireGuardClientConfig(wireGuardFields, wireGuardEndpoint);
+      }
       if (editor.mode === "create" && items.some((item) => xrayResourceTag(item) === xrayResourceTag(resource))) {
         throw new Error(`Tag “${xrayResourceTag(resource)}” 已存在，请使用唯一 Tag`);
       }
@@ -1389,11 +1694,24 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", kind, notify }: {
             throw new Error(`${messageFrom(reason, `添加新${label}失败`)}；自动恢复旧配置也失败：${messageFrom(rollbackReason, "未知错误")}`);
           }
         }
+      } else if (kind === "inbound" && editor.mode === "create" && creationPreset === "wireguard") {
+        assertSuccess(await api.post<ActionResponse>(`/api/admin/managed-inbound-resources/wireguard?server_id=${serverId}`, {
+          action: "add",
+          display_name: tag.trim(),
+          inbound: resource,
+        }), `创建${label}失败`);
       } else {
         assertSuccess(await api.post<ActionResponse>(endpoint, { action: "add", [kind]: resource }), `创建${label}失败`);
       }
       notify(editor.mode === "edit" ? `${label}已更新` : `${label}已创建`);
-      setEditor(null);
+      if (editor.mode === "create" && creationPreset === "wireguard") {
+        setWireGuardCreated({
+          serverPublicKey: wireGuardFields.serverPublicKey,
+          clientConfig: generatedWireGuardClientConfig,
+        });
+      } else {
+        setEditor(null);
+      }
       await load();
     } catch (reason) {
       setEditorError(messageFrom(reason, `${label}保存失败`));
@@ -1439,34 +1757,59 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", kind, notify }: {
         return <Surface className="xray-resource-row" key={`${itemTag}-${index}`}><span className="xray-resource-icon">{kind === "inbound" ? <ArrowDownToLine size={17} /> : <ArrowUpFromLine size={17} />}</span><span className="xray-resource-main"><strong>{itemTag || `未命名${label}`}</strong><small>{xrayResourceProtocol(item) || "未知协议"}{kind === "inbound" && item.port ? ` · ${String(item.listen || "0.0.0.0")}:${String(item.port)}` : ""}</small></span>{kind === "inbound" ? <Badge tone={runtime ? "good" : "warn"}>{runtime ? "运行中" : item._source === "runtime_only" ? "仅运行时" : "未运行"}</Badge> : null}<div className="xray-resource-actions"><Button variant="ghost" onClick={() => openEditor("view", item)}><Eye size={15} />查看</Button><IconButton label={`编辑${label} ${itemTag || index + 1}`} onClick={() => openEditor("edit", item)} disabled={!itemTag || generated || working}><Pencil size={15} /></IconButton><IconButton label={`删除${label} ${itemTag || index + 1}`} onClick={() => setDeleting(item)} disabled={!itemTag || generated || working}><Trash2 size={15} /></IconButton></div></Surface>;
       })}
     </div>}
-    {editor ? <Surface className="xray-resource-editor">
-      <div className="xray-resource-editor-head"><span><strong>{editor.mode === "create" ? `添加${label}` : editor.mode === "edit" ? `编辑${label}` : `${label}详情`}</strong><small>{editor.mode === "edit" ? "后端不支持原位更新；保存时会安全重建，失败自动回滚" : editor.mode === "view" ? "只读查看服务器返回的完整配置" : kind === "inbound" && creationPreset !== "advanced" ? "安全向导生成完整的 Xray 入站配置" : "基础字段会覆盖高级 JSON 中的同名字段"}</small></span><Button type="button" variant="ghost" onClick={closeEditor} disabled={working}>关闭</Button></div>
+    {editor ? <Dialog title={editor.mode === "create" ? `添加${label}` : editor.mode === "edit" ? `编辑${label}` : `${label}详情`} description={editor.mode === "edit" ? "保存时会安全重建，失败自动回滚" : editor.mode === "view" ? "只读查看服务器返回的完整配置" : kind === "inbound" && creationPreset !== "advanced" ? "安全向导生成完整的 Xray 入站配置" : "基础字段会覆盖高级 JSON 中的同名字段"} onClose={closeEditor} dismissible={!working && !wireGuardCreated} wide={!wireGuardCreated} extraWide={Boolean(wireGuardCreated)}><div className="xray-resource-dialog">
       {kind === "inbound" && editor.mode === "create" ? <div className="secure-inbound-presets" role="tablist" aria-label="入站创建方式">
-        <button type="button" role="tab" aria-selected={creationPreset === "reality"} className={creationPreset === "reality" ? "is-active" : ""} onClick={() => selectCreationPreset("reality")}><ShieldCheck size={16} /><span><strong>VLESS + Reality</strong><small>xtls-rprx-vision · X25519</small></span></button>
-        <button type="button" role="tab" aria-selected={creationPreset === "wss"} className={creationPreset === "wss" ? "is-active" : ""} onClick={() => selectCreationPreset("wss")}><Cloud size={16} /><span><strong>VLESS + WS + TLS</strong><small>Nginx · 443</small></span></button>
-        <button type="button" role="tab" aria-selected={creationPreset === "advanced"} className={creationPreset === "advanced" ? "is-active" : ""} onClick={() => selectCreationPreset("advanced")}><Code2 size={16} /><span><strong>高级 JSON</strong><small>全部协议</small></span></button>
+        <button type="button" role="tab" disabled={working || Boolean(wireGuardCreated)} aria-selected={creationPreset === "reality"} className={creationPreset === "reality" ? "is-active" : ""} onClick={() => selectCreationPreset("reality")}><ShieldCheck size={16} /><span><strong>VLESS + Reality</strong><small>xtls-rprx-vision · X25519</small></span></button>
+        <button type="button" role="tab" disabled={working || Boolean(wireGuardCreated)} aria-selected={creationPreset === "wss"} className={creationPreset === "wss" ? "is-active" : ""} onClick={() => selectCreationPreset("wss")}><Cloud size={16} /><span><strong>VLESS + WS + TLS</strong><small>Nginx · 443</small></span></button>
+        <button type="button" role="tab" disabled={working || Boolean(wireGuardCreated)} aria-selected={creationPreset === "wireguard"} className={creationPreset === "wireguard" ? "is-active" : ""} onClick={() => selectCreationPreset("wireguard")}><Network size={16} /><span><strong>WireGuard</strong><small>Xray 原生入站</small></span></button>
+        <button type="button" role="tab" disabled={working || Boolean(wireGuardCreated)} aria-selected={creationPreset === "trojan"} className={creationPreset === "trojan" ? "is-active" : ""} onClick={() => selectCreationPreset("trojan")}><ShieldCheck size={16} /><span><strong>Trojan</strong><small>TLS · WS · gRPC · Reality</small></span></button>
+        <button type="button" role="tab" disabled={working || Boolean(wireGuardCreated)} aria-selected={creationPreset === "advanced"} className={creationPreset === "advanced" ? "is-active" : ""} onClick={() => selectCreationPreset("advanced")}><Code2 size={16} /><span><strong>高级 JSON</strong><small>全部协议</small></span></button>
       </div> : null}
       {editorError ? <ErrorState message={editorError} /> : null}
-      {editor.mode === "view" ? <textarea className="service-code-editor xray-resource-json" aria-label={`${label}只读 JSON`} readOnly value={jsonDraft} /> : <form className="form-stack" onSubmit={submit}>
+      {wireGuardCreated ? <div className="wireguard-created-state" role="status" aria-label="WireGuard 已创建">
+        <div className="wireguard-created-head"><span><Check size={18} /></span><div><strong>WireGuard 入站已创建</strong><small>请在关闭前保存客户端配置，客户端私钥不会写入 Xray。</small></div></div>
+        <Field label="WireGuard 服务端公钥"><div className="generated-secret"><code>{wireGuardCreated.serverPublicKey}</code><IconButton type="button" label="复制 WireGuard 服务端公钥" onClick={() => void copyGenerated(wireGuardCreated.serverPublicKey, "服务端公钥")}><Copy size={16} /></IconButton></div></Field>
+        <Field label="WireGuard 客户端配置"><div className="wireguard-client-config"><textarea className="service-code-editor" aria-label="WireGuard 客户端配置" readOnly value={wireGuardCreated.clientConfig} /><IconButton type="button" label="复制 WireGuard 客户端配置" onClick={() => void copyGenerated(wireGuardCreated.clientConfig, "客户端配置")}><Copy size={16} /></IconButton></div></Field>
+        <div className="dialog-actions"><Button type="button" onClick={closeEditor}><Check size={16} />完成</Button></div>
+      </div> : editor.mode === "view" ? <textarea className="service-code-editor xray-resource-json" aria-label={`${label}只读 JSON`} readOnly value={jsonDraft} /> : <form className="form-stack" onSubmit={submit}>
         {kind === "inbound" && editor.mode === "create" && creationPreset !== "advanced" ? <>
-          <div className="secure-inbound-reference"><span><Badge tone={matchingExample ? "good" : examplesError ? "warn" : "neutral"}>{examplesLoading ? "模板读取中" : matchingExample ? "官方模板" : "内置模板"}</Badge><strong>{matchingExample?.dir_name || (creationPreset === "reality" ? "VLESS TCP Reality" : "VLESS WSS")}</strong></span>{examplesError ? <small>{examplesError}</small> : null}</div>
-          <div className="form-grid two"><Field label="Tag"><input required aria-label="入站 Tag" value={tag} onChange={(event) => setTag(event.target.value)} placeholder={creationPreset === "reality" ? "vless-reality" : "vless-wss"} /></Field><Field label={creationPreset === "wss" ? "外部 TLS 端口" : "监听端口"} hint={creationPreset === "wss" ? "Nginx 对外使用 443，Agent 会自动分配内部端口" : undefined}><input type="number" min="1" max="65535" required aria-label="入站监听端口" value={port} onChange={(event) => setPort(event.target.value)} /></Field></div>
-          <div className="form-grid two"><Field label="客户端 UUID"><div className="secure-field-action"><input required aria-label="客户端 UUID" value={secureDraft.uuid} onChange={(event) => setSecureDraft({ ...secureDraft, uuid: event.target.value.trim() })} /><IconButton type="button" label="重新生成客户端 UUID" onClick={() => setSecureDraft({ ...secureDraft, uuid: createUUID() })}><RefreshCw size={15} /></IconButton></div></Field><Field label={creationPreset === "reality" ? "Reality 伪装目标 / SNI" : "TLS 节点域名"} hint={creationPreset === "reality" ? "必须明确选择目标；优先使用同 ASN 且证书覆盖该 SNI 的 TLS 站点" : creationPreset === "wss" && !serverDomain ? "请先在服务器编辑页配置节点域名" : undefined}><div className="secure-field-action"><input required aria-label={creationPreset === "reality" ? "Reality 伪装目标 / SNI" : "TLS 节点域名"} list={creationPreset === "reality" ? `reality-domains-${serverId}` : undefined} readOnly={creationPreset === "wss"} value={secureDraft.domain} onChange={(event) => setSecureDraft({ ...secureDraft, domain: event.target.value.trim().toLowerCase() })} placeholder="www.example.com" />{creationPreset === "reality" ? <IconButton type="button" label="重新探测 Reality 域名" disabled={domainsLoading} onClick={() => void loadRealityDomains()}>{domainsLoading ? <Spinner /> : <RefreshCw size={15} />}</IconButton> : null}</div></Field></div>
-          {creationPreset === "reality" ? <>
-            <datalist id={`reality-domains-${serverId}`}>{realityDomains.map((item) => <option key={item.domain} value={item.domain}>{item.success ? `443 可达 · ${item.latency_ms ?? "-"} ms` : item.error || "探测失败"}</option>)}</datalist>
-            {domainsError ? <small className="secure-inline-error">{domainsError}</small> : null}
-            <div className="form-grid two"><Field label="Reality Short ID" hint="2-16 位偶数长度十六进制"><input required aria-label="Reality Short ID" value={secureDraft.shortId} onChange={(event) => setSecureDraft({ ...secureDraft, shortId: event.target.value.trim().toLowerCase() })} /></Field><Field label="X25519 密钥对"><div className="secure-key-status"><Badge tone={validRealityKey(secureDraft.privateKey) && validRealityKey(secureDraft.publicKey) ? "good" : "warn"}>{validRealityKey(secureDraft.privateKey) && validRealityKey(secureDraft.publicKey) ? "已生成" : "未就绪"}</Badge><Button type="button" variant="secondary" disabled={keyWorking !== ""} onClick={() => void generateRealityKeys()}>{keyWorking === "reality" ? <Spinner label="生成中" /> : <><KeyRound size={15} />重新生成</>}</Button></div></Field></div>
-            <div className="secure-encryption-row"><Toggle checked={secureDraft.enhancedEncryption} disabled={keyWorking !== ""} label="VLESS 后量子增强加密" onChange={(checked) => { setSecureDraft((current) => ({ ...current, enhancedEncryption: checked })); if (checked && (!secureDraft.decryptionConfig || !secureDraft.encryption)) void generateVlessEncryption(); }} />{secureDraft.enhancedEncryption ? <span><Badge tone={secureDraft.decryptionConfig && secureDraft.encryption ? "good" : "warn"}>{secureDraft.decryptionConfig && secureDraft.encryption ? "增强密钥已生成" : "增强密钥未就绪"}</Badge><Button type="button" variant="ghost" disabled={keyWorking !== ""} onClick={() => void generateVlessEncryption()}>{keyWorking === "encryption" ? <Spinner label="生成中" /> : <><RefreshCw size={14} />重生成</>}</Button></span> : null}</div>
-          </> : <Field label="WebSocket 路径" hint="必须以 / 开头；Agent 保存时会安全随机化最终路径"><input required aria-label="WebSocket 路径" value={secureDraft.path} onChange={(event) => setSecureDraft({ ...secureDraft, path: event.target.value })} placeholder="/ws/path" /></Field>}
+          <div className="secure-inbound-reference"><span><Badge tone={creationPreset === "wireguard" || creationPreset === "trojan" ? "good" : matchingExample ? "good" : examplesError ? "warn" : "neutral"}>{creationPreset === "wireguard" ? "Xray 原生" : creationPreset === "trojan" ? "常用组合" : examplesLoading ? "模板读取中" : matchingExample ? "官方模板" : "内置模板"}</Badge><strong>{creationPreset === "wireguard" ? "WireGuard 入站与客户端配置" : creationPreset === "trojan" ? "Trojan 安全传输向导" : matchingExample?.dir_name || (creationPreset === "reality" ? "VLESS TCP Reality" : "VLESS WSS")}</strong></span>{creationPreset !== "wireguard" && creationPreset !== "trojan" && examplesError ? <small>{examplesError}</small> : null}</div>
+          <div className="form-grid two"><Field label="Tag"><input required aria-label="入站 Tag" value={tag} onChange={(event) => setTag(event.target.value)} placeholder={creationPreset === "wireguard" ? "wireguard-in" : creationPreset === "trojan" ? "trojan-in" : creationPreset === "reality" ? "vless-reality" : "vless-wss"} /></Field><Field label={creationPreset === "wss" || (creationPreset === "trojan" && trojanDraft.combination === "ws-tls") ? "外部 TLS 端口" : "监听端口"}><input type="number" min="1" max="65535" required aria-label="入站监听端口" value={port} onChange={(event) => setPort(event.target.value)} /></Field></div>
+          {creationPreset === "wireguard" ? <>
+            <div className="secure-key-status wireguard-key-status"><span><Badge tone={validWireGuardKey(wireGuardDraft.serverPrivateKey) && validWireGuardKey(wireGuardDraft.clientPrivateKey) ? "good" : "warn"}>{validWireGuardKey(wireGuardDraft.serverPrivateKey) && validWireGuardKey(wireGuardDraft.clientPrivateKey) ? "两组密钥已生成" : "密钥未就绪"}</Badge><small>客户端私钥仅保留到本弹窗关闭</small></span><Button type="button" variant="secondary" disabled={wireGuardKeyWorking} onClick={() => void generateWireGuardKeys()}>{wireGuardKeyWorking ? <Spinner label="生成中" /> : <><KeyRound size={15} />重新生成密钥</>}</Button></div>
+            <div className="form-grid two"><Field label="服务端隧道地址"><input required aria-label="WireGuard 服务端地址" value={wireGuardDraft.serverAddress} onChange={(event) => setWireGuardDraft((current) => ({ ...current, serverAddress: event.target.value }))} /></Field><Field label="客户端隧道地址"><input required aria-label="WireGuard 客户端地址" value={wireGuardDraft.clientAddress} onChange={(event) => setWireGuardDraft((current) => ({ ...current, clientAddress: event.target.value }))} /></Field></div>
+            <div className="form-grid three"><Field label="客户端 DNS"><input aria-label="WireGuard 客户端 DNS" value={wireGuardDraft.dns} onChange={(event) => setWireGuardDraft((current) => ({ ...current, dns: event.target.value }))} /></Field><Field label="MTU"><input type="number" min="576" max="9000" aria-label="WireGuard MTU" value={wireGuardDraft.mtu} onChange={(event) => setWireGuardDraft((current) => ({ ...current, mtu: event.target.value }))} /></Field><Field label="Keepalive"><input type="number" min="0" max="65535" aria-label="WireGuard Keepalive" value={wireGuardDraft.keepAlive} onChange={(event) => setWireGuardDraft((current) => ({ ...current, keepAlive: event.target.value }))} /></Field></div>
+            <div className="form-grid two"><Field label="服务端公钥"><div className="generated-secret"><code>{wireGuardDraft.serverPublicKey || "生成中..."}</code></div></Field><Field label="客户端 Endpoint" hint="按节点域名、IPv4、IPv6 的顺序选择"><input aria-label="WireGuard 客户端 Endpoint" readOnly value={wireGuardEndpointDisplay ? `${wireGuardEndpointDisplay}:${port}` : "服务器尚未上报可连接地址"} /></Field></div>
+          </> : creationPreset === "trojan" ? <>
+            <div className="form-grid two"><Field label="传输与安全"><select aria-label="Trojan 传输与安全" value={trojanDraft.combination} onChange={(event) => selectTrojanCombination(event.target.value as TrojanCombination)}><option value="tcp-tls">TCP + TLS</option><option value="ws-tls">WebSocket + TLS（Nginx）</option><option value="grpc-tls">gRPC + TLS</option><option value="tcp-reality">TCP + Reality</option></select></Field><Field label="Trojan 密码"><div className="secure-field-action"><input required aria-label="Trojan 密码" value={trojanDraft.password} onChange={(event) => setTrojanDraft((current) => ({ ...current, password: event.target.value }))} /><IconButton type="button" label="重新生成 Trojan 密码" onClick={() => setTrojanDraft((current) => ({ ...current, password: randomHex(32) }))}><RefreshCw size={15} /></IconButton></div></Field></div>
+            <Field label={trojanDraft.combination === "tcp-reality" ? "Reality 伪装目标 / SNI" : "TLS 节点域名"} hint={trojanDraft.combination === "ws-tls" ? "使用服务器域名，由 Nginx 终止 TLS" : undefined}><div className="secure-field-action"><input required aria-label={trojanDraft.combination === "tcp-reality" ? "Trojan Reality 伪装目标 / SNI" : "Trojan TLS 节点域名"} list={trojanDraft.combination === "tcp-reality" ? `trojan-reality-domains-${serverId}` : undefined} readOnly={trojanDraft.combination === "ws-tls"} value={trojanDraft.domain} onChange={(event) => setTrojanDraft((current) => ({ ...current, domain: event.target.value.trim().toLowerCase() }))} placeholder="edge.example.com" />{trojanDraft.combination === "tcp-reality" ? <IconButton type="button" label="重新探测 Trojan Reality 域名" disabled={domainsLoading} onClick={() => void loadRealityDomains()}>{domainsLoading ? <Spinner /> : <RefreshCw size={15} />}</IconButton> : null}</div></Field>
+            {trojanDraft.combination === "tcp-tls" || trojanDraft.combination === "grpc-tls" ? <Field label="托管 TLS 证书" hint="仅显示主控通用证书和当前服务器证书"><select required aria-label="Trojan TLS 证书" value={trojanDraft.certificateId || ""} onChange={(event) => setTrojanDraft((current) => ({ ...current, certificateId: event.target.value }))}><option value="">{certificatesLoading ? "正在读取证书..." : "请选择证书"}</option>{certificates.map((certificate) => <option key={certificate.id} value={certificate.id}>{certificate.domain} · {Number(certificate.remote_server_id) ? certificate.remote_server_name || `服务器 #${certificate.remote_server_id}` : "主控通用"}</option>)}</select>{certificatesError ? <small className="secure-inline-error">{certificatesError}</small> : null}</Field> : null}
+            {trojanDraft.combination === "ws-tls" ? <Field label="WebSocket 路径" hint="Agent 保存时会安全随机化最终路径"><input required aria-label="Trojan WebSocket 路径" value={trojanDraft.path || ""} onChange={(event) => setTrojanDraft((current) => ({ ...current, path: event.target.value }))} /></Field> : null}
+            {trojanDraft.combination === "grpc-tls" ? <Field label="gRPC Service Name"><input required aria-label="Trojan gRPC Service Name" value={trojanDraft.serviceName || ""} onChange={(event) => setTrojanDraft((current) => ({ ...current, serviceName: event.target.value }))} /></Field> : null}
+            {trojanDraft.combination === "tcp-reality" ? <>
+              <datalist id={`trojan-reality-domains-${serverId}`}>{realityDomains.map((item) => <option key={item.domain} value={item.domain}>{item.success ? `443 可达 · ${item.latency_ms ?? "-"} ms` : item.error || "探测失败"}</option>)}</datalist>
+              {domainsError ? <small className="secure-inline-error">{domainsError}</small> : null}
+              <div className="form-grid two"><Field label="Reality Short ID"><input required aria-label="Trojan Reality Short ID" value={trojanDraft.shortId || ""} onChange={(event) => setTrojanDraft((current) => ({ ...current, shortId: event.target.value.trim().toLowerCase() }))} /></Field><Field label="Reality X25519 密钥"><div className="secure-key-status"><Badge tone={validRealityKey(trojanDraft.privateKey || "") && validRealityKey(trojanDraft.publicKey || "") ? "good" : "warn"}>{validRealityKey(trojanDraft.privateKey || "") && validRealityKey(trojanDraft.publicKey || "") ? "已生成" : "未就绪"}</Badge><Button type="button" variant="secondary" disabled={trojanKeyWorking} onClick={() => void generateTrojanRealityKeys()}>{trojanKeyWorking ? <Spinner label="生成中" /> : <><KeyRound size={15} />重新生成</>}</Button></div></Field></div>
+              <Field label="Reality 客户端公钥"><div className="generated-secret"><code>{trojanDraft.publicKey || "生成中..."}</code>{trojanDraft.publicKey ? <IconButton type="button" label="复制 Trojan Reality 公钥" onClick={() => void copyGenerated(trojanDraft.publicKey || "", "Reality 公钥")}><Copy size={16} /></IconButton> : null}</div></Field>
+            </> : null}
+          </> : <>
+            <div className="form-grid two"><Field label="客户端 UUID"><div className="secure-field-action"><input required aria-label="客户端 UUID" value={secureDraft.uuid} onChange={(event) => setSecureDraft({ ...secureDraft, uuid: event.target.value.trim() })} /><IconButton type="button" label="重新生成客户端 UUID" onClick={() => setSecureDraft({ ...secureDraft, uuid: createUUID() })}><RefreshCw size={15} /></IconButton></div></Field><Field label={creationPreset === "reality" ? "Reality 伪装目标 / SNI" : "TLS 节点域名"} hint={creationPreset === "reality" ? "必须明确选择目标；优先使用同 ASN 且证书覆盖该 SNI 的 TLS 站点" : creationPreset === "wss" && !serverDomain ? "请先在服务器编辑页配置节点域名" : undefined}><div className="secure-field-action"><input required aria-label={creationPreset === "reality" ? "Reality 伪装目标 / SNI" : "TLS 节点域名"} list={creationPreset === "reality" ? `reality-domains-${serverId}` : undefined} readOnly={creationPreset === "wss"} value={secureDraft.domain} onChange={(event) => setSecureDraft({ ...secureDraft, domain: event.target.value.trim().toLowerCase() })} placeholder="www.example.com" />{creationPreset === "reality" ? <IconButton type="button" label="重新探测 Reality 域名" disabled={domainsLoading} onClick={() => void loadRealityDomains()}>{domainsLoading ? <Spinner /> : <RefreshCw size={15} />}</IconButton> : null}</div></Field></div>
+            {creationPreset === "reality" ? <>
+              <datalist id={`reality-domains-${serverId}`}>{realityDomains.map((item) => <option key={item.domain} value={item.domain}>{item.success ? `443 可达 · ${item.latency_ms ?? "-"} ms` : item.error || "探测失败"}</option>)}</datalist>
+              {domainsError ? <small className="secure-inline-error">{domainsError}</small> : null}
+              <div className="form-grid two"><Field label="Reality Short ID" hint="2-16 位偶数长度十六进制"><input required aria-label="Reality Short ID" value={secureDraft.shortId} onChange={(event) => setSecureDraft({ ...secureDraft, shortId: event.target.value.trim().toLowerCase() })} /></Field><Field label="X25519 密钥对"><div className="secure-key-status"><Badge tone={validRealityKey(secureDraft.privateKey) && validRealityKey(secureDraft.publicKey) ? "good" : "warn"}>{validRealityKey(secureDraft.privateKey) && validRealityKey(secureDraft.publicKey) ? "已生成" : "未就绪"}</Badge><Button type="button" variant="secondary" disabled={keyWorking !== ""} onClick={() => void generateRealityKeys()}>{keyWorking === "reality" ? <Spinner label="生成中" /> : <><KeyRound size={15} />重新生成</>}</Button></div></Field></div>
+              <div className="secure-encryption-row"><Toggle checked={secureDraft.enhancedEncryption} disabled={keyWorking !== ""} label="VLESS 后量子增强加密" onChange={(checked) => { setSecureDraft((current) => ({ ...current, enhancedEncryption: checked })); if (checked && (!secureDraft.decryptionConfig || !secureDraft.encryption)) void generateVlessEncryption(); }} />{secureDraft.enhancedEncryption ? <span><Badge tone={secureDraft.decryptionConfig && secureDraft.encryption ? "good" : "warn"}>{secureDraft.decryptionConfig && secureDraft.encryption ? "增强密钥已生成" : "增强密钥未就绪"}</Badge><Button type="button" variant="ghost" disabled={keyWorking !== ""} onClick={() => void generateVlessEncryption()}>{keyWorking === "encryption" ? <Spinner label="生成中" /> : <><RefreshCw size={14} />重生成</>}</Button></span> : null}</div>
+            </> : <Field label="WebSocket 路径" hint="必须以 / 开头；Agent 保存时会安全随机化最终路径"><input required aria-label="WebSocket 路径" value={secureDraft.path} onChange={(event) => setSecureDraft({ ...secureDraft, path: event.target.value })} placeholder="/ws/path" /></Field>}
+          </>}
           <details className="secure-inbound-preview"><summary>查看生成的 Xray JSON</summary>{securePreview ? <textarea className="service-code-editor xray-resource-json" aria-label="生成的入站 JSON" readOnly value={securePreview} /> : <small>字段与密钥完整后显示最终配置</small>}</details>
         </> : <>
           <div className="form-grid two"><Field label="Tag"><input required aria-label={`${label} Tag`} value={tag} onChange={(event) => setTag(event.target.value)} placeholder={kind === "inbound" ? "vless-in" : "proxy-out"} /></Field><Field label="协议"><select aria-label={`${label}协议`} value={protocol} onChange={(event) => setProtocol(event.target.value)}>{protocol && !protocols.includes(protocol) ? <option value={protocol}>{protocol}</option> : null}{protocols.map((value) => <option key={value} value={value}>{value}</option>)}</select></Field></div>
           {kind === "inbound" ? <div className="form-grid two"><Field label="监听地址"><input aria-label="入站监听地址" value={listen} onChange={(event) => setListen(event.target.value)} placeholder="0.0.0.0" /></Field><Field label="监听端口"><input type="number" min="1" max="65535" required aria-label="入站监听端口" value={port} onChange={(event) => setPort(event.target.value)} /></Field></div> : null}
           <Field label="高级 JSON" hint="可配置 settings、streamSettings、sniffing、mux 等完整 Xray 字段；必须是单个对象。"><textarea className="service-code-editor xray-resource-json" aria-label={`${label}高级 JSON`} spellCheck={false} value={jsonDraft} onChange={(event) => setJsonDraft(event.target.value)} /></Field>
         </>}
-        <div className="dialog-actions"><Button type="button" variant="secondary" onClick={closeEditor} disabled={working}>取消</Button><Button type="submit" disabled={working || (creationPreset === "reality" && keyWorking !== "")}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />{editor.mode === "edit" ? "保存并重建" : `创建${label}`}</>}</Button></div>
+        <div className="dialog-actions"><Button type="button" variant="secondary" onClick={closeEditor} disabled={working}>取消</Button><Button type="submit" disabled={working || (creationPreset === "reality" && keyWorking !== "") || (creationPreset === "wireguard" && wireGuardKeyWorking) || (creationPreset === "trojan" && trojanDraft.combination === "tcp-reality" && trojanKeyWorking)}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />{editor.mode === "edit" ? "保存并重建" : `创建${label}`}</>}</Button></div>
       </form>}
-    </Surface> : null}
+    </div></Dialog> : null}
     {deleting ? <ConfirmDialog title={`删除${label}`} description={`将从服务器 #${serverId} 的 Xray 运行时和配置文件中删除“${xrayResourceTag(deleting)}”。`} confirmLabel="确认删除" working={working} onCancel={() => !working && setDeleting(null)} onConfirm={() => void remove()} /> : null}
   </div>;
 }
@@ -1499,6 +1842,8 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
   const [protocol, setProtocol] = useState("");
   const [outboundTag, setOutboundTag] = useState("");
   const [balancerTag, setBalancerTag] = useState("");
+  const [outboundTags, setOutboundTags] = useState<string[]>([]);
+  const [balancerTags, setBalancerTags] = useState<string[]>([]);
   const [jsonDraft, setJsonDraft] = useState("{\n  \"type\": \"field\"\n}");
   const [editorError, setEditorError] = useState("");
   const [working, setWorking] = useState(false);
@@ -1508,15 +1853,31 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
     setLoading(true);
     setListError("");
     try {
-      const result = assertSuccess(await api.get<XrayRoutingResponse>(endpoint), "路由规则加载失败");
-      setRules(Array.isArray(result.routing?.rules) ? result.routing.rules : []);
+      const [routingResponse, outboundResponse] = await Promise.all([
+        api.get<XrayRoutingResponse>(endpoint),
+        api.get<XrayResourceListResponse>(`/api/admin/remote/outbounds?server_id=${serverId}`),
+      ]);
+      const result = assertSuccess(routingResponse, "路由规则加载失败");
+      const outbounds = assertSuccess(outboundResponse, "出站 Tag 加载失败").outbounds ?? [];
+      const nextRules = Array.isArray(result.routing?.rules) ? result.routing.rules : [];
+      const nextBalancers = Array.isArray(result.routing?.balancers) ? result.routing.balancers : [];
+      const tags = (values: Array<string | undefined>) => [...new Set(values.map((value) => value?.trim() || "").filter(Boolean))].sort((left, right) => left.localeCompare(right, "zh-CN"));
+      setRules(nextRules);
+      setOutboundTags(tags([
+        ...outbounds.map(xrayResourceTag),
+        ...nextRules.map((rule) => typeof rule.outboundTag === "string" ? rule.outboundTag : ""),
+      ]));
+      setBalancerTags(tags([
+        ...nextBalancers.map(xrayResourceTag),
+        ...nextRules.map((rule) => typeof rule.balancerTag === "string" ? rule.balancerTag : ""),
+      ]));
       setDomainStrategy(typeof result.routing?.domainStrategy === "string" ? result.routing.domainStrategy : "");
     } catch (reason) {
       setListError(messageFrom(reason, "路由规则加载失败"));
     } finally {
       setLoading(false);
     }
-  }, [endpoint]);
+  }, [endpoint, serverId]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -1643,11 +2004,12 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
         </Surface>;
       })}
     </div>}
-    {editorOpen ? <Surface className="xray-resource-editor routing-rule-editor">
-      <div className="xray-resource-editor-head"><span><strong>添加路由规则</strong><small>填写匹配条件和唯一目标；基础字段会覆盖高级 JSON 中的同名字段</small></span><Button type="button" variant="ghost" onClick={closeEditor} disabled={working}>关闭</Button></div>
+    {editorOpen ? <Dialog title="添加路由规则" description="填写匹配条件和唯一目标；基础字段会覆盖高级 JSON 中的同名字段" onClose={closeEditor} dismissible={!working} wide><div className="xray-resource-dialog routing-rule-editor">
       {editorError ? <ErrorState message={editorError} /> : null}
       <form className="form-stack" onSubmit={submit}>
-        <div className="form-grid two"><Field label="出站 Tag"><input aria-label="路由出站 Tag" value={outboundTag} onChange={(event) => { setOutboundTag(event.target.value); if (event.target.value.trim()) setBalancerTag(""); }} placeholder="proxy-out" /></Field><Field label="负载均衡 Tag"><input aria-label="路由负载均衡 Tag" value={balancerTag} onChange={(event) => { setBalancerTag(event.target.value); if (event.target.value.trim()) setOutboundTag(""); }} placeholder="任选其一" /></Field></div>
+        <div className="form-grid two"><Field label="出站 Tag" hint="从当前出站选择，或输入自定义 Tag"><input aria-label="路由出站 Tag" list={`routing-outbound-tags-${serverId}`} value={outboundTag} onChange={(event) => { setOutboundTag(event.target.value); if (event.target.value.trim()) setBalancerTag(""); }} placeholder="选择或输入出站 Tag" /></Field><Field label="负载均衡 Tag" hint="从当前路由负载均衡器选择，或输入自定义 Tag"><input aria-label="路由负载均衡 Tag" list={`routing-balancer-tags-${serverId}`} value={balancerTag} onChange={(event) => { setBalancerTag(event.target.value); if (event.target.value.trim()) setOutboundTag(""); }} placeholder="选择或输入负载均衡 Tag" /></Field></div>
+        <datalist id={`routing-outbound-tags-${serverId}`}>{outboundTags.map((tag) => <option key={tag} value={tag} />)}</datalist>
+        <datalist id={`routing-balancer-tags-${serverId}`}>{balancerTags.map((tag) => <option key={tag} value={tag} />)}</datalist>
         <div className="form-grid two"><Field label="域名" hint="逗号或换行分隔"><textarea aria-label="路由域名" rows={3} value={domain} onChange={(event) => setDomain(event.target.value)} placeholder="domain:example.com&#10;geosite:google" /></Field><Field label="IP" hint="逗号或换行分隔"><textarea aria-label="路由 IP" rows={3} value={ip} onChange={(event) => setIP(event.target.value)} placeholder="geoip:private&#10;10.0.0.0/8" /></Field></div>
         <div className="form-grid two"><Field label="端口"><input aria-label="路由端口" value={port} onChange={(event) => setPort(event.target.value)} placeholder="80,443,1000-2000" /></Field><Field label="网络"><input aria-label="路由网络" value={network} onChange={(event) => setNetwork(event.target.value)} placeholder="tcp,udp" /></Field></div>
         <div className="form-grid two"><Field label="入站 Tag" hint="逗号或换行分隔"><input aria-label="路由入站 Tag" value={inboundTag} onChange={(event) => setInboundTag(event.target.value)} placeholder="vless-in" /></Field><Field label="用户" hint="逗号或换行分隔"><input aria-label="路由用户" value={user} onChange={(event) => setUser(event.target.value)} placeholder="user@example.com" /></Field></div>
@@ -1655,8 +2017,143 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
         <Field label="高级 JSON" hint="可配置 attrs、source、sourcePort、marktag 等完整 Xray 路由字段；必须是单个对象。"><textarea className="service-code-editor xray-resource-json" aria-label="路由规则高级 JSON" spellCheck={false} value={jsonDraft} onChange={(event) => setJsonDraft(event.target.value)} /></Field>
         <div className="dialog-actions"><Button type="button" variant="secondary" onClick={closeEditor} disabled={working}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />创建规则</>}</Button></div>
       </form>
-    </Surface> : null}
+    </div></Dialog> : null}
     {deleting ? <ConfirmDialog title="删除路由规则" description={`将从服务器 #${serverId} 删除规则 #${deleting.index + 1}（${String(deleting.rule.outboundTag || deleting.rule.balancerTag || "未指定目标")}）。`} confirmLabel="确认删除" working={working} onCancel={() => !working && setDeleting(null)} onConfirm={() => void remove()} /> : null}
+  </div>;
+}
+
+function ServerSpeedtestPanel({ server, notify }: { server: ManagedServer; notify: Notify }) {
+  const [target, setTarget] = useState<LineSpeedtestTarget | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [working, setWorking] = useState<"install" | "remove" | "run" | "">("");
+  const [jobID, setJobID] = useState("");
+  const [error, setError] = useState("");
+  const [licenseOpen, setLicenseOpen] = useState(false);
+  const [licenseAccepted, setLicenseAccepted] = useState(false);
+  const [removeOpen, setRemoveOpen] = useState(false);
+
+  const load = useCallback(async (quiet = false) => {
+    if (!quiet) setLoading(true);
+    setError("");
+    try {
+      const response = await api.get<{ targets?: LineSpeedtestTarget[] | null }>("/api/admin/line-speedtest/targets");
+      const next = (response.targets ?? []).find((item) => item.kind === "remote" && Number(item.server_id) === server.id) ?? null;
+      setTarget(next);
+      const runningJobID = String(next?.last_job?.job_id ?? next?.last_job?.id ?? "").trim();
+      if (next?.running && runningJobID) setJobID((current) => current || runningJobID);
+    } catch (reason) {
+      setError(messageFrom(reason, "服务器测速能力加载失败"));
+    } finally {
+      if (!quiet) setLoading(false);
+    }
+  }, [server.id]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    if (!jobID) return;
+    let active = true;
+    let timer = 0;
+    const poll = async () => {
+      try {
+        const response = await api.get<LineSpeedtestJobResponse>(`/api/admin/line-speedtest/jobs/${encodeURIComponent(jobID)}`);
+        if (!active) return;
+        const state = lineSpeedtestJobState(response);
+        if (["completed", "complete", "ok", "success", "succeeded", "done"].includes(state.status)) {
+          setTarget((current) => current ? { ...current, running: false, error: "", last_result: state.result ?? current.last_result, last_job: state.job } : current);
+          setJobID("");
+          notify(`${server.name} 线路测速完成`);
+          return;
+        }
+        if (["failed", "error", "cancelled", "canceled"].includes(state.status)) {
+          const failure = state.error || "线路测速失败";
+          setTarget((current) => current ? { ...current, running: false, error: failure, last_job: state.job } : current);
+          setError(failure);
+          setJobID("");
+          notify(`${server.name}：${failure}`, "error");
+          return;
+        }
+        setTarget((current) => current ? { ...current, running: true, error: state.error, last_job: state.job } : current);
+        timer = window.setTimeout(() => void poll(), 2000);
+      } catch (reason) {
+        if (!active) return;
+        const failure = messageFrom(reason, "测速任务状态刷新失败");
+        setError(failure);
+        setJobID("");
+      }
+    };
+    timer = window.setTimeout(() => void poll(), 500);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [jobID, notify, server.name]);
+
+  const install = async () => {
+    if (!target) return;
+    setWorking("install");
+    setError("");
+    try {
+      await api.post("/api/admin/line-speedtest/install", { kind: "remote", server_id: server.id, accept_license: true });
+      setLicenseOpen(false);
+      setLicenseAccepted(false);
+      notify(`${server.name} Ookla Speedtest ${target.installed ? "许可已确认" : "安装完成"}`);
+      await load(true);
+    } catch (reason) {
+      setError(messageFrom(reason, "Ookla Speedtest 安装失败"));
+    } finally {
+      setWorking("");
+    }
+  };
+
+  const remove = async () => {
+    setWorking("remove");
+    setError("");
+    try {
+      await api.post("/api/admin/line-speedtest/remove", { kind: "remote", server_id: server.id });
+      setRemoveOpen(false);
+      notify(`${server.name} Ookla Speedtest 已卸载`);
+      await load(true);
+    } catch (reason) {
+      setError(messageFrom(reason, "Ookla Speedtest 卸载失败"));
+    } finally {
+      setWorking("");
+    }
+  };
+
+  const run = async () => {
+    if (!target) return;
+    setWorking("run");
+    setError("");
+    try {
+      const response = await api.post<LineSpeedtestJobResponse>("/api/admin/line-speedtest/run", { kind: "remote", server_id: server.id });
+      const nextJobID = String(response.job_id ?? response.job?.job_id ?? response.id ?? response.job?.id ?? "").trim();
+      if (!nextJobID) throw new Error("服务端未返回线路测速任务编号");
+      const startedJob = response.job ?? response;
+      setTarget({ ...target, running: true, error: "", last_job: { ...startedJob, id: startedJob.id ?? nextJobID, status: startedJob.status || response.status || "running" } });
+      setJobID(nextJobID);
+      notify(`${server.name} 线路测速已开始`);
+    } catch (reason) {
+      setError(messageFrom(reason, "线路测速启动失败"));
+    } finally {
+      setWorking("");
+    }
+  };
+
+  const result = target?.last_result;
+  const needsLicense = target?.license_accepted === false;
+  const needsUpgrade = target ? lineSpeedtestNeedsAgentUpgrade(target) : false;
+  const testing = Boolean(target?.running || jobID || working === "run");
+
+  return <div className="service-speedtest-workbench">
+    <div className="xray-resource-head"><span><strong>服务器线路测速</strong><small>直接使用 {server.name} 的公网出口运行官方 Ookla Speedtest</small></span><IconButton label="刷新服务器测速状态" onClick={() => void load()} disabled={loading || Boolean(working)}><RefreshCw size={16} /></IconButton></div>
+    {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
+    {loading ? <div className="center-state"><Spinner label="正在读取 Speedtest 状态" /></div> : !target ? <EmptyState icon={<Gauge size={23} />} title="当前服务器未提供测速能力" description="请先升级 Agent，再刷新当前页面。" /> : <Surface className="service-speedtest-panel">
+      <div className="service-speedtest-head"><span className="service-control-icon"><Gauge size={21} /></span><span><strong>{target.implementation || "Ookla Speedtest CLI"}</strong><small>{target.version || "版本待检测"}</small></span><div><Badge tone={target.online ? "good" : "neutral"}>{target.online ? "在线" : "离线"}</Badge><Badge tone={target.installed ? "info" : "neutral"}>{target.installed ? "CLI 就绪" : "未安装"}</Badge>{needsLicense ? <Badge tone="warn">需确认许可</Badge> : null}{needsUpgrade ? <Badge tone="warn">需升级 Agent</Badge> : null}{testing ? <Badge tone="warn">测速中</Badge> : null}</div></div>
+      <div className="service-speedtest-metrics"><span><small>Ping</small><strong>{lineSpeedtestMetric(result?.ping_ms, "ms")}</strong></span><span><small>抖动</small><strong>{lineSpeedtestMetric(result?.jitter_ms, "ms")}</strong></span><span><small>下载</small><strong>↓ {lineSpeedtestMetric(result?.download_mbps, "Mbps")}</strong></span><span><small>上传</small><strong>↑ {lineSpeedtestMetric(result?.upload_mbps, "Mbps")}</strong></span><span><small>丢包</small><strong>{lineSpeedtestMetric(result?.packet_loss_percent, "%")}</strong></span></div>
+      <div className="service-speedtest-route"><span><small>测试点</small><strong>{lineSpeedtestServer(result)}</strong></span><span><small>运营商 / 出口</small><strong>{result?.isp || "-"}{result?.egress_ip ? ` · ${result.egress_ip}` : ""}</strong></span><span><small>最近测速</small><strong>{result?.created_at || result?.timestamp ? relativeTime(result.created_at || result.timestamp) : "尚未测速"}</strong></span></div>
+      {target.error ? <p className="service-speedtest-error">{target.error}</p> : null}
+      <div className="dialog-actions">{!target.installed || needsLicense ? <Button onClick={() => { setLicenseAccepted(false); setLicenseOpen(true); }} disabled={!target.online || needsUpgrade || Boolean(working)}><HardDriveDownload size={16} />{needsLicense ? "确认许可" : "安装 Speedtest"}</Button> : <><IconButton label={`卸载 ${server.name} Ookla Speedtest`} onClick={() => setRemoveOpen(true)} disabled={!target.online || testing || Boolean(working)}><Trash2 size={16} /></IconButton><Button onClick={() => void run()} disabled={!target.online || needsUpgrade || testing || Boolean(working)}>{testing ? <Spinner label="测速中" /> : <><Play size={16} />开始测速</>}</Button></>}</div>
+    </Surface>}
+    {licenseOpen && target ? <Dialog title={target.installed ? "确认 Ookla Speedtest 许可" : "安装 Ookla Speedtest"} description={`目标服务器：${server.name}`} onClose={() => !working && setLicenseOpen(false)} dismissible={!working}><div className="form-stack service-speedtest-license"><label><input type="checkbox" checked={licenseAccepted} onChange={(event) => setLicenseAccepted(event.target.checked)} /><span>我确认本次使用符合 Ookla 的许可范围，并已阅读和接受其 <a href="https://www.speedtest.net/about/eula" target="_blank" rel="noreferrer">最终用户许可协议</a> 与 <a href="https://www.speedtest.net/about/privacy" target="_blank" rel="noreferrer">隐私政策</a>。</span></label><div className="dialog-actions"><Button variant="secondary" onClick={() => setLicenseOpen(false)} disabled={Boolean(working)}>取消</Button><Button onClick={() => void install()} disabled={!licenseAccepted || Boolean(working)}>{working === "install" ? <Spinner label="安装中" /> : <><HardDriveDownload size={16} />同意并继续</>}</Button></div></div></Dialog> : null}
+    {removeOpen ? <ConfirmDialog title="卸载 Ookla Speedtest" description={`将从 ${server.name} 移除由面板管理的 Ookla Speedtest。`} confirmLabel="确认卸载" working={working === "remove"} onCancel={() => !working && setRemoveOpen(false)} onConfirm={() => void remove()} /> : null}
   </div>;
 }
 

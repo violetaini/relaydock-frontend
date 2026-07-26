@@ -9,6 +9,8 @@ import {
   CloudDownload,
   Copy,
   Download,
+  Eye,
+  EyeOff,
   ExternalLink,
   FileCode2,
   FilePlus2,
@@ -171,6 +173,7 @@ interface CertificateItem {
   auto_renew: boolean;
   auto_deploy: boolean;
   challenge_mode?: string;
+  webroot_path?: string;
   remote_server_id?: number;
   remote_server_name?: string;
   dns_provider_id?: number;
@@ -187,6 +190,9 @@ interface DNSProviderWire extends Partial<DNSProviderItem> {
   ProviderType?: string;
   CreatedAt?: string;
   UpdatedAt?: string;
+}
+interface DNSProviderCredentialsResponse extends Envelope {
+  credentials?: Record<string, unknown> | string;
 }
 interface RemoteServerItem { id: number; name: string }
 
@@ -241,11 +247,19 @@ rules:
   - MATCH,PROXY
 `;
 
-const dnsProviderFields: Record<string, { label: string; key: string }[]> = {
+interface DNSProviderField {
+  label: string;
+  key: string;
+  type?: "email" | "password";
+  optional?: boolean;
+}
+
+const cloudflareCredentialKey = "CF_API_CREDENTIAL";
+
+const dnsProviderFields: Record<string, DNSProviderField[]> = {
   cloudflare: [
-    { label: "API Token（推荐）", key: "CF_DNS_API_TOKEN" },
-    { label: "账户邮箱（Global API Key 模式）", key: "CF_API_EMAIL" },
-    { label: "Global API Key", key: "CF_API_KEY" },
+    { label: "账户邮箱（可选）", key: "CF_API_EMAIL", type: "email", optional: true },
+    { label: "API 密钥", key: cloudflareCredentialKey },
   ],
   alidns: [
     { label: "AccessKey ID", key: "ALICLOUD_ACCESS_KEY" },
@@ -262,6 +276,24 @@ const dnsProviderFields: Record<string, { label: string; key: string }[]> = {
     { label: "API Secret", key: "GODADDY_API_SECRET" },
   ],
 };
+
+function parseDNSProviderCredentials(value: DNSProviderCredentialsResponse["credentials"]): Record<string, string> {
+  let parsed: unknown = value;
+  if (typeof parsed === "string") {
+    try { parsed = JSON.parse(parsed); } catch { return {}; }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  return Object.fromEntries(Object.entries(parsed).flatMap(([key, item]) => typeof item === "string" ? [[key, item]] : []));
+}
+
+function credentialsForEditor(providerType: string, value: DNSProviderCredentialsResponse["credentials"]): Record<string, string> {
+  const stored = parseDNSProviderCredentials(value);
+  if (providerType !== "cloudflare") return stored;
+  return {
+    CF_API_EMAIL: stored.CF_API_EMAIL || "",
+    [cloudflareCredentialKey]: stored.CF_DNS_API_TOKEN || stored.CF_API_KEY || stored[cloudflareCredentialKey] || "",
+  };
+}
 
 const noNotify: ContentNotify = () => undefined;
 
@@ -1580,7 +1612,9 @@ export function CertificatesWorkbenchPage({ notify = noNotify }: ContentPageProp
   const [error, setError] = useState("");
   const [showApply, setShowApply] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
+  const [editingCertificate, setEditingCertificate] = useState<CertificateItem | null>(null);
   const [editingProvider, setEditingProvider] = useState<DNSProviderItem | "new" | null>(null);
+  const [providerForApply, setProviderForApply] = useState(false);
   const [deploying, setDeploying] = useState<CertificateItem | null>(null);
   const [pending, setPending] = useState<CertificatePending | null>(null);
 
@@ -1640,34 +1674,47 @@ export function CertificatesWorkbenchPage({ notify = noNotify }: ContentPageProp
   };
 
   return <section className="cw-page">
-    <PageHeader title="SSL/TLS 证书管理" description="管理 ACME 证书，支持通配符、DNS 验证、多 CA 和自动部署。" actions={<><IconButton label="刷新证书" onClick={() => void load()}><RefreshCw size={18} /></IconButton>{tab === "certificates" ? <><Button onClick={() => setShowApply(true)}><Plus size={16} />申请证书</Button><Button variant="secondary" onClick={() => setShowUpload(true)}><Upload size={16} />上传证书</Button></> : <Button onClick={() => setEditingProvider("new")}><Plus size={16} />DNS 提供商</Button>}</>} />
+    <PageHeader title="SSL/TLS 证书管理" description="管理 ACME 证书，支持通配符、DNS 验证、多 CA 和自动部署。" actions={<><IconButton label="刷新证书" onClick={() => void load()}><RefreshCw size={18} /></IconButton>{tab === "certificates" ? <><Button onClick={() => setShowApply(true)}><Plus size={16} />申请证书</Button><Button variant="secondary" onClick={() => setShowUpload(true)}><Upload size={16} />上传证书</Button><Button variant="secondary" onClick={() => setEditingProvider("new")}><KeyRound size={16} />DNS 提供商</Button></> : <Button onClick={() => setEditingProvider("new")}><Plus size={16} />DNS 提供商</Button>}</>} />
     <div className="cw-tabs" role="tablist" aria-label="证书管理分类"><button type="button" role="tab" aria-selected={tab === "certificates"} className={tab === "certificates" ? "is-active" : ""} onClick={() => setTab("certificates")}><Award size={16} />证书 <span>{certificates.length}</span></button><button type="button" role="tab" aria-selected={tab === "providers"} className={tab === "providers" ? "is-active" : ""} onClick={() => setTab("providers")}><KeyRound size={16} />DNS 提供商 <span>{providers.length}</span></button></div>
     {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
-    {loading ? <Surface className="cw-loading"><Spinner /></Surface> : tab === "certificates" ? <CertificateTable items={certificates} working={working} onApply={() => setShowApply(true)} onRenew={(item) => void renew(item)} onToggle={(item, key, value) => void toggleCertificate(item, key, value)} onDeploy={setDeploying} onDelete={(item) => setPending({ kind: "certificate", item })} /> : <DNSProviderTable items={providers} onCreate={() => setEditingProvider("new")} onEdit={setEditingProvider} onDelete={(item) => setPending({ kind: "provider", item })} />}
-    {showApply ? <ApplyCertificateDialog providers={providers} servers={servers} onClose={() => setShowApply(false)} onComplete={async () => { setShowApply(false); notify("证书申请已提交"); await load(); }} /> : null}
+    {loading ? <Surface className="cw-loading"><Spinner /></Surface> : tab === "certificates" ? <CertificateTable items={certificates} working={working} onApply={() => setShowApply(true)} onEdit={setEditingCertificate} onRenew={(item) => void renew(item)} onToggle={(item, key, value) => void toggleCertificate(item, key, value)} onDeploy={setDeploying} onDelete={(item) => setPending({ kind: "certificate", item })} /> : <DNSProviderTable items={providers} onCreate={() => setEditingProvider("new")} onEdit={setEditingProvider} onDelete={(item) => setPending({ kind: "provider", item })} />}
+    {showApply ? <ApplyCertificateDialog providers={providers} servers={servers} onCreateProvider={() => { setShowApply(false); setProviderForApply(true); setEditingProvider("new"); }} onClose={() => setShowApply(false)} onComplete={async () => { setShowApply(false); notify("证书申请已提交"); await load(); }} /> : null}
     {showUpload ? <UploadCertificateDialog onClose={() => setShowUpload(false)} onComplete={async () => { setShowUpload(false); notify("证书已上传"); await load(); }} /> : null}
+    {editingCertificate ? <EditCertificateDialog item={editingCertificate} providers={providers} onClose={() => setEditingCertificate(null)} onComplete={async () => { setEditingCertificate(null); notify("证书设置已更新"); await load(); }} /> : null}
     {deploying ? <DeployCertificateDialog item={deploying} onClose={() => setDeploying(null)} onComplete={async () => { setDeploying(null); notify("证书已部署"); await load(); }} /> : null}
-    {editingProvider ? <DNSProviderDialog item={editingProvider === "new" ? undefined : editingProvider} onClose={() => setEditingProvider(null)} onComplete={async () => { setEditingProvider(null); notify(editingProvider === "new" ? "DNS 提供商已创建" : "DNS 提供商已更新"); await load(); }} /> : null}
+    {editingProvider ? <DNSProviderDialog item={editingProvider === "new" ? undefined : editingProvider} onClose={() => { setEditingProvider(null); if (providerForApply) { setProviderForApply(false); setShowApply(true); } }} onComplete={async () => { const returnToApply = providerForApply; setEditingProvider(null); setProviderForApply(false); notify(editingProvider === "new" ? "DNS 提供商已创建" : "DNS 提供商已更新"); await load(); if (returnToApply) setShowApply(true); }} /> : null}
     {pending ? <ConfirmDialog title={pending.kind === "certificate" ? "删除证书" : "删除 DNS 提供商"} description={pending.kind === "certificate" ? `将删除“${pending.item.domain}”的证书记录和自动化策略。` : `将删除“${pending.item.name}”，使用该凭据的证书后续无法自动续期。`} confirmLabel="确认删除" working={working} onCancel={() => setPending(null)} onConfirm={() => void remove()} /> : null}
   </section>;
 }
 
-function CertificateTable({ items, working, onApply, onRenew, onToggle, onDeploy, onDelete }: { items: CertificateItem[]; working: boolean; onApply: () => void; onRenew: (item: CertificateItem) => void; onToggle: (item: CertificateItem, key: "auto_renew" | "auto_deploy", value: boolean) => void; onDeploy: (item: CertificateItem) => void; onDelete: (item: CertificateItem) => void }) {
+function CertificateTable({ items, working, onApply, onEdit, onRenew, onToggle, onDeploy, onDelete }: { items: CertificateItem[]; working: boolean; onApply: () => void; onEdit: (item: CertificateItem) => void; onRenew: (item: CertificateItem) => void; onToggle: (item: CertificateItem, key: "auto_renew" | "auto_deploy", value: boolean) => void; onDeploy: (item: CertificateItem) => void; onDelete: (item: CertificateItem) => void }) {
   if (items.length === 0) return <Surface><EmptyState icon={<ShieldCheck size={24} />} title="暂无证书" description="申请 ACME 证书或上传已有 PEM 证书。" action={<Button onClick={onApply}><Plus size={16} />申请证书</Button>} /></Surface>;
-  return <Surface className="table-surface cw-compact-table"><div className="table-wrap"><table><thead><tr><th>域名</th><th>状态 / CA</th><th>目标</th><th>有效期</th><th>自动化</th><th aria-label="操作" /></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td><div className="cw-file-name"><span className="cw-file-icon"><LockKeyhole size={16} /></span><span><strong>{item.domain}</strong><small>{item.email || "未记录邮箱"}</small></span></div>{item.message ? <span className={`cw-table-note ${item.status === "failed" ? "cw-private-warning" : ""}`} title={item.message}>{item.message}</span> : null}</td><td><span className="cw-status"><span className={`cw-status-dot is-${item.status}`} /><Badge tone={certificateTone(item.status)}>{certificateStatus(item.status)}</Badge></span><span className="cw-table-note">{item.provider || "manual"} · {item.challenge_mode || "manual"}</span></td><td><strong>{item.remote_server_name || (item.remote_server_id ? `服务器 #${item.remote_server_id}` : "主控本地")}</strong><span className="cw-table-note">{item.deploy_target && item.deploy_target !== "none" ? `部署到 ${item.deploy_target}` : "未配置部署"}</span></td><td><strong>{formatDate(item.expiry_date)}</strong><span className="cw-table-note">签发 {formatDate(item.issue_date)}</span></td><td><div className="cw-auto-stack"><Toggle checked={item.auto_renew} onChange={(value) => onToggle(item, "auto_renew", value)} label="自动续期" /><Toggle checked={item.auto_deploy} onChange={(value) => onToggle(item, "auto_deploy", value)} label="自动部署" /></div></td><td><div className="cw-table-actions"><IconButton label={`续期 ${item.domain}`} disabled={working || item.status === "pending" || item.provider === "manual"} onClick={() => onRenew(item)}><RotateCw size={16} /></IconButton><IconButton label={`部署 ${item.domain}`} disabled={item.status !== "valid"} onClick={() => onDeploy(item)}><Server size={16} /></IconButton><IconButton label={`删除 ${item.domain}`} onClick={() => onDelete(item)}><Trash2 size={16} /></IconButton></div></td></tr>)}</tbody></table></div></Surface>;
+  return <Surface className="table-surface cw-compact-table cw-managed-table cw-certificate-table">
+    <div className="table-wrap"><table>
+      <thead><tr><th>域名</th><th>状态 / CA</th><th>目标</th><th>有效期</th><th>自动化</th><th aria-label="操作" /></tr></thead>
+      <tbody>{items.map((item) => <tr key={item.id}>
+        <td data-label="域名"><div className="cw-file-name"><span className="cw-file-icon"><LockKeyhole size={16} /></span><span><strong title={item.domain}>{item.domain}</strong><small title={item.email}>{item.email || "未记录邮箱"}</small></span></div>{item.message ? <span className={`cw-table-note cw-clamp-note ${item.status === "failed" ? "cw-private-warning" : ""}`} title={item.message}>{item.message}</span> : null}</td>
+        <td data-label="状态 / CA"><span className="cw-status"><span className={`cw-status-dot is-${item.status}`} /><Badge tone={certificateTone(item.status)}>{certificateStatus(item.status)}</Badge></span><span className="cw-table-note">{item.provider || "manual"} · {item.challenge_mode || "manual"}</span></td>
+        <td data-label="目标"><strong title={item.remote_server_name}>{item.remote_server_name || (item.remote_server_id ? `服务器 #${item.remote_server_id}` : "主控本地")}</strong><span className="cw-table-note">{item.deploy_target && item.deploy_target !== "none" ? `部署到 ${item.deploy_target}` : "未配置部署"}</span></td>
+        <td data-label="有效期"><strong>{formatDate(item.expiry_date)}</strong><span className="cw-table-note">签发 {formatDate(item.issue_date)}</span></td>
+        <td data-label="自动化"><div className="cw-auto-stack"><Toggle checked={item.auto_renew} onChange={(value) => onToggle(item, "auto_renew", value)} label="自动续期" /><Toggle checked={item.auto_deploy} onChange={(value) => onToggle(item, "auto_deploy", value)} label="自动部署" /></div></td>
+        <td data-label="操作"><div className="cw-table-actions"><IconButton label={`编辑 ${item.domain}`} onClick={() => onEdit(item)}><Pencil size={16} /></IconButton>{item.status === "failed" ? <Button variant="secondary" disabled={working || item.provider === "manual"} onClick={() => onRenew(item)}><RotateCw size={15} />重试申请</Button> : <IconButton label={`续期 ${item.domain}`} disabled={working || item.status === "pending" || item.provider === "manual"} onClick={() => onRenew(item)}><RotateCw size={16} /></IconButton>}<IconButton label={`部署 ${item.domain}`} disabled={item.status !== "valid"} onClick={() => onDeploy(item)}><Server size={16} /></IconButton><IconButton label={`删除 ${item.domain}`} onClick={() => onDelete(item)}><Trash2 size={16} /></IconButton></div></td>
+      </tr>)}</tbody>
+    </table></div>
+  </Surface>;
 }
 
 function DNSProviderTable({ items, onCreate, onEdit, onDelete }: { items: DNSProviderItem[]; onCreate: () => void; onEdit: (item: DNSProviderItem) => void; onDelete: (item: DNSProviderItem) => void }) {
   if (items.length === 0) return <Surface><EmptyState icon={<KeyRound size={24} />} title="暂无 DNS 提供商" description="添加凭据后可使用 DNS-01 申请泛域名证书。" action={<Button onClick={onCreate}><Plus size={16} />DNS 提供商</Button>} /></Surface>;
-  return <Surface className="table-surface cw-compact-table"><div className="table-wrap"><table><thead><tr><th>名称</th><th>提供商</th><th>凭据</th><th>更新时间</th><th aria-label="操作" /></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td><div className="cw-file-name"><span className="cw-file-icon"><Globe2 size={16} /></span><span><strong>{item.name}</strong><small>ID {item.id}</small></span></div></td><td><Badge tone="info">{item.provider_type}</Badge></td><td><span className="cw-secret">••••••••</span><span className="cw-table-note">仅写入，不回显</span></td><td>{formatDate(item.updated_at || item.created_at)}</td><td><div className="cw-table-actions"><IconButton label={`编辑 ${item.name}`} onClick={() => onEdit(item)}><Pencil size={16} /></IconButton><IconButton label={`删除 ${item.name}`} onClick={() => onDelete(item)}><Trash2 size={16} /></IconButton></div></td></tr>)}</tbody></table></div></Surface>;
+  return <Surface className="table-surface cw-compact-table cw-managed-table cw-provider-table"><div className="table-wrap"><table><thead><tr><th>名称</th><th>提供商</th><th>凭据</th><th>更新时间</th><th aria-label="操作" /></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td data-label="名称"><div className="cw-file-name"><span className="cw-file-icon"><Globe2 size={16} /></span><span><strong title={item.name}>{item.name}</strong><small>ID {item.id}</small></span></div></td><td data-label="提供商"><Badge tone="info">{item.provider_type}</Badge></td><td data-label="凭据"><span className="cw-secret">••••••••</span><span className="cw-table-note">编辑后可按需显示</span></td><td data-label="更新时间">{formatDate(item.updated_at || item.created_at)}</td><td data-label="操作"><div className="cw-table-actions"><IconButton label={`编辑 ${item.name}`} onClick={() => onEdit(item)}><Pencil size={16} /></IconButton><IconButton label={`删除 ${item.name}`} onClick={() => onDelete(item)}><Trash2 size={16} /></IconButton></div></td></tr>)}</tbody></table></div></Surface>;
 }
 
-function ApplyCertificateDialog({ providers, servers: _servers, onClose, onComplete }: { providers: DNSProviderItem[]; servers: RemoteServerItem[]; onClose: () => void; onComplete: () => void }) {
+function ApplyCertificateDialog({ providers, servers: _servers, onCreateProvider, onClose, onComplete }: { providers: DNSProviderItem[]; servers: RemoteServerItem[]; onCreateProvider: () => void; onClose: () => void; onComplete: () => void }) {
   const [domain, setDomain] = useState("");
   const [email, setEmail] = useState("");
   const [provider, setProvider] = useState("letsencrypt");
   const [challenge, setChallenge] = useState("dns");
-  const [dnsProviderID, setDNSProviderID] = useState(providers[0]?.id ?? 0);
+  const [dnsProviderID, setDNSProviderID] = useState(() => providers[0] ? String(providers[0].id) : "");
   const [webrootPath, setWebrootPath] = useState("/var/www/html");
   const [deployTarget, setDeployTarget] = useState("none");
   const [certPath, setCertPath] = useState("");
@@ -1676,6 +1723,9 @@ function ApplyCertificateDialog({ providers, servers: _servers, onClose, onCompl
   const [autoDeploy, setAutoDeploy] = useState(false);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
+  useEffect(() => {
+    setDNSProviderID((current) => providers.some((item) => String(item.id) === current) ? current : providers[0] ? String(providers[0].id) : "");
+  }, [providers]);
   useEffect(() => {
     if (!domain.trim()) return;
     const name = certFilename(domain.trim());
@@ -1691,7 +1741,7 @@ function ApplyCertificateDialog({ providers, servers: _servers, onClose, onCompl
       const payload = assertSuccess(await api.post<Envelope>("/api/admin/certificates/create", {
         domain: domain.trim(), email: email.trim(), provider, challenge_mode: challenge,
         webroot_path: challenge === "webroot" ? webrootPath.trim() : "",
-        dns_provider_id: challenge === "dns" ? dnsProviderID : 0,
+        dns_provider_id: challenge === "dns" ? Number(dnsProviderID) : 0,
         remote_server_id: 0, auto_renew: autoRenew,
         deploy_target: deployTarget,
         deploy_cert_path: deployTarget === "none" ? "" : certPath.trim(),
@@ -1703,7 +1753,71 @@ function ApplyCertificateDialog({ providers, servers: _servers, onClose, onCompl
     } catch (reason) { setError(fail(reason, "提交证书申请失败")); }
     finally { setWorking(false); }
   };
-  return <Dialog title="申请 ACME 证书" description="支持 HTTP、Webroot 与 DNS-01 验证" onClose={onClose} wide><form className="cw-form" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}<div className="cw-form-grid"><Field label="域名"><input required value={domain} onChange={(event) => setDomain(event.target.value)} placeholder="example.com 或 *.example.com" /></Field><Field label="联系邮箱"><input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="admin@example.com" /></Field><Field label="证书颁发机构"><select value={provider} onChange={(event) => setProvider(event.target.value)}><option value="letsencrypt">Let's Encrypt</option><option value="letsencrypt-staging">Let's Encrypt Staging</option></select></Field><Field label="验证方式"><select value={challenge} onChange={(event) => setChallenge(event.target.value)}><option value="dns">DNS-01</option><option value="standalone">HTTP 独立验证</option><option value="webroot">网站根目录</option></select></Field>{challenge === "dns" ? <Field label="DNS 提供商"><select required value={dnsProviderID} onChange={(event) => setDNSProviderID(Number(event.target.value))}><option value={0}>请选择</option>{providers.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.provider_type}</option>)}</select></Field> : null}{challenge === "webroot" ? <Field label="网站根目录"><input required value={webrootPath} onChange={(event) => setWebrootPath(event.target.value)} /></Field> : null}<Field label="部署目标"><select value={deployTarget} onChange={(event) => { const value = event.target.value; setDeployTarget(value); if (value === "none") setAutoDeploy(false); }}><option value="none">仅保存</option><option value="nginx">Nginx</option><option value="xray">Xray</option><option value="both">Nginx + Xray</option></select></Field></div>{deployTarget !== "none" ? <div className="cw-form-grid"><Field label="证书部署路径"><input required value={certPath} onChange={(event) => setCertPath(event.target.value)} /></Field><Field label="私钥部署路径"><input required value={keyPath} onChange={(event) => setKeyPath(event.target.value)} /></Field></div> : null}<div className="cw-checkboxes"><Toggle checked={autoRenew} onChange={setAutoRenew} label="自动续期" /><Toggle checked={autoDeploy} onChange={setAutoDeploy} label="续期后自动部署" /></div><div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在提交" /> : <><ShieldCheck size={16} />提交申请</>}</Button></div></form></Dialog>;
+  return <Dialog title="申请 ACME 证书" description="支持 HTTP、Webroot 与 DNS-01 验证" onClose={onClose} wide><form className="cw-form" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}<div className="cw-form-grid"><Field label="域名"><input required value={domain} onChange={(event) => setDomain(event.target.value)} placeholder="example.com 或 *.example.com" /></Field><Field label="联系邮箱"><input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="admin@example.com" /></Field><Field label="证书颁发机构"><select value={provider} onChange={(event) => setProvider(event.target.value)}><option value="letsencrypt">Let's Encrypt</option><option value="letsencrypt-staging">Let's Encrypt Staging</option></select></Field><Field label="验证方式"><select value={challenge} onChange={(event) => setChallenge(event.target.value)}><option value="dns">DNS-01</option><option value="standalone">HTTP 独立验证</option><option value="webroot">网站根目录</option></select></Field>{challenge === "dns" ? <Field label="DNS 提供商" hint={providers.length ? "使用已保存的 DNS API 凭据" : "还没有可用凭据，请先添加 DNS 提供商"}><div className="cw-provider-picker"><select required aria-label="DNS 提供商" value={dnsProviderID} onChange={(event) => setDNSProviderID(event.target.value)}><option value="">请选择 DNS 提供商</option>{providers.map((item) => <option key={item.id} value={String(item.id)}>{item.name} · {item.provider_type}</option>)}</select><Button type="button" variant="secondary" onClick={onCreateProvider}><Plus size={15} />添加</Button></div></Field> : null}{challenge === "webroot" ? <Field label="网站根目录"><input required value={webrootPath} onChange={(event) => setWebrootPath(event.target.value)} /></Field> : null}<Field label="部署目标"><select value={deployTarget} onChange={(event) => { const value = event.target.value; setDeployTarget(value); if (value === "none") setAutoDeploy(false); }}><option value="none">仅保存</option><option value="nginx">Nginx</option><option value="xray">Xray</option><option value="both">Nginx + Xray</option></select></Field></div>{deployTarget !== "none" ? <div className="cw-form-grid"><Field label="证书部署路径"><input required value={certPath} onChange={(event) => setCertPath(event.target.value)} /></Field><Field label="私钥部署路径"><input required value={keyPath} onChange={(event) => setKeyPath(event.target.value)} /></Field></div> : null}<div className="cw-checkboxes"><Toggle checked={autoRenew} onChange={setAutoRenew} label="自动续期" /><Toggle checked={autoDeploy} onChange={setAutoDeploy} label="续期后自动部署" /></div><div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在提交" /> : <><ShieldCheck size={16} />提交申请</>}</Button></div></form></Dialog>;
+}
+
+function EditCertificateDialog({ item, providers, onClose, onComplete }: { item: CertificateItem; providers: DNSProviderItem[]; onClose: () => void; onComplete: () => void }) {
+  const domain = item.domain;
+  const [email, setEmail] = useState(item.email || "");
+  const [provider, setProvider] = useState(item.provider || "manual");
+  const [challenge, setChallenge] = useState(item.challenge_mode || (item.provider === "manual" ? "manual" : "dns"));
+  const [dnsProviderID, setDNSProviderID] = useState(item.dns_provider_id ? String(item.dns_provider_id) : "");
+  const [webrootPath, setWebrootPath] = useState(item.webroot_path || "/var/www/html");
+  const [deployTarget, setDeployTarget] = useState(item.deploy_target || "none");
+  const [certPath, setCertPath] = useState(item.deploy_cert_path || "");
+  const [keyPath, setKeyPath] = useState(item.deploy_key_path || "");
+  const [autoRenew, setAutoRenew] = useState(item.auto_renew);
+  const [autoDeploy, setAutoDeploy] = useState(item.auto_deploy);
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState("");
+  const manual = provider === "manual";
+  const issued = item.status === "valid" || Boolean(item.issue_date);
+  const providerIsKnown = ["manual", "letsencrypt", "letsencrypt-staging"].includes(provider);
+  const challengeIsKnown = ["dns", "standalone", "webroot", "manual"].includes(challenge);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault(); setWorking(true); setError("");
+    try {
+      if (!manual && domain.includes("*") && challenge !== "dns") throw new Error("泛域名证书必须使用 DNS-01 验证");
+      if (!manual && challenge === "dns" && !dnsProviderID) throw new Error("请选择 DNS 提供商");
+      if (deployTarget !== "none" && (!certPath.trim() || !keyPath.trim())) throw new Error("请输入证书和私钥部署路径");
+      assertSuccess(await api.put<Envelope>(`/api/admin/certificates/${item.id}`, {
+        domain: domain.trim(),
+        email: email.trim(),
+        provider,
+        challenge_mode: manual ? "manual" : challenge,
+        webroot_path: !manual && challenge === "webroot" ? webrootPath.trim() : "",
+        dns_provider_id: !manual && challenge === "dns" ? Number(dnsProviderID) : 0,
+        remote_server_id: item.remote_server_id || 0,
+        auto_renew: !manual && autoRenew,
+        auto_deploy: deployTarget !== "none" && autoDeploy,
+        deploy_target: deployTarget,
+        deploy_cert_path: deployTarget === "none" ? "" : certPath.trim(),
+        deploy_key_path: deployTarget === "none" ? "" : keyPath.trim(),
+      }), "更新证书设置失败");
+      onComplete();
+    } catch (reason) { setError(fail(reason, "更新证书设置失败")); }
+    finally { setWorking(false); }
+  };
+
+  return <Dialog title="编辑证书设置" description="修改仅用于后续续期和部署，不会立即重新签发证书" onClose={onClose} wide>
+    <form className="cw-form" onSubmit={submit}>
+      {error ? <ErrorState message={error} /> : null}
+      <div className="cw-form-grid">
+        <Field label="域名" hint="证书域名来自证书内容，不能直接修改"><input aria-label="域名" readOnly value={domain} /></Field>
+        <Field label="联系邮箱"><input required={!manual} type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="admin@example.com" /></Field>
+        <Field label="证书颁发机构" hint={issued ? "已签发证书不能更改 CA" : undefined}><select aria-label="证书颁发机构" disabled={issued} value={provider} onChange={(event) => { const value = event.target.value; setProvider(value); if (value === "manual") { setChallenge("manual"); setAutoRenew(false); } else if (challenge === "manual") { setChallenge("dns"); } }}>{!providerIsKnown ? <option value={provider}>{provider}</option> : null}<option value="letsencrypt">Let's Encrypt</option><option value="letsencrypt-staging">Let's Encrypt Staging</option><option value="manual">手动上传</option></select></Field>
+        {!manual ? <Field label="验证方式"><select value={challenge} onChange={(event) => setChallenge(event.target.value)}>{!challengeIsKnown ? <option value={challenge}>{challenge}</option> : null}<option value="dns">DNS-01</option><option value="standalone">HTTP 独立验证</option><option value="webroot">网站根目录</option></select></Field> : null}
+        {!manual && challenge === "dns" ? <Field label="DNS 提供商"><select required value={dnsProviderID} onChange={(event) => setDNSProviderID(event.target.value)}><option value="">请选择 DNS 提供商</option>{providers.map((providerItem) => <option key={providerItem.id} value={String(providerItem.id)}>{providerItem.name} · {providerItem.provider_type}</option>)}</select></Field> : null}
+        {!manual && challenge === "webroot" ? <Field label="网站根目录"><input required value={webrootPath} onChange={(event) => setWebrootPath(event.target.value)} /></Field> : null}
+        <Field label="部署目标"><select value={deployTarget} onChange={(event) => { const value = event.target.value; setDeployTarget(value); if (value === "none") setAutoDeploy(false); }}><option value="none">仅保存</option><option value="nginx">Nginx</option><option value="xray">Xray</option><option value="both">Nginx + Xray</option></select></Field>
+      </div>
+      {deployTarget !== "none" ? <div className="cw-form-grid"><Field label="证书部署路径"><input required value={certPath} onChange={(event) => setCertPath(event.target.value)} /></Field><Field label="私钥部署路径"><input required value={keyPath} onChange={(event) => setKeyPath(event.target.value)} /></Field></div> : null}
+      <div className="cw-checkboxes">{!manual ? <Toggle checked={autoRenew} onChange={setAutoRenew} label="自动续期" /> : null}<Toggle checked={autoDeploy} disabled={deployTarget === "none"} onChange={setAutoDeploy} label="续期后自动部署" /></div>
+      <div className="cw-help"><Info size={16} /><span>更换 DNS 提供商后，新设置会在下一次续期时生效；当前证书文件不会被覆盖。</span></div>
+      <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在保存" /> : <><Save size={16} />保存设置</>}</Button></div>
+    </form>
+  </Dialog>;
 }
 
 function UploadCertificateDialog({ onClose, onComplete }: { onClose: () => void; onComplete: () => void }) {
@@ -1742,15 +1856,51 @@ function DNSProviderDialog({ item, onClose, onComplete }: { item?: DNSProviderIt
   const [name, setName] = useState(item?.name || "");
   const [providerType, setProviderType] = useState(item?.provider_type || "cloudflare");
   const [credentials, setCredentials] = useState<Record<string, string>>({});
+  const [visibleCredentials, setVisibleCredentials] = useState<Record<string, boolean>>({});
+  const [loadingCredentials, setLoadingCredentials] = useState(false);
+  const [credentialsLoaded, setCredentialsLoaded] = useState(false);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
   const fields = dnsProviderFields[providerType] ?? [];
-  useEffect(() => { setCredentials({}); }, [providerType]);
+  const providerChanged = Boolean(item && providerType !== item.provider_type);
+  const requiresFreshCredentials = !item || providerChanged;
+  useEffect(() => {
+    setCredentials({});
+    setVisibleCredentials({});
+    setCredentialsLoaded(false);
+    setError("");
+  }, [providerType]);
+  const loadCredentials = async () => {
+    if (!item || providerChanged) return;
+    setLoadingCredentials(true); setError("");
+    try {
+      const payload = assertSuccess(await api.get<DNSProviderCredentialsResponse>(`/api/admin/dns-providers/${item.id}/credentials`), "读取 DNS 凭据失败");
+      const next = credentialsForEditor(providerType, payload.credentials);
+      setCredentials(next);
+      setVisibleCredentials(Object.fromEntries(fields.filter((field) => field.type !== "email").map((field) => [field.key, true])));
+      setCredentialsLoaded(true);
+    } catch (reason) { setError(fail(reason, "读取 DNS 凭据失败")); }
+    finally { setLoadingCredentials(false); }
+  };
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setWorking(true); setError("");
     try {
-      const values = Object.fromEntries(Object.entries(credentials).filter(([, value]) => value.trim()).map(([key, value]) => [key, value.trim()]));
-      if (Object.keys(values).length === 0) throw new Error(item ? "更新时必须重新输入 DNS 凭据" : "请至少输入一项 DNS 凭据");
+      let values: Record<string, string>;
+      if (providerType === "cloudflare") {
+        const email = (credentials.CF_API_EMAIL || "").trim();
+        const secret = (credentials[cloudflareCredentialKey] || "").trim();
+        if (email && !secret) throw new Error("填写账户邮箱时也必须输入 API 密钥");
+        values = secret
+          ? email ? { CF_API_EMAIL: email, CF_API_KEY: secret } : { CF_DNS_API_TOKEN: secret }
+          : {};
+      } else {
+        values = Object.fromEntries(fields.flatMap((field) => {
+          const value = (credentials[field.key] || "").trim();
+          return value ? [[field.key, value]] : [];
+        }));
+        if (Object.keys(values).length > 0 && fields.some((field) => !field.optional && !values[field.key])) throw new Error("请完整输入该提供商所需的 DNS 凭据");
+      }
+      if (requiresFreshCredentials && Object.keys(values).length === 0) throw new Error(providerChanged ? "切换提供商后必须输入新提供商的 DNS 凭据" : "请输入 DNS API 凭据");
       const payload = { name: name.trim(), provider_type: providerType, credentials: JSON.stringify(values) };
       if (item) assertSuccess(await api.put<Envelope>(`/api/admin/dns-providers/${item.id}`, payload), "更新 DNS 提供商失败");
       else assertSuccess(await api.post<Envelope>("/api/admin/dns-providers/create", payload), "创建 DNS 提供商失败");
@@ -1758,5 +1908,18 @@ function DNSProviderDialog({ item, onClose, onComplete }: { item?: DNSProviderIt
     } catch (reason) { setError(fail(reason, item ? "更新 DNS 提供商失败" : "创建 DNS 提供商失败")); }
     finally { setWorking(false); }
   };
-  return <Dialog title={item ? "编辑 DNS 提供商" : "添加 DNS 提供商"} description="凭据只写入服务器，保存后不再回显" onClose={onClose}><form className="cw-form" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}<Field label="名称"><input required value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：Cloudflare 主账号" /></Field><Field label="提供商类型"><select value={providerType} onChange={(event) => setProviderType(event.target.value)}>{Object.keys(dnsProviderFields).map((type) => <option key={type} value={type}>{type}</option>)}</select></Field><div className="cw-form-section"><strong>{item ? "重新输入凭据" : "DNS API 凭据"}</strong><div className="cw-form">{fields.map((field) => <Field key={field.key} label={field.label}><input type="password" autoComplete="new-password" value={credentials[field.key] || ""} onChange={(event) => setCredentials((current) => ({ ...current, [field.key]: event.target.value }))} /></Field>)}</div></div><div className="cw-help"><KeyRound size={16} /><span>{item ? "现有凭据不会返回浏览器。编辑名称或类型时也需要重新输入有效凭据。" : "凭据保存后仅显示遮罩状态。"}</span></div><div className="dialog-actions"><Button type="button" variant="secondary" onClick={() => { setCredentials({}); onClose(); }}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在保存" /> : <><Save size={16} />保存</>}</Button></div></form></Dialog>;
+  return <Dialog title={item ? "编辑 DNS 提供商" : "添加 DNS 提供商"} description="凭据安全保存在服务器，编辑时可按需显示" onClose={onClose}>
+    <form className="cw-form" onSubmit={submit}>
+      {error ? <ErrorState message={error} /> : null}
+      <Field label="名称"><input required value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：Cloudflare 主账号" /></Field>
+      <Field label="提供商类型"><select value={providerType} onChange={(event) => setProviderType(event.target.value)}>{Object.keys(dnsProviderFields).map((type) => <option key={type} value={type}>{type}</option>)}</select></Field>
+      <div className="cw-form-section">
+        <div className="cw-form-section-heading"><strong>{providerChanged ? "新提供商凭据" : "DNS API 凭据"}</strong>{item && !providerChanged ? <Button type="button" variant="secondary" disabled={loadingCredentials} onClick={() => void loadCredentials()}>{loadingCredentials ? <Spinner label="正在读取" /> : <><Eye size={15} />{credentialsLoaded ? "重新读取已保存凭据" : "显示已保存凭据"}</>}</Button> : null}</div>
+        {providerType === "cloudflare" ? <p className="cw-section-hint">邮箱留空时按 API Token 使用；填写邮箱时按 Global API Key 使用。</p> : null}
+        <div className="cw-form">{fields.map((field) => <Field key={field.key} label={field.label}>{field.type === "email" ? <input required={requiresFreshCredentials && !field.optional} type="email" autoComplete="email" value={credentials[field.key] || ""} onChange={(event) => setCredentials((current) => ({ ...current, [field.key]: event.target.value }))} /> : <div className="cw-secret-field"><input required={requiresFreshCredentials && !field.optional} type={visibleCredentials[field.key] ? "text" : "password"} autoComplete="new-password" value={credentials[field.key] || ""} onChange={(event) => setCredentials((current) => ({ ...current, [field.key]: event.target.value }))} /><IconButton type="button" label={`${visibleCredentials[field.key] ? "隐藏" : "显示"} ${field.label}`} onClick={() => setVisibleCredentials((current) => ({ ...current, [field.key]: !current[field.key] }))}>{visibleCredentials[field.key] ? <EyeOff size={16} /> : <Eye size={16} />}</IconButton></div>}</Field>)}</div>
+      </div>
+      <div className="cw-help"><KeyRound size={16} /><span>{item && !providerChanged ? "不读取或不输入新凭据时会保留现有凭据；显示后可以直接修改并保存。" : providerChanged ? "提供商类型已变更，请输入新提供商的完整凭据。" : "保存后可在编辑窗口中按需显示凭据。"}</span></div>
+      <div className="dialog-actions"><Button type="button" variant="secondary" onClick={() => { setCredentials({}); onClose(); }}>取消</Button><Button type="submit" disabled={working || loadingCredentials}>{working ? <Spinner label="正在保存" /> : <><Save size={16} />保存</>}</Button></div>
+    </form>
+  </Dialog>;
 }

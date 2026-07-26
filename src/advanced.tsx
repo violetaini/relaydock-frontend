@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
-  Activity,
   ArrowDown,
   ArrowRight,
   ArrowUp,
@@ -12,13 +11,11 @@ import {
   Download,
   FileClock,
   FileText,
-  Gauge,
   Globe2,
   Link2,
   Play,
   Plus,
   RefreshCw,
-  Route,
   Search,
   Server,
   Share2,
@@ -32,12 +29,9 @@ import {
 } from "lucide-react";
 import { api, getToken, request } from "./api";
 import type {
-  NodeItem,
-  NodeListResponse,
   RemoteServer,
   ServerListResponse,
   SharedServerToken,
-  SpeedTestResult,
   TunnelChain,
   TunnelHop,
   TunnelInfo,
@@ -60,13 +54,12 @@ import {
 import "./advanced-ops.css";
 
 type Notify = (message: string, tone?: "success" | "error") => void;
-type AdvancedTab = "tunnels" | "warp" | "federation" | "speedtest" | "backup" | "debug" | "invites";
+type AdvancedTab = "tunnels" | "warp" | "federation" | "backup" | "debug" | "invites";
 
 const advancedTabs: Array<{ key: AdvancedTab; label: string; icon: typeof Cable }> = [
   { key: "tunnels", label: "隧道", icon: Cable },
   { key: "warp", label: "WARP", icon: Cloud },
   { key: "federation", label: "联邦分享", icon: Share2 },
-  { key: "speedtest", label: "节点测速", icon: Gauge },
   { key: "backup", label: "备份恢复", icon: Database },
   { key: "debug", label: "Debug 日志", icon: FileText },
   { key: "invites", label: "TG 邀请码", icon: Bot },
@@ -110,7 +103,6 @@ export function AdvancedPage({ notify }: { notify: Notify }) {
       {tab === "tunnels" ? <TunnelsPanel notify={notify} /> : null}
       {tab === "warp" ? <WarpPanel notify={notify} /> : null}
       {tab === "federation" ? <FederationPanel notify={notify} /> : null}
-      {tab === "speedtest" ? <SpeedTestPanel notify={notify} /> : null}
       {tab === "backup" ? <BackupPanel notify={notify} /> : null}
       {tab === "debug" ? <DebugLogsPanel notify={notify} /> : null}
       {tab === "invites" ? <TGBotInvitesPanel notify={notify} /> : null}
@@ -118,10 +110,20 @@ export function AdvancedPage({ notify }: { notify: Notify }) {
   );
 }
 
-type RemoteActionResponse = { success?: boolean; message?: string; error?: string };
+type RemoteActionResponse = { success?: boolean; message?: string; error?: string; warning?: string; runtime_warning?: string };
 
 function assertRemoteActionSucceeded(response: RemoteActionResponse, fallback: string) {
-  if (response.success === false) throw new Error(response.error || response.message || fallback);
+  if (response.success !== true) throw new Error(response.error || response.message || fallback);
+  if (response.runtime_warning?.trim() || response.warning?.trim()) {
+    throw new Error(response.runtime_warning?.trim() || response.message?.trim() || response.warning?.trim() || fallback);
+  }
+}
+
+function tunnelNetworkLabel(network: string): string {
+  const values = new Set(network.toLowerCase().split(/[,_]/).map((value) => value.trim()).filter(Boolean));
+  if (values.has("tcp") && values.has("udp")) return "TCP + UDP";
+  if (values.has("udp")) return "UDP";
+  return "TCP";
 }
 
 export function TunnelsPanel({ notify }: { notify: Notify }) {
@@ -221,12 +223,12 @@ export function TunnelsPanel({ notify }: { notify: Notify }) {
         <div className="surface-heading"><div><h2>链式端口转发</h2></div><IconButton label="刷新隧道" onClick={() => void load()}><RefreshCw size={17} /></IconButton></div>
         {loading ? <div className="center-state"><Spinner /></div> : chains.length === 0 ? <EmptyState icon={<Cable size={22} />} title="暂无链式隧道" /> : (
           <div className="table-wrap"><table><thead><tr><th>名称</th><th>链路</th><th>入口</th><th>最终目标</th><th aria-label="操作" /></tr></thead><tbody>{chains.map((chain) => (
-            <tr key={chain.label}>
+            <tr key={chain.id || `${chain.label}-${chain.hops.map((hop) => `${hop.server_id}:${hop.tag}`).join("-")}`}>
               <td><strong>{chain.label}</strong><small className="cell-note">{chain.hops.length} 跳</small></td>
               <td><div className="chain-path">{chain.hops.map((hop, index) => <span key={hop.tag}><span>{hop.server_name}</span>{index < chain.hops.length - 1 ? <ArrowRight size={13} /> : null}</span>)}</div></td>
               <td><code className="inline-code">:{chain.entry_port}</code></td>
               <td><code className="inline-code">{chain.final_target}</code></td>
-              <td className="actions-cell"><IconButton label={`删除链路 ${chain.label}`} onClick={() => setPendingDelete({ chain })}><Trash2 size={17} /></IconButton></td>
+              <td className="actions-cell"><IconButton label={`删除链路 ${chain.label} ${chain.hops[0]?.server_name || chain.entry_server}:${chain.entry_port}`} onClick={() => setPendingDelete({ chain })}><Trash2 size={17} /></IconButton></td>
             </tr>
           ))}</tbody></table></div>
         )}
@@ -241,7 +243,7 @@ export function TunnelsPanel({ notify }: { notify: Notify }) {
               <td>{tunnel.server_name}{tunnel.is_federated ? <small className="cell-note">联邦服务器</small> : null}</td>
               <td><code className="inline-code">:{tunnel.listen_port || "-"}</code></td>
               <td><code className="inline-code">{tunnel.target_address || "-"}:{tunnel.target_port || "-"}</code></td>
-              <td><Badge tone={tunnel.kind === "inbound" ? "info" : "neutral"}>{tunnel.kind === "inbound" ? "入站" : "路由"}</Badge></td>
+              <td><Badge tone={tunnel.kind === "inbound" ? "info" : "neutral"}>{tunnel.kind === "inbound" ? `任意门 · ${tunnelNetworkLabel(tunnel.network || "tcp")}` : "路由"}</Badge></td>
               <td className="actions-cell"><IconButton label={`删除隧道 ${tunnel.tag}`} onClick={() => setPendingDelete({ tunnel })}><Trash2 size={17} /></IconButton></td>
             </tr>
           ))}</tbody></table></div>
@@ -249,7 +251,7 @@ export function TunnelsPanel({ notify }: { notify: Notify }) {
       </Surface>
 
       {showCreate ? <CreateTunnelDialog servers={connectedServers} onClose={() => setShowCreate(false)} onCreated={async () => { setShowCreate(false); notify("链式隧道已创建"); await load(); }} /> : null}
-      {pendingDelete ? <ConfirmDialog title={pendingDelete.chain ? "删除链式隧道" : "删除隧道"} description={pendingDelete.chain ? `将移除当前发现的 ${pendingDelete.chain.hops.length} 个可达跳点；离线服务器不会出现在本次结果中，恢复连接后仍需复查。` : `将从 ${pendingDelete.tunnel?.server_name ?? "服务器"} 删除“${pendingDelete.tunnel?.tag ?? ""}”及其路由配置。`} confirmLabel="确认删除" working={working} onCancel={() => setPendingDelete(null)} onConfirm={() => void remove()} /> : null}
+      {pendingDelete ? <ConfirmDialog title={pendingDelete.chain ? "删除链式隧道" : "删除隧道"} description={pendingDelete.chain ? `将移除入口服务器 ${pendingDelete.chain.hops[0]?.server_name || pendingDelete.chain.entry_server}:${pendingDelete.chain.entry_port} 的 ${pendingDelete.chain.hops.length} 个可达跳点；离线服务器不会出现在本次结果中，恢复连接后仍需复查。` : `将从 ${pendingDelete.tunnel?.server_name ?? "服务器"} 删除“${pendingDelete.tunnel?.tag ?? ""}”及其路由配置。`} confirmLabel="确认删除" working={working} onCancel={() => setPendingDelete(null)} onConfirm={() => void remove()} /> : null}
     </div>
   );
 }
@@ -293,7 +295,7 @@ function CreateTunnelDialog({ servers, onClose, onCreated }: { servers: RemoteSe
     <Dialog title="创建链式端口转发" description="按顺序在多台服务器间建立 TCP/UDP 转发" onClose={onClose} wide>
       <form className="form-stack" onSubmit={submit}>
         {error ? <ErrorState message={error} /> : null}
-        <div className="form-grid"><Field label="链路名称"><input autoFocus required value={form.label} onChange={(event) => setForm({ ...form, label: event.target.value })} placeholder="hk-us-exit" /></Field><Field label="入口端口" hint="留空自动分配"><input type="number" min="1024" max="65535" value={form.entry_port} onChange={(event) => setForm({ ...form, entry_port: event.target.value })} /></Field></div>
+        <div className="form-grid"><Field label="链路名称"><input autoFocus required value={form.label} onChange={(event) => setForm({ ...form, label: event.target.value })} placeholder="hk-us-exit" /></Field><Field label="全链路端口" hint="所有服务器共用；留空自动选择"><input type="number" min="1024" max="65535" value={form.entry_port} onChange={(event) => setForm({ ...form, entry_port: event.target.value })} /></Field></div>
         <div className="form-grid"><Field label="最终目标地址"><input required value={form.target_address} onChange={(event) => setForm({ ...form, target_address: event.target.value })} placeholder="example.com" /></Field><Field label="最终目标端口"><input required type="number" min="1" max="65535" value={form.target_port} onChange={(event) => setForm({ ...form, target_port: event.target.value })} placeholder="443" /></Field></div>
         <Field label="添加服务器"><div className="inline-form"><select value={candidate} onChange={(event) => setCandidate(event.target.value)}><option value="">选择服务器</option>{available.map((server) => <option key={server.id} value={server.id}>{server.name} · {server.ip_address}</option>)}</select><Button type="button" variant="secondary" disabled={!candidate} onClick={() => { setSelected([...selected, Number(candidate)]); setCandidate(""); }}><Plus size={16} />加入</Button></div></Field>
         <div className="route-order">{selected.length === 0 ? <span className="muted">尚未选择服务器</span> : selected.map((id, index) => { const server = servers.find((item) => item.id === id); return <div key={id}><span className="route-index">{index + 1}</span><span><strong>{server?.name}</strong><small>{server?.ip_address}</small></span><div><IconButton type="button" label="上移" disabled={index === 0} onClick={() => move(index, -1)}><ArrowUp size={16} /></IconButton><IconButton type="button" label="下移" disabled={index === selected.length - 1} onClick={() => move(index, 1)}><ArrowDown size={16} /></IconButton><IconButton type="button" label="移除" onClick={() => setSelected(selected.filter((value) => value !== id))}><X size={16} /></IconButton></div></div>; })}</div>
@@ -1077,86 +1079,5 @@ function CreateInviteDialog({ onClose, onCreated }: { onClose: () => void; onCre
         <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose} disabled={working}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在创建" /> : <><Plus size={16} />创建邀请码</>}</Button></div>
       </form>
     </Dialog>
-  );
-}
-
-function SpeedTestPanel({ notify }: { notify: Notify }) {
-  const [nodes, setNodes] = useState<NodeItem[]>([]);
-  const [results, setResults] = useState<SpeedTestResult[]>([]);
-  const [mihomoReady, setMihomoReady] = useState(false);
-  const [form, setForm] = useState({ node_id: "", mode: "latency", bytes_mb: "50", threads: "1" });
-  const [loading, setLoading] = useState(true);
-  const [working, setWorking] = useState(false);
-  const [error, setError] = useState("");
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const [nodeResponse, resultResponse, mihomoResponse] = await Promise.all([
-        api.get<NodeListResponse>("/api/admin/nodes"),
-        api.get<{ results: SpeedTestResult[] | null }>("/api/admin/speedtest/results?limit=50"),
-        api.get<{ ready: boolean }>("/api/admin/speedtest/mihomo-status"),
-      ]);
-      const list = (nodeResponse.nodes ?? []).filter((node) => node.enabled);
-      setNodes(list);
-      setResults(resultResponse.results ?? []);
-      setMihomoReady(Boolean(mihomoResponse.ready));
-      setForm((current) => ({ ...current, node_id: current.node_id || String(list[0]?.id ?? "") }));
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "测速数据加载失败");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { void load(); }, [load]);
-  const hasRunning = useMemo(() => results.some((result) => result.status === "running"), [results]);
-  useEffect(() => {
-    if (!hasRunning) return;
-    const timer = window.setInterval(() => void load(), 2500);
-    return () => window.clearInterval(timer);
-  }, [hasRunning, load]);
-
-  const run = async (event: FormEvent) => {
-    event.preventDefault();
-    setWorking(true);
-    setError("");
-    try {
-      await api.post("/api/admin/speedtest/run", {
-        node_id: Number(form.node_id),
-        bytes: form.mode === "latency" ? 0 : Math.max(1, Number(form.bytes_mb)) * 1024 * 1024,
-        threads: Math.max(1, Number(form.threads)),
-        latency_only: form.mode === "latency",
-      });
-      notify("测速任务已提交");
-      await load();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "测速启动失败");
-    } finally {
-      setWorking(false);
-    }
-  };
-
-  return (
-    <div className="advanced-stack">
-      {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
-      <Surface className="advanced-surface speedtest-runner">
-        <div className="surface-heading"><div><h2>主控节点测速</h2></div><Badge tone={mihomoReady ? "good" : "warn"}>{mihomoReady ? "内核就绪" : "首次运行自动准备"}</Badge></div>
-        {loading ? <div className="center-state"><Spinner /></div> : nodes.length === 0 ? <EmptyState icon={<Route size={22} />} title="暂无可测速节点" /> : (
-          <form className="speedtest-form" onSubmit={run}>
-            <Field label="节点"><select value={form.node_id} onChange={(event) => setForm({ ...form, node_id: event.target.value })}>{nodes.map((node) => <option key={node.id} value={node.id}>{node.node_name} · {node.protocol}</option>)}</select></Field>
-            <Field label="测试类型"><select value={form.mode} onChange={(event) => setForm({ ...form, mode: event.target.value })}><option value="latency">仅延迟</option><option value="download">下载速度</option></select></Field>
-            <Field label="流量（MB）"><input type="number" min="1" max="1024" disabled={form.mode === "latency"} value={form.bytes_mb} onChange={(event) => setForm({ ...form, bytes_mb: event.target.value })} /></Field>
-            <Field label="线程"><select disabled={form.mode === "latency"} value={form.threads} onChange={(event) => setForm({ ...form, threads: event.target.value })}><option value="1">1</option><option value="2">2</option><option value="4">4</option><option value="8">8</option></select></Field>
-            <Button type="submit" disabled={working || !form.node_id}>{working ? <Spinner label="正在提交" /> : <><Play size={16} />开始测速</>}</Button>
-          </form>
-        )}
-      </Surface>
-      <Surface className="table-surface advanced-surface">
-        <div className="surface-heading"><div><h2>测速记录</h2></div><IconButton label="刷新测速记录" onClick={() => void load()}><RefreshCw size={17} /></IconButton></div>
-        {loading ? <div className="center-state"><Spinner /></div> : results.length === 0 ? <EmptyState icon={<Activity size={22} />} title="暂无测速记录" /> : <div className="table-wrap"><table><thead><tr><th>节点</th><th>来源</th><th>延迟</th><th>下载</th><th>测试流量</th><th>出口 IP</th><th>状态</th><th>时间</th></tr></thead><tbody>{results.map((result) => <tr key={result.id}><td><strong>{result.node_name}</strong></td><td>{result.source === "home_tester" ? "测速端" : "主控"}</td><td>{result.latency_ms > 0 ? `${result.latency_ms} ms` : "-"}</td><td>{result.down_mbps > 0 ? `${result.down_mbps.toFixed(1)} Mbps` : "-"}</td><td>{formatBytes(result.test_bytes)}</td><td><code className="inline-code">{result.egress_ip || "-"}</code></td><td><Badge tone={result.status === "ok" ? "good" : result.status === "running" ? "warn" : "bad"}>{result.status === "ok" ? "完成" : result.status === "running" ? "进行中" : "失败"}</Badge>{result.error ? <small className="cell-note" title={result.error}>{result.error}</small> : null}</td><td>{formatDate(result.created_at)}</td></tr>)}</tbody></table></div>}
-      </Surface>
-    </div>
   );
 }

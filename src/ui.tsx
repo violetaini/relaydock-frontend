@@ -41,7 +41,7 @@ export function ErrorState({ message, onRetry }: { message: string; onRetry?: ()
   );
 }
 
-export function Dialog({ title, description, children, onClose, wide = false, dismissible = true, describedBy }: { title: string; description?: string; children: ReactNode; onClose: () => void; wide?: boolean; dismissible?: boolean; describedBy?: string }) {
+export function Dialog({ title, description, children, onClose, wide = false, extraWide = false, dismissible = true, describedBy }: { title: string; description?: string; children: ReactNode; onClose: () => void; wide?: boolean; extraWide?: boolean; dismissible?: boolean; describedBy?: string }) {
   const titleId = useId();
   const descriptionId = useId();
   const dialogRef = useRef<HTMLElement>(null);
@@ -113,7 +113,7 @@ export function Dialog({ title, description, children, onClose, wide = false, di
     <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => dismissible && event.target === event.currentTarget && onClose()}>
       <section
         ref={dialogRef}
-        className={`dialog ${wide ? "dialog-wide" : ""}`}
+        className={`dialog ${wide ? "dialog-wide" : ""} ${extraWide ? "dialog-extra-wide" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

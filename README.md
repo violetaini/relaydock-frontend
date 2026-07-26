@@ -19,11 +19,12 @@ RelayDock Console 是 [RelayDock](https://github.com/violetaini/relaydock) 主�
 ## 主要功能
 
 - 多服务器、节点、用户、套餐和订阅统一管理
-- 按服务器向用户授权，并设置节点创建与使用期限
-- VLESS、VMess、Trojan、Shadowsocks 等常见协议配置表单
-- Reality、TLS、WebSocket、TCP 等传输与安全选项
-- 节点限速、流量统计、测速和在线状态查看
-- 证书、模板、规则、订阅文件与系统设置管理
+- 按服务器、有效期和具体协议组合向用户授权自助建点
+- VLESS、VMess、Trojan、Shadowsocks 2022、Hysteria2、WireGuard 等协议配置
+- Reality、TLS、WebSocket、gRPC、TCP 等传输与安全组合
+- TCP/UDP 多跳隧道与 Tunnel（任意门）管理
+- 节点测速，以及主控和受管服务器 Ookla Speedtest 线路测速
+- DNS 凭据、证书、模板、路由规则、订阅文件与系统设置管理
 - 响应式桌面/移动端界面、明暗主题与双因素认证流程
 
 ## 快速开始
@@ -31,6 +32,10 @@ RelayDock Console 是 [RelayDock](https://github.com/violetaini/relaydock) 主�
 ### 安装完整面板
 
 生产环境请直接安装 [RelayDock](https://github.com/violetaini/relaydock)。主仓库发行包已经包含本控制台，安装完成后即可通过浏览器使用。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/violetaini/relaydock/main/install.sh | sudo bash
+```
 
 ### 本地开发
 

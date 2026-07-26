@@ -17,7 +17,7 @@ const tunnel = {
   public_id: "tunnel_tokyo_us",
   name: "东京到洛杉矶",
   state: "active",
-  network: "tcp",
+  network: "tcp_udp",
   billing_mode: "both",
   traffic_multiplier_milli: 1000,
   hops: [
@@ -54,7 +54,7 @@ describe("forwarding response compatibility", () => {
 });
 
 describe("user forwarding workflow", () => {
-  it("preflights and creates a TCP forward with a managed target", async () => {
+  it("preflights and creates a TCP+UDP forward on one requested hop port", async () => {
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
       if (path === "/api/user/tunnel-grants") return { data: { grants: [compactGrant] } } as T;
       if (path === "/api/user/forwards") return { forwards: [] } as T;
@@ -62,7 +62,7 @@ describe("user forwarding workflow", () => {
       throw new Error(`unexpected GET ${path}`);
     });
     const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
-      if (path === "/api/user/forwards/preflight") return { data: { result: { success: true, ready: true, entry_address: "edge.example.com", entry_port: 24567 } } } as T;
+      if (path === "/api/user/forwards/preflight") return { data: { result: { success: true, ready: true, entry_address: "edge.example.com", entry_port: 2033 } } } as T;
       if (path === "/api/user/forwards") return { data: { forward: { id: "forward_1", observed_state: "pending" } } } as T;
       throw new Error(`unexpected POST ${path}`);
     });
@@ -80,18 +80,20 @@ describe("user forwarding workflow", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     fireEvent.change(screen.getByRole("textbox", { name: "转发名称" }), { target: { value: "东京入口" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: /全链路端口/ }), { target: { value: "2033" } });
     expect(screen.getByRole("combobox", { name: "网络类型" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
 
     expect(await screen.findByText("转发预检通过")).toBeInTheDocument();
-    expect(screen.getByText("edge.example.com:24567")).toBeInTheDocument();
+    expect(screen.getByText("edge.example.com:2033")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "确认创建" }));
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/user/forwards", {
       grant_id: "grant_alice_tokyo",
       name: "东京入口",
       target: { type: "managed_node", node_id: 42 },
-      network: "tcp",
+      network: "tcp_udp",
+      requested_entry_port: 2033,
       source_cidrs: [],
     }, { idempotencyKey: expect.any(String) }));
   });
@@ -105,7 +107,7 @@ describe("user forwarding workflow", () => {
         grant_id: "grant_alice_tokyo",
         target_node_id: 42,
         target_name: "美国 Reality",
-        network: "tcp",
+        network: "tcp_udp",
         entry_host: "edge.example.com",
         entry_port: 39888,
         desired_state: "active",
@@ -150,14 +152,16 @@ describe("administrator tunnel composition", () => {
     fireEvent.click(screen.getByRole("button", { name: "加入路线" }));
     fireEvent.click(screen.getByRole("button", { name: "加入路线" }));
     fireEvent.click(screen.getByRole("button", { name: "上移 洛杉矶出口" }));
+    fireEvent.change(screen.getByRole("spinbutton", { name: /端口范围起点/ }), { target: { value: "2033" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: /端口范围终点/ }), { target: { value: "2033" } });
     fireEvent.click(screen.getByRole("button", { name: "预检路线" }));
 
     expect(await screen.findByText("路线预检通过")).toBeInTheDocument();
     fireEvent.click(within(screen.getByRole("dialog", { name: "创建隧道模板" })).getByRole("button", { name: "创建隧道" }));
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/tunnel-templates", expect.objectContaining({
       name: "东京反向链路",
-      port_range_start: 39000,
-      port_range_end: 40000,
+      port_range_start: 2033,
+      port_range_end: 2033,
       server_ids: [12, 11],
     }), { idempotencyKey: expect.any(String) }));
     const createBody = post.mock.calls.find(([path]) => path === "/api/admin/tunnel-templates")?.[1] as Record<string, unknown>;

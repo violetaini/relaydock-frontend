@@ -11,6 +11,7 @@ import {
   Unplug,
 } from "lucide-react";
 import { api } from "./api";
+import type { ManagedGrantProtocol, ManagedGrantProtocolProfile } from "./managed-grant-protocols";
 import { Badge, Button, ConfirmDialog, EmptyState, ErrorState, IconButton, Spinner, Surface, formatBytes } from "./ui";
 import type { ManagedBillingMode } from "./server-grants";
 import "./self-service-nodes.css";
@@ -31,6 +32,8 @@ export interface UserManagedGrant {
   traffic_limit_bytes?: number;
   billed_bytes?: number;
   billing_mode?: ManagedBillingMode;
+  allowed_protocols: ManagedGrantProtocol[];
+  allowed_protocol_profiles: ManagedGrantProtocolProfile[];
 }
 
 export interface UserManagedSelection {
@@ -42,6 +45,7 @@ export interface UserManagedSelection {
   server_id: number;
   server_name: string;
   protocol: string;
+  protocol_profile: string;
   desired_enabled: boolean;
   state: string;
   effective_speed_limit_mbps?: number;
@@ -58,6 +62,7 @@ export interface ManagedNodeCatalogItem {
   server_name: string;
   server_status?: string;
   protocol: string;
+  protocol_profile: string;
   grant_id: number;
   grant_state: string;
   expires_at?: string | null;
@@ -69,6 +74,8 @@ export interface ManagedNodeCatalogItem {
   connection_limit?: number;
   traffic_limit_bytes?: number;
   billing_mode?: ManagedBillingMode;
+  allowed_protocols: ManagedGrantProtocol[];
+  allowed_protocol_profiles: ManagedGrantProtocolProfile[];
 }
 
 interface ManagedNodesPayload {
@@ -113,6 +120,35 @@ function boolean(value: unknown, fallback = false): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
+function protocolList(value: unknown): ManagedGrantProtocol[] {
+  return Array.isArray(value) ? value.filter((item): item is ManagedGrantProtocol => typeof item === "string") : [];
+}
+
+function protocolProfileList(value: unknown): ManagedGrantProtocolProfile[] {
+  return Array.isArray(value) ? value.filter((item): item is ManagedGrantProtocolProfile => typeof item === "string") : [];
+}
+
+function canonicalManagedProtocol(value: string): string {
+  switch (value.trim().toLowerCase()) {
+    case "ss": return "shadowsocks";
+    case "hysteria2":
+    case "hy2": return "hysteria";
+    case "socks5": return "socks";
+    default: return value.trim().toLowerCase();
+  }
+}
+
+function protocolAllowed(
+  protocol: string,
+  profile: string,
+  allowedProtocols: ManagedGrantProtocol[],
+  allowedProfiles: ManagedGrantProtocolProfile[],
+): boolean {
+  const familyAllowed = allowedProtocols.length === 0 || allowedProtocols.includes(canonicalManagedProtocol(protocol) as ManagedGrantProtocol);
+  if (!familyAllowed || allowedProfiles.length === 0) return familyAllowed;
+  return Boolean(profile) && allowedProfiles.includes(profile as ManagedGrantProtocolProfile);
+}
+
 function normalizeGrant(value: unknown): UserManagedGrant {
   const item = record(value);
   return {
@@ -129,6 +165,8 @@ function normalizeGrant(value: unknown): UserManagedGrant {
     traffic_limit_bytes: number(item.traffic_limit_bytes),
     billed_bytes: number(item.billed_bytes || item.usage_bytes),
     billing_mode: (string(item.billing_mode) || "download") as ManagedBillingMode,
+    allowed_protocols: protocolList(item.allowed_protocols),
+    allowed_protocol_profiles: protocolProfileList(item.allowed_protocol_profiles),
   };
 }
 
@@ -145,6 +183,7 @@ function normalizeSelection(value: unknown, catalog?: RecordValue): UserManagedS
     server_id: number(item.server_id || offer.server_id || grant.server_id),
     server_name: string(item.server_name || catalog?.server_name),
     protocol: string(item.protocol || catalog?.protocol),
+    protocol_profile: string(item.protocol_profile || catalog?.protocol_profile),
     desired_enabled: boolean(item.desired_enabled, true),
     state: string(item.state || catalog?.state || catalog?.grant_status || "inactive"),
     effective_speed_limit_mbps: number(item.effective_speed_limit_mbps || grant.speed_limit_mbps),
@@ -168,6 +207,7 @@ function normalizeCatalog(value: unknown): ManagedNodeCatalogItem {
     server_name: string(item.server_name),
     server_status: string(item.server_status),
     protocol: string(item.protocol),
+    protocol_profile: string(item.protocol_profile),
     grant_id: number(item.grant_id || grant.id),
     grant_state: string(item.grant_state || item.state),
     expires_at: optionalString(item.expires_at || grant.expires_at),
@@ -179,6 +219,8 @@ function normalizeCatalog(value: unknown): ManagedNodeCatalogItem {
     connection_limit: number(item.connection_limit || grant.connection_limit),
     traffic_limit_bytes: number(item.traffic_limit_bytes || grant.traffic_limit_bytes),
     billing_mode: (string(item.billing_mode || grant.billing_mode) || "download") as ManagedBillingMode,
+    allowed_protocols: protocolList(item.allowed_protocols || grant.allowed_protocols),
+    allowed_protocol_profiles: protocolProfileList(item.allowed_protocol_profiles || grant.allowed_protocol_profiles),
   };
 }
 
@@ -219,13 +261,21 @@ export function SelfServiceNodes({ view, notify, onChanged }: {
     try {
       const payload = await api.get<ManagedNodesPayload>("/api/user/managed-nodes");
       const rawCatalog = Array.isArray(payload.catalog) ? payload.catalog : [];
-      const normalizedCatalog = rawCatalog.map(normalizeCatalog).filter((item) => item.offer_id > 0);
+      const normalizedGrants = (Array.isArray(payload.grants) ? payload.grants : []).map(normalizeGrant);
+      const grantsByID = new Map(normalizedGrants.map((grant) => [grant.id, grant]));
+      const normalizedCatalog = rawCatalog.map(normalizeCatalog).filter((item) => {
+        if (item.offer_id <= 0) return false;
+        const grant = grantsByID.get(item.grant_id);
+        const allowedProtocols = item.allowed_protocols.length ? item.allowed_protocols : grant?.allowed_protocols ?? [];
+        const allowedProfiles = item.allowed_protocol_profiles.length ? item.allowed_protocol_profiles : grant?.allowed_protocol_profiles ?? [];
+        return protocolAllowed(item.protocol, item.protocol_profile, allowedProtocols, allowedProfiles);
+      });
       const explicitSelected = Array.isArray(payload.selected) ? payload.selected : Array.isArray(payload.items) ? payload.items : [];
       const nestedSelected = rawCatalog
         .map((item) => ({ entry: record(item), selection: record(record(item).selection) }))
         .filter(({ selection }) => number(selection.id) > 0)
         .map(({ entry, selection }) => normalizeSelection(selection, entry));
-      setGrants((Array.isArray(payload.grants) ? payload.grants : []).map(normalizeGrant));
+      setGrants(normalizedGrants);
       setSelected((explicitSelected.length ? explicitSelected.map((item) => normalizeSelection(item)) : nestedSelected).filter((item) => item.id > 0));
       setCatalog(normalizedCatalog);
     } catch (reason) {

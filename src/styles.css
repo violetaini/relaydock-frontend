@@ -584,6 +584,7 @@ tbody tr:hover { background: var(--surface-hover); }
 .dialog-backdrop { background: rgb(28 21 18 / 70%); backdrop-filter: none; }
 .dialog { border-radius: 2px; box-shadow: 7px 7px 0 rgb(14 10 8 / 35%); }
 .dialog-wide { width: min(96vw, 900px); }
+.dialog-extra-wide { width: min(calc(100vw - 32px), 1480px); }
 .command-box, .preview-list, .import-summary { border-radius: 2px; }
 .toast { border-radius: 2px; }
 .confirm-content { min-height: 92px; display: flex; align-items: flex-start; gap: 14px; }
@@ -633,16 +634,11 @@ tbody tr:hover { background: var(--surface-hover); }
 .secret-box { min-height: 94px; padding: 15px; display: flex; align-items: flex-start; gap: 12px; border: 1px solid var(--border-strong); background: var(--surface-muted); }
 .secret-box code { min-width: 0; flex: 1; overflow-wrap: anywhere; font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; line-height: 1.65; }
 .secret-box .icon-button { background: var(--surface); border-color: var(--border); }
-.speedtest-runner { min-height: 220px; }
-.speedtest-form { padding: 24px; display: grid; grid-template-columns: minmax(220px, 1.5fr) repeat(3, minmax(120px, .7fr)) auto; align-items: end; gap: 12px; }
-
 @media (max-width: 1180px) {
   .sidebar-brand > span:last-child { display: none; }
   .sidebar-brand { padding-inline: 13px; }
   .nav-item { padding-inline: 10px; }
   .sidebar-footer { min-width: 198px; }
-  .speedtest-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .speedtest-form .button { justify-self: start; }
 }
 
 @media (max-width: 1040px) {
@@ -694,8 +690,6 @@ tbody tr:hover { background: var(--surface-hover); }
   .control-heading { flex-direction: column; align-items: stretch; }
   .surface-actions { width: 100%; align-items: stretch; flex-wrap: wrap; }
   .surface-actions .field { min-width: 0; flex: 1; }
-  .speedtest-form { padding: 18px; grid-template-columns: 1fr; }
-  .speedtest-form .button { width: 100%; }
 }
 
 @media (max-width: 390px) {

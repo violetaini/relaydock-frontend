@@ -1,7 +1,8 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
 import {
+  AnyDoorForwardDialog,
   ChainProxyDialog,
   ExternalSubscriptionsDialog,
   NodeEditor,
@@ -71,6 +72,12 @@ function userConfig(nodeOrder: number[] = []) {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -95,6 +102,41 @@ describe("managed certificate hostname coverage", () => {
     expect(managedTLSHostnameForCertificate(wildcard, server, "")).toBe("edge.example.com");
     expect(managedCertificateMatchesServer({ ...valid, remote_server_id: 8, dns_names: ["edge.example.com"] }, server)).toBe(false);
     expect(managedCertificateMatchesServer({ ...valid, dns_names: ["other.example.com", "edge.example.com"] }, server)).toBe(true);
+  });
+});
+
+describe("WireGuard managed inbound resources", () => {
+  it("shows the inbound in node management and only allows management actions", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [] } as T;
+      if (path === "/api/admin/speedtest/results?latest=1") return { results: [] } as T;
+      if (path === "/api/user/config") return userConfig() as T;
+      if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
+      if (path === "/api/admin/managed-inbound-resources") return { resources: [{
+        id: 12,
+        server_id: 3,
+        server_name: "Edge 154",
+        display_name: "办公室 WireGuard",
+        protocol: "wireguard",
+        inbound_tag: "wireguard-in",
+        endpoint_host: "203.0.113.10",
+        endpoint_port: 51820,
+        public_metadata: { server_addresses: ["10.66.66.1/32"], mtu: 1420, peers: [{ allowed_ips: ["10.66.66.2/32"] }] },
+      }] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    vi.spyOn(api, "patch").mockResolvedValue({ success: true } as never);
+    render(<NodesWorkbench isAdmin notify={vi.fn()} />);
+
+    expect(await screen.findByText("办公室 WireGuard")).toBeInTheDocument();
+    expect(screen.getByText("不进入订阅")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "测延迟" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "重命名 办公室 WireGuard" }));
+    const input = screen.getByRole("textbox", { name: "显示名称" });
+    fireEvent.change(input, { target: { value: "生产 WireGuard" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(api.patch).toHaveBeenCalledWith("/api/admin/managed-inbound-resources/12", { display_name: "生产 WireGuard" }));
   });
 });
 
@@ -142,6 +184,380 @@ describe("nodes speedtest workbench", () => {
     }));
     expect(refresh).toHaveBeenCalledOnce();
     expect(notify).toHaveBeenCalledWith("节点测速已开始");
+  });
+
+  it("loads line targets lazily and exposes explicit managed installation states", async () => {
+    let masterInstalled = false;
+    const installRequest = deferred<Record<string, unknown>>();
+    const get = vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/speedtest/testers") return { testers: [] } as T;
+      if (path === "/api/admin/speedtest/mihomo-status") return { ready: true } as T;
+      if (path === "/api/admin/line-speedtest/targets") return { targets: [
+        { key: "master", kind: "master", name: "主控", online: true, installed: masterInstalled, managed: true, owned: masterInstalled, implementation: "Ookla Speedtest", version: masterInstalled ? "1.2.0" : "", running: false },
+        { key: "remote-8", kind: "remote", server_id: 8, name: "旧版 Agent", online: true, installed: false, managed: false, supported: false, upgrade_required: true, running: false, error: "Agent 版本过旧" },
+        { key: "remote-9", kind: "remote", server_id: 9, name: "系统 CLI", online: true, installed: true, managed: true, owned: false, implementation: "Ookla Speedtest", version: "1.2.0.84", running: false },
+        { key: "remote-10", kind: "remote", server_id: 10, name: "离线服务器", online: false, installed: false, managed: false, supported: false, running: false, error: "服务器离线" },
+        { key: "remote-11", kind: "remote", server_id: 11, name: "探测失败", online: true, installed: false, managed: false, running: false, error: "context deadline exceeded" },
+        { key: "remote-12", kind: "remote", server_id: 12, name: "最近失败", online: true, supported: true, installed: true, managed: true, owned: true, running: false, error: "公网测速超时", last_result: { ping_ms: 20, download_mbps: 100, upload_mbps: 50, created_at: "2026-07-22T12:00:00Z" }, last_job: { id: 44, status: "failed", error: "公网测速超时", created_at: "2026-07-23T12:00:00Z", completed_at: "2026-07-23T12:03:00Z" } },
+        { key: "remote-13", kind: "remote", server_id: 13, name: "待确认许可", online: true, supported: true, installed: true, managed: true, owned: true, license_accepted: false, running: false },
+      ] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/line-speedtest/install") {
+        const response = await installRequest.promise;
+        masterInstalled = true;
+        return response as T;
+      }
+      throw new Error(`unexpected POST ${path}`);
+    });
+    const notify = vi.fn();
+    render(<SpeedDialog nodes={[node(1, "香港 A")]} initialNodeIDs={[]} latest={{}} notify={notify} onClose={vi.fn()} onRefresh={vi.fn()} onOpenHistory={vi.fn()} onManageTesters={vi.fn()} />);
+
+    await screen.findByRole("tab", { name: "节点测速" });
+    expect(get).not.toHaveBeenCalledWith("/api/admin/line-speedtest/targets");
+    fireEvent.click(screen.getByRole("tab", { name: "线路 Ookla Speedtest" }));
+
+    const oldAgentRow = (await screen.findByText("旧版 Agent")).closest("tr");
+    expect(oldAgentRow).not.toBeNull();
+    expect(within(oldAgentRow as HTMLTableRowElement).getByText("需升级 Agent")).toBeInTheDocument();
+    expect(within(oldAgentRow as HTMLTableRowElement).getByRole("button", { name: "安装 Ookla Speedtest 到 旧版 Agent" })).toBeDisabled();
+    const offlineRow = screen.getByText("离线服务器").closest("tr");
+    expect(within(offlineRow as HTMLTableRowElement).getByText("离线")).toBeInTheDocument();
+    expect(within(offlineRow as HTMLTableRowElement).queryByText("需升级 Agent")).not.toBeInTheDocument();
+    expect(within(offlineRow as HTMLTableRowElement).getByRole("button", { name: "安装 Ookla Speedtest 到 离线服务器" })).toBeDisabled();
+    const probeErrorRow = screen.getByText("探测失败").closest("tr");
+    expect(within(probeErrorRow as HTMLTableRowElement).getByText("状态不可用")).toBeInTheDocument();
+    expect(within(probeErrorRow as HTMLTableRowElement).queryByText("手动安装")).not.toBeInTheDocument();
+    expect(within(probeErrorRow as HTMLTableRowElement).getByRole("button", { name: "安装 Ookla Speedtest 到 探测失败" })).toBeDisabled();
+    const failedRow = screen.getByText("最近失败").closest("tr");
+    expect(within(failedRow as HTMLTableRowElement).getByText("最近测速失败")).toBeInTheDocument();
+    expect(within(failedRow as HTMLTableRowElement).getByText("公网测速超时")).toBeInTheDocument();
+    const systemRow = screen.getByText("系统 CLI").closest("tr");
+    expect(within(systemRow as HTMLTableRowElement).queryByRole("button", { name: "卸载 系统 CLI Ookla Speedtest" })).not.toBeInTheDocument();
+    const licenseRow = screen.getByText("待确认许可").closest("tr");
+    expect(within(licenseRow as HTMLTableRowElement).getByText("需确认许可")).toBeInTheDocument();
+    expect(within(licenseRow as HTMLTableRowElement).getByRole("button", { name: "确认 Ookla Speedtest 许可 到 待确认许可" })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "安装 Ookla Speedtest 到 主控" }));
+    expect(await screen.findByRole("dialog", { name: "安装 Ookla Speedtest" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "同意并安装" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "同意并安装" }));
+    expect((await screen.findAllByText("安装中")).length).toBeGreaterThanOrEqual(1);
+    await act(async () => { installRequest.resolve({ success: true }); });
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/line-speedtest/install", { kind: "master", accept_license: true }));
+    expect(await screen.findByRole("button", { name: "测速 主控 线路" })).toBeEnabled();
+    expect(notify).toHaveBeenCalledWith("主控 Ookla Speedtest 安装完成");
+  });
+
+  it("polls a line job and renders the complete Speedtest result", async () => {
+    const jobRequest = deferred<Record<string, unknown>>();
+    const get = vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/speedtest/testers") return { testers: [] } as T;
+      if (path === "/api/admin/speedtest/mihomo-status") return { ready: true } as T;
+      if (path === "/api/admin/line-speedtest/targets") return { targets: [{ key: "remote-7", kind: "remote", server_id: 7, name: "东京线路", online: true, supported: true, installed: true, managed: true, owned: true, implementation: "Ookla Speedtest", version: "1.2.0", running: false, error: "上次测速超时", last_job: { id: "old-job", status: "failed", error: "上次测速超时" } }] } as T;
+      if (path === "/api/admin/line-speedtest/jobs/job-7") return jobRequest.promise as Promise<T>;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ job_id: "job-7", status: "queued" });
+    const notify = vi.fn();
+    render(<SpeedDialog nodes={[]} initialNodeIDs={[]} latest={{}} notify={notify} onClose={vi.fn()} onRefresh={vi.fn()} onOpenHistory={vi.fn()} onManageTesters={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "线路 Ookla Speedtest" }));
+    expect(await screen.findByText("最近测速失败")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "测速 东京线路 线路" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/line-speedtest/run", { kind: "remote", server_id: 7 }));
+    expect((await screen.findAllByText("测试中")).length).toBeGreaterThanOrEqual(1);
+    await act(async () => { jobRequest.resolve({
+      job: { id: "job-7", status: "completed" },
+      result: {
+        ping_ms: 12.34,
+        jitter_ms: 1.23,
+        packet_loss_percent: 0,
+        download_mbps: 812.45,
+        upload_mbps: 398.76,
+        test_server: "Ookla Tokyo #15047",
+        server_name: "ignored fallback",
+        server_location: "Tokyo",
+        isp: "Example ISP",
+        egress_ip: "203.0.113.7",
+        created_at: "2026-07-23T12:30:00Z",
+      },
+    }); });
+
+    expect(await screen.findByText("12.3 ms")).toBeInTheDocument();
+    expect(screen.getByText("抖动")).toBeInTheDocument();
+    expect(screen.getByText("1.2 ms")).toBeInTheDocument();
+    expect(screen.getByText("丢包")).toBeInTheDocument();
+    expect(screen.getByText("0.0 %")).toBeInTheDocument();
+    expect(screen.getByText("↓ 812.5 Mbps")).toBeInTheDocument();
+    expect(screen.getByText("↑ 398.8 Mbps")).toBeInTheDocument();
+    expect(screen.getByText("Ookla Tokyo #15047")).toBeInTheDocument();
+    expect(screen.getByText(/Example ISP · 203\.0\.113\.7/)).toBeInTheDocument();
+    const lineTable = screen.getByRole("table", { name: "线路测速目标" });
+    expect(Array.from(lineTable.querySelectorAll("colgroup col"), (column) => column.className)).toEqual([
+      "nw-line-col-target",
+      "nw-line-col-status",
+      "nw-line-col-implementation",
+      "nw-line-col-latency",
+      "nw-line-col-throughput",
+      "nw-line-col-endpoint",
+      "nw-line-col-time",
+      "nw-line-col-actions",
+    ]);
+    expect(screen.getByText("12.3 ms").closest(".nw-line-metrics")).not.toBeNull();
+    expect(screen.getByText("↓ 812.5 Mbps").closest(".nw-line-throughput")).not.toBeNull();
+    expect(get).toHaveBeenCalledWith("/api/admin/line-speedtest/jobs/job-7");
+    expect(notify).toHaveBeenCalledWith("东京线路测速完成");
+    expect(screen.queryByText("最近测速失败")).not.toBeInTheDocument();
+  });
+
+  it("stops polling and surfaces a failed line Speedtest job", async () => {
+    const jobRequest = deferred<Record<string, unknown>>();
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/speedtest/testers") return { testers: [] } as T;
+      if (path === "/api/admin/speedtest/mihomo-status") return { ready: true } as T;
+      if (path === "/api/admin/line-speedtest/targets") return { targets: [{ key: "remote-7", kind: "remote", server_id: 7, name: "东京线路", online: true, supported: true, installed: true, managed: true, owned: true, implementation: "Ookla Speedtest", running: false }] } as T;
+      if (path === "/api/admin/line-speedtest/jobs/job-7") return jobRequest.promise as Promise<T>;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    vi.spyOn(api, "post").mockResolvedValue({ job_id: "job-7", status: "running" });
+    const notify = vi.fn();
+    render(<SpeedDialog nodes={[]} initialNodeIDs={[]} latest={{}} notify={notify} onClose={vi.fn()} onRefresh={vi.fn()} onOpenHistory={vi.fn()} onManageTesters={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "线路 Ookla Speedtest" }));
+    fireEvent.click(await screen.findByRole("button", { name: "测速 东京线路 线路" }));
+    expect((await screen.findAllByText("测试中")).length).toBeGreaterThanOrEqual(1);
+    await act(async () => { jobRequest.resolve({ job: { id: "job-7", status: "failed", error: "公网测速超时" } }); });
+
+    expect(await screen.findByText("公网测速超时")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("测试中")).not.toBeInTheDocument());
+    expect(notify).toHaveBeenCalledWith("东京线路：公网测速超时", "error");
+  });
+
+  it("removes only a panel-owned Speedtest installation after confirmation", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/speedtest/testers") return { testers: [] } as T;
+      if (path === "/api/admin/speedtest/mihomo-status") return { ready: true } as T;
+      if (path === "/api/admin/line-speedtest/targets") return { targets: [{ key: "remote-3", kind: "remote", server_id: 3, name: "香港线路", online: true, installed: true, managed: true, owned: true, implementation: "Ookla Speedtest", running: false }] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<SpeedDialog nodes={[]} initialNodeIDs={[]} latest={{}} notify={vi.fn()} onClose={vi.fn()} onRefresh={vi.fn()} onOpenHistory={vi.fn()} onManageTesters={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "线路 Ookla Speedtest" }));
+    fireEvent.click(await screen.findByRole("button", { name: "卸载 香港线路 Ookla Speedtest" }));
+    expect(screen.getByRole("dialog", { name: "卸载 Ookla Speedtest" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认卸载" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/line-speedtest/remove", { kind: "remote", server_id: 3 }));
+  });
+
+  it("surfaces a Speedtest removal failure after closing the confirmation", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/speedtest/testers") return { testers: [] } as T;
+      if (path === "/api/admin/speedtest/mihomo-status") return { ready: true } as T;
+      if (path === "/api/admin/line-speedtest/targets") return { targets: [{ key: "remote-3", kind: "remote", server_id: 3, name: "香港线路", online: true, installed: true, managed: true, owned: true, implementation: "Ookla Speedtest", running: false }] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    vi.spyOn(api, "post").mockRejectedValue(new Error("只允许删除面板安装的 Ookla Speedtest"));
+    render(<SpeedDialog nodes={[]} initialNodeIDs={[]} latest={{}} notify={vi.fn()} onClose={vi.fn()} onRefresh={vi.fn()} onOpenHistory={vi.fn()} onManageTesters={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "线路 Ookla Speedtest" }));
+    fireEvent.click(await screen.findByRole("button", { name: "卸载 香港线路 Ookla Speedtest" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认卸载" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "卸载 Ookla Speedtest" })).not.toBeInTheDocument());
+    expect(screen.getByText("只允许删除面板安装的 Ookla Speedtest")).toBeInTheDocument();
+  });
+});
+
+describe("node any-door forwarding", () => {
+  it("creates an AnyDoor node by selecting Tunnel and an existing target node", async () => {
+    const source = node(7, "美国 Reality", "vless", "target.example.com");
+    const managedServer = {
+      id: 3,
+      name: "香港入口",
+      status: "online",
+      ws_connected: true,
+      xray_running: true,
+      xray_mode: "embedded",
+      is_federated: false,
+      domain: "edge.example.com",
+      inbounds: [],
+    };
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [source] } as T;
+      if (path === "/api/admin/speedtest/results?latest=1") return { results: [] } as T;
+      if (path === "/api/user/config") return userConfig([7]) as T;
+      if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
+      if (path === "/api/admin/remote-servers") return { servers: [managedServer] } as T;
+      if (path === "/api/admin/certificates") return { certificates: [] } as T;
+      if (path === "/api/admin/remote/inbounds?server_id=3") return { inbounds: [] } as T;
+      if (path === "/api/admin/remote/reality-domains?server_id=3") return { domains: [] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/xray/generate-x25519") return { privateKey: "A".repeat(43), publicKey: "B".repeat(43) } as T;
+      if (path === "/api/admin/managed-nodes/create?server_id=3") return { success: true, node_id: 41 } as T;
+      throw new Error(`unexpected POST ${path}`);
+    });
+    const notify = vi.fn();
+    render(<NodesWorkbench isAdmin notify={notify} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "在服务器创建" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "下一步" })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+
+    fireEvent.change(await screen.findByRole("combobox", { name: "节点协议" }), { target: { value: "anydoor" } });
+    expect(screen.getByRole("combobox", { name: "节点传输与安全预设" })).toHaveValue("anydoor");
+    expect(screen.getByText("Tunnel（任意门）", { selector: "strong" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+
+    fireEvent.change(await screen.findByRole("textbox", { name: "节点名称" }), { target: { value: "A-B-C Tunnel" } });
+    expect(screen.getByRole("spinbutton", { name: "监听端口" })).toHaveValue(2033);
+    expect(screen.getByRole("combobox", { name: "目标节点" })).toHaveValue("7");
+    expect(screen.getByRole("textbox", { name: "目标地址" })).toHaveValue("target.example.com:443");
+    expect(screen.getByRole("textbox", { name: "转发网络" })).toHaveValue("TCP + UDP");
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建节点" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/managed-nodes/create?server_id=3", {
+      action: "add",
+      node_name: "A-B-C Tunnel",
+      ip_version: "v4",
+      forward_node_id: 7,
+      inbound: {
+        tag: expect.stringMatching(/^anydoor-[a-f0-9]{6}$/),
+        listen: "0.0.0.0",
+        protocol: "tunnel",
+        port: 2033,
+        settings: { address: "target.example.com", port: 443, network: "tcp,udp" },
+      },
+    }));
+    expect(notify).toHaveBeenCalledWith("任意门转发已创建");
+  });
+
+  it("shows managed AnyDoor clones as TUNNEL in the node table", async () => {
+    const tunnel = { ...node(41, "A-B-C Tunnel", "vless", "edge.example.com"), inbound_tag: "anydoor-node-7" };
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [tunnel] } as T;
+      if (path === "/api/admin/speedtest/results?latest=1") return { results: [] } as T;
+      if (path === "/api/user/config") return userConfig([41]) as T;
+      if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    render(<NodesWorkbench isAdmin notify={vi.fn()} />);
+
+    const row = (await screen.findByText("A-B-C Tunnel")).closest("tr");
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLTableRowElement).getByText("TUNNEL")).toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).getByText(/目标协议 VLESS/)).toBeInTheDocument();
+  });
+
+  it("exposes any-door forwarding from an administrator node row", async () => {
+    const source = node(7, "美国 Reality", "vless", "target.example.com");
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [source] } as T;
+      if (path === "/api/admin/speedtest/results?latest=1") return { results: [] } as T;
+      if (path === "/api/user/config") return userConfig([7]) as T;
+      if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
+      if (path === "/api/admin/remote-servers") return { servers: [] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    render(<NodesWorkbench isAdmin notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "更多 美国 Reality 操作" }));
+    fireEvent.click(screen.getByRole("button", { name: "任意门转发" }));
+    expect(screen.getByRole("dialog", { name: "任意门转发 · 美国 Reality" })).toBeInTheDocument();
+  });
+
+  it.each([
+    { kind: "top-level node id", response: { success: true, node_id: 41 } },
+    { kind: "nested node id", response: { success: true, node_id: 0, node: { id: 41 } } },
+  ])("creates a TCP+UDP tunnel through the managed-node transaction with $kind", async ({ response }) => {
+    const source = node(7, "美国 Reality", "vless", "target.example.com");
+    vi.spyOn(api, "get").mockResolvedValue({ servers: [{
+      id: 3,
+      name: "香港入口",
+      status: "online",
+      ws_connected: true,
+      xray_running: true,
+      is_federated: false,
+      domain: "edge.example.com",
+    }] });
+    const post = vi.spyOn(api, "post").mockResolvedValue(response);
+    const complete = vi.fn().mockResolvedValue(undefined);
+    render(<AnyDoorForwardDialog node={source} onClose={vi.fn()} onComplete={complete} />);
+
+    expect(await screen.findByRole("combobox", { name: "入口服务器" })).toHaveValue("3");
+    expect(screen.getByRole("spinbutton", { name: "监听端口" })).toHaveValue(2033);
+    fireEvent.click(screen.getByRole("button", { name: "创建任意门" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/managed-nodes/create?server_id=3", {
+      action: "add",
+      node_name: "美国 Reality | Tunnel",
+      forward_node_id: 7,
+      inbound: {
+        tag: "anydoor-node-7",
+        protocol: "tunnel",
+        port: 2033,
+        settings: { address: "target.example.com", port: 443, network: "tcp,udp" },
+      },
+    }));
+    expect(complete).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      kind: "an empty 2xx body",
+      response: {},
+      expected: "任意门转发创建失败：服务端未确认事务成功",
+    },
+    {
+      kind: "success without a node id",
+      response: { success: true },
+      expected: "任意门转发创建失败：服务端未返回有效节点记录",
+    },
+    {
+      kind: "warning",
+      response: { success: true, node_id: 41, warning: "persist_failed", message: "入站已添加到运行时，但写入配置文件失败" },
+      expected: "入站已添加到运行时，但写入配置文件失败",
+    },
+    {
+      kind: "runtime warning",
+      response: { success: true, node_id: 41, runtime_warning: "Xray 运行态应用失败" },
+      expected: "Xray 运行态应用失败",
+    },
+    {
+      kind: "success false",
+      response: { success: false, error: "Agent 拒绝创建入站", runtime_warning: "不应覆盖主错误" },
+      expected: "Agent 拒绝创建入站",
+    },
+  ])("keeps the dialog open when the Agent returns $kind", async ({ response, expected }) => {
+    const source = node(7, "美国 Reality", "vless", "target.example.com");
+    vi.spyOn(api, "get").mockResolvedValue({ servers: [{
+      id: 3,
+      name: "香港入口",
+      status: "online",
+      ws_connected: true,
+      xray_running: true,
+      is_federated: false,
+      domain: "edge.example.com",
+    }] });
+    vi.spyOn(api, "post").mockResolvedValue(response);
+    const complete = vi.fn().mockResolvedValue(undefined);
+    render(<AnyDoorForwardDialog node={source} onClose={vi.fn()} onComplete={complete} />);
+
+    await screen.findByRole("combobox", { name: "入口服务器" });
+    fireEvent.click(screen.getByRole("button", { name: "创建任意门" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(expected);
+    expect(complete).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "任意门转发 · 美国 Reality" })).toBeInTheDocument();
   });
 });
 
@@ -277,6 +693,103 @@ describe("managed server node creation", () => {
       }),
     })));
     expect(notify).toHaveBeenCalledWith("受管节点已创建");
+  });
+
+  it("offers audited gRPC TLS and Trojan Reality presets with protocol-specific fields", async () => {
+    const existing = node(1, "香港 A");
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [existing] } as T;
+      if (path === "/api/admin/speedtest/results?latest=1") return { results: [] } as T;
+      if (path === "/api/user/config") return userConfig([1]) as T;
+      if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
+      if (path === "/api/admin/remote-servers") return { servers: [{ id: 3, name: "香港入口", status: "online", ws_connected: true, xray_running: true, xray_mode: "embedded", ipv6_enabled: false, domain: "edge.example.com", current_upload_speed: 0, current_download_speed: 0, traffic_limit: 0, traffic_used: 0, traffic_stats_mode: "both", traffic_source: "xray", connection_mode: "websocket", encrypted: true, inbounds: [] }] } as T;
+      if (path === "/api/admin/remote/inbounds?server_id=3") return { success: true, inbounds: [] } as T;
+      if (path === "/api/admin/certificates") return { certificates: [{ id: 9, domain: "*.example.com", status: "valid", expiry_date: "2030-01-01T00:00:00Z", remote_server_id: 3 }] } as T;
+      if (path === "/api/admin/remote/reality-domains?server_id=3") return { domains: [{ domain: "www.cloudflare.com", success: true, latency_ms: 16 }] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/xray/generate-x25519") return { privateKey: "A".repeat(43), publicKey: "B".repeat(43) } as T;
+      throw new Error(`unexpected POST ${path}`);
+    });
+    render(<NodesWorkbench isAdmin notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "在服务器创建" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "下一步" })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+
+    const family = await screen.findByRole("combobox", { name: "节点协议" });
+    const preset = screen.getByRole("combobox", { name: "节点传输与安全预设" });
+    expect(screen.getByRole("option", { name: "VLESS gRPC TLS" })).toBeInTheDocument();
+    fireEvent.change(family, { target: { value: "vmess" } });
+    expect(screen.getByRole("option", { name: "VMess gRPC TLS" })).toBeInTheDocument();
+    fireEvent.change(family, { target: { value: "trojan" } });
+    expect(screen.getByRole("option", { name: "Trojan TCP Reality" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Trojan gRPC TLS" })).toBeInTheDocument();
+
+    fireEvent.change(preset, { target: { value: "trojan-reality" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "下一步" })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(await screen.findByRole("textbox", { name: "认证密码" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: /^伪装目标域名 \/ SNI/ })).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "托管证书" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "上一步" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "节点传输与安全预设" }), { target: { value: "trojan-grpc-tls" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(await screen.findByRole("textbox", { name: /^gRPC Service Name/ })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "认证密码" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "托管证书" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "TLS SNI" })).toBeInTheDocument();
+  });
+
+  it("creates WireGuard through the one-time inbound path without sending the client private key", async () => {
+    const existing = node(1, "香港 A");
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [existing] } as T;
+      if (path === "/api/admin/speedtest/results?latest=1") return { results: [] } as T;
+      if (path === "/api/user/config") return userConfig([1]) as T;
+      if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
+      if (path === "/api/admin/remote-servers") return { servers: [{ id: 3, name: "香港入口", status: "online", ws_connected: true, xray_running: true, xray_mode: "embedded", ipv6_enabled: false, domain: "edge.example.com", current_upload_speed: 0, current_download_speed: 0, traffic_limit: 0, traffic_used: 0, traffic_stats_mode: "both", traffic_source: "xray", connection_mode: "websocket", encrypted: true, inbounds: [] }] } as T;
+      if (path === "/api/admin/remote/inbounds?server_id=3") return { success: true, inbounds: [] } as T;
+      if (path === "/api/admin/certificates") return { certificates: [] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/managed-inbound-resources/wireguard?server_id=3") return { success: true, resource: { id: 8 } } as T;
+      throw new Error(`unexpected POST ${path}`);
+    });
+    const notify = vi.fn();
+    render(<NodesWorkbench isAdmin notify={notify} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "在服务器创建" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "下一步" })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    fireEvent.change(await screen.findByRole("combobox", { name: "节点协议" }), { target: { value: "wireguard" } });
+    expect(screen.getByRole("combobox", { name: "节点传输与安全预设" })).toHaveValue("wireguard");
+    await waitFor(() => expect(screen.getByRole("button", { name: "下一步" })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "节点名称" }), { target: { value: "香港 WireGuard" } });
+    expect(screen.getByRole("textbox", { name: "WireGuard 服务端地址" })).toHaveValue("10.66.66.1/32");
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    const preview = await screen.findByRole("textbox", { name: "受管节点 Xray JSON" });
+    expect((preview as HTMLTextAreaElement).value).toContain('"protocol": "wireguard"');
+    fireEvent.click(screen.getByRole("button", { name: "创建 WireGuard 入站" }));
+
+    const config = await screen.findByRole("textbox", { name: "WireGuard 客户端配置" });
+    const clientPrivateKey = (config as HTMLTextAreaElement).value.match(/^PrivateKey = (.+)$/m)?.[1];
+    expect(clientPrivateKey).toMatch(/^[A-Za-z0-9+/]{43}=$/);
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/managed-inbound-resources/wireguard?server_id=3", expect.objectContaining({
+      action: "add",
+      display_name: "香港 WireGuard",
+      inbound: expect.objectContaining({ protocol: "wireguard" }),
+    })));
+    const payload = post.mock.calls.find(([path]) => path === "/api/admin/managed-inbound-resources/wireguard?server_id=3")?.[1];
+    expect(JSON.stringify(payload)).not.toContain(clientPrivateKey);
+    expect(post).not.toHaveBeenCalledWith("/api/admin/remote/inbounds?server_id=3", expect.anything());
+
+    fireEvent.click(screen.getByRole("button", { name: "完成" }));
+    expect(notify).toHaveBeenCalledWith("WireGuard 入站已创建，请妥善保存客户端配置");
   });
 
   it("offers public WS without a server domain while keeping WSS disabled", async () => {

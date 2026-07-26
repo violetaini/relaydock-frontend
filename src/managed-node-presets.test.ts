@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   buildManagedInboundRequest,
+  buildManagedWireGuardClientConfig,
+  buildManagedWireGuardInbound,
   managedInboundSupportsPublishing,
+  managedProtocolOptions,
   newManagedInboundDraft,
   randomBase64,
   type ManagedProtocol,
@@ -41,6 +44,118 @@ describe("managed node protocol presets", () => {
       privateKey: "A".repeat(43),
       publicKey: "B".repeat(43),
     })).toThrow("Reality 必须填写有效的伪装目标域名 / SNI");
+  });
+
+  it("builds Trojan Reality with password authentication and server-only key material", () => {
+    const request = buildManagedInboundRequest({
+      ...newManagedInboundDraft(),
+      name: "Trojan Reality",
+      tag: "trojan-reality-in",
+      protocol: "trojan-reality",
+      password: "trojan-secret",
+      domain: "www.cloudflare.com",
+      privateKey: "A".repeat(43),
+      publicKey: "B".repeat(43),
+      shortId: "A1B2C3D4",
+    });
+
+    expect(request.inbound).toMatchObject({
+      protocol: "trojan",
+      settings: { clients: [{ password: "trojan-secret", email: "admin", level: 0 }] },
+      streamSettings: {
+        network: "tcp",
+        security: "reality",
+        realitySettings: {
+          target: "www.cloudflare.com:443",
+          serverNames: ["www.cloudflare.com"],
+          privateKey: "A".repeat(43),
+          shortIds: ["a1b2c3d4"],
+        },
+      },
+    });
+    expect(request.inbound).not.toHaveProperty("cert_id");
+    expect((request.inbound.streamSettings as { realitySettings: Record<string, unknown> }).realitySettings).not.toHaveProperty("publicKey");
+  });
+
+  it.each([
+    {
+      preset: "vless-grpc-tls" as ManagedProtocol,
+      xrayProtocol: "vless",
+      settings: { clients: [{ id: expect.any(String), email: "admin" }], decryption: "none" },
+    },
+    {
+      preset: "vmess-grpc-tls" as ManagedProtocol,
+      xrayProtocol: "vmess",
+      settings: { clients: [{ id: expect.any(String), email: "admin", security: "chacha20-poly1305", level: 0 }] },
+    },
+    {
+      preset: "trojan-grpc-tls" as ManagedProtocol,
+      xrayProtocol: "trojan",
+      settings: { clients: [{ password: "proxy-secret", email: "admin", level: 0 }] },
+    },
+  ])("builds $preset with HTTP/2-only TLS and a normalized service name", ({ preset, xrayProtocol, settings }) => {
+    const request = buildManagedInboundRequest({
+      ...newManagedInboundDraft(),
+      name: `${preset} node`,
+      tag: `${preset}-in`,
+      protocol: preset,
+      domain: "edge.example.com",
+      wsPath: "/grpc-service",
+      certificateId: "12",
+      password: "proxy-secret",
+      flow: "xtls-rprx-vision",
+      vmessCipher: "chacha20-poly1305",
+      skipCertVerify: true,
+    });
+
+    expect(request.inbound).toMatchObject({
+      protocol: xrayProtocol,
+      cert_id: 12,
+      settings,
+      streamSettings: {
+        network: "grpc",
+        security: "tls",
+        grpcSettings: { serviceName: "grpc-service", multiMode: false },
+        tlsSettings: { serverName: "edge.example.com", alpn: ["h2"] },
+      },
+    });
+    expect(request.client_options).toEqual({ skip_cert_verify: true });
+    if (preset === "vless-grpc-tls") {
+      expect((request.inbound.settings as { clients: Array<Record<string, unknown>> }).clients[0]).not.toHaveProperty("flow");
+    }
+  });
+
+  it("rejects missing gRPC service names and incomplete Trojan Reality keys", () => {
+    expect(() => buildManagedInboundRequest({
+      ...newManagedInboundDraft(),
+      name: "Missing service",
+      protocol: "vless-grpc-tls",
+      certificateId: "3",
+      domain: "edge.example.com",
+      wsPath: "   ",
+    })).toThrow("gRPC Service Name 不能为空");
+
+    expect(() => buildManagedInboundRequest({
+      ...newManagedInboundDraft(),
+      name: "Missing Trojan Reality key",
+      protocol: "trojan-reality",
+      domain: "www.cloudflare.com",
+      privateKey: "",
+      publicKey: "",
+    })).toThrow("Reality X25519 密钥不完整");
+  });
+
+  it("exposes only the audited Trojan presets and marks certificate requirements", () => {
+    const trojanOptions = managedProtocolOptions.filter((option) => option.family === "trojan");
+    expect(trojanOptions.map((option) => option.value)).toEqual([
+      "trojan",
+      "trojan-reality",
+      "trojan-grpc-tls",
+      "trojan-wss",
+    ]);
+    expect(trojanOptions.find((option) => option.value === "trojan-reality")?.requiresCertificate).not.toBe(true);
+    expect(trojanOptions.find((option) => option.value === "trojan-grpc-tls")?.requiresCertificate).toBe(true);
+    expect(managedProtocolOptions.some((option) => option.value === ("trojan-none" as ManagedProtocol))).toBe(false);
   });
 
   it.each([
@@ -241,6 +356,69 @@ describe("managed node protocol presets", () => {
     expect(managedInboundSupportsPublishing({ protocol: "vmess-ws", ssCipher: "aes-128-gcm" })).toBe(true);
   });
 
+  it("builds a one-time WireGuard inbound without persisting the client private key", () => {
+    const clientPrivateKey = `${"A".repeat(43)}=`;
+    const draft = {
+      ...newManagedInboundDraft(),
+      name: "HK WireGuard",
+      protocol: "wireguard" as const,
+      tag: "wireguard-hk",
+      port: "51820",
+      wireGuardServerPrivateKey: `${"B".repeat(43)}=`,
+      wireGuardServerPublicKey: `${"C".repeat(43)}=`,
+      wireGuardClientPrivateKey: clientPrivateKey,
+      wireGuardClientPublicKey: `${"D".repeat(43)}=`,
+    };
+
+    const inbound = buildManagedWireGuardInbound(draft);
+    expect(inbound).toMatchObject({
+      tag: "wireguard-hk",
+      protocol: "wireguard",
+      settings: {
+        secretKey: `${"B".repeat(43)}=`,
+        address: ["10.66.66.1/32"],
+        peers: [{ publicKey: `${"D".repeat(43)}=`, allowedIPs: ["10.66.66.2/32"], keepAlive: 25 }],
+      },
+    });
+    expect(JSON.stringify(inbound)).not.toContain(clientPrivateKey);
+    expect(buildManagedWireGuardClientConfig(draft, "edge.example.com")).toContain(`PrivateKey = ${clientPrivateKey}`);
+    expect(managedInboundSupportsPublishing({ protocol: "wireguard", ssCipher: "2022-blake3-aes-128-gcm" })).toBe(false);
+    expect(() => buildManagedInboundRequest(draft)).toThrow("一次性客户端配置");
+  });
+
+  it("builds AnyDoor as a TCP+UDP tunnel to an existing node", () => {
+    const request = buildManagedInboundRequest({
+      ...newManagedInboundDraft(),
+      name: "A-B-C Tunnel",
+      tag: "anydoor-2033",
+      protocol: "anydoor",
+      port: "2033",
+      forwardNodeId: "7",
+      targetAddress: "target.example.com",
+      targetPort: "443",
+      publish: true,
+    });
+
+    expect(request).toEqual({
+      action: "add",
+      node_name: "A-B-C Tunnel",
+      ip_version: "v4",
+      forward_node_id: 7,
+      inbound: {
+        tag: "anydoor-2033",
+        listen: "0.0.0.0",
+        port: 2033,
+        protocol: "tunnel",
+        settings: {
+          address: "target.example.com",
+          port: 443,
+          network: "tcp,udp",
+        },
+      },
+    });
+    expect(managedInboundSupportsPublishing({ protocol: "anydoor", ssCipher: "2022-blake3-aes-128-gcm" })).toBe(false);
+  });
+
   it("uses Xray's canonical hysteria protocol with version 2 and a managed certificate", () => {
     const request = buildManagedInboundRequest({
       ...newManagedInboundDraft(),
@@ -250,7 +428,6 @@ describe("managed node protocol presets", () => {
       password: "admin-auth",
       certificateId: "7",
       domain: "edge.example.com",
-      hysteriaObfsPassword: "obfs-secret",
     });
     expect(request.inbound).toMatchObject({
       protocol: "hysteria",
@@ -259,8 +436,8 @@ describe("managed node protocol presets", () => {
       streamSettings: {
         network: "hysteria",
         security: "tls",
-        tlsSettings: { serverName: "edge.example.com" },
-        hysteriaSettings: { version: 2, password: "obfs-secret" },
+        tlsSettings: { serverName: "edge.example.com", alpn: ["h3"] },
+        hysteriaSettings: { version: 2 },
       },
     });
   });

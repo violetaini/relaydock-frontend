@@ -179,6 +179,7 @@ export interface TunnelHop {
 }
 
 export interface TunnelChain {
+  id?: string;
   label: string;
   hops: TunnelHop[];
   entry_server: number;

@@ -22,6 +22,9 @@
 .sg-policy-grid > span:nth-last-child(-n+3) { border-bottom: 0; }
 .sg-policy-grid small { font-size: 9px; }
 .sg-policy-grid strong { margin-top: 4px; overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.sg-protocol-summary { min-width: 0; display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: start; gap: 9px; }
+.sg-protocol-summary > small { padding-top: 4px; font-size: 10px; }
+.sg-protocol-summary > span { min-width: 0; display: flex; flex-wrap: wrap; gap: 5px; }
 .sg-quota { display: grid; grid-template-columns: minmax(0, 1fr) 32px; align-items: center; gap: 8px; }
 .sg-quota > span { height: 5px; overflow: hidden; background: var(--surface-muted); border: 1px solid var(--border); }
 .sg-quota i { height: 100%; display: block; background: var(--accent); }
@@ -37,6 +40,29 @@
 .sg-row-actions { display: flex; }
 .sg-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
 .sg-toggle-field { min-height: 64px; display: flex; align-items: center; }
+.sg-protocol-fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.sg-protocol-fieldset legend { padding: 0; color: var(--text-soft); font-size: 12px; font-weight: 650; }
+.sg-protocol-fieldset > p { margin: 5px 0 9px; color: var(--text-faint); font-size: 11px; line-height: 1.4; }
+.sg-protocol-all { min-height: 48px; padding: 8px 11px; display: flex; align-items: center; gap: 9px; cursor: pointer; background: var(--surface); border: 1px solid var(--border); }
+.sg-protocol-all:hover, .sg-protocol-group-head:hover, .sg-protocol-options label:hover { background: var(--surface-muted); }
+.sg-protocol-all.is-selected { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.sg-protocol-all input, .sg-protocol-group-head input, .sg-protocol-options input { width: 15px; height: 15px; flex: 0 0 15px; accent-color: var(--accent); }
+.sg-protocol-all span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sg-protocol-all strong { color: var(--text); font-size: 11px; }
+.sg-protocol-all small { font-size: 9px; }
+.sg-protocol-groups { margin-top: 9px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.sg-protocol-groups section { min-width: 0; border: 1px solid var(--border); background: var(--surface); }
+.sg-protocol-groups section.is-selected { border-color: color-mix(in srgb, var(--accent) 34%, var(--border)); }
+.sg-protocol-group-head { min-height: 39px; padding: 7px 9px; display: grid; grid-template-columns: 15px minmax(0, 1fr) auto; align-items: center; gap: 8px; cursor: pointer; border-bottom: 1px solid var(--border); background: var(--surface-muted); }
+.sg-protocol-group-head strong { color: var(--text); font-size: 12px; }
+.sg-protocol-group-head small { font-size: 10px; }
+.sg-protocol-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--border); }
+.sg-protocol-options label { min-width: 0; min-height: 49px; padding: 7px 9px; display: flex; align-items: center; gap: 8px; cursor: pointer; background: var(--surface); }
+.sg-protocol-options label.is-selected { background: var(--accent-soft); }
+.sg-protocol-options span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sg-protocol-options strong, .sg-protocol-options small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sg-protocol-options strong { color: var(--text); font-size: 11px; }
+.sg-protocol-options small { font-size: 10px; }
 .sg-choice { min-height: 40px; padding: 3px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid var(--border-strong); background: var(--surface-muted); }
 .sg-choice button { min-height: 32px; color: var(--text-soft); background: transparent; font-size: 12px; font-weight: 700; }
 .sg-choice button.is-active { color: var(--accent-strong); background: var(--surface); border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border)); }
@@ -46,6 +72,7 @@
   .sg-node-row { grid-template-columns: 60px minmax(0, 1fr) auto; }
   .sg-node-policy { grid-column: 2 / -1; }
   .sg-row-actions { grid-column: 3; grid-row: 1; }
+  .sg-protocol-groups { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 480px) {
@@ -63,4 +90,5 @@
   .sg-node-policy { grid-column: 1 / -1; }
   .sg-form-grid { grid-template-columns: 1fr; }
   .sg-form-grid > span:empty { display: none; }
+  .sg-protocol-options { grid-template-columns: 1fr; }
 }

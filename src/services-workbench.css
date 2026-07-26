@@ -246,13 +246,36 @@
 .service-control-main p { overflow: hidden; color: var(--text-soft); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .service-control-actions { display: flex; align-items: center; gap: 2px; }
 
-.service-config-panel { min-height: 310px; }
+.service-speedtest-workbench { min-height: 310px; display: flex; flex-direction: column; gap: 12px; }
+.service-speedtest-panel { padding: 15px; display: flex; flex-direction: column; gap: 14px; }
+.service-speedtest-head { min-width: 0; display: flex; align-items: center; gap: 11px; }
+.service-speedtest-head > span:nth-child(2) { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.service-speedtest-head > span:nth-child(2) strong,
+.service-speedtest-head > span:nth-child(2) small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.service-speedtest-head > span:nth-child(2) strong { font-size: 14px; }
+.service-speedtest-head > span:nth-child(2) small { color: var(--text-soft); font-size: 11px; }
+.service-speedtest-head > div { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+.service-speedtest-metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: var(--surface-muted); }
+.service-speedtest-metrics > span { min-width: 0; padding: 11px 12px; display: flex; flex-direction: column; gap: 5px; border-right: 1px solid var(--border); }
+.service-speedtest-metrics > span:last-child { border-right: 0; }
+.service-speedtest-metrics small,
+.service-speedtest-route small { color: var(--text-soft); font-size: 11px; }
+.service-speedtest-metrics strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.service-speedtest-route { display: grid; grid-template-columns: 1.1fr 1.5fr .8fr; gap: 12px; }
+.service-speedtest-route > span { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.service-speedtest-route strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.service-speedtest-error { padding: 9px 10px; overflow-wrap: anywhere; border: 1px solid color-mix(in srgb, var(--red) 28%, var(--border)); border-radius: 6px; color: var(--red); background: var(--red-soft); font-size: 11px; line-height: 1.5; }
+.service-speedtest-license > label { display: flex; align-items: flex-start; gap: 10px; color: var(--text-soft); font-size: 12px; line-height: 1.6; }
+.service-speedtest-license > label input { width: 16px; height: 16px; margin-top: 2px; flex: 0 0 16px; accent-color: var(--accent); }
+.service-speedtest-license a { color: var(--accent); text-decoration: underline; }
+
+.service-config-panel { min-height: clamp(460px, 64vh, 680px); display: flex; flex-direction: column; }
 .service-config-head { margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .service-config-head > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .service-config-head > span strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .service-config-head > span small { font-size: 10px; }
 .service-config-head > div { display: flex; align-items: center; gap: 5px; }
-.service-code-editor { width: 100%; min-height: 430px; padding: 13px; resize: vertical; border: 1px solid var(--border-strong); border-radius: 6px; color: #d9e5e0; background: #111614; font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 2; }
+.service-code-editor { width: 100%; height: clamp(400px, 58vh, 620px); min-height: clamp(400px, 58vh, 620px); flex: none; padding: 13px; resize: vertical; border: 1px solid var(--border-strong); border-radius: 6px; color: #d9e5e0; background: #111614; font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 2; }
 .service-code-editor:focus { border-color: var(--accent); outline: 3px solid color-mix(in srgb, var(--accent) 18%, transparent); }
 
 .xray-resource-workbench { min-height: 310px; display: flex; flex-direction: column; gap: 12px; }
@@ -277,12 +300,13 @@
 .xray-resource-actions .button { min-height: 32px; padding: 0 8px; }
 .xray-resource-editor { padding: 14px; display: flex; flex-direction: column; gap: 13px; border-color: var(--border-strong); }
 .xray-resource-editor-head { padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.xray-resource-dialog { display: flex; flex-direction: column; gap: 13px; }
 .xray-resource-json { min-height: 250px; }
 .xray-resource-editor > .xray-resource-json { min-height: 360px; }
 
 .secure-inbound-presets {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
 }
 .secure-inbound-presets > button {
@@ -300,6 +324,7 @@
 }
 .secure-inbound-presets > button:hover { color: var(--text); border-color: var(--border-strong); }
 .secure-inbound-presets > button.is-active { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.secure-inbound-presets > button:disabled { cursor: default; opacity: .58; }
 .secure-inbound-presets > button > svg { flex: 0 0 auto; }
 .secure-inbound-presets > button > span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .secure-inbound-presets strong,
@@ -326,6 +351,47 @@
 .secure-field-action { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
 .secure-key-status { min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .secure-key-status .button { min-height: 34px; }
+.xray-resource-dialog .form-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.wireguard-key-status {
+  min-height: 58px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-muted);
+}
+.wireguard-key-status > span { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.wireguard-key-status small { color: var(--text-soft); font-size: 10px; }
+.generated-secret {
+  min-width: 0;
+  min-height: 40px;
+  padding: 7px 7px 7px 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface-muted);
+}
+.generated-secret code { min-width: 0; overflow-wrap: anywhere; color: var(--text); font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.wireguard-created-state { display: flex; flex-direction: column; gap: 14px; }
+.wireguard-created-head {
+  min-width: 0;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--green) 30%, var(--border));
+  border-radius: 6px;
+  background: var(--green-soft);
+}
+.wireguard-created-head > span { width: 32px; height: 32px; flex: 0 0 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; color: var(--green); background: var(--surface); }
+.wireguard-created-head > div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.wireguard-created-head strong { color: var(--text); font-size: 13px; }
+.wireguard-created-head small { color: var(--text-soft); font-size: 11px; line-height: 1.45; }
+.wireguard-client-config { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 36px; align-items: start; gap: 7px; }
+.wireguard-client-config .service-code-editor { height: clamp(360px, 48vh, 520px); min-height: 360px; max-height: 560px; resize: vertical; }
+.wireguard-client-config .icon-button { margin-top: 1px; }
 .secure-encryption-row {
   min-height: 44px;
   padding: 8px 10px;
@@ -350,20 +416,22 @@
 .routing-rule-head > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .routing-rule-head strong,
 .routing-rule-head small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.routing-rule-head strong { font-size: 12px; }
-.routing-rule-head small { color: var(--text-soft); font-size: 10px; }
+.xray-routing-workbench .xray-resource-head strong { font-size: 15px; }
+.xray-routing-workbench .xray-resource-head small { font-size: 12px; }
+.routing-rule-head strong { font-size: 14px; }
+.routing-rule-head small { color: var(--text-soft); font-size: 12px; }
 .routing-rule-head > div { display: flex; align-items: center; gap: 5px; }
 .routing-rule-fields { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
 .routing-rule-fields > div { min-width: 0; padding: 8px 10px; display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 7px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .routing-rule-fields > div:nth-child(2n) { border-right: 0; }
 .routing-rule-fields > div:nth-last-child(-n + 2) { border-bottom: 0; }
 .routing-rule-fields > div:last-child:nth-child(odd) { grid-column: 1 / -1; border-right: 0; }
-.routing-rule-fields dt { color: var(--text-soft); font-size: 10px; }
-.routing-rule-fields dd { min-width: 0; margin: 0; overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.routing-rule-fields dt { color: var(--text-soft); font-size: 12px; }
+.routing-rule-fields dd { min-width: 0; margin: 0; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .routing-rule-fields .is-empty dd { color: var(--text-faint); }
 .routing-rule-json { border-top: 1px solid var(--border); }
-.routing-rule-json summary { padding-top: 10px; color: var(--text-soft); font-size: 10px; font-weight: 650; cursor: pointer; }
-.routing-rule-json pre { max-height: 260px; margin: 10px 0 0; padding: 11px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; color: #d9e5e0; background: #111614; font: 10px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.routing-rule-json summary { padding-top: 10px; color: var(--text-soft); font-size: 12px; font-weight: 650; cursor: pointer; }
+.routing-rule-json pre { max-height: 260px; margin: 10px 0 0; padding: 11px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; color: #d9e5e0; background: #111614; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .routing-rule-editor textarea:not(.service-code-editor) { width: 100%; resize: vertical; }
 .routing-rule-editor .xray-resource-json { min-height: 220px; }
 
@@ -392,8 +460,15 @@
   .service-control-card { align-items: flex-start; flex-wrap: wrap; }
   .service-control-main { min-width: calc(100% - 54px); }
   .service-control-actions { width: 100%; justify-content: flex-end; padding-top: 8px; border-top: 1px solid var(--border); }
+  .service-speedtest-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .service-speedtest-metrics > span { border-bottom: 1px solid var(--border); }
+  .service-speedtest-metrics > span:nth-child(2n) { border-right: 0; }
+  .service-speedtest-metrics > span:last-child { grid-column: 1 / -1; border-right: 0; border-bottom: 0; }
+  .service-speedtest-route { grid-template-columns: 1fr; }
   .service-config-head { align-items: stretch; flex-direction: column; }
   .service-config-head > div { overflow-x: auto; }
+  .service-config-panel { min-height: 0; }
+  .service-code-editor { height: clamp(320px, 52vh, 520px); min-height: clamp(320px, 52vh, 520px); }
   .xray-resource-head,
   .xray-resource-editor-head { align-items: stretch; flex-direction: column; }
   .xray-resource-head > div { justify-content: flex-end; }
@@ -402,6 +477,8 @@
   .routing-rule-fields > div:nth-child(2n),
   .routing-rule-fields > div:nth-last-child(-n + 2) { border-right: 0; border-bottom: 1px solid var(--border); }
   .routing-rule-fields > div:last-child { grid-column: auto; border-bottom: 0; }
+  .secure-inbound-presets { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .xray-resource-dialog .form-grid.three { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 560px) {
@@ -417,6 +494,9 @@
   .service-operation-tabs button { flex: 0 0 auto; }
   .service-address-panel dl > div,
   .service-ddns-panel dl > div { grid-template-columns: 74px minmax(0, 1fr); }
+  .service-speedtest-head { align-items: flex-start; flex-wrap: wrap; }
+  .service-speedtest-head > span:nth-child(2) { min-width: calc(100% - 54px); }
+  .service-speedtest-head > div { width: 100%; justify-content: flex-start; }
   .service-share-create { grid-template-columns: 1fr; }
   .xray-resource-row { align-items: flex-start; flex-wrap: wrap; }
   .xray-resource-main { min-width: calc(100% - 42px); }
@@ -426,5 +506,10 @@
   .secure-inbound-reference,
   .secure-encryption-row { align-items: stretch; flex-direction: column; }
   .secure-encryption-row > span { justify-content: space-between; }
+  .wireguard-key-status { align-items: stretch; flex-direction: column; }
+  .wireguard-key-status .button { width: 100%; justify-content: center; }
+  .wireguard-client-config { grid-template-columns: minmax(0, 1fr); }
+  .wireguard-client-config .icon-button { justify-self: end; }
+  .wireguard-client-config .service-code-editor { height: 230px; min-height: 230px; }
   .upgrade-summary strong { font-size: 18px; }
 }

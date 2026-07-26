@@ -10,6 +10,7 @@ vi.mock("./api", async (importOriginal) => {
 
 import { api } from "./api";
 import {
+  AdvancedPage,
   BackupPanel,
   DebugLogsPanel,
   SecretDialog,
@@ -58,6 +59,21 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("advanced navigation", () => {
+  it("does not expose the removed legacy node speedtest tab", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/tunnels") return { success: true, tunnels: [], chains: [] } as T;
+      if (path === "/api/admin/remote-servers") return { servers: [] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    render(<AdvancedPage notify={vi.fn()} />);
+
+    expect(screen.queryByRole("tab", { name: "节点测速" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("tab", { name: "隧道" })).toHaveAttribute("aria-selected", "true");
+  });
+});
+
 describe("WARP status", () => {
   it("ignores an older server response after the selection changes", async () => {
     const first = deferred<Record<string, unknown>>();
@@ -99,7 +115,7 @@ describe("WARP status", () => {
     render(<WarpPanel notify={notify} />);
     fireEvent.click(await screen.findByRole("button", { name: "安装 WARP" }));
     expect(post).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "确认安装" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认安装" }));
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote/warp/install?server_id=1", undefined));
     expect(await screen.findByText("已注册")).toBeInTheDocument();
@@ -187,6 +203,57 @@ describe("routed tunnel deletion", () => {
 
     await waitFor(() => expect(notify).toHaveBeenCalledWith("出站仍在使用", "error"));
     expect(notify).not.toHaveBeenCalledWith("隧道已删除");
+  });
+});
+
+describe("legacy chain deletion", () => {
+  it("keeps same-label chain instances isolated by their stable ids", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/tunnels") {
+        return {
+          success: true,
+          tunnels: [],
+          chains: [
+            {
+              id: "shared:1/tunnel-shared-h0,2/tunnel-shared-h1",
+              label: "shared",
+              entry_server: 1,
+              entry_port: 2033,
+              final_target: "first.example:443",
+              hops: [
+                { server_id: 1, server_name: "入口 A", tag: "tunnel-shared-h0", listen_port: 2033, target_address: "edge-b.example", target_port: 2033 },
+                { server_id: 2, server_name: "出口 B", tag: "tunnel-shared-h1", listen_port: 2033, target_address: "first.example", target_port: 443 },
+              ],
+            },
+            {
+              id: "shared:3/tunnel-shared-h0,4/tunnel-shared-h1",
+              label: "shared",
+              entry_server: 3,
+              entry_port: 2033,
+              final_target: "second.example:8443",
+              hops: [
+                { server_id: 3, server_name: "入口 C", tag: "tunnel-shared-h0", listen_port: 2033, target_address: "edge-d.example", target_port: 2033 },
+                { server_id: 4, server_name: "出口 D", tag: "tunnel-shared-h1", listen_port: 2033, target_address: "second.example", target_port: 8443 },
+              ],
+            },
+          ],
+        } as T;
+      }
+      if (path === "/api/admin/remote-servers") return { servers: [] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+
+    render(<TunnelsPanel notify={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "删除链路 shared 入口 C:2033" }));
+    expect(screen.getByRole("dialog", { name: "删除链式隧道" })).toHaveTextContent("入口服务器 入口 C:2033");
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+    expect(post.mock.calls.map(([path]) => path)).toEqual([
+      "/api/admin/remote/inbounds?server_id=4",
+      "/api/admin/remote/inbounds?server_id=3",
+    ]);
   });
 });
 

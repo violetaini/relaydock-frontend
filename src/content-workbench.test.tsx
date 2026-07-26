@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const requestMock = vi.hoisted(() => vi.fn());
@@ -342,10 +342,14 @@ describe("content workbench subscriptions", () => {
 });
 
 describe("content workbench certificates", () => {
-  function mockCertificateLoads() {
+  function mockCertificateLoads(
+    certificate: Record<string, unknown> = {},
+    credentialsResponse: unknown = { success: true, credentials: { CF_DNS_API_TOKEN: "SAVED_TOKEN" } },
+  ) {
     return vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
-      if (path === "/api/admin/certificates") return { success: true, certificates: [{ id: 3, domain: "*.example.com", email: "ops@example.com", provider: "letsencrypt", status: "valid", expiry_date: "2030-01-01T00:00:00Z", issue_date: "2029-10-01T00:00:00Z", auto_renew: false, auto_deploy: false, challenge_mode: "dns", dns_provider_id: 8, deploy_target: "none" }] } as T;
+      if (path === "/api/admin/certificates") return { success: true, certificates: [{ id: 3, domain: "*.example.com", email: "ops@example.com", provider: "letsencrypt", status: "valid", expiry_date: "2030-01-01T00:00:00Z", issue_date: "2029-10-01T00:00:00Z", auto_renew: false, auto_deploy: false, challenge_mode: "dns", dns_provider_id: 8, deploy_target: "none", ...certificate }] } as T;
       if (path === "/api/admin/dns-providers") return { success: true, providers: [{ ID: 8, Name: "Cloudflare", ProviderType: "cloudflare", Credentials: "TOP_SECRET_TOKEN", UpdatedAt: "2026-01-01T00:00:00Z" }] } as T;
+      if (path === "/api/admin/dns-providers/8/credentials") return credentialsResponse as T;
       if (path === "/api/admin/remote-servers") return { servers: [] } as T;
       throw new Error(`unexpected GET ${path}`);
     });
@@ -364,24 +368,151 @@ describe("content workbench certificates", () => {
     })));
   });
 
-  it("never exposes stored DNS credentials and requires a fresh credential on update", async () => {
-    mockCertificateLoads();
+  it("does not fetch stored DNS credentials automatically and preserves them on an untouched edit", async () => {
+    const get = mockCertificateLoads();
     const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
     render(<CertificatesWorkbenchPage notify={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("tab", { name: /DNS 提供商/ }));
     expect(screen.queryByDisplayValue("TOP_SECRET_TOKEN")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "编辑 Cloudflare" }));
-    const tokenInput = screen.getByLabelText("API Token（推荐）") as HTMLInputElement;
-    expect(tokenInput.value).toBe("");
-    fireEvent.change(tokenInput, { target: { value: "NEW_TOKEN" } });
+    expect(get).not.toHaveBeenCalledWith("/api/admin/dns-providers/8/credentials");
+    expect(screen.getByLabelText("API 密钥")).toHaveValue("");
+    expect(screen.getByLabelText("账户邮箱（可选）")).toHaveValue("");
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
     await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/dns-providers/8", {
       name: "Cloudflare",
       provider_type: "cloudflare",
-      credentials: JSON.stringify({ CF_DNS_API_TOKEN: "NEW_TOKEN" }),
+      credentials: JSON.stringify({}),
     }));
+  });
+
+  it("reveals and populates stored Cloudflare credentials only after an explicit request, then saves them", async () => {
+    const get = mockCertificateLoads({}, {
+      success: true,
+      credentials: { CF_API_EMAIL: "owner@example.com", CF_API_KEY: "GLOBAL_KEY" },
+    });
+    const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
+    render(<CertificatesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: /DNS 提供商/ }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑 Cloudflare" }));
+    const dialog = screen.getByRole("dialog", { name: "编辑 DNS 提供商" });
+    const keyInput = within(dialog).getByLabelText("API 密钥");
+    expect(keyInput).toHaveAttribute("type", "password");
+    expect(get).not.toHaveBeenCalledWith("/api/admin/dns-providers/8/credentials");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "显示已保存凭据" }));
+
+    await waitFor(() => expect(keyInput).toHaveValue("GLOBAL_KEY"));
+    expect(within(dialog).getByLabelText("账户邮箱（可选）")).toHaveValue("owner@example.com");
+    expect(keyInput).toHaveAttribute("type", "text");
+    expect(get).toHaveBeenCalledWith("/api/admin/dns-providers/8/credentials");
+    fireEvent.click(within(dialog).getByRole("button", { name: "隐藏 API 密钥" }));
+    expect(keyInput).toHaveAttribute("type", "password");
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/dns-providers/8", {
+      name: "Cloudflare",
+      provider_type: "cloudflare",
+      credentials: JSON.stringify({ CF_API_EMAIL: "owner@example.com", CF_API_KEY: "GLOBAL_KEY" }),
+    }));
+  });
+
+  it("reports an error when stored DNS credentials cannot be loaded", async () => {
+    mockCertificateLoads({}, { success: false, error: "没有权限读取凭据" });
+    render(<CertificatesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: /DNS 提供商/ }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑 Cloudflare" }));
+    const dialog = screen.getByRole("dialog", { name: "编辑 DNS 提供商" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "显示已保存凭据" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("没有权限读取凭据");
+    expect(within(dialog).getByLabelText("API 密钥")).toHaveValue("");
+    expect(within(dialog).getByRole("button", { name: "显示已保存凭据" })).toBeEnabled();
+  });
+
+  it("maps the single Cloudflare key to an API token when email is empty", async () => {
+    mockCertificateLoads();
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<CertificatesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "DNS 提供商" }));
+    const dialog = screen.getByRole("dialog", { name: "添加 DNS 提供商" });
+    fireEvent.change(within(dialog).getByLabelText("名称"), { target: { value: "Cloudflare Token" } });
+    fireEvent.change(within(dialog).getByLabelText("API 密钥"), { target: { value: "TOKEN_VALUE" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/dns-providers/create", {
+      name: "Cloudflare Token",
+      provider_type: "cloudflare",
+      credentials: JSON.stringify({ CF_DNS_API_TOKEN: "TOKEN_VALUE" }),
+    }));
+  });
+
+  it("maps the single Cloudflare key to a Global API Key when email is present", async () => {
+    mockCertificateLoads();
+    const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
+    render(<CertificatesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: /DNS 提供商/ }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑 Cloudflare" }));
+    fireEvent.change(screen.getByLabelText("账户邮箱（可选）"), { target: { value: "owner@example.com" } });
+    fireEvent.change(screen.getByLabelText("API 密钥"), { target: { value: "GLOBAL_KEY" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/dns-providers/8", {
+      name: "Cloudflare",
+      provider_type: "cloudflare",
+      credentials: JSON.stringify({ CF_API_EMAIL: "owner@example.com", CF_API_KEY: "GLOBAL_KEY" }),
+    }));
+  });
+
+  it("requires fresh credentials after switching DNS provider type", async () => {
+    mockCertificateLoads();
+    const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
+    render(<CertificatesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: /DNS 提供商/ }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑 Cloudflare" }));
+    fireEvent.change(screen.getByLabelText("提供商类型"), { target: { value: "alidns" } });
+
+    expect(screen.getByLabelText("AccessKey ID")).toBeRequired();
+    expect(screen.getByLabelText("AccessKey Secret")).toBeRequired();
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it("edits certificate renewal and deployment settings without changing issued identity", async () => {
+    mockCertificateLoads();
+    const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<CertificatesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 *.example.com" }));
+    const dialog = screen.getByRole("dialog", { name: "编辑证书设置" });
+    expect(within(dialog).getByLabelText("域名")).toHaveAttribute("readonly");
+    expect(within(dialog).getByLabelText("证书颁发机构")).toBeDisabled();
+    fireEvent.click(within(dialog).getByRole("switch", { name: "自动续期" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存设置" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/certificates/3", {
+      domain: "*.example.com",
+      email: "ops@example.com",
+      provider: "letsencrypt",
+      challenge_mode: "dns",
+      webroot_path: "",
+      dns_provider_id: 8,
+      remote_server_id: 0,
+      auto_renew: true,
+      auto_deploy: false,
+      deploy_target: "none",
+      deploy_cert_path: "",
+      deploy_key_path: "",
+    }));
+    expect(post).not.toHaveBeenCalledWith("/api/admin/certificates/create", expect.anything());
   });
 
   it("forces ACME issuance onto the working local handler path", async () => {
@@ -390,6 +521,7 @@ describe("content workbench certificates", () => {
     render(<CertificatesWorkbenchPage notify={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "申请证书" }));
+    expect(screen.getByRole("combobox", { name: "DNS 提供商" })).toHaveValue("8");
     fireEvent.change(screen.getByRole("textbox", { name: "域名" }), { target: { value: "*.new.example.com" } });
     fireEvent.change(screen.getByRole("textbox", { name: "联系邮箱" }), { target: { value: "ops@example.com" } });
     fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
@@ -402,6 +534,33 @@ describe("content workbench certificates", () => {
       auto_renew: true,
     })));
     expect(screen.queryByRole("combobox", { name: "签发目标" })).not.toBeInTheDocument();
+  });
+
+  it("offers DNS provider creation directly when the certificate selector is empty", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/certificates") return { success: true, certificates: [] } as T;
+      if (path === "/api/admin/dns-providers") return { success: true, providers: [] } as T;
+      if (path === "/api/admin/remote-servers") return { servers: [] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    render(<CertificatesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "申请证书" }));
+    const applyDialog = screen.getByRole("dialog", { name: "申请 ACME 证书" });
+    expect(within(applyDialog).getByRole("combobox", { name: "DNS 提供商" })).toHaveValue("");
+    fireEvent.click(within(applyDialog).getByRole("button", { name: "添加" }));
+
+    expect(await screen.findByRole("dialog", { name: "添加 DNS 提供商" })).toBeInTheDocument();
+  });
+
+  it("offers an explicit retry action for a failed ACME request", async () => {
+    mockCertificateLoads({ status: "failed", issue_date: null, expiry_date: null, message: "DNS 验证失败" });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<CertificatesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "重试申请" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/certificates/renew", { id: 3 }));
   });
 
   it("deploys a valid certificate with the handler's required paths", async () => {

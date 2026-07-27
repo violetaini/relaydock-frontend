@@ -687,6 +687,38 @@ for (const viewport of [
   { name: "desktop", width: 1440, height: 900 },
   { name: "mobile", width: 390, height: 844 },
 ]) {
+  test(`system update panel stays readable on ${viewport.name}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await mockAPI(page);
+    await page.goto("/#/settings");
+
+    const panel = page.locator(".settings-update-group .settings-workbench-section");
+    await expect(page.getByRole("heading", { name: "系统维护", exact: true })).toBeVisible();
+    await expect(panel.getByRole("heading", { name: "系统更新", exact: true })).toBeVisible();
+    await expect(panel.getByText("0.5.0", { exact: true })).toBeVisible();
+    await expect(panel.getByText("0.5.1", { exact: true })).toBeVisible();
+    await expect(panel.getByText("发现新版本", { exact: true })).toBeVisible();
+    await panel.scrollIntoViewIfNeeded();
+
+    const overflow = await panel.evaluate((element) => ({
+      panel: element.scrollWidth - element.clientWidth,
+      versions: (element.querySelector<HTMLElement>(".system-update-versions")?.scrollWidth ?? 0)
+        - (element.querySelector<HTMLElement>(".system-update-versions")?.clientWidth ?? 0),
+      actions: (element.querySelector<HTMLElement>(".system-update-actions")?.scrollWidth ?? 0)
+        - (element.querySelector<HTMLElement>(".system-update-actions")?.clientWidth ?? 0),
+    }));
+    expect(overflow.panel).toBeLessThanOrEqual(1);
+    expect(overflow.versions).toBeLessThanOrEqual(1);
+    expect(overflow.actions).toBeLessThanOrEqual(1);
+    await expectViewportIntegrity(page, `${viewport.name} system update panel`);
+
+    await panel.getByRole("button", { name: "立即更新" }).click();
+    const dialog = page.getByRole("dialog", { name: "更新到 0.5.1" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(/数据备份/)).toBeVisible();
+    await expectViewportIntegrity(page, `${viewport.name} system update confirmation`);
+  });
+
   test(`all console routes render cleanly on ${viewport.name}`, async ({ page }) => {
     const pageErrors: string[] = [];
     const unknownPaths: string[] = [];
@@ -991,6 +1023,7 @@ for (const viewport of [
       ["安全设置", "登录限流"],
       ["用户权限", "普通用户页面"],
       ["通知设置", "Telegram"],
+      ["系统维护", "系统更新"],
       ["账户与 API", "管理 API Token"],
     ]) {
       await expect(page.getByRole("heading", { name: group, exact: true })).toBeVisible();

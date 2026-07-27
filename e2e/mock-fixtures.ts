@@ -96,4 +96,16 @@ export const settingsGetResponses: Record<string, unknown> = {
     notify_server_tolerance_seconds: 60,
   },
   "/api/admin/system-settings/api-token": { token: "masked-test-token" },
+  "/api/admin/update/check": {
+    current_version: "0.5.0",
+    latest_version: "0.5.1",
+    has_update: true,
+    release_url: "https://github.com/violetaini/relaydock/releases/tag/v0.5.1",
+    download_url: "https://github.com/violetaini/relaydock/releases/download/v0.5.1/arcway-linux-amd64",
+    release_notes: "新增面板一键更新，并强化更新校验与回滚保护。",
+    deployment_mode: "standalone",
+    update_scope: "full",
+    external_web_root: false,
+    can_apply: true,
+  },
 };

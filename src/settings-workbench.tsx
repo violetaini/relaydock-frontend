@@ -6,7 +6,9 @@ import {
   Code2,
   Copy,
   Database,
+  Download,
   Eye,
+  ExternalLink,
   FileJson,
   Gauge,
   KeyRound,
@@ -21,14 +23,109 @@ import {
   SlidersHorizontal,
   Users,
 } from "lucide-react";
-import { api } from "./api";
+import { api, getToken } from "./api";
 import { MmwMigrationDialog } from "./migration-workbench";
 import { TwoFactorSettings } from "./two-factor";
 import type { RemoteServer, ServerListResponse } from "./types";
-import { Button, ConfirmDialog, ErrorState, Field, IconButton, PageHeader, Spinner, Surface, Toggle } from "./ui";
+import { Badge, Button, ConfirmDialog, ErrorState, Field, IconButton, PageHeader, Spinner, Surface, Toggle } from "./ui";
 import "./settings-workbench.css";
 
 type Notify = (message: string, tone?: "success" | "error") => void;
+
+interface UpdateInfo {
+  current_version: string;
+  latest_version: string;
+  has_update: boolean;
+  release_url: string;
+  download_url: string;
+  release_notes: string;
+  deployment_mode?: "docker" | "standalone" | string;
+  update_scope?: "none" | "backend_only" | "control_plane_only" | "full" | string;
+  external_web_root?: boolean;
+  can_apply?: boolean;
+  warning?: string;
+}
+
+interface UpdateProgress {
+  step: string;
+  progress: number;
+  message: string;
+}
+
+type UpdateRunState = "idle" | "running" | "restarting" | "success" | "error";
+
+function normalizedVersion(value: string): string {
+  return value.trim().replace(/^v/i, "");
+}
+
+function updateOverallProgress(progress: UpdateProgress): number {
+  const downloadProgress = Math.min(100, Math.max(0, progress.progress || 0));
+  switch (progress.step) {
+    case "checking": return 5;
+    case "downloading": return 10 + Math.round(downloadProgress * 0.65);
+    case "backing_up": return 80;
+    case "replacing": return 88;
+    case "restarting": return 95;
+    case "done": return 100;
+    default: return downloadProgress;
+  }
+}
+
+function updateScopeLabel(info: UpdateInfo): string {
+  if (info.update_scope === "full") return "完整控制端";
+  if (info.update_scope === "control_plane_only") return "控制端与内嵌面板";
+  if (info.update_scope === "backend_only") return "不含外置前端";
+  if (info.deployment_mode === "docker" || info.update_scope === "none") return "容器镜像";
+  return info.external_web_root ? "仅后端" : "后端与面板";
+}
+
+async function updateResponseError(response: Response): Promise<Error> {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    const body = await response.json().catch(() => null) as { error?: string; message?: string } | null;
+    return new Error(body?.error || body?.message || `更新请求失败 (${response.status})`);
+  }
+  const body = await response.text().catch(() => "");
+  return new Error(body.trim() || `更新请求失败 (${response.status})`);
+}
+
+function splitSSEEvents(buffer: string, flush = false): { events: string[]; rest: string } {
+  const events: string[] = [];
+  let rest = buffer;
+  while (rest) {
+    const lfIndex = rest.indexOf("\n\n");
+    const crlfIndex = rest.indexOf("\r\n\r\n");
+    const candidates = [lfIndex, crlfIndex].filter((index) => index >= 0);
+    if (!candidates.length) break;
+    const index = Math.min(...candidates);
+    const separatorLength = crlfIndex === index ? 4 : 2;
+    events.push(rest.slice(0, index));
+    rest = rest.slice(index + separatorLength);
+  }
+  if (flush && rest.trim()) {
+    events.push(rest);
+    rest = "";
+  }
+  return { events, rest };
+}
+
+function parseUpdateProgress(rawEvent: string): UpdateProgress | null {
+  const data = rawEvent
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart())
+    .join("\n");
+  if (!data) return null;
+  const parsed = JSON.parse(data) as Partial<UpdateProgress>;
+  if (typeof parsed.step !== "string" || typeof parsed.message !== "string") {
+    throw new Error("更新服务返回了无法识别的进度数据");
+  }
+  return { step: parsed.step, progress: Number(parsed.progress) || 0, message: parsed.message };
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
 
 interface SecuritySettings {
   login_rate_max_attempts: number;
@@ -203,6 +300,14 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
   const [apiToken, setApiToken] = useState("");
   const [confirmTokenReset, setConfirmTokenReset] = useState(false);
   const [showMigration, setShowMigration] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [updateChecking, setUpdateChecking] = useState(true);
+  const [updateCheckError, setUpdateCheckError] = useState("");
+  const [updateRunState, setUpdateRunState] = useState<UpdateRunState>("idle");
+  const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
+  const [updateLog, setUpdateLog] = useState<UpdateProgress[]>([]);
+  const [updateRunError, setUpdateRunError] = useState("");
+  const [confirmUpdate, setConfirmUpdate] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true); setLoaded(false); setError("");
@@ -243,7 +348,25 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
     } catch (reason) { setError(messageOf(reason, "设置加载失败")); } finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  const checkUpdate = useCallback(async (): Promise<UpdateInfo | null> => {
+    setUpdateChecking(true);
+    setUpdateCheckError("");
+    try {
+      const info = await api.get<UpdateInfo>("/api/admin/update/check");
+      setUpdateInfo(info);
+      return info;
+    } catch (reason) {
+      setUpdateCheckError(messageOf(reason, "检查更新失败"));
+      return null;
+    } finally {
+      setUpdateChecking(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+    void checkUpdate();
+  }, [checkUpdate, load]);
 
   const save = async (key: string, operation: () => Promise<unknown>, message: string) => {
     setSaving(key); setError("");
@@ -307,6 +430,104 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
   const regenerateToken = async () => {
     setConfirmTokenReset(false);
     await save("token", async () => { const response = await api.post<{ token: string }>("/api/admin/system-settings/api-token/regenerate"); setApiToken(response.token); }, "API Token 已重新生成");
+  };
+
+  const waitForUpdatedVersion = async (expectedVersion: string): Promise<{ current_version: string }> => {
+    let lastStatus = "";
+    for (let attempt = 0; attempt < 46; attempt += 1) {
+      if (attempt > 0) await delay(2000);
+      try {
+        const status = await api.get<{ current_version: string }>("/api/admin/update/status");
+        if (normalizedVersion(status.current_version) === normalizedVersion(expectedVersion)) return status;
+        lastStatus = `控制端仍在运行 ${status.current_version || "旧版本"}`;
+      } catch (reason) {
+        lastStatus = messageOf(reason, "控制端暂时离线");
+      }
+    }
+    throw new Error(`服务重启等待超时。${lastStatus ? `最后状态：${lastStatus}` : "请稍后手动刷新页面确认。"}`);
+  };
+
+  const applyUpdate = async () => {
+    const expectedVersion = updateInfo?.latest_version;
+    if (!updateInfo || !expectedVersion || updateInfo.can_apply !== true || !updateInfo.has_update) return;
+    setConfirmUpdate(false);
+    setUpdateRunState("running");
+    setUpdateRunError("");
+    setUpdateLog([]);
+    setUpdateProgress({ step: "checking", progress: 0, message: "正在启动更新..." });
+
+    let restartExpected = false;
+    let reportedFailure: Error | null = null;
+    try {
+      const headers = new Headers({ Accept: "text/event-stream" });
+      const token = getToken();
+      if (token) headers.set("MM-Authorization", token);
+
+      let response: Response;
+      try {
+        response = await fetch(`/api/admin/update/apply-sse?version=${encodeURIComponent(expectedVersion)}`, {
+          method: "POST",
+          headers,
+          credentials: "same-origin",
+        });
+      } catch {
+        throw new Error("无法连接控制端，请检查网络或服务状态");
+      }
+      if (!response.ok) {
+        if (response.status === 401) window.dispatchEvent(new CustomEvent("arcway:unauthorized"));
+        throw await updateResponseError(response);
+      }
+      if (!response.body) throw new Error("浏览器无法读取流式更新进度，请改用命令行更新");
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      const handleRawEvent = (rawEvent: string) => {
+        const progress = parseUpdateProgress(rawEvent);
+        if (!progress) return;
+        setUpdateProgress(progress);
+        setUpdateLog((current) => [...current, progress].slice(-8));
+        if (progress.step === "error") {
+          reportedFailure = new Error(progress.message || "更新失败");
+          throw reportedFailure;
+        }
+        if (progress.step === "restarting" || progress.step === "done") {
+          restartExpected = true;
+          setUpdateRunState("restarting");
+        }
+      };
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const split = splitSSEEvents(buffer);
+          buffer = split.rest;
+          split.events.forEach(handleRawEvent);
+        }
+        buffer += decoder.decode();
+        splitSSEEvents(buffer, true).events.forEach(handleRawEvent);
+      } catch (reason) {
+        if (reportedFailure) throw reportedFailure;
+        if (!restartExpected) throw reason;
+      }
+
+      if (!restartExpected) throw new Error("更新进度连接提前结束，控制端尚未进入重启阶段");
+      setUpdateRunState("restarting");
+      setUpdateProgress({ step: "restarting", progress: 0, message: "等待新版本控制端恢复..." });
+      const refreshed = await waitForUpdatedVersion(expectedVersion);
+      setUpdateInfo((current) => current ? { ...current, current_version: refreshed.current_version, has_update: false } : current);
+      setUpdateRunState("success");
+      setUpdateProgress({ step: "done", progress: 100, message: `更新完成，当前版本 ${refreshed.current_version}` });
+      notify(`系统已更新到 ${refreshed.current_version}`);
+      void checkUpdate();
+    } catch (reason) {
+      const message = messageOf(reason, "系统更新失败");
+      setUpdateRunState("error");
+      setUpdateRunError(message);
+      notify(message, "error");
+    }
   };
 
   return <>
@@ -396,6 +617,22 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
         <SaveRow label="保存通知设置" saving={saving === "notifications"} />
       </form>
 
+      <section className="settings-settings-group settings-update-group">
+        <SettingsGroupHeading icon={<Download size={18} />} title="系统维护" description="检查正式版本并安全更新控制端" />
+        <SystemUpdatePanel
+          info={updateInfo}
+          checking={updateChecking}
+          checkError={updateCheckError}
+          runState={updateRunState}
+          progress={updateProgress}
+          logs={updateLog}
+          runError={updateRunError}
+          notify={notify}
+          onCheck={() => void checkUpdate()}
+          onApply={() => setConfirmUpdate(true)}
+        />
+      </section>
+
       <section className="settings-settings-group settings-account-group">
         <SettingsGroupHeading icon={<KeyRound size={18} />} title="账户与 API" description="管理接口凭据与双因素认证" />
         <SettingSection icon={<KeyRound size={19} />} title="管理 API Token" description="用于可信自动化调用；重新生成后旧 Token 立即失效"><div className="api-token-row"><code>{apiToken || "尚未生成"}</code><IconButton label="复制 API Token" disabled={!apiToken} onClick={() => void navigator.clipboard.writeText(apiToken).then(() => notify("API Token 已复制"))}><Copy size={16} /></IconButton></div><Button type="button" variant="danger" onClick={() => setConfirmTokenReset(true)}>重新生成 Token</Button></SettingSection>
@@ -403,6 +640,16 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
       </section>
     </div> : null}
     {confirmTokenReset ? <ConfirmDialog title="重新生成 API Token" description="所有使用当前 Token 的脚本和集成都会立即失效，需要逐一替换。" confirmLabel="确认重新生成" working={saving === "token"} onCancel={() => setConfirmTokenReset(false)} onConfirm={() => void regenerateToken()} /> : null}
+    {confirmUpdate && updateInfo ? <ConfirmDialog
+      title={`更新到 ${updateInfo.latest_version}`}
+      description={updateInfo.update_scope === "backend_only" || updateInfo.external_web_root
+        ? "本次会更新控制端程序及已配置的守卫资源，但不会替换外置前端。更新包校验通过后服务会短暂重启，请确认已做好数据备份。"
+        : "更新包校验通过后将替换后端与内嵌面板，并短暂重启服务。数据库和现有配置会保留，建议已做好数据备份。"}
+      confirmLabel="确认更新"
+      tone="primary"
+      onCancel={() => setConfirmUpdate(false)}
+      onConfirm={() => void applyUpdate()}
+    /> : null}
     {showMigration ? <MmwMigrationDialog notify={notify} onClose={() => setShowMigration(false)} /> : null}
   </>;
 }
@@ -413,6 +660,71 @@ function SettingsGroupHeading({ icon, title, description }: { icon: ReactNode; t
 
 function SettingSection({ icon, title, description, children }: { icon: ReactNode; title: string; description: string; children: ReactNode }) {
   return <Surface className="settings-workbench-section"><div className="settings-heading"><span className="settings-icon">{icon}</span><div><h2>{title}</h2><p>{description}</p></div></div><div className="settings-section-body">{children}</div></Surface>;
+}
+
+function SystemUpdatePanel({ info, checking, checkError, runState, progress, logs, runError, notify, onCheck, onApply }: {
+  info: UpdateInfo | null;
+  checking: boolean;
+  checkError: string;
+  runState: UpdateRunState;
+  progress: UpdateProgress | null;
+  logs: UpdateProgress[];
+  runError: string;
+  notify: Notify;
+  onCheck: () => void;
+  onApply: () => void;
+}) {
+  const running = runState === "running" || runState === "restarting";
+  const docker = info?.deployment_mode === "docker" || info?.update_scope === "none";
+  const canApply = Boolean(info?.has_update && info.can_apply === true && !docker);
+  const overallProgress = progress ? updateOverallProgress(progress) : 0;
+  const warning = info?.warning || (info?.external_web_root
+    ? "当前使用外置前端目录，一键更新不会替换外置页面；前端需要单独发布。"
+    : info?.has_update && info.can_apply !== true
+      ? "当前控制端尚未提供安全的网页更新能力，请先按 README 使用命令行更新。"
+      : "");
+  const composeCommand = "docker compose pull && docker compose up -d";
+
+  return <SettingSection icon={<RefreshCw size={19} />} title="系统更新" description="从 GitHub Release 检查并安装已发布的正式版本">
+    <div className="system-update-versions" aria-label="系统版本状态">
+      <div><span>当前版本</span><strong>{info?.current_version || (checking ? "读取中" : "未知")}</strong></div>
+      <div><span>最新版本</span><strong>{info?.latest_version || (checking ? "检查中" : "未知")}</strong></div>
+      <div><span>更新范围</span><strong>{info ? updateScopeLabel(info) : "待检查"}</strong></div>
+      <div className="system-update-status"><span>状态</span>{checking
+        ? <Badge tone="info">正在检查</Badge>
+        : info?.has_update
+          ? <Badge tone="warn">发现新版本</Badge>
+          : info
+            ? <Badge tone="good">已是最新</Badge>
+            : <Badge tone="neutral">检查失败</Badge>}</div>
+    </div>
+
+    {warning ? <div className="system-update-notice" role="note"><Shield size={17} /><span>{warning}</span></div> : null}
+    {docker ? <div className="system-update-command">
+      <div><strong>请在 Docker 宿主机更新</strong><span>容器内替换程序无法持久保存，因此面板不会直接执行更新。</span></div>
+      <div className="system-update-command-line"><code>{composeCommand}</code><IconButton label="复制 Docker 更新命令" onClick={() => void navigator.clipboard.writeText(composeCommand).then(() => notify("Docker 更新命令已复制")).catch(() => notify("复制失败，请手动复制命令", "error"))}><Copy size={16} /></IconButton></div>
+    </div> : null}
+
+    {info?.release_notes ? <details className="system-update-notes">
+      <summary>查看发布说明</summary>
+      <div>{info.release_notes}</div>
+    </details> : null}
+
+    {checkError ? <div className="system-update-error" role="alert">{checkError}</div> : null}
+    {runError ? <div className="system-update-error" role="alert">{runError}</div> : null}
+    {progress && runState !== "idle" ? <div className={`system-update-progress is-${runState}`} role="status" aria-live="polite">
+      <div className="system-update-progress-heading"><strong>{runState === "restarting" ? "正在等待服务恢复" : runState === "success" ? "更新完成" : runState === "error" ? "更新未完成" : "正在更新"}</strong><span>{overallProgress}%</span></div>
+      <div className="system-update-progress-track" role="progressbar" aria-label="系统更新进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={overallProgress}><span style={{ width: `${overallProgress}%` }} /></div>
+      <p>{progress.message}</p>
+      {logs.length > 1 ? <ol className="system-update-log">{logs.map((entry, index) => <li key={`${entry.step}-${index}`}>{entry.message}</li>)}</ol> : null}
+    </div> : null}
+
+    <div className="system-update-actions">
+      {info?.release_url ? <a className="button button-secondary" href={info.release_url} target="_blank" rel="noreferrer"><ExternalLink size={16} />查看发布页</a> : null}
+      <Button type="button" variant="secondary" onClick={onCheck} disabled={checking || running}><RefreshCw size={16} />{checking ? "正在检查" : "检查更新"}</Button>
+      <Button type="button" onClick={onApply} disabled={!canApply || running}><Download size={16} />立即更新</Button>
+    </div>
+  </SettingSection>;
 }
 
 function NumberField({ label, value, onChange, min = 1, max }: { label: string; value: number; onChange: (value: number) => void; min?: number; max?: number }) {

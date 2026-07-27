@@ -7,7 +7,7 @@ vi.hoisted(() => {
   (globalThis as unknown as { process: { env: { NODE_ENV?: string } } }).process.env.NODE_ENV = "test";
 });
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); localStorage.clear(); });
 
 function mockCompleteSettings(overrides: Record<string, unknown> = {}, failingPath = "") {
   const responses: Record<string, unknown> = {
@@ -39,6 +39,12 @@ function mockCompleteSettings(overrides: Record<string, unknown> = {}, failingPa
     "/api/admin/system-settings/user-permissions": { config: { pages: [], quota_template: 0, quota_override: 0, quota_subscribe: 0, routed_outbound_enabled: false, quota_routed_outbound: 2, daily_limit_routed_outbound: 5 } },
     "/api/admin/notify-config": { notify_enabled: false },
     "/api/admin/system-settings/api-token": { token: "" },
+    "/api/admin/update/check": {
+      current_version: "0.5.0", latest_version: "0.5.0", has_update: false,
+      release_url: "https://github.com/violetaini/relaydock/releases/tag/v0.5.0",
+      download_url: "", release_notes: "", deployment_mode: "standalone",
+      update_scope: "full", external_web_root: false, can_apply: true,
+    },
     "/api/user/config": {
       force_sync_external: true, match_rule: "server_port", sync_scope: "saved_only",
       keep_node_name: true, cache_expire_minutes: 30, sync_traffic: true,
@@ -52,7 +58,9 @@ function mockCompleteSettings(overrides: Record<string, unknown> = {}, failingPa
   return vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
     if (path === failingPath) throw new Error("setting unavailable");
     if (!(path in responses)) throw new Error(`unexpected GET ${path}`);
-    return responses[path] as T;
+    const response = responses[path];
+    if (typeof response === "function") return await (response as () => unknown)() as T;
+    return response as T;
   });
 }
 
@@ -134,5 +142,126 @@ describe("settings workbench", () => {
     expect(screen.queryByRole("textbox", { name: "公开 URL" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "保存基础设置" })).not.toBeInTheDocument();
     expect(put).not.toHaveBeenCalled();
+  });
+
+  it("shows the host update command and blocks in-container updates for Docker", async () => {
+    mockCompleteSettings({
+      "/api/admin/update/check": {
+        current_version: "0.5.0", latest_version: "0.6.0", has_update: true,
+        release_url: "https://github.com/violetaini/relaydock/releases/tag/v0.6.0",
+        download_url: "", release_notes: "Docker release", deployment_mode: "docker",
+        update_scope: "none", external_web_root: false, can_apply: false,
+        warning: "Docker 部署需要在宿主机拉取新镜像。",
+      },
+    });
+    render(<SettingsWorkbenchPage notify={vi.fn()} />);
+
+    expect(await screen.findByRole("heading", { name: "系统更新" })).toBeInTheDocument();
+    expect(screen.getByText("Docker 部署需要在宿主机拉取新镜像。")).toBeInTheDocument();
+    expect(screen.getByText("docker compose pull && docker compose up -d")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "立即更新" })).toBeDisabled();
+  });
+
+  it("does not expose legacy updater behavior before the backend declares it safe", async () => {
+    mockCompleteSettings({
+      "/api/admin/update/check": {
+        current_version: "0.5.0", latest_version: "0.5.1", has_update: true,
+        release_url: "", download_url: "https://example.com/arcway", release_notes: "",
+      },
+    });
+    render(<SettingsWorkbenchPage notify={vi.fn()} />);
+
+    expect(await screen.findByText("当前控制端尚未提供安全的网页更新能力，请先按 README 使用命令行更新。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "立即更新" })).toBeDisabled();
+  });
+
+  it("streams an authenticated update and recovers after the restart disconnect", async () => {
+    let checkCount = 0;
+    const get = mockCompleteSettings({
+      "/api/admin/update/check": () => {
+        checkCount += 1;
+        return checkCount === 1 ? {
+          current_version: "0.5.0", latest_version: "0.6.0", has_update: true,
+          release_url: "https://github.com/violetaini/relaydock/releases/tag/v0.6.0",
+          download_url: "https://example.com/arcway", release_notes: "New release",
+          deployment_mode: "standalone", update_scope: "full", external_web_root: false, can_apply: true,
+        } : {
+          current_version: "0.6.0", latest_version: "0.6.0", has_update: false,
+          release_url: "https://github.com/violetaini/relaydock/releases/tag/v0.6.0",
+          download_url: "", release_notes: "New release", deployment_mode: "standalone",
+          update_scope: "full", external_web_root: false, can_apply: true,
+        };
+      },
+      "/api/admin/update/status": { current_version: "0.6.0" },
+    });
+    localStorage.setItem("arcway-session-token", "admin-session");
+    const encoder = new TextEncoder();
+    const reader = {
+      read: vi.fn()
+        .mockResolvedValueOnce({
+          done: false,
+          value: encoder.encode([
+            'data: {"step":"checking","progress":0,"message":"正在检查版本"}',
+            'data: {"step":"replacing","progress":0,"message":"正在替换文件"}',
+            'data: {"step":"restarting","progress":0,"message":"正在重启服务"}',
+          ].join("\n\n") + "\n\n"),
+        })
+        .mockRejectedValueOnce(new Error("connection closed during restart")),
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-type": "text/event-stream" }),
+      body: { getReader: () => reader },
+    } as unknown as Response);
+    vi.stubGlobal("fetch", fetchMock);
+    const notify = vi.fn();
+    render(<SettingsWorkbenchPage notify={notify} />);
+
+    await screen.findByText("发现新版本");
+    fireEvent.click(screen.getByRole("button", { name: "立即更新" }));
+    expect(screen.getByRole("dialog", { name: "更新到 0.6.0" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认更新" }));
+
+    expect(await screen.findByText("更新完成，当前版本 0.6.0")).toBeInTheDocument();
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/update/apply-sse?version=0.6.0");
+    expect(init.method).toBe("POST");
+    expect(init.credentials).toBe("same-origin");
+    expect(new Headers(init.headers).get("MM-Authorization")).toBe("admin-session");
+    expect(new Headers(init.headers).get("Accept")).toBe("text/event-stream");
+    expect(get.mock.calls.some(([path]) => path === "/api/admin/update/status")).toBe(true);
+    expect(notify).toHaveBeenCalledWith("系统已更新到 0.6.0");
+  });
+
+  it("shows an SSE update failure without waiting for a restart", async () => {
+    mockCompleteSettings({
+      "/api/admin/update/check": {
+        current_version: "0.5.0", latest_version: "0.6.0", has_update: true,
+        release_url: "", download_url: "https://example.com/arcway", release_notes: "",
+        deployment_mode: "standalone", update_scope: "backend_only", external_web_root: true, can_apply: true,
+      },
+    });
+    const encoder = new TextEncoder();
+    const reader = {
+      read: vi.fn()
+        .mockResolvedValueOnce({ done: false, value: encoder.encode('data: {"step":"error","progress":0,"message":"更新包校验失败"}\n\n') })
+        .mockResolvedValueOnce({ done: true, value: undefined }),
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-type": "text/event-stream" }),
+      body: { getReader: () => reader },
+    } as unknown as Response));
+    const notify = vi.fn();
+    render(<SettingsWorkbenchPage notify={notify} />);
+
+    await screen.findByText("发现新版本");
+    fireEvent.click(screen.getByRole("button", { name: "立即更新" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认更新" }));
+
+    expect(await screen.findByText("更新包校验失败", { selector: ".system-update-error" })).toBeInTheDocument();
+    expect(notify).toHaveBeenCalledWith("更新包校验失败", "error");
   });
 });

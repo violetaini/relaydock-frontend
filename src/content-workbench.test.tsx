@@ -183,7 +183,7 @@ describe("content workbench subscriptions", () => {
     expect(onOpenRulesConfig).toHaveBeenCalledOnce();
   });
 
-  it("exposes real Clash and Clash Meta deep links for the resolved subscription URL", async () => {
+  it("exposes a real Clash deep link for the resolved subscription URL", async () => {
     qrMock.mockResolvedValue("data:image/png;base64,LOCAL_QR");
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
       if (path === "/api/subscriptions") return { subscriptions: [{ id: 4, name: "日常套餐", filename: "daily.yaml", type: "package", file_short_code: "abc" }] } as T;
@@ -193,10 +193,9 @@ describe("content workbench subscriptions", () => {
     render(<SubscriptionLinksPage />);
 
     const clash = await screen.findByRole("link", { name: "导入 Clash" });
-    const meta = screen.getByRole("link", { name: "导入 Clash Meta" });
     expect(clash.getAttribute("href")).toContain("clash://install-config?");
     expect(clash.getAttribute("href")).toContain("url=http%3A%2F%2Flocalhost%3A3000%2Fx%2Fabcusr");
-    expect(meta.getAttribute("href")).toContain("clashmeta://install-config?");
+    expect(screen.queryByRole("link", { name: "导入 Clash Meta" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "二维码" }));
 
     const image = await screen.findByRole("img", { name: "日常套餐 订阅二维码" });

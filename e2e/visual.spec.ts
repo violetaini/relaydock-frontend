@@ -205,6 +205,16 @@ const subscriptions = [{
   file_short_code: "daily",
   updated_at: new Date().toISOString(),
   latest_version: 3,
+}, {
+  id: 2,
+  name: "备用订阅",
+  description: "故障切换线路",
+  filename: "backup.yaml",
+  type: "clash",
+  can_delete: true,
+  file_short_code: "backup",
+  updated_at: new Date().toISOString(),
+  latest_version: 1,
 }];
 
 const certificates = [{
@@ -785,7 +795,7 @@ for (const viewport of [
 
     await page.goto("/#/subscriptions");
     await expect(page.getByRole("link", { name: "导入 Clash" }).first()).toHaveAttribute("href", /^clash:\/\/install-config\?/);
-    await expect(page.getByRole("link", { name: "导入 Clash Meta" }).first()).toHaveAttribute("href", /^clashmeta:\/\/install-config\?/);
+    await expect(page.getByRole("link", { name: "导入 Clash Meta" })).toHaveCount(0);
     await page.getByRole("button", { name: "二维码" }).first().click();
     const qrDialog = page.getByRole("dialog", { name: "订阅二维码" });
     await expect(qrDialog.getByRole("img", { name: "日常订阅 订阅二维码" })).toBeVisible();
@@ -793,9 +803,14 @@ for (const viewport of [
     await expectViewportIntegrity(page, `${viewport.name} local subscription QR`);
     await closeDialog(page);
     const subscriptionActions = page.locator(".cw-subscription-actions").first();
+    const cards = page.locator(".cw-subscription-grid > .cw-card");
+    const cardTops = await cards.evaluateAll((elements) => elements.slice(0, 2).map((element) => Math.round(element.getBoundingClientRect().top)));
     if (viewport.name === "desktop") {
+      expect(Math.max(...cardTops) - Math.min(...cardTops), "desktop should show two subscription cards per row").toBeLessThanOrEqual(2);
       const actionTops = await subscriptionActions.locator(":scope > *").evaluateAll((elements) => elements.map((element) => Math.round(element.getBoundingClientRect().top)));
       expect(Math.max(...actionTops) - Math.min(...actionTops), "desktop subscription actions should stay on one line").toBeLessThanOrEqual(2);
+    } else {
+      expect(cardTops[1] - cardTops[0], "mobile should stack subscription cards").toBeGreaterThan(20);
     }
     await subscriptionActions.getByRole("button", { name: "删除订阅 日常订阅" }).click();
     await expect(page.getByRole("dialog", { name: "删除订阅" })).toBeVisible();

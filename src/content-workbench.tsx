@@ -384,9 +384,9 @@ function absoluteURL(path: string): string {
   return new URL(path, window.location.origin).toString();
 }
 
-function clashDeepLink(url: string, name: string, scheme = "clash"): string {
+function clashDeepLink(url: string, name: string): string {
   const params = new URLSearchParams({ url, name });
-  return `${scheme}://install-config?${params.toString()}`;
+  return `clash://install-config?${params.toString()}`;
 }
 
 let generatedID = 0;
@@ -670,7 +670,6 @@ export function SubscriptionLinksPage({ notify = noNotify }: ContentPageProps) {
                   <Button variant="secondary" onClick={async () => { await copyText(url); notify("订阅链接已复制"); }}><Clipboard size={16} />复制链接</Button>
                   <Button variant="secondary" onClick={() => setQRItem({ name: item.name, url })}><QrCode size={16} />二维码</Button>
                   <a className="button button-secondary" href={clashDeepLink(url, item.name)}><Download size={16} />导入 Clash</a>
-                  <a className="button button-secondary" href={clashDeepLink(url, item.name, "clashmeta")}><Download size={16} />导入 Clash Meta</a>
                   <Button variant="ghost" onClick={() => window.open(url, "_blank", "noopener,noreferrer")}><ExternalLink size={16} />浏览器打开</Button>
                   {item.can_delete ? <IconButton className="cw-subscription-delete" label={`删除订阅 ${item.name}`} disabled={deleting} onClick={() => setDeleteItem(item)}><Trash2 size={17} /></IconButton> : null}
                 </div>

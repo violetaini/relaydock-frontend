@@ -820,7 +820,17 @@ for (const viewport of [
     await page.goto("/#/generator");
     await page.getByRole("button", { name: "全选" }).click();
     await page.getByRole("main").getByRole("button", { name: "生成订阅文件" }).click();
-    await expect(page.getByLabel("生成的订阅配置")).not.toHaveValue("");
+    const generatedConfig = page.getByLabel("生成的订阅配置");
+    await expect(generatedConfig).not.toHaveValue("");
+    await expect(generatedConfig).toHaveAttribute("rows", "16");
+    const generatedLayout = await generatedConfig.evaluate((element) => {
+      const editor = element.getBoundingClientRect();
+      const actions = element.closest(".cw-output-section")?.querySelector<HTMLElement>(".cw-generator-actions")?.getBoundingClientRect();
+      return { height: editor.height, actionGap: actions ? actions.top - editor.bottom : -1 };
+    });
+    expect(generatedLayout.height, `${viewport.name} generated config editor should remain readable`).toBeGreaterThanOrEqual(250);
+    expect(generatedLayout.actionGap, `${viewport.name} generated config actions should not overlap the editor`).toBeGreaterThanOrEqual(8);
+    await expectViewportIntegrity(page, `${viewport.name} generated config editor`);
     await page.getByRole("button", { name: "保存订阅" }).click();
     await expect(page.getByRole("dialog", { name: "保存生成的订阅" })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} generator dialog`);

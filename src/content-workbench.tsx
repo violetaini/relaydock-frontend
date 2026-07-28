@@ -808,7 +808,7 @@ export function SubscriptionGeneratorPage({ notify = noNotify }: ContentPageProp
           <section className={`cw-workbench-section cw-output-section ${output ? "has-output" : ""}`}>
             <div className="cw-section-title"><div><h2>最终订阅配置</h2><p>生成后可复制、下载或保存到订阅管理</p></div></div>
             {output ? <div className="cw-generator-output">
-              <textarea className="cw-code" aria-label="生成的订阅配置" value={output} onChange={(event) => setOutput(event.target.value)} placeholder="选择节点和规则后生成配置" spellCheck={false} />
+              <textarea className="cw-code" aria-label="生成的订阅配置" rows={16} value={output} onChange={(event) => setOutput(event.target.value)} placeholder="选择节点和规则后生成配置" spellCheck={false} />
               <div className="cw-output-actions"><IconButton label="复制配置" onClick={async () => { await copyText(output); notify("配置已复制"); }}><Copy size={16} /></IconButton><IconButton label="下载配置" onClick={() => downloadText("subscription.yaml", output)}><Download size={16} /></IconButton></div>
             </div> : null}
             <div className="cw-card-actions cw-generator-actions">

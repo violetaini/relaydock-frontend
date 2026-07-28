@@ -38,6 +38,7 @@ import { api, request } from "./api";
 import type { NginxMode, RemoteServer, ServerListResponse, SharedServerToken } from "./types";
 import {
   buildTrojanInbound,
+  buildWireGuardClientProfile,
   buildWireGuardClientConfig,
   buildWireGuardInbound,
   generateWireGuardKeyPair,
@@ -94,6 +95,12 @@ interface ActionResponse {
   message?: string;
   error?: string;
   output?: string;
+}
+
+interface WireGuardCreateResponse extends ActionResponse {
+  node_id?: number;
+  node?: { id?: number };
+  client_config?: string;
 }
 
 interface DeleteImpactCounts {
@@ -1940,11 +1947,15 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
           }
         }
       } else if (kind === "inbound" && editor.mode === "create" && creationPreset === "wireguard") {
-        assertSuccess(await api.post<ActionResponse>(`/api/admin/managed-inbound-resources/wireguard?server_id=${serverId}`, {
+        const response = await api.post<WireGuardCreateResponse>(`/api/admin/managed-inbound-resources/wireguard?server_id=${serverId}`, {
           action: "add",
           display_name: tag.trim(),
           inbound: resource,
-        }), `创建${label}失败`);
+          client: buildWireGuardClientProfile(wireGuardFields),
+        });
+        assertSuccess(response, `创建${label}失败`);
+        if (!(response.node_id ?? response.node?.id)) throw new Error("WireGuard 创建完成但控制端未返回节点记录");
+        generatedWireGuardClientConfig = response.client_config || generatedWireGuardClientConfig;
       } else {
         assertSuccess(await api.post<ActionResponse>(endpoint, { action: "add", [kind]: resource }), `创建${label}失败`);
       }
@@ -1997,9 +2008,14 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
     {loading ? <div className="center-state"><Spinner label={`正在加载${label}`} /></div> : items.length === 0 ? <EmptyState icon={kind === "inbound" ? <ArrowDownToLine size={23} /> : <ArrowUpFromLine size={23} />} title={`暂无${label}`} description={`此列表直接读取服务器 #${serverId} 当前 Xray 配置`} action={<Button onClick={() => openEditor("create")}><Plus size={16} />添加{label}</Button>} /> : <div className="xray-resource-list" role="list" aria-label={`${label}列表`}>
       {items.map((item, index) => {
         const itemTag = xrayResourceTag(item);
+        const itemProtocol = xrayResourceProtocol(item);
         const generated = item._generated_tag === true;
         const runtime = item._runtime_status === "running";
-        return <Surface className="xray-resource-row" key={`${itemTag}-${index}`}><span className="xray-resource-icon">{kind === "inbound" ? <ArrowDownToLine size={17} /> : <ArrowUpFromLine size={17} />}</span><span className="xray-resource-main"><strong>{itemTag || `未命名${label}`}</strong><small>{xrayResourceProtocol(item) || "未知协议"}{kind === "inbound" && item.port ? ` · ${String(item.listen || "0.0.0.0")}:${String(item.port)}` : ""}</small></span>{kind === "inbound" ? <Badge tone={runtime ? "good" : "warn"}>{runtime ? "运行中" : item._source === "runtime_only" ? "仅运行时" : "未运行"}</Badge> : null}<div className="xray-resource-actions"><Button variant="ghost" onClick={() => openEditor("view", item)}><Eye size={15} />查看</Button><IconButton label={`编辑${label} ${itemTag || index + 1}`} onClick={() => openEditor("edit", item)} disabled={!itemTag || generated || working}><Pencil size={15} /></IconButton><IconButton label={`删除${label} ${itemTag || index + 1}`} onClick={() => setDeleting(item)} disabled={!itemTag || generated || working}><Trash2 size={15} /></IconButton></div></Surface>;
+        const protectedWireGuard = kind === "inbound" && itemProtocol.toLowerCase() === "wireguard";
+        const editLabel = protectedWireGuard
+          ? `WireGuard 入站 ${itemTag || index + 1} 不能直接编辑，请删除后重新创建`
+          : `编辑${label} ${itemTag || index + 1}`;
+        return <Surface className="xray-resource-row" key={`${itemTag}-${index}`}><span className="xray-resource-icon">{kind === "inbound" ? <ArrowDownToLine size={17} /> : <ArrowUpFromLine size={17} />}</span><span className="xray-resource-main"><strong>{itemTag || `未命名${label}`}</strong><small>{itemProtocol || "未知协议"}{kind === "inbound" && item.port ? ` · ${String(item.listen || "0.0.0.0")}:${String(item.port)}` : ""}</small></span>{kind === "inbound" ? <Badge tone={runtime ? "good" : "warn"}>{runtime ? "运行中" : item._source === "runtime_only" ? "仅运行时" : "未运行"}</Badge> : null}<div className="xray-resource-actions"><Button variant="ghost" onClick={() => openEditor("view", item)}><Eye size={15} />查看</Button><IconButton label={editLabel} onClick={() => openEditor("edit", item)} disabled={!itemTag || generated || protectedWireGuard || working}><Pencil size={15} /></IconButton><IconButton label={`删除${label} ${itemTag || index + 1}`} onClick={() => setDeleting(item)} disabled={!itemTag || generated || working}><Trash2 size={15} /></IconButton></div></Surface>;
       })}
     </div>}
     {editor ? <Dialog title={editor.mode === "create" ? `添加${label}` : editor.mode === "edit" ? `编辑${label}` : `${label}详情`} description={editor.mode === "edit" ? "保存时会安全重建，失败自动回滚" : editor.mode === "view" ? "只读查看服务器返回的完整配置" : kind === "inbound" && creationPreset !== "advanced" ? "安全向导生成完整的 Xray 入站配置" : "基础字段会覆盖高级 JSON 中的同名字段"} onClose={closeEditor} dismissible={!working && !wireGuardCreated} wide={!wireGuardCreated} extraWide={Boolean(wireGuardCreated)}><div className="xray-resource-dialog">
@@ -2012,7 +2028,7 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
       </div> : null}
       {editorError ? <ErrorState message={editorError} /> : null}
       {wireGuardCreated ? <div className="wireguard-created-state" role="status" aria-label="WireGuard 已创建">
-        <div className="wireguard-created-head"><span><Check size={18} /></span><div><strong>WireGuard 入站已创建</strong><small>请在关闭前保存客户端配置，客户端私钥不会写入 Xray。</small></div></div>
+        <div className="wireguard-created-head"><span><Check size={18} /></span><div><strong>WireGuard 节点已创建</strong><small>客户端凭据已加密存储，可在节点管理、套餐和订阅中正常使用。</small></div></div>
         <Field label="WireGuard 服务端公钥"><div className="generated-secret"><code>{wireGuardCreated.serverPublicKey}</code><IconButton type="button" label="复制 WireGuard 服务端公钥" onClick={() => void copyGenerated(wireGuardCreated.serverPublicKey, "服务端公钥")}><Copy size={16} /></IconButton></div></Field>
         <Field label="WireGuard 客户端配置"><div className="wireguard-client-config"><textarea className="service-code-editor" aria-label="WireGuard 客户端配置" readOnly value={wireGuardCreated.clientConfig} /><IconButton type="button" label="复制 WireGuard 客户端配置" onClick={() => void copyGenerated(wireGuardCreated.clientConfig, "客户端配置")}><Copy size={16} /></IconButton></div></Field>
         <div className="dialog-actions"><Button type="button" onClick={closeEditor}><Check size={16} />完成</Button></div>
@@ -2022,7 +2038,7 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
           {nginxMode === "reuse_existing" && (creationPreset === "wss" || (creationPreset === "trojan" && trojanDraft.combination === "ws-tls")) ? <div className="service-nginx-reuse-notice" role="note"><ShieldCheck size={17} /><span><strong>此入站将复用系统已有 Nginx</strong><small>Arcway 只添加独立站点配置并安全重载，不会覆盖主配置或接管 Nginx 服务。</small></span></div> : null}
           <div className="form-grid two"><Field label="Tag"><input required aria-label="入站 Tag" value={tag} onChange={(event) => setTag(event.target.value)} placeholder={creationPreset === "wireguard" ? "wireguard-in" : creationPreset === "trojan" ? "trojan-in" : creationPreset === "reality" ? "vless-reality" : "vless-wss"} /></Field><Field label={creationPreset === "wss" || (creationPreset === "trojan" && trojanDraft.combination === "ws-tls") ? "外部 TLS 端口" : "监听端口"}><input type="number" min="1" max="65535" required aria-label="入站监听端口" value={port} onChange={(event) => setPort(event.target.value)} /></Field></div>
           {creationPreset === "wireguard" ? <>
-            <div className="secure-key-status wireguard-key-status"><span><Badge tone={validWireGuardKey(wireGuardDraft.serverPrivateKey) && validWireGuardKey(wireGuardDraft.clientPrivateKey) ? "good" : "warn"}>{validWireGuardKey(wireGuardDraft.serverPrivateKey) && validWireGuardKey(wireGuardDraft.clientPrivateKey) ? "两组密钥已生成" : "密钥未就绪"}</Badge><small>客户端私钥仅保留到本弹窗关闭</small></span><Button type="button" variant="secondary" disabled={wireGuardKeyWorking} onClick={() => void generateWireGuardKeys()}>{wireGuardKeyWorking ? <Spinner label="生成中" /> : <><KeyRound size={15} />重新生成密钥</>}</Button></div>
+            <div className="secure-key-status wireguard-key-status"><span><Badge tone={validWireGuardKey(wireGuardDraft.serverPrivateKey) && validWireGuardKey(wireGuardDraft.clientPrivateKey) ? "good" : "warn"}>{validWireGuardKey(wireGuardDraft.serverPrivateKey) && validWireGuardKey(wireGuardDraft.clientPrivateKey) ? "两组密钥已生成" : "密钥未就绪"}</Badge><small>客户端凭据将由控制端加密存储</small></span><Button type="button" variant="secondary" disabled={wireGuardKeyWorking} onClick={() => void generateWireGuardKeys()}>{wireGuardKeyWorking ? <Spinner label="生成中" /> : <><KeyRound size={15} />重新生成密钥</>}</Button></div>
             <div className="form-grid two"><Field label="服务端隧道地址"><input required aria-label="WireGuard 服务端地址" value={wireGuardDraft.serverAddress} onChange={(event) => setWireGuardDraft((current) => ({ ...current, serverAddress: event.target.value }))} /></Field><Field label="客户端隧道地址"><input required aria-label="WireGuard 客户端地址" value={wireGuardDraft.clientAddress} onChange={(event) => setWireGuardDraft((current) => ({ ...current, clientAddress: event.target.value }))} /></Field></div>
             <div className="form-grid three"><Field label="客户端 DNS"><input aria-label="WireGuard 客户端 DNS" value={wireGuardDraft.dns} onChange={(event) => setWireGuardDraft((current) => ({ ...current, dns: event.target.value }))} /></Field><Field label="MTU"><input type="number" min="576" max="9000" aria-label="WireGuard MTU" value={wireGuardDraft.mtu} onChange={(event) => setWireGuardDraft((current) => ({ ...current, mtu: event.target.value }))} /></Field><Field label="Keepalive"><input type="number" min="0" max="65535" aria-label="WireGuard Keepalive" value={wireGuardDraft.keepAlive} onChange={(event) => setWireGuardDraft((current) => ({ ...current, keepAlive: event.target.value }))} /></Field></div>
             <div className="form-grid two"><Field label="服务端公钥"><div className="generated-secret"><code>{wireGuardDraft.serverPublicKey || "生成中..."}</code></div></Field><Field label="客户端 Endpoint" hint="按节点域名、IPv4、IPv6 的顺序选择"><input aria-label="WireGuard 客户端 Endpoint" readOnly value={wireGuardEndpointDisplay ? `${wireGuardEndpointDisplay}:${port}` : "服务器尚未上报可连接地址"} /></Field></div>

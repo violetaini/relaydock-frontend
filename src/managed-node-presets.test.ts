@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildManagedInboundRequest,
+  buildManagedWireGuardClientProfile,
   buildManagedWireGuardClientConfig,
   buildManagedWireGuardInbound,
   managedInboundSupportsPublishing,
@@ -356,7 +357,7 @@ describe("managed node protocol presets", () => {
     expect(managedInboundSupportsPublishing({ protocol: "vmess-ws", ssCipher: "aes-128-gcm" })).toBe(true);
   });
 
-  it("builds a one-time WireGuard inbound without persisting the client private key", () => {
+  it("separates the WireGuard runtime inbound from the encrypted client profile", () => {
     const clientPrivateKey = `${"A".repeat(43)}=`;
     const draft = {
       ...newManagedInboundDraft(),
@@ -381,9 +382,16 @@ describe("managed node protocol presets", () => {
       },
     });
     expect(JSON.stringify(inbound)).not.toContain(clientPrivateKey);
+    expect(buildManagedWireGuardClientProfile(draft)).toMatchObject({
+      private_key: clientPrivateKey,
+      public_key: `${"D".repeat(43)}=`,
+      address: ["10.66.66.2/32"],
+      server_public_key: `${"C".repeat(43)}=`,
+      allowed_ips: ["0.0.0.0/0"],
+    });
     expect(buildManagedWireGuardClientConfig(draft, "edge.example.com")).toContain(`PrivateKey = ${clientPrivateKey}`);
     expect(managedInboundSupportsPublishing({ protocol: "wireguard", ssCipher: "2022-blake3-aes-128-gcm" })).toBe(false);
-    expect(() => buildManagedInboundRequest(draft)).toThrow("一次性客户端配置");
+    expect(() => buildManagedInboundRequest(draft)).toThrow("加密客户端凭据");
   });
 
   it("builds AnyDoor as a TCP+UDP tunnel to an existing node", () => {

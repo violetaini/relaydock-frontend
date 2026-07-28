@@ -54,6 +54,7 @@ import { api } from "./api";
 import { TunnelsPanel } from "./advanced";
 import {
   buildManagedInboundRequest,
+  buildManagedWireGuardClientProfile,
   buildManagedWireGuardClientConfig,
   buildManagedWireGuardInbound,
   isManagedGRPCProtocol,
@@ -247,8 +248,6 @@ type SortMode = "recent" | "custom" | "name" | "protocol" | "server" | "latency"
 type SourceFilter = "all" | "managed" | "imported" | "routed";
 type WorkbenchDialog =
   | { kind: "managed-create" }
-  | { kind: "inbound-resource-config"; resource: ManagedInboundResource }
-  | { kind: "inbound-resource-rename"; resource: ManagedInboundResource }
   | { kind: "edit"; node: WorkbenchNode }
   | { kind: "config"; node: WorkbenchNode }
   | { kind: "import" }
@@ -332,33 +331,13 @@ interface ManagedCreateResponse {
   node?: WorkbenchNode;
 }
 
+interface ManagedWireGuardCreateResponse extends ManagedCreateResponse {
+  client_config?: string;
+}
+
 interface WireGuardCreatedState {
   clientConfig: string;
   filename: string;
-}
-
-interface ManagedInboundResource {
-  id: number;
-  server_id: number;
-  server_name: string;
-  display_name: string;
-  protocol: string;
-  inbound_tag: string;
-  endpoint_host: string;
-  endpoint_port: number;
-  public_metadata?: {
-    server_public_key?: string;
-    server_addresses?: string[];
-    mtu?: number;
-    peers?: Array<{
-      public_key?: string;
-      allowed_ips?: string[];
-      keep_alive?: number;
-    }>;
-  };
-  created_by?: string;
-  created_at?: string;
-  updated_at?: string;
 }
 
 interface ManagedInboundInventoryResponse {
@@ -515,7 +494,6 @@ function downloadText(filename: string, content: string): void {
 
 export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
   const [nodes, setNodes] = useState<WorkbenchNode[]>([]);
-  const [inboundResources, setInboundResources] = useState<ManagedInboundResource[]>([]);
   const [offers, setOffers] = useState<ManagedNodeOffer[]>([]);
   const [latest, setLatest] = useState<Record<number, SpeedResult>>({});
   const [tcping, setTCPing] = useState<Record<number, TCPingResult>>({});
@@ -546,7 +524,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
     if (!quiet) setLoading(true);
     setError("");
     try {
-      const [nodeResponse, speedResponse, configResponse, routedResponse, offerResponse, inboundResourceResponse] = await Promise.all([
+      const [nodeResponse, speedResponse, configResponse, routedResponse, offerResponse] = await Promise.all([
         api.get<{ nodes?: WorkbenchNode[] }>("/api/admin/nodes"),
         isAdmin
           ? api.get<{ results?: SpeedResult[] | null }>("/api/admin/speedtest/results?latest=1").catch(() => ({ results: [] }))
@@ -556,13 +534,9 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
         isAdmin
           ? api.get<{ offers?: ManagedNodeOffer[] } | ManagedNodeOffer[]>("/api/admin/managed-node-offers").catch(() => ({ offers: [] }))
           : Promise.resolve({ offers: [] as ManagedNodeOffer[] }),
-        isAdmin
-          ? api.get<{ resources?: ManagedInboundResource[] }>("/api/admin/managed-inbound-resources").catch(() => ({ resources: [] }))
-          : Promise.resolve({ resources: [] as ManagedInboundResource[] }),
       ]);
       const list = nodeResponse.nodes ?? [];
       setNodes(list);
-      setInboundResources(inboundResourceResponse.resources ?? []);
       setOffers(Array.isArray(offerResponse) ? offerResponse : offerResponse.offers ?? []);
       setUserConfig(configResponse);
       setUserRouted(routedResponse);
@@ -756,17 +730,6 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
     run: async () => { await api.delete(`/api/admin/nodes/${node.id}`); notify("节点已删除"); await load(true); },
   });
 
-  const removeInboundResource = (resource: ManagedInboundResource) => setPending({
-    title: "删除 WireGuard 入站",
-    description: `将从“${resource.server_name}”删除“${resource.display_name}”及对应远程入站。Agent 离线时不会移除本地记录，可恢复在线后重试。`,
-    confirmLabel: "确认删除",
-    run: async () => {
-      await api.delete(`/api/admin/managed-inbound-resources/${resource.id}`);
-      notify("WireGuard 入站已删除");
-      await load(true);
-    },
-  });
-
   const removeUserRouted = (node: WorkbenchNode) => setPending({
     title: "删除私有路由出站",
     description: `将删除“${node.node_name}”，并从对应 Agent 清理客户端、出站与路由规则。此操作计入今日操作次数。`,
@@ -871,7 +834,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       <PageHeader
         title="节点管理"
         description={isAdmin
-          ? `${nodes.length} 个订阅节点 · ${inboundResources.length} 个仅管理入站 · 管理、连通性与测速工作台`
+          ? `${nodes.length} 个节点 · 管理、连通性与测速工作台`
           : userView === "mine" ? `${nodes.length} 个可用节点 · ${nodes.filter((node) => node.enabled).length} 个启用` : "按服务器授权开通独立节点凭据"}
         actions={isAdmin || userView === "mine" ? <>
           <IconButton label="刷新节点数据" onClick={() => void load()} disabled={loading}><RefreshCw size={18} /></IconButton>
@@ -945,22 +908,6 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
         <IconButton label="清除选择" onClick={() => setSelected(new Set())}><X size={16} /></IconButton>
       </div> : null}
 
-      {isAdmin && inboundResources.length ? <Surface className="table-surface nw-inbound-resource-surface">
-        <div className="nw-inbound-resource-heading"><span><Shield size={18} /><span><strong>仅管理入站</strong><small>用于管理服务器上的 WireGuard；不进入订阅、套餐、测速或批量操作。</small></span></span><Badge tone="info">{inboundResources.length} 项</Badge></div>
-        <div className="table-wrap"><table className="nw-inbound-resource-table"><thead><tr><th>协议 / 名称</th><th>服务器与 Tag</th><th>公网 Endpoint</th><th>隧道参数</th><th>状态</th><th aria-label="操作" /></tr></thead><tbody>{inboundResources.map((resource) => {
-          const endpointHost = resource.endpoint_host?.includes(":") && !resource.endpoint_host.startsWith("[") ? `[${resource.endpoint_host}]` : resource.endpoint_host;
-          const peer = resource.public_metadata?.peers?.[0];
-          return <tr key={resource.id}>
-            <td><div className="nw-node-primary"><Badge tone="info">{resource.protocol.toUpperCase()}</Badge><span><strong>{resource.display_name}</strong><small>管理资源 #{resource.id}</small></span></div></td>
-            <td><strong className="nw-resource-server">{resource.server_name || `服务器 #${resource.server_id}`}</strong><small className="cell-note"><code>{resource.inbound_tag}</code></small></td>
-            <td><code className="nw-address">{endpointHost || "-"}:{resource.endpoint_port || "-"}/UDP</code></td>
-            <td><span className="nw-resource-parameters">{resource.public_metadata?.server_addresses?.join(", ") || "-"}<small>MTU {resource.public_metadata?.mtu || "-"} · Peer {peer?.allowed_ips?.join(", ") || "-"}</small></span></td>
-            <td><Badge tone="good">已创建</Badge><small className="cell-note">不进入订阅</small></td>
-            <td><div className="nw-row-actions"><IconButton label={`查看 ${resource.display_name} 公开配置`} onClick={() => setDialog({ kind: "inbound-resource-config", resource })}><Eye size={16} /></IconButton><IconButton label={`重命名 ${resource.display_name}`} onClick={() => setDialog({ kind: "inbound-resource-rename", resource })}><Edit3 size={16} /></IconButton><IconButton label={`删除 ${resource.display_name}`} onClick={() => removeInboundResource(resource)}><Trash2 size={16} /></IconButton></div></td>
-          </tr>;
-        })}</tbody></table></div>
-      </Surface> : null}
-
       <Surface className="table-surface nw-node-surface">
         {loading ? <div className="center-state"><Spinner label="正在加载节点" /></div> : visible.length === 0 ? <EmptyState icon={<Route size={24} />} title={nodes.length ? "没有匹配的节点" : "暂无节点"} description={nodes.length ? "调整筛选条件后重试" : "从受管服务器创建节点，或导入已经建好的外部节点"} action={!nodes.length ? <Button onClick={() => isAdmin ? setDialog({ kind: "managed-create" }) : setDialog({ kind: "import" })}>{isAdmin ? <Server size={16} /> : <Upload size={16} />}{isAdmin ? "在服务器创建" : "导入节点"}</Button> : undefined} /> : <div className="table-wrap"><table className="nw-node-table"><thead><tr><th className="nw-check-col"><input aria-label="选择当前结果" type="checkbox" checked={allVisibleSelected} onChange={toggleVisible} /></th>{sort === "custom" ? <th className="nw-order-col">顺序</th> : null}<th>协议 / 节点</th><th>标签与归属</th><th>服务器地址</th><th>连通性</th><th>测速结果</th><th>状态</th><th aria-label="操作" /></tr></thead><tbody>{visible.map((node) => {
           const address = nodeAddress(node);
@@ -984,8 +931,6 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       </>}
 
       {dialog?.kind === "managed-create" ? <ManagedNodeWizard nodes={nodes} onClose={closeDialog} onComplete={async (message, tone) => { closeDialog(); if (tone) notify(message, tone); else notify(message); await load(true); }} /> : null}
-      {dialog?.kind === "inbound-resource-config" ? <ManagedInboundResourceConfigDialog resource={dialog.resource} onClose={closeDialog} /> : null}
-      {dialog?.kind === "inbound-resource-rename" ? <ManagedInboundResourceRenameDialog resource={dialog.resource} onClose={closeDialog} onComplete={async () => { closeDialog(); notify("WireGuard 入站名称已更新"); await load(true); }} /> : null}
       {dialog?.kind === "edit" ? <NodeEditor node={dialog.node} offer={offers.find((item) => item.node_id === dialog.node.id)} onClose={closeDialog} onComplete={async (message) => { closeDialog(); notify(message); await load(true); }} /> : null}
       {dialog?.kind === "config" ? <ConfigDialog node={dialog.node} editable={isAdmin} onClose={closeDialog} onComplete={async () => { closeDialog(); notify("节点配置已更新"); await load(true); }} /> : null}
       {dialog?.kind === "import" ? <ImportDialog onClose={closeDialog} onComplete={async (count) => { closeDialog(); notify(`已导入 ${count} 个节点`); await load(true); }} /> : null}
@@ -1008,51 +953,6 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       {pending ? <ConfirmDialog title={pending.title} description={pending.description} confirmLabel={pending.confirmLabel} tone={pending.tone} working={working} onCancel={() => !working && setPending(null)} onConfirm={() => void runPending()} /> : null}
     </div>
   );
-}
-
-function ManagedInboundResourceConfigDialog({ resource, onClose }: { resource: ManagedInboundResource; onClose: () => void }) {
-  const publicView = {
-    protocol: resource.protocol,
-    server: resource.endpoint_host,
-    port: resource.endpoint_port,
-    inbound_tag: resource.inbound_tag,
-    ...resource.public_metadata,
-  };
-  return <Dialog title={resource.display_name} description="WireGuard 公开管理参数；客户端私钥不会存储在控制端。" onClose={onClose} wide>
-    <div className="form-stack">
-      <div className="nw-inline-note"><ShieldCheck size={16} /><span>此资源只管理远程入站，不会进入用户订阅、套餐或节点测速。</span></div>
-      <Field label="公开配置"><textarea className="nw-code-editor" aria-label="WireGuard 公开配置" readOnly value={JSON.stringify(publicView, null, 2)} /></Field>
-      <div className="dialog-actions"><Button type="button" variant="secondary" onClick={() => void copyText(JSON.stringify(publicView, null, 2))}><Copy size={16} />复制</Button><Button type="button" onClick={onClose}><Check size={16} />关闭</Button></div>
-    </div>
-  </Dialog>;
-}
-
-function ManagedInboundResourceRenameDialog({ resource, onClose, onComplete }: { resource: ManagedInboundResource; onClose: () => void; onComplete: () => void | Promise<void> }) {
-  const [displayName, setDisplayName] = useState(resource.display_name);
-  const [working, setWorking] = useState(false);
-  const [error, setError] = useState("");
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    const normalized = displayName.trim();
-    if (!normalized) return setError("名称不能为空");
-    setWorking(true);
-    setError("");
-    try {
-      await api.patch(`/api/admin/managed-inbound-resources/${resource.id}`, { display_name: normalized });
-      await onComplete();
-    } catch (reason) {
-      setError(reasonMessage(reason, "WireGuard 入站改名失败"));
-    } finally {
-      setWorking(false);
-    }
-  };
-  return <Dialog title="重命名 WireGuard 入站" description={`${resource.server_name} · ${resource.inbound_tag}`} onClose={onClose} dismissible={!working}>
-    <form className="form-stack" onSubmit={submit}>
-      {error ? <ErrorState message={error} /> : null}
-      <Field label="显示名称"><input autoFocus maxLength={120} value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></Field>
-      <div className="dialog-actions"><Button type="button" variant="secondary" disabled={working} onClick={onClose}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />保存</>}</Button></div>
-    </form>
-  </Dialog>;
 }
 
 function NodeActions({ node, isAdmin, userRouted, onEdit, onConfig, onQRCode, onRelay, onAnyDoor, onCancelRelay, onChain, onResolve, onRegion, onRestore, onRoute, onTempSub, onDelete }: {
@@ -1216,7 +1116,7 @@ export function NodeEditor({ node, offer, onClose, onComplete }: { node?: Workbe
       if (!config.name || !config.type || !config.server || !config.port) throw new Error("名称、协议、服务器地址和端口均为必填项");
       if (config.port < 1 || config.port > 65535) throw new Error("端口必须在 1-65535 之间");
       if (form.selfService && tunnelNode) throw new Error("Tunnel 转发节点不能发布到用户自助目录");
-      if (form.selfService && !managedSelfServiceConfigSupported(form.protocol, JSON.stringify(config))) throw new Error(nodeProtocolKey(form.protocol) === "wireguard" ? "WireGuard 客户端私钥不能进入用户目录或订阅" : "经典 Shadowsocks 使用共享密码，不能发布到用户自助目录；请改用 Shadowsocks 2022");
+      if (form.selfService && !managedSelfServiceConfigSupported(form.protocol, JSON.stringify(config))) throw new Error(nodeProtocolKey(form.protocol) === "wireguard" ? "WireGuard 暂不支持按用户自助开通；管理员创建的普通节点仍可分配到套餐和订阅" : "经典 Shadowsocks 使用共享密码，不能发布到用户自助目录；请改用 Shadowsocks 2022");
       const configJSON = JSON.stringify(config);
       const tags = form.tags.split(/[,，\n]/).map((value) => value.trim()).filter(Boolean);
       const payload = {
@@ -1260,7 +1160,7 @@ export function NodeEditor({ node, offer, onClose, onComplete }: { node?: Workbe
       {node?.original_server ? <div className="nw-inline-note"><Server size={16} /><span>受管服务器：<strong>{node.original_server}</strong>{node.inbound_tag ? ` · 入站 ${node.inbound_tag}` : ""}</span></div> : null}
       <Field label="Clash JSON 配置" hint="保存前会校验 JSON，并以顶部基础字段覆盖 name/type/server/port"><textarea className="nw-code-editor" rows={14} spellCheck={false} value={form.config} onChange={(event) => setForm({ ...form, config: event.target.value })} /></Field>
       <Toggle checked={form.enabled} onChange={(enabled) => setForm({ ...form, enabled })} label="启用节点" />
-      {node ? <div className="nw-managed-offer"><Toggle checked={form.selfService} disabled={(!offer && (!node.original_server || !node.inbound_tag)) || (!selfServiceProtocolReady && !form.selfService)} onChange={(selfService) => setForm({ ...form, selfService })} label="允许获授权用户自助开通" />{form.selfService ? <Field label="目录排序" hint="数值越小越靠前"><input type="number" min="0" step="1" value={form.offerOrder} onChange={(event) => setForm({ ...form, offerOrder: event.target.value })} /></Field> : null}{!node.original_server || !node.inbound_tag ? <small>需要受管服务器和入站标识（Tag）后才能发布。</small> : tunnelNode ? <small>Tunnel 转发节点复用目标节点凭据，不能单独发布到用户目录。</small> : !selfServiceProtocolReady ? <small>{nodeProtocolKey(form.protocol) === "wireguard" ? "WireGuard 客户端私钥不能安全写入用户目录或订阅。" : "经典 Shadowsocks 只有共享密码，不能安全分配给独立用户；请改用 Shadowsocks 2022。"}</small> : <small>保存时会校验 Agent 的开通、到期和限速能力。</small>}</div> : null}
+      {node ? <div className="nw-managed-offer"><Toggle checked={form.selfService} disabled={(!offer && (!node.original_server || !node.inbound_tag)) || (!selfServiceProtocolReady && !form.selfService)} onChange={(selfService) => setForm({ ...form, selfService })} label="允许获授权用户自助开通" />{form.selfService ? <Field label="目录排序" hint="数值越小越靠前"><input type="number" min="0" step="1" value={form.offerOrder} onChange={(event) => setForm({ ...form, offerOrder: event.target.value })} /></Field> : null}{!node.original_server || !node.inbound_tag ? <small>需要受管服务器和入站标识（Tag）后才能发布。</small> : tunnelNode ? <small>Tunnel 转发节点复用目标节点凭据，不能单独发布到用户目录。</small> : !selfServiceProtocolReady ? <small>{nodeProtocolKey(form.protocol) === "wireguard" ? "WireGuard 暂不支持按用户自助开通；管理员创建的普通节点仍可分配到套餐和订阅。" : "经典 Shadowsocks 只有共享密码，不能安全分配给独立用户；请改用 Shadowsocks 2022。"}</small> : <small>保存时会校验 Agent 的开通、到期和限速能力。</small>}</div> : null}
       <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose} disabled={working}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />保存节点</>}</Button></div>
     </form>
   </Dialog>;
@@ -1383,7 +1283,7 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
   const publishDisabledReason = isTunnel
     ? "任意门是端口转发入站，不提供独立用户凭据，不能发布到用户目录。"
     : isWireGuard
-    ? "WireGuard 客户端私钥只在本次浏览器会话保留，不能进入订阅或用户目录。"
+    ? "WireGuard 暂不支持普通用户自助开通，管理员创建后仍会作为正常节点使用。"
     : isClassicShadowsocks
     ? "经典 Shadowsocks 只有一组共享密码，不能安全下发独立用户凭据；请使用 SS2022 后再发布。"
     : "该服务器为外置 Xray 模式，只能创建管理员节点，不能安全提供多用户凭据。";
@@ -1611,14 +1511,16 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
       if (isWireGuard) {
         const inbound = buildManagedWireGuardInbound(draft);
         const clientConfig = buildManagedWireGuardClientConfig(draft, wireGuardEndpoint);
-        const response = await api.post<{ success?: boolean; error?: string; message?: string; resource?: ManagedInboundResource }>(`/api/admin/managed-inbound-resources/wireguard?server_id=${selectedServer.id}`, {
+        const response = await api.post<ManagedWireGuardCreateResponse>(`/api/admin/managed-inbound-resources/wireguard?server_id=${selectedServer.id}`, {
           action: "add",
           display_name: draft.name.trim(),
           inbound,
+          client: buildManagedWireGuardClientProfile(draft),
         });
-        if (response.success !== true) throw new Error(response.error || response.message || "WireGuard 入站创建失败：服务端未确认创建成功");
+        const nodeID = response.node_id ?? response.node?.id;
+        if (response.success !== true || !nodeID) throw new Error(response.error || response.message || "WireGuard 创建完成但控制端未返回节点记录");
         setWireGuardCreated({
-          clientConfig,
+          clientConfig: response.client_config || clientConfig,
           filename: `${draft.name.trim().replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "wireguard"}.conf`,
         });
         return;
@@ -1643,22 +1545,22 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
         }
       }
       onComplete(isTunnel ? "任意门转发已创建" : willPublish ? "受管节点已创建并发布给用户" : "受管节点已创建");
-    } catch (reason) { setError(reasonMessage(reason, isTunnel ? "任意门转发创建失败" : isWireGuard ? "WireGuard 入站创建失败" : "受管节点创建失败")); }
+    } catch (reason) { setError(reasonMessage(reason, isTunnel ? "任意门转发创建失败" : isWireGuard ? "WireGuard 节点创建失败" : "受管节点创建失败")); }
     finally { setWorking(false); }
   };
 
   if (wireGuardCreated) {
-    return <Dialog title="保存 WireGuard 客户端配置" description="客户端私钥只保留在当前浏览器；关闭后不能从订阅或控制端恢复。" onClose={() => onComplete("WireGuard 入站已创建，请妥善保存客户端配置")} extraWide>
+    return <Dialog title="WireGuard 节点已创建" description="客户端凭据已加密存储，节点会正常进入节点管理、套餐与订阅。" onClose={() => onComplete("WireGuard 节点已创建")} extraWide>
       <div className="form-stack nw-wireguard-created">
         {error ? <ErrorState message={error} /> : null}
-        <div className="nw-inline-note"><KeyRound size={16} /><span>WireGuard 入站已创建。下载或复制配置后再关闭此窗口。</span></div>
+        <div className="nw-inline-note"><KeyRound size={16} /><span>配置已保存为正常节点；你也可以立即复制或下载客户端配置。</span></div>
         <Field label="WireGuard 客户端配置"><textarea className="nw-code-editor" aria-label="WireGuard 客户端配置" readOnly value={wireGuardCreated.clientConfig} /></Field>
-        <div className="dialog-actions"><Button variant="secondary" onClick={() => void copyText(wireGuardCreated.clientConfig).catch((reason) => setError(reasonMessage(reason, "复制客户端配置失败")))}><Copy size={16} />复制</Button><Button variant="secondary" onClick={() => { try { downloadText(wireGuardCreated.filename, wireGuardCreated.clientConfig); } catch (reason) { setError(reasonMessage(reason, "下载客户端配置失败")); } }}><FileDown size={16} />下载 .conf</Button><Button onClick={() => onComplete("WireGuard 入站已创建，请妥善保存客户端配置")}><Check size={16} />完成</Button></div>
+        <div className="dialog-actions"><Button variant="secondary" onClick={() => void copyText(wireGuardCreated.clientConfig).catch((reason) => setError(reasonMessage(reason, "复制客户端配置失败")))}><Copy size={16} />复制</Button><Button variant="secondary" onClick={() => { try { downloadText(wireGuardCreated.filename, wireGuardCreated.clientConfig); } catch (reason) { setError(reasonMessage(reason, "下载客户端配置失败")); } }}><FileDown size={16} />下载 .conf</Button><Button onClick={() => onComplete("WireGuard 节点已创建")}><Check size={16} />完成</Button></div>
       </div>
     </Dialog>;
   }
 
-  return <Dialog title="在服务器创建节点" description="选择受管服务器后创建真实入站；WireGuard 使用一次性客户端配置。" onClose={onClose} wide dismissible={!working}>
+  return <Dialog title="在服务器创建节点" description="选择受管服务器后创建真实入站和可用的订阅节点。" onClose={onClose} wide dismissible={!working}>
     <div className="managed-node-wizard" ref={wizardRef}>
       <ol className="managed-stepper" aria-label="创建进度">
         {["服务器", "协议", "配置", "确认"].map((label, index) => <li key={label} className={step === index + 1 ? "is-active" : step > index + 1 ? "is-done" : ""}><span>{step > index + 1 ? <Check size={14} /> : index + 1}</span><strong>{label}</strong></li>)}
@@ -1683,7 +1585,7 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
         <div className="form-grid"><Field label="节点名称"><input autoFocus required value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder={`${selectedServer?.name || "节点"} ${protocolLabel(draft.protocol)}`} /></Field><Field label="入站标识（Tag）" hint="Xray 内部唯一标识，同一服务器不可重复"><input required value={draft.tag} onChange={(event) => setDraft({ ...draft, tag: event.target.value })} /></Field></div>
         <div className="form-grid"><Field label="监听端口"><input required type="number" min="1" max="65535" value={draft.port} onChange={(event) => setDraft({ ...draft, port: event.target.value })} /></Field>{isTunnel ? <Field label="转发网络"><input readOnly value="TCP + UDP" /></Field> : isWireGuard ? <Field label="客户端 Endpoint"><input readOnly value={wireGuardEndpoint ? `${wireGuardEndpoint.includes(":") && !wireGuardEndpoint.startsWith("[") ? `[${wireGuardEndpoint}]` : wireGuardEndpoint}:${draft.port}` : "服务器尚未上报可连接地址"} /></Field> : <Field label="客户端地址"><select value={draft.ipVersion} onChange={(event) => setDraft({ ...draft, ipVersion: event.target.value as ManagedInboundDraft["ipVersion"] })}><option value="v4">IPv4</option>{selectedServer?.ipv6_enabled && selectedServer.ip_address_v6 ? <option value="v6">IPv6</option> : null}{selectedServer?.ipv6_enabled && selectedServer.ip_address_v6 ? <option value="both">IPv4 + IPv6</option> : null}</select></Field>}</div>
         {isTunnel ? <><div className="form-grid"><Field label="目标节点"><select value={draft.forwardNodeId} onChange={(event) => chooseForwardNode(event.target.value)}><option value="">请选择已有节点</option>{forwardingCandidates.map((node) => { const address = nodeAddress(node); return <option key={node.id} value={node.id}>{node.node_name} · {address.host}:{address.port}</option>; })}</select></Field><Field label="目标地址"><input readOnly value={draft.targetAddress && draft.targetPort ? `${draft.targetAddress}:${draft.targetPort}` : ""} /></Field></div>{forwardingCandidates.length ? <div className="nw-inline-note"><Cable size={16} /><span><strong>TCP + UDP</strong> · {selectedForwardNode ? <code>{draft.targetAddress}:{draft.targetPort}</code> : "请选择目标节点"}</span></div> : <ErrorState message="当前没有可转发的目标节点，请先创建或导入一个节点" />}</> : null}
-        {isWireGuard ? <><div className="form-grid"><Field label="服务端隧道地址"><input aria-label="WireGuard 服务端地址" value={draft.wireGuardServerAddress} onChange={(event) => setDraft({ ...draft, wireGuardServerAddress: event.target.value })} placeholder="10.66.66.1/32" /></Field><Field label="客户端隧道地址"><input aria-label="WireGuard 客户端地址" value={draft.wireGuardClientAddress} onChange={(event) => setDraft({ ...draft, wireGuardClientAddress: event.target.value })} placeholder="10.66.66.2/32" /></Field></div><div className="form-grid three"><Field label="客户端 DNS"><input aria-label="WireGuard 客户端 DNS" value={draft.wireGuardDNS} onChange={(event) => setDraft({ ...draft, wireGuardDNS: event.target.value })} /></Field><Field label="MTU"><input type="number" min="576" max="9000" aria-label="WireGuard MTU" value={draft.wireGuardMTU} onChange={(event) => setDraft({ ...draft, wireGuardMTU: event.target.value })} /></Field><Field label="Keepalive"><input type="number" min="0" max="65535" aria-label="WireGuard Keepalive" value={draft.wireGuardKeepAlive} onChange={(event) => setDraft({ ...draft, wireGuardKeepAlive: event.target.value })} /></Field></div><div className="managed-key-state"><span><KeyRound size={16} /><span><strong>本地 WireGuard 密钥</strong><small>{draft.wireGuardServerPrivateKey && draft.wireGuardClientPrivateKey ? "两组密钥已生成；客户端私钥不会发送到控制端" : "等待在浏览器中生成"}</small></span></span><Button type="button" variant="secondary" disabled={wireGuardKeyWorking} onClick={() => void generateWireGuardKeys()}>{wireGuardKeyWorking ? <Spinner label="正在生成" /> : <><RefreshCw size={15} />重新生成</>}</Button></div></> : null}
+        {isWireGuard ? <><div className="form-grid"><Field label="服务端隧道地址"><input aria-label="WireGuard 服务端地址" value={draft.wireGuardServerAddress} onChange={(event) => setDraft({ ...draft, wireGuardServerAddress: event.target.value })} placeholder="10.66.66.1/32" /></Field><Field label="客户端隧道地址"><input aria-label="WireGuard 客户端地址" value={draft.wireGuardClientAddress} onChange={(event) => setDraft({ ...draft, wireGuardClientAddress: event.target.value })} placeholder="10.66.66.2/32" /></Field></div><div className="form-grid three"><Field label="客户端 DNS"><input aria-label="WireGuard 客户端 DNS" value={draft.wireGuardDNS} onChange={(event) => setDraft({ ...draft, wireGuardDNS: event.target.value })} /></Field><Field label="MTU"><input type="number" min="576" max="9000" aria-label="WireGuard MTU" value={draft.wireGuardMTU} onChange={(event) => setDraft({ ...draft, wireGuardMTU: event.target.value })} /></Field><Field label="Keepalive"><input type="number" min="0" max="65535" aria-label="WireGuard Keepalive" value={draft.wireGuardKeepAlive} onChange={(event) => setDraft({ ...draft, wireGuardKeepAlive: event.target.value })} /></Field></div><div className="managed-key-state"><span><KeyRound size={16} /><span><strong>WireGuard 密钥</strong><small>{draft.wireGuardServerPrivateKey && draft.wireGuardClientPrivateKey ? "两组密钥已生成；客户端凭据将加密存储" : "等待在浏览器中生成"}</small></span></span><Button type="button" variant="secondary" disabled={wireGuardKeyWorking} onClick={() => void generateWireGuardKeys()}>{wireGuardKeyWorking ? <Spinner label="正在生成" /> : <><RefreshCw size={15} />重新生成</>}</Button></div></> : null}
         {draft.protocol === "vless-reality" ? <div className="form-grid"><Field label="客户端 UUID"><div className="nw-copy-field"><input value={draft.uuid} onChange={(event) => setDraft({ ...draft, uuid: event.target.value })} /><IconButton label="重新生成 UUID" onClick={() => setDraft({ ...draft, uuid: createManagedUUID() })}><RefreshCw size={15} /></IconButton></div></Field><Field label="流控"><select aria-label="Reality 流控" value={draft.flow} onChange={(event) => setDraft({ ...draft, flow: event.target.value as ManagedInboundDraft["flow"] })}><option value="xtls-rprx-vision">xtls-rprx-vision（推荐）</option><option value="">无流控</option></select></Field></div> : draft.protocol === "trojan-reality" ? <Field label="认证密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field> : null}
         {isReality ? <>
           <div className="form-grid"><Field label="伪装目标域名 / SNI" hint="必须明确选择；优先使用同 ASN 且证书覆盖该 SNI 的 TLS 站点"><div className="nw-copy-field"><input list="managed-reality-domains" value={draft.domain} onChange={(event) => setDraft({ ...draft, domain: event.target.value })} placeholder="www.example.com" /><IconButton label="重新探测 Reality 目标域名" disabled={domainWorking} onClick={() => void loadRealityDomains(serverID)}><RefreshCw size={15} /></IconButton></div></Field><Field label="Short ID" hint="2-16 位偶数长度十六进制"><input value={draft.shortId} onChange={(event) => setDraft({ ...draft, shortId: event.target.value })} /></Field></div>
@@ -1701,11 +1603,11 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
         {selectedProtocol?.requiresCertificate ? <>{isManagedUUIDProtocol(draft.protocol) ? <Field label="托管证书"><select value={draft.certificateId} onChange={(event) => { const certificate = validCertificates.find((item) => String(item.id) === event.target.value); setDraft({ ...draft, certificateId: event.target.value, domain: managedTLSHostnameForCertificate(certificate, selectedServer, draft.domain) }); }}><option value="">请选择证书</option>{validCertificates.map((item) => <option value={item.id} key={item.id}>{item.domain}</option>)}</select></Field> : <div className="form-grid"><Field label="认证密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field><Field label="托管证书"><select value={draft.certificateId} onChange={(event) => { const certificate = validCertificates.find((item) => String(item.id) === event.target.value); setDraft({ ...draft, certificateId: event.target.value, domain: managedTLSHostnameForCertificate(certificate, selectedServer, draft.domain) }); }}><option value="">请选择证书</option>{validCertificates.map((item) => <option value={item.id} key={item.id}>{item.domain}</option>)}</select></Field></div>}<Field label="TLS SNI"><input value={draft.domain} onChange={(event) => setDraft({ ...draft, domain: event.target.value })} placeholder="edge.example.com" /></Field><Toggle checked={draft.skipCertVerify} onChange={(skipCertVerify) => setDraft({ ...draft, skipCertVerify })} label="客户端跳过证书校验" /></> : null}
         {!isTunnel ? <div className="managed-publish-panel"><Toggle checked={draft.publish && canPublish} disabled={!canPublish} onChange={(publish) => setDraft({ ...draft, publish })} label="创建后发布到用户自助目录" />{draft.publish && canPublish ? <Field label="目录排序" hint="数值越小越靠前"><input type="number" min="0" value={draft.sortOrder} onChange={(event) => setDraft({ ...draft, sortOrder: event.target.value })} /></Field> : <small>{canPublish ? "稍后也可以在节点编辑中发布。" : publishDisabledReason}</small>}</div> : null}
       </section> : <section className="managed-wizard-step">
-        <div className="managed-step-heading"><span><ShieldCheck size={19} /></span><div><h3>确认创建</h3><p>{isWireGuard ? "创建会写入远程 Xray，并在当前浏览器提供一次性客户端配置。" : "创建会写入远程 Xray，并在控制端生成对应节点。"}</p></div></div>
-        <dl className="managed-review"><div><dt>服务器</dt><dd>{selectedServer?.name}</dd></div><div><dt>节点名称</dt><dd>{draft.name}</dd></div><div><dt>协议</dt><dd>{protocolLabel(draft.protocol)}</dd></div><div><dt>监听</dt><dd>{draft.port} · {isTunnel ? "TCP + UDP" : isWireGuard ? "UDP · 一次性配置" : draft.ipVersion.toUpperCase()}</dd></div><div><dt>入站标识（Tag）</dt><dd><code>{draft.tag}</code></dd></div>{isTunnel ? <div><dt>目标节点</dt><dd>{selectedForwardNode?.node_name} · <code>{draft.targetAddress}:{draft.targetPort}</code></dd></div> : <div><dt>用户目录</dt><dd>{isWireGuard ? "不支持" : draft.publish && canPublish ? "创建后发布" : "暂不发布"}</dd></div>}</dl>
+        <div className="managed-step-heading"><span><ShieldCheck size={19} /></span><div><h3>确认创建</h3><p>创建会写入远程 Xray，并在控制端生成对应节点。</p></div></div>
+        <dl className="managed-review"><div><dt>服务器</dt><dd>{selectedServer?.name}</dd></div><div><dt>节点名称</dt><dd>{draft.name}</dd></div><div><dt>协议</dt><dd>{protocolLabel(draft.protocol)}</dd></div><div><dt>监听</dt><dd>{draft.port} · {isTunnel ? "TCP + UDP" : isWireGuard ? "UDP" : draft.ipVersion.toUpperCase()}</dd></div><div><dt>入站标识（Tag）</dt><dd><code>{draft.tag}</code></dd></div>{isTunnel ? <div><dt>目标节点</dt><dd>{selectedForwardNode?.node_name} · <code>{draft.targetAddress}:{draft.targetPort}</code></dd></div> : <div><dt>用户目录</dt><dd>{draft.publish && canPublish ? "创建后发布" : "暂不发布"}</dd></div>}</dl>
         <details className="secure-inbound-preview"><summary>查看将提交的 Xray JSON</summary><textarea className="nw-code-editor" aria-label="受管节点 Xray JSON" readOnly value={JSON.stringify((isWireGuard ? buildManagedWireGuardInbound(draft) : buildManagedInboundRequest(draft).inbound), null, 2)} /></details>
       </section>}
-      {!loading ? <div className="dialog-actions managed-wizard-actions"><Button type="button" variant="secondary" onClick={step === 1 ? onClose : () => { setError(""); setStep((current) => current - 1); }} disabled={working}><ArrowLeft size={16} />{step === 1 ? "取消" : "上一步"}</Button>{step < 4 ? <Button type="button" onClick={validateStep} disabled={working || (step === 1 && (!readyServers.length || inventoryWorking || inventoryServerID !== serverID)) || keyWorking || wireGuardKeyWorking}>下一步<ArrowRight size={16} /></Button> : <Button type="button" onClick={() => void submit()} disabled={working}>{working ? <Spinner label="正在创建并校验" /> : <><Server size={16} />{isWireGuard ? "创建 WireGuard 入站" : "创建节点"}</>}</Button>}</div> : null}
+      {!loading ? <div className="dialog-actions managed-wizard-actions"><Button type="button" variant="secondary" onClick={step === 1 ? onClose : () => { setError(""); setStep((current) => current - 1); }} disabled={working}><ArrowLeft size={16} />{step === 1 ? "取消" : "上一步"}</Button>{step < 4 ? <Button type="button" onClick={validateStep} disabled={working || (step === 1 && (!readyServers.length || inventoryWorking || inventoryServerID !== serverID)) || keyWorking || wireGuardKeyWorking}>下一步<ArrowRight size={16} /></Button> : <Button type="button" onClick={() => void submit()} disabled={working}>{working ? <Spinner label="正在创建并校验" /> : <><Server size={16} />创建节点</>}</Button>}</div> : null}
     </div>
   </Dialog>;
 }

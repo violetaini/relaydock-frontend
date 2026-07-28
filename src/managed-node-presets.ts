@@ -1,6 +1,8 @@
 import {
+  buildWireGuardClientProfile,
   buildWireGuardClientConfig,
   buildWireGuardInbound,
+  type WireGuardClientProfile,
   type WireGuardInboundFields,
 } from "./xray-inbound-presets";
 
@@ -107,7 +109,7 @@ export const managedProtocolOptions: Array<{
   { value: "hysteria2", family: "hysteria2", familyLabel: "Hysteria2", label: "Hysteria2", detail: "UDP · TLS · Hysteria2", requiresCertificate: true },
   { value: "socks5", family: "socks5", familyLabel: "SOCKS5", label: "SOCKS5", detail: "TCP + UDP · 用户名密码" },
   { value: "http", family: "http", familyLabel: "HTTP", label: "HTTP Proxy", detail: "TCP · 用户名密码" },
-  { value: "wireguard", family: "wireguard", familyLabel: "WireGuard", label: "WireGuard", detail: "UDP · 单客户端 · 一次性配置" },
+  { value: "wireguard", family: "wireguard", familyLabel: "WireGuard", label: "WireGuard", detail: "UDP · 客户端凭据加密存储" },
   { value: "anydoor", family: "anydoor", familyLabel: "Tunnel", label: "Tunnel（任意门）", detail: "同时转发 TCP 与 UDP · 目标为已有节点" },
 ];
 
@@ -417,6 +419,10 @@ export function buildManagedWireGuardClientConfig(draft: ManagedInboundDraft, en
   return buildWireGuardClientConfig(managedWireGuardFields(draft), endpointHost);
 }
 
+export function buildManagedWireGuardClientProfile(draft: ManagedInboundDraft): WireGuardClientProfile {
+  return buildWireGuardClientProfile(managedWireGuardFields(draft));
+}
+
 export function buildManagedInboundRequest(draft: ManagedInboundDraft): ManagedInboundRequest {
   const name = draft.name.trim();
   if (!name) throw new Error("节点名称不能为空");
@@ -566,7 +572,7 @@ export function buildManagedInboundRequest(draft: ManagedInboundDraft): ManagedI
       });
       break;
     case "wireguard":
-      throw new Error("WireGuard 必须通过一次性客户端配置创建，不能登记为受管订阅节点");
+      throw new Error("WireGuard 必须通过包含加密客户端凭据的专用创建流程");
     case "anydoor":
       forwardNodeID = Number(draft.forwardNodeId);
       if (!Number.isInteger(forwardNodeID) || forwardNodeID <= 0) throw new Error("请选择要转发的目标节点");

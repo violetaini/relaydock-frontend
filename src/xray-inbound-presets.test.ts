@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildTrojanInbound,
+  buildWireGuardClientProfile,
   buildWireGuardClientConfig,
   buildWireGuardInbound,
   generateWireGuardKeyPair,
@@ -113,6 +114,19 @@ describe("WireGuard inbound preset", () => {
     });
     expect(JSON.stringify(buildWireGuardInbound(fields))).not.toContain(fields.clientPrivateKey);
     expect(() => buildWireGuardInbound({ ...fields, serverAddress: "10.66.66.1/24" })).toThrow("IPv4 /32");
+  });
+
+  it("builds the structured client profile persisted by the control plane", () => {
+    expect(buildWireGuardClientProfile(fields)).toEqual({
+      private_key: fields.clientPrivateKey,
+      public_key: fields.clientPublicKey,
+      address: ["10.66.66.2/32"],
+      dns: ["1.1.1.1", "1.0.0.1"],
+      mtu: 1420,
+      keep_alive: 25,
+      server_public_key: fields.serverPublicKey,
+      allowed_ips: ["0.0.0.0/0"],
+    });
   });
 
   it("brackets IPv6 endpoints without routing IPv6 through an IPv4-only tunnel", () => {

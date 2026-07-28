@@ -33,6 +33,17 @@ export interface WireGuardKeyPair {
   publicKey: string;
 }
 
+export interface WireGuardClientProfile {
+  private_key: string;
+  public_key: string;
+  address: string[];
+  dns: string[];
+  mtu: number;
+  keep_alive: number;
+  server_public_key: string;
+  allowed_ips: string[];
+}
+
 type XrayResource = Record<string, unknown>;
 
 function requireTag(value: string): string {
@@ -264,29 +275,45 @@ export function buildWireGuardInbound(fields: WireGuardInboundFields): XrayResou
   };
 }
 
+export function buildWireGuardClientProfile(fields: WireGuardInboundFields): WireGuardClientProfile {
+  const privateKey = requireWireGuardKey(fields.clientPrivateKey);
+  const publicKey = requireWireGuardKey(fields.clientPublicKey);
+  const serverPublicKey = requireWireGuardKey(fields.serverPublicKey);
+  const address = requireIPv4HostCIDR(fields.clientAddress, "客户端隧道地址");
+  const mtu = optionalPositiveInteger(fields.mtu, 1420, "MTU", 9000);
+  if (mtu < 576) throw new Error("MTU 必须在 576 到 9000 之间");
+  const keepAlive = optionalPositiveInteger(fields.keepAlive, 25, "Keepalive", 65535);
+  const dns = fields.dns.split(",").map((item) => item.trim()).filter(Boolean);
+  return {
+    private_key: privateKey,
+    public_key: publicKey,
+    address: [address],
+    dns: dns.length ? dns : ["1.1.1.1", "1.0.0.1"],
+    mtu,
+    keep_alive: keepAlive,
+    server_public_key: serverPublicKey,
+    allowed_ips: ["0.0.0.0/0"],
+  };
+}
+
 export function buildWireGuardClientConfig(fields: WireGuardInboundFields, endpointHost: string): string {
   const host = endpointHost.trim();
   if (!host) throw new Error("服务器尚未上报可连接的域名或 IP");
   const endpoint = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
-  const clientPrivateKey = requireWireGuardKey(fields.clientPrivateKey);
-  const serverPublicKey = requireWireGuardKey(fields.serverPublicKey);
-  const clientAddress = requireIPv4HostCIDR(fields.clientAddress, "客户端隧道地址");
+  const client = buildWireGuardClientProfile(fields);
   const port = requirePort(fields.port);
-  const mtu = optionalPositiveInteger(fields.mtu, 1420, "MTU", 9000);
-  const keepAlive = optionalPositiveInteger(fields.keepAlive, 25, "Keepalive", 65535);
-  const dns = fields.dns.split(",").map((item) => item.trim()).filter(Boolean).join(", ") || "1.1.1.1, 1.0.0.1";
   return [
     "[Interface]",
-    `PrivateKey = ${clientPrivateKey}`,
-    `Address = ${clientAddress}`,
-    `DNS = ${dns}`,
-    `MTU = ${mtu}`,
+    `PrivateKey = ${client.private_key}`,
+    `Address = ${client.address.join(", ")}`,
+    `DNS = ${client.dns.join(", ")}`,
+    `MTU = ${client.mtu}`,
     "",
     "[Peer]",
-    `PublicKey = ${serverPublicKey}`,
-    "AllowedIPs = 0.0.0.0/0",
+    `PublicKey = ${client.server_public_key}`,
+    `AllowedIPs = ${client.allowed_ips.join(", ")}`,
     `Endpoint = ${endpoint}:${port}`,
-    ...(keepAlive > 0 ? [`PersistentKeepalive = ${keepAlive}`] : []),
+    ...(client.keep_alive > 0 ? [`PersistentKeepalive = ${client.keep_alive}`] : []),
     "",
   ].join("\n");
 }

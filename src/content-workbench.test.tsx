@@ -11,7 +11,7 @@ vi.mock("./api", async (importOriginal) => {
 vi.mock("qrcode", () => ({ default: { toDataURL: qrMock } }));
 
 import { api } from "./api";
-import { CertificatesWorkbenchPage, SubscribeFilesPage, SubscriptionLinksPage, TemplatesWorkbenchPage } from "./content-workbench";
+import { CertificatesWorkbenchPage, SubscribeFilesPage, SubscriptionGeneratorPage, SubscriptionLinksPage, TemplatesWorkbenchPage } from "./content-workbench";
 
 vi.hoisted(() => {
   (globalThis as unknown as { process: { env: { NODE_ENV?: string } } }).process.env.NODE_ENV = "test";
@@ -169,6 +169,45 @@ describe("content workbench templates", () => {
 });
 
 describe("content workbench subscriptions", () => {
+  it("includes a normal WireGuard node in generated subscriptions", async () => {
+    const wireGuard = {
+      id: 12,
+      node_name: "办公室 WireGuard",
+      protocol: "wireguard",
+      enabled: true,
+      tags: ["office"],
+      clash_config: JSON.stringify({
+        name: "办公室 WireGuard",
+        type: "wireguard",
+        server: "edge.example.com",
+        port: 51820,
+        ip: "10.66.66.2",
+        "private-key": "encrypted-client-private-key",
+        "public-key": "server-public-key",
+        "allowed-ips": ["0.0.0.0/0"],
+        udp: true,
+        mtu: 1420,
+      }),
+    };
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [wireGuard] } as T;
+      if (path === "/api/admin/template-v3") return { templates: [] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const notify = vi.fn();
+    render(<SubscriptionGeneratorPage notify={notify} />);
+
+    fireEvent.click(await screen.findByRole("checkbox", { name: /办公室 WireGuard/ }));
+    fireEvent.click(screen.getByRole("button", { name: "生成订阅文件" }));
+
+    const output = await screen.findByRole("textbox", { name: "生成的订阅配置" });
+    const generated = (output as HTMLTextAreaElement).value;
+    expect(generated).toContain('"type":"wireguard"');
+    expect(generated).toContain('"private-key":"encrypted-client-private-key"');
+    expect(generated).toContain('"allowed-ips":["0.0.0.0/0"]');
+    expect(notify).toHaveBeenCalledWith("订阅配置已生成");
+  });
+
   it("keeps rule management entry points with subscription management", async () => {
     const onOpenCustomRules = vi.fn();
     const onOpenRulesConfig = vi.fn();

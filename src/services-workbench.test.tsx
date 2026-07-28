@@ -818,11 +818,11 @@ describe("service management workbench", () => {
     expect(post).not.toHaveBeenCalledWith("/api/admin/remote/inbounds?server_id=11", expect.anything());
   });
 
-  it("creates WireGuard with two generated keypairs and keeps the one-time client config open", async () => {
+  it("creates a normal WireGuard node and keeps its encrypted client config available", async () => {
     mockServerReads([onlineServer], { inbounds: [] });
     const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
       if (path === "/api/admin/xray/generate-x25519") return { privateKey: "A".repeat(43), publicKey: "B".repeat(43) } as T;
-      if (path === "/api/admin/managed-inbound-resources/wireguard?server_id=11") return { success: true, message: "added" } as T;
+      if (path === "/api/admin/managed-inbound-resources/wireguard?server_id=11") return { success: true, message: "added", node_id: 19 } as T;
       throw new Error(`unexpected POST ${path}`);
     });
     render(<ServicesWorkbenchPage notify={vi.fn()} />);
@@ -859,7 +859,17 @@ describe("service management workbench", () => {
     const clientConfig = within(dialog).getByRole("textbox", { name: "WireGuard 客户端配置" }) as HTMLTextAreaElement;
     const clientPrivateKey = clientConfig.value.match(/^PrivateKey = (.+)$/m)?.[1];
     expect(clientPrivateKey).toMatch(/^[A-Za-z0-9+/]{43}=$/);
-    expect(JSON.stringify(inboundCall?.[1])).not.toContain(clientPrivateKey);
+    expect(inboundCall?.[1]).toMatchObject({
+      client: {
+        private_key: clientPrivateKey,
+        address: ["10.66.66.2/32"],
+        dns: ["1.1.1.1", "1.0.0.1"],
+        mtu: 1420,
+        keep_alive: 25,
+        allowed_ips: ["0.0.0.0/0"],
+      },
+    });
+    expect(JSON.stringify((inboundCall?.[1] as { inbound?: unknown }).inbound)).not.toContain(clientPrivateKey);
     expect(clientConfig.value).toMatch(/^PublicKey = [A-Za-z0-9+/]{43}=$/m);
     expect(clientConfig.value).toContain("Endpoint = hk.example.com:51820");
     expect(within(dialog).queryByRole("button", { name: "创建入站" })).not.toBeInTheDocument();
@@ -975,6 +985,29 @@ describe("service management workbench", () => {
         },
       }),
     }));
+  });
+
+  it("keeps WireGuard view and delete available without exposing the destructive raw-edit path", async () => {
+    const wireGuardInbound = {
+      tag: "wireguard-in",
+      protocol: "wireguard",
+      port: 51820,
+      settings: { address: ["10.66.66.1/32"], peers: [] },
+      _source: "config",
+      _runtime_status: "running",
+    };
+    mockServerReads([onlineServer], { inbounds: [wireGuardInbound] });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(dialog).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(dialog).getByRole("tab", { name: "入站" }));
+    await within(dialog).findByText("wireguard-in");
+
+    expect(within(dialog).getByRole("button", { name: "WireGuard 入站 wireguard-in 不能直接编辑，请删除后重新创建" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "查看" })).toBeEnabled();
+    expect(within(dialog).getByRole("button", { name: "删除入站 wireguard-in" })).toBeEnabled();
   });
 
   it("edits an outbound through the real remove-then-add contract on one server", async () => {

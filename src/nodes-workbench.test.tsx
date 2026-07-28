@@ -111,38 +111,38 @@ describe("managed certificate hostname coverage", () => {
   });
 });
 
-describe("WireGuard managed inbound resources", () => {
-  it("shows the inbound in node management and only allows management actions", async () => {
+describe("WireGuard nodes", () => {
+  it("shows WireGuard through the normal node management workflow", async () => {
+    const wireGuard = node(12, "办公室 WireGuard", "wireguard", "203.0.113.10");
+    const config = {
+      name: wireGuard.node_name,
+      type: "wireguard",
+      server: "203.0.113.10",
+      port: 51820,
+      ip: "10.66.66.2",
+      "private-key": "encrypted-at-rest-client-key",
+      "public-key": "server-public-key",
+      "allowed-ips": ["0.0.0.0/0"],
+      udp: true,
+      mtu: 1420,
+    };
+    wireGuard.clash_config = JSON.stringify(config);
+    wireGuard.parsed_config = JSON.stringify(config);
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
-      if (path === "/api/admin/nodes") return { nodes: [] } as T;
+      if (path === "/api/admin/nodes") return { nodes: [wireGuard] } as T;
       if (path === "/api/admin/speedtest/results?latest=1") return { results: [] } as T;
-      if (path === "/api/user/config") return userConfig() as T;
+      if (path === "/api/user/config") return userConfig([12]) as T;
       if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
-      if (path === "/api/admin/managed-inbound-resources") return { resources: [{
-        id: 12,
-        server_id: 3,
-        server_name: "Edge 154",
-        display_name: "办公室 WireGuard",
-        protocol: "wireguard",
-        inbound_tag: "wireguard-in",
-        endpoint_host: "203.0.113.10",
-        endpoint_port: 51820,
-        public_metadata: { server_addresses: ["10.66.66.1/32"], mtu: 1420, peers: [{ allowed_ips: ["10.66.66.2/32"] }] },
-      }] } as T;
       throw new Error(`unexpected GET ${path}`);
     });
-    vi.spyOn(api, "patch").mockResolvedValue({ success: true } as never);
     render(<NodesWorkbench isAdmin notify={vi.fn()} />);
 
     expect(await screen.findByText("办公室 WireGuard")).toBeInTheDocument();
-    expect(screen.getByText("不进入订阅")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "测延迟" })).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "重命名 办公室 WireGuard" }));
-    const input = screen.getByRole("textbox", { name: "显示名称" });
-    fireEvent.change(input, { target: { value: "生产 WireGuard" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(api.patch).toHaveBeenCalledWith("/api/admin/managed-inbound-resources/12", { display_name: "生产 WireGuard" }));
+    expect(screen.getAllByText("WIREGUARD")).toHaveLength(2);
+    expect(screen.getByText("203.0.113.10:51820")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "测延迟" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "更多 办公室 WireGuard 操作" })).toBeInTheDocument();
+    expect(screen.queryByText("不进入订阅")).not.toBeInTheDocument();
   });
 });
 
@@ -749,7 +749,7 @@ describe("managed server node creation", () => {
     expect(screen.getByRole("textbox", { name: "TLS SNI" })).toBeInTheDocument();
   });
 
-  it("creates WireGuard through the one-time inbound path without sending the client private key", async () => {
+  it("creates WireGuard as a normal node with separately encrypted client credentials", async () => {
     const existing = node(1, "香港 A");
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
       if (path === "/api/admin/nodes") return { nodes: [existing] } as T;
@@ -762,7 +762,7 @@ describe("managed server node creation", () => {
       throw new Error(`unexpected GET ${path}`);
     });
     const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
-      if (path === "/api/admin/managed-inbound-resources/wireguard?server_id=3") return { success: true, resource: { id: 8 } } as T;
+      if (path === "/api/admin/managed-inbound-resources/wireguard?server_id=3") return { success: true, resource: { id: 8 }, node_id: 8 } as T;
       throw new Error(`unexpected POST ${path}`);
     });
     const notify = vi.fn();
@@ -780,7 +780,7 @@ describe("managed server node creation", () => {
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     const preview = await screen.findByRole("textbox", { name: "受管节点 Xray JSON" });
     expect((preview as HTMLTextAreaElement).value).toContain('"protocol": "wireguard"');
-    fireEvent.click(screen.getByRole("button", { name: "创建 WireGuard 入站" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建节点" }));
 
     const config = await screen.findByRole("textbox", { name: "WireGuard 客户端配置" });
     const clientPrivateKey = (config as HTMLTextAreaElement).value.match(/^PrivateKey = (.+)$/m)?.[1];
@@ -791,11 +791,21 @@ describe("managed server node creation", () => {
       inbound: expect.objectContaining({ protocol: "wireguard" }),
     })));
     const payload = post.mock.calls.find(([path]) => path === "/api/admin/managed-inbound-resources/wireguard?server_id=3")?.[1];
-    expect(JSON.stringify(payload)).not.toContain(clientPrivateKey);
+    expect(payload).toMatchObject({
+      client: {
+        private_key: clientPrivateKey,
+        address: ["10.66.66.2/32"],
+        dns: ["1.1.1.1", "1.0.0.1"],
+        mtu: 1420,
+        keep_alive: 25,
+        allowed_ips: ["0.0.0.0/0"],
+      },
+    });
+    expect(JSON.stringify((payload as { inbound?: unknown }).inbound)).not.toContain(clientPrivateKey);
     expect(post).not.toHaveBeenCalledWith("/api/admin/remote/inbounds?server_id=3", expect.anything());
 
     fireEvent.click(screen.getByRole("button", { name: "完成" }));
-    expect(notify).toHaveBeenCalledWith("WireGuard 入站已创建，请妥善保存客户端配置");
+    expect(notify).toHaveBeenCalledWith("WireGuard 节点已创建");
   });
 
   it("offers public WS without a server domain while keeping WSS disabled", async () => {
@@ -1086,6 +1096,28 @@ describe("single node QR import", () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(uri));
     expect(notify).toHaveBeenCalledWith("节点分享链接已复制");
     expect(screen.getByRole("link", { name: "下载 PNG" })).toHaveAttribute("download", "美国 Reality.png");
+  });
+
+  it("uses the same QR workflow for a normal WireGuard node", async () => {
+    const selected = node(12, "办公室 WireGuard", "wireguard", "edge.example.com");
+    const uri = "wireguard://client-private@edge.example.com:51820/?publickey=server-public&address=10.66.66.2%2F32#Office";
+    vi.spyOn(api, "get").mockResolvedValue({
+      item: {
+        username: "alice",
+        node_id: 12,
+        node_name: "办公室 WireGuard",
+        protocol: "wireguard",
+        node_type: "physical",
+        uri,
+      },
+    });
+    vi.mocked(QRCode.toDataURL).mockClear();
+
+    render(<NodeShareQRCodeDialog node={selected} notify={vi.fn()} onClose={vi.fn()} />);
+
+    expect(await screen.findByRole("img", { name: "办公室 WireGuard 节点二维码" })).toHaveAttribute("src", "data:image/png;base64,node-qr");
+    expect(api.get).toHaveBeenCalledWith("/api/admin/nodes/12/uri");
+    expect(QRCode.toDataURL).toHaveBeenCalledWith(uri, expect.objectContaining({ width: 320, margin: 2 }));
   });
 
   it("renders the row menu in a portal and exposes QR import to regular users", async () => {

@@ -68,6 +68,7 @@ interface SubscriptionItem {
   description?: string;
   filename: string;
   type: string;
+  can_delete?: boolean;
   file_short_code?: string;
   custom_short_code?: string;
   updated_at?: string;
@@ -602,6 +603,8 @@ export function SubscriptionLinksPage({ notify = noNotify }: ContentPageProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [qrItem, setQRItem] = useState<{ name: string; url: string } | null>(null);
+  const [deleteItem, setDeleteItem] = useState<SubscriptionItem | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -622,6 +625,22 @@ export function SubscriptionLinksPage({ notify = noNotify }: ContentPageProps) {
 
   useEffect(() => { void load(); }, [load]);
 
+  const remove = async () => {
+    if (!deleteItem?.can_delete || deleteItem.id <= 0) return;
+    setDeleting(true);
+    setError("");
+    try {
+      await api.delete(`/api/admin/subscribe-files/${deleteItem.id}`);
+      setItems((current) => current.filter((item) => item.id !== deleteItem.id));
+      notify(`订阅“${deleteItem.name}”已删除`);
+      setDeleteItem(null);
+    } catch (reason) {
+      setError(fail(reason, "删除订阅失败"));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
     <section className="cw-page">
       <PageHeader title="订阅链接" description="查看已分配的配置并复制到 Clash、Mihomo 或兼容客户端。" actions={<IconButton label="刷新订阅" onClick={() => void load()}><RefreshCw size={18} /></IconButton>} />
@@ -629,7 +648,7 @@ export function SubscriptionLinksPage({ notify = noNotify }: ContentPageProps) {
       {loading ? <Surface className="cw-loading"><Spinner /></Surface> : items.length === 0 ? (
         <Surface><EmptyState icon={<Link2 size={24} />} title="暂无可用订阅" description="尚未分配套餐或订阅文件。" /></Surface>
       ) : (
-        <div className="cw-grid">
+        <div className="cw-grid cw-subscription-grid">
           {items.map((item) => {
             const url = resolveSubscriptionURL(item, token);
             return (
@@ -647,12 +666,13 @@ export function SubscriptionLinksPage({ notify = noNotify }: ContentPageProps) {
                   <code title={privateURL(url)}>{privateURL(url)}</code>
                   <IconButton label={`复制 ${item.name} 订阅链接`} onClick={async () => { await copyText(url); notify("订阅链接已复制"); }}><Copy size={17} /></IconButton>
                 </div>
-                <div className="cw-card-actions" style={{ marginTop: 12 }}>
+                <div className="cw-card-actions cw-subscription-actions">
                   <Button variant="secondary" onClick={async () => { await copyText(url); notify("订阅链接已复制"); }}><Clipboard size={16} />复制链接</Button>
                   <Button variant="secondary" onClick={() => setQRItem({ name: item.name, url })}><QrCode size={16} />二维码</Button>
                   <a className="button button-secondary" href={clashDeepLink(url, item.name)}><Download size={16} />导入 Clash</a>
                   <a className="button button-secondary" href={clashDeepLink(url, item.name, "clashmeta")}><Download size={16} />导入 Clash Meta</a>
                   <Button variant="ghost" onClick={() => window.open(url, "_blank", "noopener,noreferrer")}><ExternalLink size={16} />浏览器打开</Button>
+                  {item.can_delete ? <IconButton className="cw-subscription-delete" label={`删除订阅 ${item.name}`} disabled={deleting} onClick={() => setDeleteItem(item)}><Trash2 size={17} /></IconButton> : null}
                 </div>
               </Surface>
             );
@@ -660,6 +680,7 @@ export function SubscriptionLinksPage({ notify = noNotify }: ContentPageProps) {
         </div>
       )}
       {qrItem ? <SubscriptionQRDialog name={qrItem.name} url={qrItem.url} onClose={() => setQRItem(null)} /> : null}
+      {deleteItem ? <ConfirmDialog title="删除订阅" description={`将永久删除“${deleteItem.name}”及其订阅文件，所有已分配链接会立即失效。`} confirmLabel="确认删除" working={deleting} onCancel={() => setDeleteItem(null)} onConfirm={() => void remove()} /> : null}
     </section>
   );
 }

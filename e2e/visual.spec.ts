@@ -201,6 +201,7 @@ const subscriptions = [{
   description: "香港与美国日常线路",
   filename: "daily.yaml",
   type: "clash",
+  can_delete: true,
   file_short_code: "daily",
   updated_at: new Date().toISOString(),
   latest_version: 3,
@@ -790,6 +791,15 @@ for (const viewport of [
     await expect(qrDialog.getByRole("img", { name: "日常订阅 订阅二维码" })).toBeVisible();
     await expect(qrDialog.getByRole("link", { name: "下载 PNG" })).toHaveAttribute("download", "日常订阅.png");
     await expectViewportIntegrity(page, `${viewport.name} local subscription QR`);
+    await closeDialog(page);
+    const subscriptionActions = page.locator(".cw-subscription-actions").first();
+    if (viewport.name === "desktop") {
+      const actionTops = await subscriptionActions.locator(":scope > *").evaluateAll((elements) => elements.map((element) => Math.round(element.getBoundingClientRect().top)));
+      expect(Math.max(...actionTops) - Math.min(...actionTops), "desktop subscription actions should stay on one line").toBeLessThanOrEqual(2);
+    }
+    await subscriptionActions.getByRole("button", { name: "删除订阅 日常订阅" }).click();
+    await expect(page.getByRole("dialog", { name: "删除订阅" })).toBeVisible();
+    await expectViewportIntegrity(page, `${viewport.name} subscription delete confirmation`);
     await closeDialog(page);
 
     await page.goto("/#/generator");

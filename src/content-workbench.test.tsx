@@ -210,6 +210,30 @@ describe("content workbench subscriptions", () => {
     expect(screen.getByRole("link", { name: "下载 PNG" })).toHaveAttribute("download", "日常套餐.png");
   });
 
+  it("deletes only subscriptions the current user is allowed to remove", async () => {
+    const notify = vi.fn();
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/subscriptions") return { subscriptions: [
+        { id: 4, name: "自建订阅", filename: "mine.yaml", type: "create", file_short_code: "abc", can_delete: true },
+        { id: -1, name: "套餐订阅", filename: "__package__", type: "package", file_short_code: "pkg", can_delete: false },
+      ] } as T;
+      if (path === "/api/user/token") return { token: "secret", user_short_code: "usr" } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const remove = vi.spyOn(api, "delete").mockResolvedValue({});
+    render(<SubscriptionLinksPage notify={notify} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "删除订阅 自建订阅" }));
+    expect(screen.queryByRole("button", { name: "删除订阅 套餐订阅" })).not.toBeInTheDocument();
+    expect(screen.getByText("所有已分配链接会立即失效。", { exact: false })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+
+    await waitFor(() => expect(remove).toHaveBeenCalledWith("/api/admin/subscribe-files/4"));
+    await waitFor(() => expect(screen.queryByText("自建订阅")).not.toBeInTheDocument());
+    expect(screen.getByText("套餐订阅")).toBeInTheDocument();
+    expect(notify).toHaveBeenCalledWith("订阅“自建订阅”已删除");
+  });
+
   it("preserves server scopes and traffic limits when toggling an unrelated setting", async () => {
     const file = {
       id: 4,

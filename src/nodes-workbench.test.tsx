@@ -1,11 +1,13 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import QRCode from "qrcode";
 import { api } from "./api";
 import {
   AnyDoorForwardDialog,
   ChainProxyDialog,
   ExternalSubscriptionsDialog,
   NodeEditor,
+  NodeShareQRCodeDialog,
   NodesWorkbench,
   RegionEmojiDialog,
   ResolveIPDialog,
@@ -18,6 +20,10 @@ import {
   managedTLSHostnameForCertificate,
   type WorkbenchNode,
 } from "./nodes-workbench";
+
+vi.mock("qrcode", () => ({
+  default: { toDataURL: vi.fn().mockResolvedValue("data:image/png;base64,node-qr") },
+}));
 
 vi.hoisted(() => {
   (globalThis as unknown as { process: { env: { NODE_ENV?: string } } }).process.env.NODE_ENV = "test";
@@ -471,7 +477,7 @@ describe("node any-door forwarding", () => {
     render(<NodesWorkbench isAdmin notify={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "更多 美国 Reality 操作" }));
-    fireEvent.click(screen.getByRole("button", { name: "任意门转发" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "任意门转发" }));
     expect(screen.getByRole("dialog", { name: "任意门转发 · 美国 Reality" })).toBeInTheDocument();
   });
 
@@ -1049,5 +1055,56 @@ describe("URI manager", () => {
 
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("vless://alice-secret"));
     expect(notify).toHaveBeenCalledWith("已复制 1 条 URI");
+  });
+});
+
+describe("single node QR import", () => {
+  it("loads the server-produced URI and generates the QR locally", async () => {
+    const selected = node(7, "美国 Reality", "vless", "edge.example.com");
+    const uri = "vless://70000000-0000-4000-8000-000000000000@edge.example.com:443?security=tls#US";
+    vi.spyOn(api, "get").mockResolvedValue({
+      item: {
+        username: "alice",
+        node_id: 7,
+        node_name: "美国 Reality",
+        protocol: "vless",
+        node_type: "physical",
+        uri,
+      },
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    const notify = vi.fn();
+    vi.mocked(QRCode.toDataURL).mockClear();
+
+    render(<NodeShareQRCodeDialog node={selected} notify={notify} onClose={vi.fn()} />);
+
+    expect(await screen.findByRole("img", { name: "美国 Reality 节点二维码" })).toHaveAttribute("src", "data:image/png;base64,node-qr");
+    expect(api.get).toHaveBeenCalledWith("/api/admin/nodes/7/uri");
+    expect(QRCode.toDataURL).toHaveBeenCalledWith(uri, expect.objectContaining({ width: 320, margin: 2 }));
+    fireEvent.click(screen.getByRole("button", { name: "复制链接" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(uri));
+    expect(notify).toHaveBeenCalledWith("节点分享链接已复制");
+    expect(screen.getByRole("link", { name: "下载 PNG" })).toHaveAttribute("download", "美国 Reality.png");
+  });
+
+  it("renders the row menu in a portal and exposes QR import to regular users", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [node(1, "香港 A")] } as T;
+      if (path === "/api/user/config") return userConfig([1]) as T;
+      if (path === "/api/user/routed-outbound") return { items: [], enabled: false, quota: { used: 0, max: 2 }, daily: { used: 0, max: 5 } } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    render(<NodesWorkbench isAdmin={false} notify={vi.fn()} />);
+
+    const trigger = await screen.findByRole("button", { name: "更多 香港 A 操作" });
+    fireEvent.click(trigger);
+    const menu = screen.getByRole("menu", { name: "香港 A 节点操作" });
+    expect(menu.parentElement).toBe(document.body);
+    expect(within(menu).getByRole("menuitem", { name: "二维码导入" })).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("menu", { name: "香港 A 节点操作" })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
   });
 });

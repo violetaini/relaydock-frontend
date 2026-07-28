@@ -296,6 +296,7 @@ async function mockAPI(
       "/api/user/debug/tail": { lines: "[INFO] agent connected\n[WARN] sample retry", total_size: 12288 },
       "/api/admin/tgbot/invites": { success: true, items: [{ code: "ARCWAY-DEMO", kind: "new", created_by: "admin", package_id: 1, max_uses: 3, used_count: 1, expires_at: "2026-08-19T00:00:00Z", revoked: false, remark: "新用户邀请", created_at: "2026-07-19T00:00:00Z", usable: true, duration_months: 1 }] },
       "/api/admin/node-uris": { items: [{ username: "alice", node_id: 1, node_name: "HK Reality 01", protocol: "vless", node_type: "physical", uri: "vless://masked@example.com:443" }] },
+      "/api/admin/nodes/7/uri": { item: { username: "admin", node_id: 7, node_name: "HK Backup", protocol: "tuic", node_type: "physical", uri: "tuic://70000000-0000-4000-8000-000000000000:visual-secret@edge.example.com:443?sni=edge.example.com#HK%20Backup" } },
       "/api/admin/packages": { success: true, packages },
       "/api/admin/traffic/users": { users: [
         { username: "alice", total_uplink: 10995116277, total_downlink: 43980465111, cycle_uplink: 5368709120, cycle_downlink: 21474836480 },
@@ -875,6 +876,23 @@ for (const viewport of [
     await page.getByRole("button", { name: "导入已有节点" }).click();
     await expect(page.getByRole("dialog", { name: "导入外部节点" })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} node import`);
+    await closeDialog(page);
+    const lastNodeMenuTrigger = page.getByRole("button", { name: "更多 HK Backup 操作" });
+    await lastNodeMenuTrigger.scrollIntoViewIfNeeded();
+    await lastNodeMenuTrigger.click();
+    const lastNodeMenu = page.getByRole("menu", { name: "HK Backup 节点操作" });
+    await expect(lastNodeMenu.getByRole("menuitem", { name: "二维码导入" })).toBeVisible();
+    const menuBox = await lastNodeMenu.boundingBox();
+    expect(menuBox).not.toBeNull();
+    expect(menuBox!.y).toBeGreaterThanOrEqual(7);
+    expect(menuBox!.x).toBeGreaterThanOrEqual(7);
+    expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(viewport.height - 7);
+    expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(viewport.width - 7);
+    await lastNodeMenu.getByRole("menuitem", { name: "二维码导入" }).click();
+    const nodeQRDialog = page.getByRole("dialog", { name: "节点二维码" });
+    await expect(nodeQRDialog.getByRole("img", { name: "HK Backup 节点二维码" })).toBeVisible();
+    await expect(nodeQRDialog.getByRole("link", { name: "下载 PNG" })).toHaveAttribute("download", "HK Backup.png");
+    await expectViewportIntegrity(page, `${viewport.name} node QR import`);
     await closeDialog(page);
     await page.getByRole("button", { name: "工具", exact: true }).click();
     await page.getByRole("menuitem", { name: "节点测速" }).click();

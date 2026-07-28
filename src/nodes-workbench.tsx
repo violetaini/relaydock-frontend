@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import QRCode from "qrcode";
 import {
   Activity,
   ArrowDown,
@@ -29,6 +31,7 @@ import {
   Plus,
   Power,
   PowerOff,
+  QrCode,
   RefreshCw,
   RotateCcw,
   Route,
@@ -263,6 +266,7 @@ type WorkbenchDialog =
   | { kind: "testers" }
   | { kind: "tunnels" }
   | { kind: "route"; node: WorkbenchNode }
+  | { kind: "qr"; node: WorkbenchNode }
   | { kind: "temp-sub"; nodes: WorkbenchNode[] }
   | null;
 
@@ -490,6 +494,10 @@ function resultLabel(result?: SpeedResult): string {
 async function copyText(value: string): Promise<void> {
   if (!navigator.clipboard) throw new Error("clipboard unavailable");
   await navigator.clipboard.writeText(value);
+}
+
+function safeDownloadBasename(value: string): string {
+  return value.trim().replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, " ").slice(0, 80) || "node";
 }
 
 function downloadText(filename: string, content: string): void {
@@ -969,7 +977,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
             <td className="nw-cell-latency" data-label="连通性"><button className={`nw-result-button ${ping?.success ? "is-good" : ping?.error ? "is-bad" : ""}`} disabled={ping?.loading} title={ping?.error || "点击测试 TCP/UDP 连通延迟"} onClick={() => void pingOne(node)}>{ping?.loading ? <Spinner label="" /> : <Zap size={14} />}{ping?.loading ? "测试中" : ping?.success ? `${ping.latency.toFixed(1)} ms` : ping?.error ? "失败" : "测延迟"}</button></td>
             <td className="nw-cell-speed" data-label="测速">{isAdmin ? <button className="nw-speed-cell" title={speed?.error || "打开节点测速"} onClick={() => setDialog({ kind: "speed", nodeIDs: [node.id] })}><Badge tone={speedTone(speed)}>{resultLabel(speed)}</Badge>{speed?.egress_ip ? <small>{speed.egress_ip}</small> : null}</button> : <Badge tone="neutral">管理员功能</Badge>}</td>
             <td className="nw-cell-status" data-label="状态">{isAdmin ? <button className="nw-status-button" title={`点击${node.enabled ? "停用" : "启用"}`} onClick={() => void update(node, { enabled: !node.enabled }, node.enabled ? "节点已停用" : "节点已启用")}><span className={node.enabled ? "is-on" : ""} />{node.enabled ? "启用" : "停用"}</button> : <Badge tone={node.enabled ? "good" : "neutral"}>{node.enabled ? "启用" : "停用"}</Badge>}</td>
-            <td className="nw-cell-actions"><NodeActions node={node} isAdmin={isAdmin} userRouted={userRouted} onEdit={() => setDialog({ kind: "edit", node })} onConfig={() => setDialog({ kind: "config", node })} onRelay={() => setDialog({ kind: "relay", node })} onAnyDoor={() => setDialog({ kind: "anydoor", node })} onCancelRelay={() => cancelRelay(node)} onChain={() => setDialog({ kind: "chain", node })} onResolve={() => setDialog({ kind: "resolve", node })} onRegion={() => setDialog({ kind: "region", node })} onRestore={() => restoreDomain(node)} onRoute={() => setDialog({ kind: "route", node })} onTempSub={() => setDialog({ kind: "temp-sub", nodes: [node] })} onDelete={() => isAdmin ? removeNode(node) : removeUserRouted(node)} /></td>
+            <td className="nw-cell-actions"><NodeActions node={node} isAdmin={isAdmin} userRouted={userRouted} onEdit={() => setDialog({ kind: "edit", node })} onConfig={() => setDialog({ kind: "config", node })} onQRCode={() => setDialog({ kind: "qr", node })} onRelay={() => setDialog({ kind: "relay", node })} onAnyDoor={() => setDialog({ kind: "anydoor", node })} onCancelRelay={() => cancelRelay(node)} onChain={() => setDialog({ kind: "chain", node })} onResolve={() => setDialog({ kind: "resolve", node })} onRegion={() => setDialog({ kind: "region", node })} onRestore={() => restoreDomain(node)} onRoute={() => setDialog({ kind: "route", node })} onTempSub={() => setDialog({ kind: "temp-sub", nodes: [node] })} onDelete={() => isAdmin ? removeNode(node) : removeUserRouted(node)} /></td>
           </tr>;
         })}</tbody></table></div>}
       </Surface>
@@ -995,6 +1003,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       {dialog?.kind === "subscriptions" ? <ExternalSubscriptionsDialog notify={notify} onClose={closeDialog} onNodesChanged={() => load(true)} /> : null}
       {dialog?.kind === "tunnels" ? <Dialog title="Tunnel 管理" description="跨节点服务器管理端口转发与链式隧道" onClose={closeDialog} wide><TunnelsPanel notify={notify} /></Dialog> : null}
       {dialog?.kind === "route" ? <RoutedOutboundDialog node={dialog.node} nodes={nodes} isAdmin={isAdmin} userStatus={userRouted} onClose={closeDialog} onComplete={async () => { closeDialog(); notify(isAdmin ? "路由出站已创建" : "私有路由出站已创建"); await load(true); }} /> : null}
+      {dialog?.kind === "qr" ? <NodeShareQRCodeDialog node={dialog.node} notify={notify} onClose={closeDialog} /> : null}
       {dialog?.kind === "temp-sub" ? <TempSubscriptionDialog nodes={dialog.nodes} notify={notify} onClose={closeDialog} /> : null}
       {pending ? <ConfirmDialog title={pending.title} description={pending.description} confirmLabel={pending.confirmLabel} tone={pending.tone} working={working} onCancel={() => !working && setPending(null)} onConfirm={() => void runPending()} /> : null}
     </div>
@@ -1046,12 +1055,13 @@ function ManagedInboundResourceRenameDialog({ resource, onClose, onComplete }: {
   </Dialog>;
 }
 
-function NodeActions({ node, isAdmin, userRouted, onEdit, onConfig, onRelay, onAnyDoor, onCancelRelay, onChain, onResolve, onRegion, onRestore, onRoute, onTempSub, onDelete }: {
+function NodeActions({ node, isAdmin, userRouted, onEdit, onConfig, onQRCode, onRelay, onAnyDoor, onCancelRelay, onChain, onResolve, onRegion, onRestore, onRoute, onTempSub, onDelete }: {
   node: WorkbenchNode;
   isAdmin: boolean;
   userRouted: UserRoutedOutboundStatus | null;
   onEdit: () => void;
   onConfig: () => void;
+  onQRCode: () => void;
   onRelay: () => void;
   onAnyDoor: () => void;
   onCancelRelay: () => void;
@@ -1064,23 +1074,114 @@ function NodeActions({ node, isAdmin, userRouted, onEdit, onConfig, onRelay, onA
   onDelete: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState({ top: 8, left: 8, maxHeight: 320, above: false });
+  const triggerWrapRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const userQuotaAvailable = Boolean(userRouted?.enabled)
     && (userRouted?.quota.max ?? 0) > (userRouted?.quota.used ?? 0)
     && (userRouted?.daily.max ?? 0) > (userRouted?.daily.used ?? 0);
   const canCreateRoute = node.node_type !== "routed" && Boolean(node.original_server && node.inbound_tag) && (isAdmin || userQuotaAvailable);
   const canDeleteUserRoute = !isAdmin && node.node_type === "routed" && node.routed_owner === "user";
-  return <div className="nw-row-actions"><IconButton label={`查看 ${node.node_name} 配置`} onClick={onConfig}><Eye size={16} /></IconButton>{isAdmin ? <IconButton label={`编辑 ${node.node_name}`} onClick={onEdit}><Edit3 size={16} /></IconButton> : null}<div className="nw-row-menu"><IconButton label={`更多 ${node.node_name} 操作`} onClick={() => setOpen((value) => !value)}><MoreHorizontal size={17} /></IconButton>{open ? <div className="nw-row-popover">
-    <button onClick={() => { onTempSub(); setOpen(false); }}><Link2 size={15} />临时订阅</button>
-    {isAdmin && nodeAddress(node).host && nodeAddress(node).port ? <button onClick={() => { onAnyDoor(); setOpen(false); }}><Cable size={15} />任意门转发</button> : null}
-    {isAdmin ? <button onClick={() => { onRelay(); setOpen(false); }}><Shuffle size={15} />{node.relay_orig_server ? "修改中转" : "设置中转"}</button> : null}
-    {isAdmin && node.relay_orig_server ? <button onClick={() => { onCancelRelay(); setOpen(false); }}><RotateCcw size={15} />取消中转</button> : null}
-    {isAdmin ? <button onClick={() => { onChain(); setOpen(false); }}><Route size={15} />{node.chain_proxy_node_id ? "修改链式代理" : "设置链式代理"}</button> : null}
-    {isAdmin && nodeAddress(node).host && !isIPHost(nodeAddress(node).host) ? <button onClick={() => { onResolve(); setOpen(false); }}><Network size={15} />解析域名为 IP</button> : null}
-    {isAdmin ? <button onClick={() => { onRegion(); setOpen(false); }}><MapPin size={15} />地区 Emoji</button> : null}
-    {isAdmin && node.original_domain ? <button onClick={() => { onRestore(); setOpen(false); }}><Globe2 size={15} />恢复原域名</button> : null}
-    {canCreateRoute ? <button onClick={() => { onRoute(); setOpen(false); }}><Route size={15} />{isAdmin ? "创建路由出站" : "创建私有路由出站"}</button> : null}
-    {isAdmin || canDeleteUserRoute ? <button className="is-danger" onClick={() => { onDelete(); setOpen(false); }}><Trash2 size={15} />{canDeleteUserRoute ? "删除私有路由出站" : "删除节点"}</button> : null}
-  </div> : null}</div></div>;
+
+  const positionMenu = useCallback(() => {
+    const trigger = triggerWrapRef.current?.querySelector("button");
+    const menu = menuRef.current;
+    if (!trigger || !menu) return;
+    const margin = 8;
+    const gap = 4;
+    const triggerRect = trigger.getBoundingClientRect();
+    const menuWidth = menu.offsetWidth || 210;
+    const menuHeight = menu.offsetHeight || 360;
+    const spaceBelow = Math.max(0, window.innerHeight - triggerRect.bottom - gap - margin);
+    const spaceAbove = Math.max(0, triggerRect.top - gap - margin);
+    const above = spaceBelow < Math.min(menuHeight, 240) && spaceAbove > spaceBelow;
+    const maxHeight = above ? spaceAbove : spaceBelow;
+    const renderedHeight = Math.min(menuHeight, maxHeight);
+    const maxLeft = Math.max(margin, window.innerWidth - menuWidth - margin);
+    const left = Math.min(Math.max(triggerRect.right - menuWidth, margin), maxLeft);
+    const top = above
+      ? Math.max(margin, triggerRect.top - gap - renderedHeight)
+      : Math.min(triggerRect.bottom + gap, window.innerHeight - margin - renderedHeight);
+    setMenuPosition({ top, left, maxHeight, above });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    positionMenu();
+    menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target || triggerWrapRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setOpen(false);
+      triggerWrapRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", positionMenu);
+    window.addEventListener("scroll", positionMenu, true);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", positionMenu);
+      window.removeEventListener("scroll", positionMenu, true);
+    };
+  }, [open, positionMenu]);
+
+  const choose = (action: () => void) => {
+    triggerWrapRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    setOpen(false);
+    action();
+  };
+  const onMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (!items.length) return;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const offset = event.key === "ArrowDown" ? 1 : -1;
+      items[(current + offset + items.length) % items.length].focus();
+    } else if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      items[event.key === "Home" ? 0 : items.length - 1].focus();
+    }
+  };
+  const menu = open ? createPortal(
+    <div
+      ref={menuRef}
+      className={`nw-row-popover is-portal ${menuPosition.above ? "is-above" : ""}`}
+      role="menu"
+      aria-label={`${node.node_name} 节点操作`}
+      style={{ top: menuPosition.top, left: menuPosition.left, maxHeight: menuPosition.maxHeight }}
+      onKeyDown={onMenuKeyDown}
+    >
+      <button role="menuitem" onClick={() => choose(onQRCode)}><QrCode size={15} />二维码导入</button>
+      <button role="menuitem" onClick={() => choose(onTempSub)}><Link2 size={15} />临时订阅</button>
+      {isAdmin && nodeAddress(node).host && nodeAddress(node).port ? <button role="menuitem" onClick={() => choose(onAnyDoor)}><Cable size={15} />任意门转发</button> : null}
+      {isAdmin ? <button role="menuitem" onClick={() => choose(onRelay)}><Shuffle size={15} />{node.relay_orig_server ? "修改中转" : "设置中转"}</button> : null}
+      {isAdmin && node.relay_orig_server ? <button role="menuitem" onClick={() => choose(onCancelRelay)}><RotateCcw size={15} />取消中转</button> : null}
+      {isAdmin ? <button role="menuitem" onClick={() => choose(onChain)}><Route size={15} />{node.chain_proxy_node_id ? "修改链式代理" : "设置链式代理"}</button> : null}
+      {isAdmin && nodeAddress(node).host && !isIPHost(nodeAddress(node).host) ? <button role="menuitem" onClick={() => choose(onResolve)}><Network size={15} />解析域名为 IP</button> : null}
+      {isAdmin ? <button role="menuitem" onClick={() => choose(onRegion)}><MapPin size={15} />地区 Emoji</button> : null}
+      {isAdmin && node.original_domain ? <button role="menuitem" onClick={() => choose(onRestore)}><Globe2 size={15} />恢复原域名</button> : null}
+      {canCreateRoute ? <button role="menuitem" onClick={() => choose(onRoute)}><Route size={15} />{isAdmin ? "创建路由出站" : "创建私有路由出站"}</button> : null}
+      {isAdmin || canDeleteUserRoute ? <button role="menuitem" className="is-danger" onClick={() => choose(onDelete)}><Trash2 size={15} />{canDeleteUserRoute ? "删除私有路由出站" : "删除节点"}</button> : null}
+    </div>,
+    document.body,
+  ) : null;
+
+  return <div className="nw-row-actions">
+    <IconButton label={`查看 ${node.node_name} 配置`} onClick={onConfig}><Eye size={16} /></IconButton>
+    {isAdmin ? <IconButton label={`编辑 ${node.node_name}`} onClick={onEdit}><Edit3 size={16} /></IconButton> : null}
+    <div ref={triggerWrapRef} className="nw-row-menu">
+      <IconButton label={`更多 ${node.node_name} 操作`} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)}><MoreHorizontal size={17} /></IconButton>
+    </div>
+    {menu}
+  </div>;
 }
 
 export function NodeEditor({ node, offer, onClose, onComplete }: { node?: WorkbenchNode; offer?: ManagedNodeOffer; onClose: () => void; onComplete: (message: string) => void }) {
@@ -2602,6 +2703,75 @@ export function RoutedOutboundDialog({ node, nodes, isAdmin = true, userStatus =
     {mode === "custom" ? <Field label="Xray Outbound JSON" hint="tag 由后端生成，提交时会忽略自定义 tag"><textarea className="nw-code-editor" rows={14} spellCheck={false} value={custom} onChange={(event) => setCustom(event.target.value)} /></Field> : <Field label="生成的 Xray Outbound"><textarea className="nw-code-editor" rows={14} readOnly spellCheck={false} value={preview.value ? JSON.stringify(preview.value, null, 2) : ""} /></Field>}
     <DialogStatusBar><span><ShieldCheck size={15} />{isAdmin ? "创建时会同时写入 outbound、routing rule 和占位客户端" : "仅使用你的子账号，操作受数量和每日次数限制"}</span><span className="nw-dialog-actions-inline"><Button type="button" variant="secondary" onClick={onClose}>取消</Button><Button type="submit" disabled={working || !preview.value}>{working ? <Spinner label="正在创建" /> : <><Route size={16} />{isAdmin ? "创建路由出站" : "创建私有路由出站"}</>}</Button></span></DialogStatusBar>
   </form></Dialog>;
+}
+
+export function NodeShareQRCodeDialog({ node, notify, onClose }: { node: WorkbenchNode; notify: NodesWorkbenchNotify; onClose: () => void }) {
+  const [item, setItem] = useState<NodeURI | null>(null);
+  const [dataURL, setDataURL] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    setItem(null);
+    setDataURL("");
+    try {
+      const response = await api.get<{ item?: NodeURI }>(`/api/admin/nodes/${node.id}/uri`);
+      if (!response.item?.uri) throw new Error("服务端没有返回可用的节点分享链接");
+      setItem(response.item);
+    } catch (reason) {
+      setError(reasonMessage(reason, "节点分享链接生成失败"));
+    } finally {
+      setLoading(false);
+    }
+  }, [node.id]);
+
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (!item?.uri) return;
+    let active = true;
+    void QRCode.toDataURL(item.uri, {
+      errorCorrectionLevel: "M",
+      margin: 2,
+      width: 320,
+      color: { dark: "#111815", light: "#ffffff" },
+    }).then((value) => {
+      if (active) setDataURL(value);
+    }).catch((reason: unknown) => {
+      if (active) setError(reasonMessage(reason, "二维码生成失败"));
+    });
+    return () => { active = false; };
+  }, [item]);
+
+  const copy = async () => {
+    if (!item?.uri) return;
+    try {
+      await copyText(item.uri);
+      notify("节点分享链接已复制");
+    } catch {
+      setError("无法访问剪贴板，请手动选择分享链接");
+    }
+  };
+
+  return <Dialog title="节点二维码" description={`${node.node_name} · ${displayedNodeProtocol(node).toUpperCase()}`} onClose={onClose}>
+    <div className="form-stack">
+      <div className="nw-inline-note nw-qr-warning"><KeyRound size={17} /><span>二维码包含节点凭据，请勿转发或公开截图。</span></div>
+      {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
+      {!error ? <div className="nw-qr-canvas">
+        {dataURL ? <img src={dataURL} alt={`${node.node_name} 节点二维码`} width={320} height={320} /> : <Spinner label={loading ? "正在生成节点链接" : "正在本地生成二维码"} />}
+      </div> : null}
+      {item ? <div className="nw-qr-uri">
+        <span><Badge tone="info">{item.protocol.toUpperCase()}</Badge><strong>{item.node_name}</strong></span>
+        <code aria-label="节点分享 URI">{item.uri}</code>
+        <IconButton label="复制节点分享链接" onClick={() => void copy()}><Copy size={17} /></IconButton>
+      </div> : null}
+      <div className="dialog-actions">
+        <Button variant="secondary" onClick={onClose}>关闭</Button>
+        {item ? <Button variant="secondary" onClick={() => void copy()}><Copy size={16} />复制链接</Button> : null}
+        {dataURL ? <a className="button button-primary" href={dataURL} download={`${safeDownloadBasename(node.node_name)}.png`}><Download size={16} />下载 PNG</a> : null}
+      </div>
+    </div>
+  </Dialog>;
 }
 
 export function TempSubscriptionDialog({ nodes, notify, onClose }: { nodes: WorkbenchNode[]; notify: NodesWorkbenchNotify; onClose: () => void }) {

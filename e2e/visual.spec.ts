@@ -264,6 +264,12 @@ async function mockAPI(
       "/api/setup/status": { needs_setup: false },
       "/api/user/profile": profile,
       "/api/admin/remote-servers": { success: true, servers },
+      "/api/admin/remote-servers/delete-impact": {
+        success: true,
+        server: { id: 1, name: "Hong Kong Edge", ownership: "owned", online: true, agent_uninstall_v2: true, xray_mode: "external", warp_installed: true },
+        counts: { nodes: 7, subaccounts: 4, inbound_configs: 3, outbounds: 2, xray_snapshots: 5, batch_inbounds: 1, batch_outbounds: 1, stat_records: 128, total: 168 },
+        blocker: null,
+      },
       "/api/admin/remote/services/status": { success: true, xray: { installed: true, running: true, version: "25.6.8" }, nginx: { installed: true, running: true, version: "1.26.3" } },
       "/api/admin/remote/agent/version-info": { success: true, current: "0.3.4", latest: "0.3.4", upgrade_available: false },
       "/api/admin/remote/system/info": { success: true, hostname: "edge-hk-01", uptime: 86400, loadavg: "0.12 0.18 0.20", memory: { MemAvailable: "1.8 GiB" } },
@@ -1088,6 +1094,29 @@ test("dashboard reports when every configured server is offline", async ({ page 
   await expect(page.getByRole("button", { name: "在线服务器 0 / 2" })).toBeVisible();
 });
 
+test("user status controls share one desktop column axis", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockAPI(page);
+  await page.goto("/#/users");
+  await expect(page.getByRole("heading", { name: "用户管理" })).toBeVisible();
+
+  const centers = await page.locator(".users-table-surface table").evaluate((table) => {
+    const center = (element: Element | null) => {
+      if (!element) throw new Error("missing user status table element");
+      const rect = element.getBoundingClientRect();
+      return rect.left + rect.width / 2;
+    };
+    const statusCells = table.querySelectorAll("tbody td:nth-child(5)");
+    return [
+      center(table.querySelector("thead th:nth-child(5)")),
+      center(statusCells[0]?.querySelector(".badge") ?? null),
+      center(statusCells[1]?.querySelector(".toggle") ?? null),
+    ];
+  });
+
+  expect(Math.max(...centers) - Math.min(...centers)).toBeLessThanOrEqual(1);
+});
+
 test("a single package fills the package management canvas", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockAPI(page);
@@ -1106,6 +1135,68 @@ test("a single package fills the package management canvas", async ({ page }) =>
   expect(widths.item).toBeCloseTo(widths.grid, 0);
   await expectViewportIntegrity(page, "full-width package card");
 });
+
+for (const viewport of [
+  { name: "desktop", width: 1440, height: 900 },
+  { name: "mobile", width: 390, height: 844 },
+]) {
+  test(`existing Nginx reuse mode stays clear and locked on ${viewport.name}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    const reuseServers = servers.map((server, index) => index === 0 ? { ...server, nginx_mode: "reuse_existing" } : server);
+    await mockAPI(page, traffic, undefined, {
+      "/api/admin/remote-servers": { success: true, servers: reuseServers },
+    });
+    await page.goto("/#/servers");
+
+    await page.getByRole("button", { name: "编辑 Hong Kong Edge" }).click();
+    const editDialog = page.getByRole("dialog", { name: "编辑 Hong Kong Edge" });
+    await expect(editDialog.getByRole("radio", { name: /复用系统已有 Nginx/ })).toHaveAttribute("aria-checked", "true");
+    await expect(editDialog.getByRole("note")).toContainText("不会安装、卸载、覆盖主配置或控制服务启停");
+    await expectViewportIntegrity(page, `${viewport.name} existing Nginx edit mode`);
+    await editDialog.getByRole("button", { name: "取消" }).click();
+    await expect(editDialog).toBeHidden();
+
+    await page.getByRole("button", { name: /^管理(?: Hong Kong Edge)?$/ }).first().click();
+    const operationsDialog = page.getByRole("dialog", { name: "Hong Kong Edge" });
+    await expect(operationsDialog.getByText("Agent 版本", { exact: true })).toBeVisible();
+    await operationsDialog.getByRole("tab", { name: "服务控制" }).click();
+    await expect(operationsDialog.getByRole("note")).toContainText("不接管服务启停");
+    await expect(operationsDialog.getByText("系统托管", { exact: true })).toBeVisible();
+    for (const action of ["启动", "重启", "停止", "卸载"]) {
+      await expect(operationsDialog.getByRole("button", { name: `${action} Nginx` })).toBeDisabled();
+    }
+    await expectViewportIntegrity(page, `${viewport.name} existing Nginx service lock`);
+  });
+
+  test(`complete server deletion stays readable on ${viewport.name}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await mockAPI(page);
+    await page.goto("/#/servers");
+    await page.getByRole("button", { name: "删除 Hong Kong Edge" }).click();
+
+    const dialog = page.getByRole("dialog", { name: "删除服务器" });
+    await expect(dialog.getByText("共 168 条关联数据")).toBeVisible();
+    await expect(dialog.getByText("其他关联").locator("xpath=preceding-sibling::*[1]")).toHaveText("17");
+    await expect(dialog.getByText("远端将清理", { exact: true })).toBeVisible();
+    await expect(dialog.getByText("远端将保留", { exact: true })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "取消" })).toBeVisible();
+    const confirm = dialog.getByRole("button", { name: "卸载 Agent 并删除" });
+    await expect(confirm).toBeVisible();
+    await expect(confirm).toBeEnabled();
+    await expectViewportIntegrity(page, `${viewport.name} complete server deletion`);
+
+    const overflow = await dialog.evaluate((element) => ({
+      dialog: element.scrollWidth - element.clientWidth,
+      metrics: Array.from(element.querySelectorAll<HTMLElement>(".service-delete-metrics > span"))
+        .map((metric) => metric.scrollWidth - metric.clientWidth),
+      actions: (element.querySelector<HTMLElement>(".service-delete-actions")?.scrollWidth ?? 0)
+        - (element.querySelector<HTMLElement>(".service-delete-actions")?.clientWidth ?? 0),
+    }));
+    expect(overflow.dialog).toBeLessThanOrEqual(1);
+    expect(Math.max(...overflow.metrics)).toBeLessThanOrEqual(1);
+    expect(overflow.actions).toBeLessThanOrEqual(1);
+  });
+}
 
 for (const viewport of [
   { name: "desktop", width: 1440, height: 900 },

@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
-import { ServicesWorkbenchPage } from "./services-workbench";
+import { parseSSELog, ServicesWorkbenchPage } from "./services-workbench";
 import type { RemoteServer } from "./types";
 
 vi.hoisted(() => {
@@ -30,6 +30,8 @@ const onlineServer: RemoteServer = {
   traffic_source: "system",
   ws_connected: true,
   encrypted: true,
+  agent_uninstall_v2: true,
+  nginx_mode: "managed",
   inbounds: [{ tag: "vless-in", protocol: "vless", port: 443, uplink: 1, downlink: 2 }],
 };
 
@@ -54,10 +56,41 @@ function mockServerReads(servers: RemoteServer[] = [onlineServer, offlineServer]
   ddnsStatuses?: Record<string, unknown>[];
   lineSpeedtestTargets?: Record<string, unknown>[];
   certificates?: Record<string, unknown>[];
+  deleteImpact?: Record<string, unknown>;
 } = {}) {
   let ddnsStatusRead = 0;
   return vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
     if (path === "/api/admin/remote-servers") return { success: true, servers } as T;
+    if (path.startsWith("/api/admin/remote-servers/delete-impact?server_id=")) {
+      const serverID = Number(new URLSearchParams(path.split("?")[1]).get("server_id"));
+      const server = servers.find((item) => item.id === serverID) ?? servers[0];
+      return (resources.deleteImpact ?? {
+        success: true,
+        server: {
+          id: server?.id,
+          name: server?.name,
+          ownership: server?.is_federated ? "shared" : "owned",
+          online: server ? server.status !== "offline" : false,
+          agent_uninstall_v2: server?.agent_uninstall_v2 ?? null,
+          xray_mode: server?.xray_mode,
+          warp_installed: server?.warp_installed ?? false,
+        },
+        counts: {
+          nodes: 3,
+          subaccounts: 2,
+          inbound_configs: 4,
+          outbounds: 5,
+          xray_snapshots: 6,
+          batch_inbounds: 1,
+          batch_outbounds: 2,
+          node_traffic: 8,
+          user_traffic: 9,
+          stat_records: 10,
+          total: 50,
+        },
+        blocker: null,
+      }) as T;
+    }
     if (path === "/api/admin/dns-providers") return { success: true, providers: resources.dnsProviders ?? [
       { id: 8, name: "Cloudflare 主账号", provider_type: "cloudflare" },
       { ID: 9, Name: "DNSPod 备用", ProviderType: "dnspod" },
@@ -172,6 +205,7 @@ describe("service management workbench", () => {
       ip_address: "203.0.113.13",
       connection_mode: "websocket",
       xray_mode: "embedded",
+      nginx_mode: "managed",
       traffic_limit: 500 * 1024 ** 3,
       traffic_source: "system",
       traffic_stats_mode: "both",
@@ -180,6 +214,32 @@ describe("service management workbench", () => {
       steal_self: false,
     })));
     expect(await screen.findByRole("dialog", { name: "Edge Singapore 接入凭据" })).toBeInTheDocument();
+  });
+
+  it("creates a server in existing Nginx reuse mode", async () => {
+    mockServerReads([onlineServer]);
+    const post = vi.spyOn(api, "post").mockResolvedValue({
+      success: true,
+      server: { ...onlineServer, id: 18, name: "Existing Nginx", nginx_mode: "reuse_existing" },
+      install_command: "safe installer",
+    });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    await screen.findByText("Edge Hong Kong");
+    fireEvent.click(screen.getByRole("button", { name: "添加服务器" }));
+    const dialog = screen.getByRole("dialog", { name: "添加服务器" });
+    const reuse = within(dialog).getByRole("radio", { name: /复用系统已有 Nginx/ });
+    expect(within(dialog).getByRole("radio", { name: /Arcway 管理 Nginx/ })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(reuse);
+    expect(reuse).toHaveAttribute("aria-checked", "true");
+    expect(within(dialog).getByRole("note")).toHaveTextContent("不会安装、卸载、覆盖主配置或控制服务启停");
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "服务器名称" }), { target: { value: "Existing Nginx" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "创建并生成命令" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote-servers/create", expect.objectContaining({
+      name: "Existing Nginx",
+      nginx_mode: "reuse_existing",
+    })));
   });
 
   it("saves an explicitly selected certificate DNS provider when creating a DDNS server", async () => {
@@ -323,6 +383,44 @@ describe("service management workbench", () => {
     })));
   });
 
+  it("loads and saves the existing Nginx reuse mode when editing", async () => {
+    const reuseServer = { ...onlineServer, nginx_mode: "reuse_existing" as const };
+    mockServerReads([reuseServer]);
+    const put = vi.spyOn(api, "put").mockResolvedValue({ success: true, message: "saved" });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 Edge Hong Kong" }));
+    const dialog = screen.getByRole("dialog", { name: "编辑 Edge Hong Kong" });
+    expect(within(dialog).getByRole("radio", { name: /复用系统已有 Nginx/ })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存更改" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/remote-servers/update", expect.objectContaining({
+      id: 11,
+      nginx_mode: "reuse_existing",
+    })));
+  });
+
+  it("locks all Nginx service controls while reusing the system Nginx", async () => {
+    const reuseServer = { ...onlineServer, nginx_mode: "reuse_existing" as const };
+    mockServerReads([reuseServer]);
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(dialog).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(dialog).getByRole("tab", { name: "服务控制" }));
+
+    expect(within(dialog).getByRole("note")).toHaveTextContent("不安装、不卸载、不覆盖主配置");
+    expect(within(dialog).getByText("系统托管")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "启动 Nginx" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "重启 Nginx" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "停止 Nginx" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "卸载 Nginx" })).toBeDisabled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "重启 Nginx" }));
+    expect(post).not.toHaveBeenCalled();
+  });
+
   it("can switch an existing DDNS server back to automatic certificate provider selection", async () => {
     const ddnsServer = { ...onlineServer, pull_address: "agent-hk.example.com", pull_port: 23889, ddns_enabled: true, ddns_provider_id: 8 } as RemoteServer;
     mockServerReads([ddnsServer]);
@@ -401,8 +499,145 @@ describe("service management workbench", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "删除 Edge Hong Kong" }));
     expect(post).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
-    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote-servers/delete", { id: 11 }));
+    expect(screen.queryByRole("checkbox", { name: "同时卸载远端 Agent" })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "卸载 Agent 并删除" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote-servers/delete", { id: 11, uninstall_agent: true }));
+  });
+
+  it("previews the complete impact and retains remote server software and configuration", async () => {
+    mockServerReads([{ ...onlineServer, xray_mode: "embedded" }]);
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true, message: "远端 Agent 已完成清理，服务器记录已删除" });
+    const notify = vi.fn();
+    render(<ServicesWorkbenchPage notify={notify} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "删除 Edge Hong Kong" }));
+    const dialog = screen.getByRole("dialog", { name: "删除服务器" });
+    expect(await within(dialog).findByText("共 50 条关联数据")).toBeInTheDocument();
+    expect(within(dialog).getByText("节点子账号")).toBeInTheDocument();
+    expect(within(dialog).getByText("流量与统计").previousElementSibling).toHaveTextContent("10");
+    expect(within(dialog).getByText("其他关联").previousElementSibling).toHaveTextContent("17");
+    expect(within(dialog).getByText("Arcway Agent 与到期守护服务")).toBeInTheDocument();
+    expect(within(dialog).getByText("Arcway 创建的防火墙与端口规则")).toBeInTheDocument();
+    expect(within(dialog).getByText("Xray 与 Nginx 程序")).toBeInTheDocument();
+    expect(within(dialog).getByText("证书文件")).toBeInTheDocument();
+    expect(within(dialog).getByRole("note")).toHaveTextContent("现有连接将中断");
+    expect(within(dialog).getByRole("note")).toHaveTextContent("配置文件仍会保留");
+    fireEvent.click(within(dialog).getByRole("button", { name: "卸载 Agent 并删除" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote-servers/delete", { id: 11, uninstall_agent: true }));
+    expect(notify).toHaveBeenCalledWith("远端 Agent 已完成清理，服务器记录已删除");
+  });
+
+  it("allows an online HTTP Agent to be probed when deletion is confirmed", async () => {
+    mockServerReads([{ ...onlineServer, ws_connected: false, agent_uninstall_v2: undefined }]);
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true, message: "远端 Agent 已完成清理，服务器记录已删除" });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "删除 Edge Hong Kong" }));
+    const dialog = screen.getByRole("dialog", { name: "删除服务器" });
+    expect(await within(dialog).findByText("删除时将再次检测 Agent 的安全卸载能力。")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "卸载 Agent 并删除" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote-servers/delete", { id: 11, uninstall_agent: true }));
+  });
+
+  it("keeps the deletion dialog and server record visible when remote uninstall fails", async () => {
+    mockServerReads([onlineServer]);
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: false, error: "远端 Agent 卸载失败：权限不足" });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "删除 Edge Hong Kong" }));
+    const dialog = screen.getByRole("dialog", { name: "删除服务器" });
+    fireEvent.click(await within(dialog).findByRole("button", { name: "卸载 Agent 并删除" }));
+
+    await waitFor(() => expect(within(dialog).getAllByRole("alert").some((item) => item.textContent?.includes("远端 Agent 卸载失败：权限不足"))).toBe(true));
+    expect(screen.getByRole("dialog", { name: "删除服务器" })).toBeInTheDocument();
+    expect(screen.getByText("Edge Hong Kong")).toBeInTheDocument();
+  });
+
+  it.each([
+    [{ ...offlineServer, agent_uninstall_v2: true }, "Agent 当前离线，无法安全完成删除。请先恢复 Agent 在线后重试。"],
+    [{ ...onlineServer, id: 14, name: "Legacy Edge", agent_uninstall_v2: false }, "当前 Agent 版本或运行环境不支持安全卸载。请先升级 Agent 或修复运行环境后重试。"],
+  ] as Array<[RemoteServer, string]>)("blocks complete deletion when the owned server cannot be safely uninstalled", async (server, reason) => {
+    mockServerReads([server]);
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: `删除 ${server.name}` }));
+    const dialog = screen.getByRole("dialog", { name: "删除服务器" });
+    expect(await within(dialog).findByText(reason)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "卸载 Agent 并删除" })).toBeDisabled();
+  });
+
+  it("removes only the local relationship for a shared server", async () => {
+    const sharedServer = { ...onlineServer, id: 13, name: "Shared Edge", is_federated: true };
+    mockServerReads([sharedServer]);
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true, message: "共享接入已解除" });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "删除 Shared Edge" }));
+    const dialog = await screen.findByRole("dialog", { name: "解除共享接入" });
+    expect(within(dialog).getByText("远端保持原状")).toBeInTheDocument();
+    expect(within(dialog).queryByText("远端将清理")).not.toBeInTheDocument();
+    fireEvent.click(await within(dialog).findByRole("button", { name: "解除共享接入" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote-servers/delete", { id: 13 }));
+  });
+
+  it("resumes a persisted deletion after the remote Agent has already been removed", async () => {
+    mockServerReads([{ ...offlineServer, id: 15, name: "Pending Cleanup" }], { deleteImpact: {
+      success: true,
+      server: { id: 15, name: "Pending Cleanup", ownership: "owned", online: false, agent_uninstall_v2: false, xray_mode: "external" },
+      counts: { nodes: 1, total: 2 },
+      blocker: null,
+      deletion_task: { status: "agent_uninstalled", message: "远端清理已确认" },
+    } });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true, message: "删除完成" });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "删除 Pending Cleanup" }));
+    const dialog = screen.getByRole("dialog", { name: "删除服务器" });
+    expect(await within(dialog).findByText("远端 Agent 已卸载，仅待清理面板数据")).toBeInTheDocument();
+    const finish = within(dialog).getByRole("button", { name: "完成删除" });
+    expect(finish).toBeEnabled();
+    fireEvent.click(finish);
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote-servers/delete", { id: 15, uninstall_agent: true }));
+  });
+
+  it("continues waiting for an already dispatched deletion even when the Agent is now offline", async () => {
+    mockServerReads([{ ...offlineServer, id: 16, name: "Dispatched Cleanup" }], { deleteImpact: {
+      success: true,
+      server: { id: 16, name: "Dispatched Cleanup", ownership: "owned", online: false, agent_uninstall_v2: true, xray_mode: "external" },
+      counts: { total: 1 },
+      blocker: null,
+      deletion_task: { status: "dispatched", message: "等待远端完成回调" },
+    } });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "删除 Dispatched Cleanup" }));
+    const dialog = screen.getByRole("dialog", { name: "删除服务器" });
+    expect(await within(dialog).findByText("已有卸载任务，继续操作不会重复下发")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "继续等待并删除" })).toBeEnabled();
+  });
+
+  it("respects a backend blocker after the remote Agent has been removed", async () => {
+    mockServerReads([{ ...offlineServer, id: 17, name: "Referenced Edge" }], { deleteImpact: {
+      success: true,
+      server: { id: 17, name: "Referenced Edge", ownership: "owned", online: false, agent_uninstall_v2: false, xray_mode: "external" },
+      counts: { total: 3 },
+      blocker: "仍有 2 条转发规则引用此服务器，请先解除引用。",
+      deletion_task: { status: "agent_uninstalled" },
+    } });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "删除 Referenced Edge" }));
+    const dialog = screen.getByRole("dialog", { name: "删除服务器" });
+    expect(await within(dialog).findByText("仍有 2 条转发规则引用此服务器，请先解除引用。")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "完成删除" })).toBeDisabled();
+  });
+
+  it("treats SSE error events as failures", () => {
+    expect(() => parseSSELog('data: {"type":"error","message":"Agent 不可达"}\n\n')).toThrow("Agent 不可达");
   });
 
   it("creates an inbound on the selected server with structured fields and advanced JSON", async () => {
@@ -512,8 +747,8 @@ describe("service management workbench", () => {
     }));
   });
 
-  it("creates VLESS WS TLS through the existing Nginx-managed inbound contract", async () => {
-    mockServerReads([onlineServer], { inbounds: [] });
+  it("creates VLESS WS TLS while clearly preserving existing Nginx reuse mode", async () => {
+    mockServerReads([{ ...onlineServer, nginx_mode: "reuse_existing" }], { inbounds: [] });
     const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
       if (path === "/api/admin/xray/generate-x25519") return { privateKey: "A".repeat(43), publicKey: "B".repeat(43) } as T;
       if (path === "/api/admin/remote/inbounds?server_id=11") return { success: true, message: "added" } as T;
@@ -527,6 +762,7 @@ describe("service management workbench", () => {
     fireEvent.click(within(dialog).getByRole("tab", { name: "入站" }));
     fireEvent.click(await within(dialog).findByRole("button", { name: "添加入站" }));
     fireEvent.click(within(dialog).getByRole("tab", { name: /VLESS \+ WS \+ TLS/ }));
+    expect(within(dialog).getByRole("note")).toHaveTextContent("此入站将复用系统已有 Nginx");
     fireEvent.change(within(dialog).getByRole("textbox", { name: "客户端 UUID" }), { target: { value: "123e4567-e89b-12d3-a456-426614174000" } });
     fireEvent.change(within(dialog).getByRole("textbox", { name: "WebSocket 路径" }), { target: { value: "/ws/arcway" } });
     expect(within(dialog).getByRole("textbox", { name: "TLS 节点域名" })).toHaveValue("hk.example.com");

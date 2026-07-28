@@ -1,5 +1,7 @@
 export type Theme = "light" | "dark";
 
+export type NginxMode = "managed" | "reuse_existing";
+
 export interface Session {
   token: string;
   expires_at: string;
@@ -36,12 +38,14 @@ export interface RemoteServer {
   xray_running: boolean;
   xray_version?: string;
   xray_mode: string;
+  nginx_mode?: NginxMode;
   traffic_limit: number;
   traffic_used: number;
   traffic_stats_mode: string;
   traffic_source: string;
   ws_connected: boolean;
   encrypted: boolean;
+  agent_uninstall_v2?: boolean;
   warp_installed?: boolean;
   is_federated?: boolean;
   federation_prefix?: string;

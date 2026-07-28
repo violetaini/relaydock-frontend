@@ -28,13 +28,14 @@ import {
   Square,
   TerminalSquare,
   Trash2,
+  TriangleAlert,
   UploadCloud,
   Wifi,
   WifiOff,
   Wrench,
 } from "lucide-react";
 import { api, request } from "./api";
-import type { RemoteServer, ServerListResponse, SharedServerToken } from "./types";
+import type { NginxMode, RemoteServer, ServerListResponse, SharedServerToken } from "./types";
 import {
   buildTrojanInbound,
   buildWireGuardClientConfig,
@@ -93,6 +94,52 @@ interface ActionResponse {
   message?: string;
   error?: string;
   output?: string;
+}
+
+interface DeleteImpactCounts {
+  nodes?: number;
+  subaccounts?: number;
+  inbound_configs?: number;
+  outbounds?: number;
+  xray_snapshots?: number;
+  batch_inbounds?: number;
+  batch_outbounds?: number;
+  node_traffic?: number;
+  user_traffic?: number;
+  user_email_traffic?: number;
+  traffic_snapshots?: number;
+  node_traffic_snapshots?: number;
+  user_traffic_snapshots?: number;
+  system_traffic_snapshots?: number;
+  stat_records?: number;
+  total?: number;
+}
+
+type DeleteTaskStatus = "pending" | "dispatched" | "agent_uninstalled" | "failed";
+
+interface DeleteImpact {
+  server?: {
+    id?: number;
+    name?: string;
+    ownership?: "owned" | "shared";
+    online?: boolean;
+    agent_uninstall_v2?: boolean | null;
+    xray_mode?: string;
+    warp_installed?: boolean;
+  };
+  counts?: DeleteImpactCounts;
+  blocker?: string | null;
+  deletion_task?: {
+    status?: DeleteTaskStatus;
+    last_error?: string;
+    message?: string;
+    retry_message?: string;
+    expires_at?: string;
+  };
+}
+
+interface DeleteImpactResponse extends ActionResponse, DeleteImpact {
+  impact?: DeleteImpact;
 }
 
 interface LineSpeedtestResult {
@@ -302,6 +349,7 @@ interface CreateServerForm {
   listenPort: string;
   domain: string;
   xrayMode: string;
+  nginxMode: NginxMode;
   trafficLimitGB: string;
   trafficUsedGB: string;
   trafficResetDay: string;
@@ -325,6 +373,7 @@ const emptyCreateForm: CreateServerForm = {
   listenPort: "23889",
   domain: "",
   xrayMode: "external",
+  nginxMode: "managed",
   trafficLimitGB: "",
   trafficUsedGB: "",
   trafficResetDay: "1",
@@ -398,13 +447,13 @@ function bytesToGB(value?: number): string {
   return (value / 1024 ** 3).toFixed(2).replace(/\.00$/, "");
 }
 
-function parseSSELog(raw: string): string {
+export function parseSSELog(raw: string): string {
   if (!raw.trim()) return "操作已完成";
   const lines = raw.split("\n").map((line) => line.trim()).filter(Boolean);
   const messages: string[] = [];
   for (const line of lines) {
     const value = line.startsWith("data:") ? line.slice(5).trim() : line;
-    let parsed: { message?: string; output?: string; error?: string; hint?: string; success?: boolean };
+    let parsed: { type?: string; message?: string; output?: string; error?: string; hint?: string; success?: boolean };
     try {
       parsed = JSON.parse(value) as typeof parsed;
     } catch {
@@ -413,7 +462,7 @@ function parseSSELog(raw: string): string {
     }
     const resultText = parsed.error || parsed.message || parsed.output || parsed.hint;
     if (resultText) messages.push(resultText);
-    if (parsed.success === false) throw new Error(resultText || "远端操作失败");
+    if (parsed.success === false || parsed.type?.toLowerCase() === "error") throw new Error(resultText || "远端操作失败");
   }
   return messages.slice(-4).join("\n") || "操作已完成";
 }
@@ -642,6 +691,8 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
   const [credentialsLoading, setCredentialsLoading] = useState<number | null>(null);
   const [deleting, setDeleting] = useState<ManagedServer | null>(null);
   const [deleteWorking, setDeleteWorking] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+  const [deleteRefreshVersion, setDeleteRefreshVersion] = useState(0);
   const [upgrade, setUpgrade] = useState<UpgradeState | null>(null);
 
   const load = useCallback(async () => {
@@ -705,16 +756,36 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
     }
   };
 
-  const deleteServer = async () => {
+  const openDeleteServer = (server: ManagedServer) => {
+    setDeleting(server);
+    setDeleteError("");
+    setDeleteRefreshVersion(0);
+  };
+
+  const closeDeleteServer = () => {
+    if (deleteWorking) return;
+    setDeleting(null);
+    setDeleteError("");
+    setDeleteRefreshVersion(0);
+  };
+
+  const deleteServer = async (shared = Boolean(deleting?.is_federated)) => {
     if (!deleting) return;
     setDeleteWorking(true);
+    setDeleteError("");
     try {
-      assertSuccess(await api.post<ActionResponse>("/api/admin/remote-servers/delete", { id: deleting.id }), "删除服务器失败");
-      notify(`已从控制端删除 ${deleting.name}`);
+      const payload = shared ? { id: deleting.id } : { id: deleting.id, uninstall_agent: true };
+      const response = assertSuccess(await api.post<ActionResponse>("/api/admin/remote-servers/delete", payload), "删除服务器失败");
+      notify(response.message || (shared ? `已解除 ${deleting.name} 的共享接入` : `已卸载 ${deleting.name} 的 Agent 并删除关联数据`));
       setDeleting(null);
+      setDeleteError("");
+      setDeleteRefreshVersion(0);
       await load();
     } catch (reason) {
-      notify(messageFrom(reason, "删除服务器失败"), "error");
+      const message = messageFrom(reason, "删除服务器失败");
+      setDeleteError(message);
+      setDeleteRefreshVersion((version) => version + 1);
+      notify(message, "error");
     } finally {
       setDeleteWorking(false);
     }
@@ -784,10 +855,10 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
         <Surface><EmptyState icon={<Server size={24} />} title={servers.length ? "没有匹配的服务器" : "尚未接入服务器"} description={servers.length ? "调整搜索词或状态筛选" : "创建服务器后会得到 Agent 安装命令"} action={!servers.length ? <Button onClick={() => setCreateOpen(true)}><Plus size={16} />添加服务器</Button> : undefined} /></Surface>
       ) : view === "cards" ? (
         <div className="services-card-grid">
-          {visible.map((server) => <ServerCard key={server.id} server={server} checked={selected.includes(server.id)} credentialsLoading={credentialsLoading === server.id} onCheck={(checked) => setSelected((current) => checked ? [...new Set([...current, server.id])] : current.filter((id) => id !== server.id))} onOpen={() => setDetails(server)} onEdit={() => setEditing(server)} onCredentials={() => void revealCredentials(server)} onDelete={() => setDeleting(server)} />)}
+          {visible.map((server) => <ServerCard key={server.id} server={server} checked={selected.includes(server.id)} credentialsLoading={credentialsLoading === server.id} onCheck={(checked) => setSelected((current) => checked ? [...new Set([...current, server.id])] : current.filter((id) => id !== server.id))} onOpen={() => setDetails(server)} onEdit={() => setEditing(server)} onCredentials={() => void revealCredentials(server)} onDelete={() => openDeleteServer(server)} />)}
         </div>
       ) : (
-        <ServerTable servers={visible} selected={selected} credentialsLoading={credentialsLoading} onSelect={setSelected} onOpen={setDetails} onEdit={setEditing} onCredentials={(server) => void revealCredentials(server)} onDelete={setDeleting} />
+        <ServerTable servers={visible} selected={selected} credentialsLoading={credentialsLoading} onSelect={setSelected} onOpen={setDetails} onEdit={setEditing} onCredentials={(server) => void revealCredentials(server)} onDelete={openDeleteServer} />
       )}
 
       {createOpen ? <CreateServerDialog onClose={() => setCreateOpen(false)} onCreated={async (result) => { setCreateOpen(false); await load(); if (result.server && result.install_command) setCredentials({ server: result.server, token: result.server.token ?? "", pullToken: result.server.pull_token ?? "", agentToken: result.server.agent_token ?? "", command: result.install_command }); notify("服务器已创建"); }} /> : null}
@@ -795,10 +866,175 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
       {editing ? <EditServerDialog server={editing} onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); notify("服务器设置已保存"); await load(); }} /> : null}
       {details ? <ServerOperationsDialog server={details} notify={notify} onClose={() => setDetails(null)} onChanged={load} onUpgrade={() => void runUpgrade([details])} /> : null}
       {credentials ? <CredentialsDialog value={credentials} notify={notify} onClose={() => setCredentials(null)} /> : null}
-      {deleting ? <ConfirmDialog title="删除服务器" description={`将从控制端删除“${deleting.name}”及其关联记录；远端 Agent 不会自动卸载。`} confirmLabel="确认删除" working={deleteWorking} onCancel={() => !deleteWorking && setDeleting(null)} onConfirm={() => void deleteServer()} /> : null}
+      {deleting ? <DeleteServerDialog server={deleting} working={deleteWorking} error={deleteError} refreshVersion={deleteRefreshVersion} onCancel={closeDeleteServer} onConfirm={(shared) => void deleteServer(shared)} /> : null}
       {upgrade ? <UpgradeDialog state={upgrade} servers={servers} onClose={() => !upgrade.running && setUpgrade(null)} /> : null}
     </div>
   );
+}
+
+function DeleteServerDialog({ server, working, error, refreshVersion, onCancel, onConfirm }: {
+  server: ManagedServer;
+  working: boolean;
+  error: string;
+  refreshVersion: number;
+  onCancel: () => void;
+  onConfirm: (shared: boolean) => void;
+}) {
+  const [impact, setImpact] = useState<DeleteImpact | null>(null);
+  const [impactLoading, setImpactLoading] = useState(true);
+  const [impactError, setImpactError] = useState("");
+  const [impactReload, setImpactReload] = useState(0);
+
+  useEffect(() => {
+    let current = true;
+    setImpactLoading(true);
+    setImpactError("");
+    void api.get<DeleteImpactResponse>(`/api/admin/remote-servers/delete-impact?server_id=${server.id}`)
+      .then((response) => {
+        if (!current) return;
+        const checked = assertSuccess(response, "读取删除影响失败");
+        setImpact(checked.impact ?? checked);
+      })
+      .catch((reason) => {
+        if (!current) return;
+        setImpact(null);
+        setImpactError(messageFrom(reason, "无法核对删除范围"));
+      })
+      .finally(() => {
+        if (current) setImpactLoading(false);
+      });
+    return () => { current = false; };
+  }, [impactReload, refreshVersion, server.id]);
+
+  const ownership = impact?.server?.ownership ?? (server.is_federated ? "shared" : "owned");
+  const shared = ownership === "shared";
+  const online = impact?.server?.online ?? isConnected(server);
+  const uninstallSupport = impact?.server?.agent_uninstall_v2 ?? server.agent_uninstall_v2;
+  const xrayMode = impact?.server?.xray_mode ?? server.xray_mode;
+  const taskStatus = impact?.deletion_task?.status;
+  const remoteAlreadyUninstalled = taskStatus === "agent_uninstalled";
+  const taskAlreadyRunning = taskStatus === "pending" || taskStatus === "dispatched";
+  const capabilityBlocker = impact?.blocker
+    || (!shared && !remoteAlreadyUninstalled && !taskAlreadyRunning
+      ? !online
+        ? "Agent 当前离线，无法安全完成删除。请先恢复 Agent 在线后重试。"
+        : uninstallSupport === false
+          ? "当前 Agent 版本或运行环境不支持安全卸载。请先升级 Agent 或修复运行环境后重试。"
+          : ""
+      : "");
+  const confirmDisabled = working || impactLoading || Boolean(impactError) || Boolean(capabilityBlocker);
+  const counts = impact?.counts;
+  const trafficCount = typeof counts?.stat_records === "number" ? counts.stat_records : sumKnownCounts(counts, [
+    "node_traffic", "user_traffic", "user_email_traffic", "traffic_snapshots", "node_traffic_snapshots",
+    "user_traffic_snapshots", "system_traffic_snapshots",
+  ]);
+  const batchCount = sumKnownCounts(counts, ["batch_inbounds", "batch_outbounds"]);
+  const displayedCount = sumNumbers([
+    counts?.nodes, counts?.subaccounts, counts?.inbound_configs, counts?.outbounds,
+    counts?.xray_snapshots, batchCount, trafficCount,
+  ]);
+  const otherCount = typeof counts?.total === "number"
+    ? Math.max(0, counts.total - displayedCount)
+    : undefined;
+  const metrics: Array<[string, number | undefined]> = [
+    ["节点", counts?.nodes],
+    ["节点子账号", counts?.subaccounts],
+    ["入站", counts?.inbound_configs],
+    ["出站", counts?.outbounds],
+    ["配置快照", counts?.xray_snapshots],
+    ["批量记录", batchCount],
+    ["流量与统计", trafficCount],
+    ["其他关联", otherCount],
+  ];
+  const taskMessage = impact?.deletion_task?.retry_message || impact?.deletion_task?.message || impact?.deletion_task?.last_error;
+  const confirmLabel = shared
+    ? "解除共享接入"
+    : taskStatus === "agent_uninstalled"
+      ? "完成删除"
+      : taskStatus === "failed"
+        ? "重新卸载并删除"
+        : taskStatus === "pending" || taskStatus === "dispatched"
+          ? "继续等待并删除"
+          : "卸载 Agent 并删除";
+
+  return (
+    <Dialog
+      title={shared ? "解除共享接入" : "删除服务器"}
+      description={shared ? "仅解除当前控制端与共享服务器的关联。" : "将卸载远端 Agent，并永久删除控制端关联数据。"}
+      onClose={onCancel}
+      dismissible={!working}
+      wide
+    >
+      <div className={`service-delete-summary ${shared ? "is-shared" : ""}`}>
+        <span>{shared ? <Cloud size={22} /> : <TriangleAlert size={22} />}</span>
+        <div>
+          <strong>{shared ? `解除“${server.name}”的共享接入` : `永久删除“${server.name}”`}</strong>
+          <p>{shared ? "本地的共享映射与关联数据将被移除，服务器拥有方及远端服务不会受到影响。" : "此操作会先安全卸载 Arcway Agent；只有远端确认完成后，控制端才会删除关联记录。"}</p>
+        </div>
+      </div>
+
+      <section className="service-delete-impact" aria-label="删除影响预览">
+        <div className="service-delete-section-head">
+          <span><Trash2 size={16} /><strong>控制端将永久删除</strong></span>
+          {impactLoading ? <Spinner label="正在核对删除范围" /> : impactError ? <Button type="button" variant="ghost" onClick={() => setImpactReload((version) => version + 1)}><RefreshCw size={14} />重新核对</Button> : <small>{typeof counts?.total === "number" ? `共 ${counts.total} 条关联数据` : "影响范围已核对"}</small>}
+        </div>
+        {impactError ? <div className="service-delete-preview-error" role="alert"><TriangleAlert size={16} /><span><strong>无法读取删除影响</strong><small>{impactError}</small></span></div> : (
+          <div className={`service-delete-metrics ${impactLoading ? "is-loading" : ""}`} aria-busy={impactLoading}>
+            {metrics.map(([label, value]) => <span key={label}><strong>{impactLoading ? "·" : formatImpactCount(value)}</strong><small>{label}</small></span>)}
+          </div>
+        )}
+      </section>
+
+      {!shared ? <>
+        <div className="service-delete-scope-grid">
+          <section className="service-delete-scope is-cleaned">
+            <span><TerminalSquare size={18} /></span>
+            <div><strong>远端将清理</strong><ul><li>Arcway Agent 与到期守护服务</li><li>WARP 及 Agent 管理的出站</li><li>Arcway 创建的防火墙与端口规则</li></ul></div>
+          </section>
+          <section className="service-delete-scope is-preserved">
+            <span><ShieldCheck size={18} /></span>
+            <div><strong>远端将保留</strong><ul><li>Xray 与 Nginx 程序</li><li>证书文件</li><li>Xray/Nginx 配置与其他非 Arcway 数据</li></ul></div>
+          </section>
+        </div>
+
+        <div className="service-delete-runtime-note" role="note">
+          <TriangleAlert size={16} />
+          <span>{xrayMode === "embedded" ? "当前为内置 Xray：卸载 Agent 后代理服务会停止，现有连接将中断，但 Xray 配置文件仍会保留。" : "当前为外置 Xray：卸载 Agent 不会停止 Xray，它仍可能继续监听并提供代理服务。"}</span>
+        </div>
+      </> : <div className="service-delete-shared-note"><Network size={17} /><span><strong>远端保持原状</strong><small>不会卸载服务器拥有方的 Agent，也不会修改其 Xray、Nginx、防火墙或证书。</small></span></div>}
+
+      {!shared && taskStatus ? <div className={`service-delete-task-status is-${taskStatus}`} role="status">
+        {taskStatus === "agent_uninstalled" ? <Check size={17} /> : taskStatus === "failed" ? <TriangleAlert size={17} /> : <RefreshCw className="service-spin" size={17} />}
+        <span>
+          <strong>{taskStatus === "agent_uninstalled" ? "远端 Agent 已卸载，仅待清理面板数据" : taskStatus === "failed" ? "上次卸载未完成" : "已有卸载任务，继续操作不会重复下发"}</strong>
+          {taskMessage ? <small>{taskMessage}</small> : null}
+        </span>
+      </div> : null}
+
+      {capabilityBlocker ? <div className="service-delete-blocker" role="alert"><TriangleAlert size={17} /><span><strong>暂时无法删除</strong><small>{capabilityBlocker}</small></span></div> : uninstallSupport == null && !shared && !impactLoading && !impactError ? <div className="service-delete-capability-note"><RefreshCw size={15} /><span>删除时将再次检测 Agent 的安全卸载能力。</span></div> : null}
+
+      {error ? <div className="service-delete-error" role="alert"><TriangleAlert size={16} /><span>{error}</span></div> : null}
+      <div className="dialog-actions service-delete-actions">
+        <small>{shared ? "解除后可由拥有方重新分享接入" : "删除过程失败时，服务器记录会保留以便重试"}</small>
+        <Button type="button" variant="secondary" onClick={onCancel} disabled={working}>取消</Button>
+        <Button type="button" variant="danger" onClick={() => onConfirm(shared)} disabled={confirmDisabled}>{working ? <Spinner label={shared ? "正在解除共享接入" : remoteAlreadyUninstalled ? "正在清理面板数据" : "正在卸载并删除"} /> : <><Trash2 size={16} />{confirmLabel}</>}</Button>
+      </div>
+    </Dialog>
+  );
+}
+
+function sumKnownCounts(counts: DeleteImpactCounts | undefined, keys: Array<keyof DeleteImpactCounts>): number | undefined {
+  if (!counts) return undefined;
+  const known = keys.map((key) => counts[key]).filter((value): value is number => typeof value === "number");
+  return known.length ? known.reduce((total, value) => total + value, 0) : undefined;
+}
+
+function sumNumbers(values: Array<number | undefined>): number {
+  return values.reduce<number>((total, value) => total + (typeof value === "number" ? value : 0), 0);
+}
+
+function formatImpactCount(value: number | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value).toLocaleString() : "—";
 }
 
 function ServerCard({ server, checked, credentialsLoading, onCheck, onOpen, onEdit, onCredentials, onDelete }: {
@@ -905,6 +1141,7 @@ function ServerFormFields({ form, setForm, editing = false }: { form: CreateServ
     <div className="form-grid"><Field label="Agent 监听端口"><input type="number" min="1024" max="65534" value={form.listenPort} onChange={(event) => patch("listenPort", event.target.value)} disabled={editing} /></Field><Field label="Pull 端口"><input type="number" min="1" max="65535" value={form.pullPort} onChange={(event) => patch("pullPort", event.target.value)} disabled={form.connectionMode !== "pull"} /></Field></div>
     {!editing && form.connectionMode === "pull" ? <Field label="可选 Agent 认证 Token" hint="留空时由控制端安全生成"><input value={form.pullToken} onChange={(event) => patch("pullToken", event.target.value)} /></Field> : null}
     <div className="form-grid"><Field label="节点域名" hint={form.stealMode === "default" ? undefined : "Tunnel/Fallback 接管模式必填"}><input required={form.stealMode !== "default"} value={form.domain} onChange={(event) => patch("domain", event.target.value)} placeholder="hk.example.com" /></Field><Field label="Xray 模式"><select value={form.xrayMode} onChange={(event) => patch("xrayMode", event.target.value)}><option value="external">外置 Xray</option><option value="embedded">内嵌 Xray</option></select></Field></div>
+    <fieldset className="service-nginx-mode"><legend>Nginx 管理模式</legend><div className="service-nginx-mode-options" role="radiogroup" aria-label="Nginx 管理模式"><button type="button" role="radio" aria-checked={form.nginxMode === "managed"} className={form.nginxMode === "managed" ? "is-active" : ""} onClick={() => patch("nginxMode", "managed")}><Server size={18} /><span><strong>Arcway 管理 Nginx</strong><small>由面板安装、启停、更新配置</small></span></button><button type="button" role="radio" aria-checked={form.nginxMode === "reuse_existing"} className={form.nginxMode === "reuse_existing" ? "is-active" : ""} onClick={() => patch("nginxMode", "reuse_existing")}><ShieldCheck size={18} /><span><strong>复用系统已有 Nginx</strong><small>只下发独立站点配置，不接管服务</small></span></button></div>{form.nginxMode === "reuse_existing" ? <div className="service-nginx-mode-note" role="note"><ShieldCheck size={17} /><span><strong>现有 Nginx 保持系统托管</strong><small>Arcway 不会安装、卸载、覆盖主配置或控制服务启停；部署前会预检配置，失败时由服务端回滚。</small></span></div> : null}</fieldset>
     <div className="form-grid"><Field label="流量限额（GB）" hint="0 或留空表示不限"><input type="number" min="0" step="0.01" value={form.trafficLimitGB} onChange={(event) => patch("trafficLimitGB", event.target.value)} /></Field><Field label={editing ? "已用流量校准（GB，可选）" : "初始已用流量（GB）"}><input type="number" min="0" step="0.01" value={form.trafficUsedGB} onChange={(event) => patch("trafficUsedGB", event.target.value)} placeholder={editing ? "留空保持不变" : "0"} /></Field></div>
     <div className="form-grid"><Field label="每月重置日" hint="0 表示不自动重置"><input type="number" min="0" max="31" value={form.trafficResetDay} onChange={(event) => patch("trafficResetDay", event.target.value)} /></Field><Field label="服务器流量来源"><select value={form.trafficSource} onChange={(event) => patch("trafficSource", event.target.value)}><option value="system">系统网卡（VPS 计费口径）</option><option value="xray">Xray 节点聚合</option></select></Field></div>
     <Field label="流量统计方向"><select value={form.trafficStatsMode} onChange={(event) => patch("trafficStatsMode", event.target.value)}><option value="both">上行 + 下行</option><option value="max">上行 / 下行取较大值</option><option value="upload">仅上行</option><option value="download">仅下行</option></select></Field>
@@ -933,6 +1170,7 @@ function CreateServerDialog({ onClose, onCreated }: { onClose: () => void; onCre
         listen_port: Number(form.listenPort) || 0,
         domain: form.domain.trim(),
         xray_mode: form.xrayMode,
+        nginx_mode: form.nginxMode,
         traffic_limit: gbToBytes(form.trafficLimitGB),
         traffic_used_offset: gbToBytes(form.trafficUsedGB),
         traffic_reset_day: Number(form.trafficResetDay) || 0,
@@ -970,6 +1208,7 @@ function formFromServer(server: ManagedServer): CreateServerForm {
     listenPort: String(server.listen_port || 23889),
     domain: server.domain ?? "",
     xrayMode: server.xray_mode || "external",
+    nginxMode: server.nginx_mode || "managed",
     trafficLimitGB: bytesToGB(server.traffic_limit),
     trafficUsedGB: "",
     trafficResetDay: String(server.traffic_reset_day ?? 0),
@@ -1009,6 +1248,7 @@ function EditServerDialog({ server, onClose, onSaved }: { server: ManagedServer;
         pull_port: updatesPullConfig ? Number(form.pullPort) || 23889 : 0,
         pull_token: pullToken,
         xray_mode: form.xrayMode,
+        nginx_mode: form.nginxMode,
         traffic_stats_mode: form.trafficStatsMode,
         traffic_source: form.trafficSource,
         ipv6_enabled: form.ipv6Enabled,
@@ -1111,6 +1351,7 @@ function ServerOperationsDialog({ server, notify, onClose, onChanged, onUpgrade 
   const [shares, setShares] = useState<SharedServerToken[]>([]);
   const [shareLabel, setShareLabel] = useState("");
   const [newShareToken, setNewShareToken] = useState("");
+  const reusesExistingNginx = server.nginx_mode === "reuse_existing";
 
   const refreshDDNSStatus = useCallback(async () => {
     const result = assertSuccess(await api.get<DDNSStatusResponse>(`/api/admin/servers/${server.id}/ddns-status`), "读取 DDNS 状态失败");
@@ -1166,6 +1407,10 @@ function ServerOperationsDialog({ server, notify, onClose, onChanged, onUpgrade 
   };
 
   const serviceAction = async (service: "xray" | "nginx", action: "start" | "stop" | "restart" | "install" | "remove") => {
+    if (service === "nginx" && reusesExistingNginx) {
+      setError("当前服务器复用系统已有 Nginx，Arcway 不会安装、卸载或控制该服务。");
+      return;
+    }
     const key = `${service}-${action}`;
     setWorking(key);
     setError("");
@@ -1295,9 +1540,9 @@ function ServerOperationsDialog({ server, notify, onClose, onChanged, onUpgrade 
 
   return <Dialog title={server.name} description={`${server.domain || server.ip_address || "地址待上报"} · ${isConnected(server) ? "Agent 在线" : "Agent 离线"}`} onClose={() => !working && onClose()} wide extraWide><div className="service-operation-tabs" role="tablist">{tabs.map((item) => <button key={item.key} role="tab" aria-selected={tab === item.key} className={tab === item.key ? "is-active" : ""} onClick={() => setTab(item.key)}>{item.icon}{item.label}</button>)}</div>{error ? <ErrorState message={error} onRetry={() => void loadStatus()} /> : null}{loading ? <div className="center-state"><Spinner label="正在读取 Agent 状态" /></div> : null}
     {!loading && tab === "overview" ? <div className="service-overview"><div className="service-overview-grid"><InfoTile label="连接状态" value={isConnected(server) ? "在线" : "离线"} detail={server.encrypted ? "加密 WebSocket" : server.connection_mode} icon={<Wifi size={18} />} /><InfoTile label="Agent 版本" value={version?.current || system?.agent_version || "未知"} detail={version?.latest ? `最新 ${version.latest}` : version?.latest_error || "未读取最新版本"} icon={<UploadCloud size={18} />} /><InfoTile label="主机名" value={system?.hostname || server.name} detail={system?.uptime ? `运行 ${Math.floor(Number(system.uptime) / 3600)} 小时` : relativeTime(server.last_heartbeat)} icon={<Server size={18} />} /><InfoTile label="系统负载" value={system?.loadavg?.split(" ").slice(0, 3).join(" / ") || "暂无"} detail={system?.memory?.MemAvailable ? `可用内存 ${system.memory.MemAvailable}` : "Agent 未上报内存"} icon={<Gauge size={18} />} /></div><Surface className="service-address-panel"><h3>连接与流量</h3><dl><div><dt>IPv4</dt><dd>{server.ip_address || "未上报"}</dd></div><div><dt>IPv6</dt><dd>{server.ipv6_enabled ? server.ip_address_v6 || "未上报" : "已关闭"}</dd></div><div><dt>节点域名</dt><dd>{server.domain || "未设置"}</dd></div><div><dt>Agent 端口</dt><dd>{server.listen_port || 23889}</dd></div><div><dt>统计口径</dt><dd>{server.traffic_source === "system" ? "系统网卡" : "Xray 聚合"} / {server.traffic_stats_mode || "both"}</dd></div><div><dt>本期流量</dt><dd>{formatBytes(server.traffic_used)}{server.traffic_limit ? ` / ${formatBytes(server.traffic_limit)}` : "（不限）"}</dd></div></dl></Surface><DDNSOverviewPanel status={ddnsStatus} working={working === "ddns-test"} onRetry={() => void triggerDDNS()} /><div className="dialog-actions"><Button variant="secondary" onClick={() => void loadStatus()}><RefreshCw size={16} />刷新状态</Button><Button onClick={onUpgrade} disabled={!isConnected(server)}><UploadCloud size={16} />{version?.upgrade_available ? "升级 Agent" : "重新安装 / 升级 Agent"}</Button></div></div> : null}
-    {!loading && tab === "services" ? <div className="service-control-stack"><ServiceControlCard name="Xray" state={status?.xray} fallbackVersion={server.xray_version} working={working} onAction={(action) => action === "stop" ? setConfirm({ service: "xray", action }) : void serviceAction("xray", action)} onRemove={() => setConfirm({ service: "xray", action: "remove" })} /><ServiceControlCard name="Nginx" state={status?.nginx} working={working} onAction={(action) => action === "stop" ? setConfirm({ service: "nginx", action }) : void serviceAction("nginx", action)} onRemove={() => setConfirm({ service: "nginx", action: "remove" })} /></div> : null}
+    {!loading && tab === "services" ? <div className="service-control-stack">{reusesExistingNginx ? <div className="service-nginx-reuse-notice" role="note"><ShieldCheck size={18} /><span><strong>正在复用系统已有 Nginx</strong><small>Arcway 仅下发独立站点配置并执行预检与安全重载，不安装、不卸载、不覆盖主配置，也不接管服务启停。</small></span></div> : null}<ServiceControlCard name="Xray" state={status?.xray} fallbackVersion={server.xray_version} working={working} onAction={(action) => action === "stop" ? setConfirm({ service: "xray", action }) : void serviceAction("xray", action)} onRemove={() => setConfirm({ service: "xray", action: "remove" })} /><ServiceControlCard name="Nginx" state={status?.nginx} working={working} externallyManaged={reusesExistingNginx} onAction={(action) => action === "stop" ? setConfirm({ service: "nginx", action }) : void serviceAction("nginx", action)} onRemove={() => setConfirm({ service: "nginx", action: "remove" })} /></div> : null}
     {!loading && tab === "speedtest" ? <ServerSpeedtestPanel server={server} notify={notify} /> : null}
-    {!loading && tab === "inbounds" ? <XrayResourcesWorkbench serverId={server.id} serverDomain={server.domain} serverIPv4={server.ip_address} serverIPv6={server.ip_address_v6} kind="inbound" notify={notify} /> : null}
+    {!loading && tab === "inbounds" ? <XrayResourcesWorkbench serverId={server.id} serverDomain={server.domain} serverIPv4={server.ip_address} serverIPv6={server.ip_address_v6} nginxMode={server.nginx_mode || "managed"} kind="inbound" notify={notify} /> : null}
     {!loading && tab === "outbounds" ? <XrayResourcesWorkbench serverId={server.id} serverDomain={server.domain} serverIPv4={server.ip_address} serverIPv6={server.ip_address_v6} kind="outbound" notify={notify} /> : null}
     {!loading && tab === "routing" ? <XrayRoutingWorkbench serverId={server.id} notify={notify} /> : null}
     {!loading && tab === "config" ? <div className="service-config-panel">{!configLoaded ? <EmptyState icon={<Code2 size={23} />} title="读取 Agent 上的 Xray 配置" description="编辑前会从目标服务器读取当前配置，不使用本地缓存。" action={<Button onClick={() => void loadConfig()} disabled={working === "config-load"}>{working === "config-load" ? <Spinner label="正在读取" /> : <><Clipboard size={16} />读取配置</>}</Button>} /> : <><div className="service-config-head"><span><strong>{configPath || "config.json"}</strong><small>{configDirty ? "存在未保存更改" : "已与 Agent 同步"}</small></span><div><Button variant="ghost" onClick={() => void loadConfig()} disabled={Boolean(working)}><RefreshCw size={15} />重新读取</Button><Button variant="secondary" onClick={() => void testConfig()} disabled={Boolean(working) || !config.trim()}>{working === "config-test" ? <Spinner label="预检中" /> : <><ShieldCheck size={15} />预检</>}</Button><Button onClick={() => void saveConfig()} disabled={Boolean(working) || !configDirty}>{working === "config-save" ? <Spinner label="保存中" /> : <><Check size={15} />保存配置</>}</Button></div></div><textarea className="service-code-editor" aria-label="Xray 配置 JSON" spellCheck={false} value={config} onChange={(event) => { setConfig(event.target.value); setConfigDirty(true); }} /></>}</div> : null}
@@ -1315,7 +1560,7 @@ function defaultXrayResource(kind: XrayResourceKind): XrayResource {
   return { tag: "", protocol: "freedom", settings: {} };
 }
 
-function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", serverIPv6 = "", kind, notify }: { serverId: number; serverDomain?: string; serverIPv4?: string; serverIPv6?: string; kind: XrayResourceKind; notify: Notify }) {
+function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", serverIPv6 = "", nginxMode = "managed", kind, notify }: { serverId: number; serverDomain?: string; serverIPv4?: string; serverIPv6?: string; nginxMode?: NginxMode; kind: XrayResourceKind; notify: Notify }) {
   const plural = kind === "inbound" ? "inbounds" : "outbounds";
   const label = kind === "inbound" ? "入站" : "出站";
   const endpoint = `/api/admin/remote/${plural}?server_id=${serverId}`;
@@ -1774,6 +2019,7 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
       </div> : editor.mode === "view" ? <textarea className="service-code-editor xray-resource-json" aria-label={`${label}只读 JSON`} readOnly value={jsonDraft} /> : <form className="form-stack" onSubmit={submit}>
         {kind === "inbound" && editor.mode === "create" && creationPreset !== "advanced" ? <>
           <div className="secure-inbound-reference"><span><Badge tone={creationPreset === "wireguard" || creationPreset === "trojan" ? "good" : matchingExample ? "good" : examplesError ? "warn" : "neutral"}>{creationPreset === "wireguard" ? "Xray 原生" : creationPreset === "trojan" ? "常用组合" : examplesLoading ? "模板读取中" : matchingExample ? "官方模板" : "内置模板"}</Badge><strong>{creationPreset === "wireguard" ? "WireGuard 入站与客户端配置" : creationPreset === "trojan" ? "Trojan 安全传输向导" : matchingExample?.dir_name || (creationPreset === "reality" ? "VLESS TCP Reality" : "VLESS WSS")}</strong></span>{creationPreset !== "wireguard" && creationPreset !== "trojan" && examplesError ? <small>{examplesError}</small> : null}</div>
+          {nginxMode === "reuse_existing" && (creationPreset === "wss" || (creationPreset === "trojan" && trojanDraft.combination === "ws-tls")) ? <div className="service-nginx-reuse-notice" role="note"><ShieldCheck size={17} /><span><strong>此入站将复用系统已有 Nginx</strong><small>Arcway 只添加独立站点配置并安全重载，不会覆盖主配置或接管 Nginx 服务。</small></span></div> : null}
           <div className="form-grid two"><Field label="Tag"><input required aria-label="入站 Tag" value={tag} onChange={(event) => setTag(event.target.value)} placeholder={creationPreset === "wireguard" ? "wireguard-in" : creationPreset === "trojan" ? "trojan-in" : creationPreset === "reality" ? "vless-reality" : "vless-wss"} /></Field><Field label={creationPreset === "wss" || (creationPreset === "trojan" && trojanDraft.combination === "ws-tls") ? "外部 TLS 端口" : "监听端口"}><input type="number" min="1" max="65535" required aria-label="入站监听端口" value={port} onChange={(event) => setPort(event.target.value)} /></Field></div>
           {creationPreset === "wireguard" ? <>
             <div className="secure-key-status wireguard-key-status"><span><Badge tone={validWireGuardKey(wireGuardDraft.serverPrivateKey) && validWireGuardKey(wireGuardDraft.clientPrivateKey) ? "good" : "warn"}>{validWireGuardKey(wireGuardDraft.serverPrivateKey) && validWireGuardKey(wireGuardDraft.clientPrivateKey) ? "两组密钥已生成" : "密钥未就绪"}</Badge><small>客户端私钥仅保留到本弹窗关闭</small></span><Button type="button" variant="secondary" disabled={wireGuardKeyWorking} onClick={() => void generateWireGuardKeys()}>{wireGuardKeyWorking ? <Spinner label="生成中" /> : <><KeyRound size={15} />重新生成密钥</>}</Button></div>
@@ -2161,9 +2407,10 @@ function InfoTile({ label, value, detail, icon }: { label: string; value: string
   return <Surface className="service-info-tile"><span>{icon}</span><div><small>{label}</small><strong>{value}</strong><p>{detail}</p></div></Surface>;
 }
 
-function ServiceControlCard({ name, state, fallbackVersion, working, onAction, onRemove }: { name: "Xray" | "Nginx"; state?: ServiceState; fallbackVersion?: string; working: string; onAction: (action: "start" | "stop" | "restart" | "install") => void; onRemove: () => void }) {
+function ServiceControlCard({ name, state, fallbackVersion, working, externallyManaged = false, onAction, onRemove }: { name: "Xray" | "Nginx"; state?: ServiceState; fallbackVersion?: string; working: string; externallyManaged?: boolean; onAction: (action: "start" | "stop" | "restart" | "install") => void; onRemove: () => void }) {
   const key = name.toLowerCase();
   const installed = state?.installed ?? (name === "Xray" && Boolean(fallbackVersion));
   const running = state?.running ?? false;
-  return <Surface className="service-control-card"><div className="service-control-icon">{name === "Xray" ? <Network size={21} /> : <Server size={21} />}</div><div className="service-control-main"><div><h3>{name}</h3><Badge tone={running ? "good" : installed ? "warn" : "neutral"}>{running ? "运行中" : installed ? "已停止" : "未安装"}</Badge></div><p>{state?.version || fallbackVersion || "未检测到版本信息"}</p></div><div className="service-control-actions">{!installed ? <Button onClick={() => onAction("install")} disabled={Boolean(working)}>{working === `${key}-install` ? <Spinner label="安装中" /> : <><Plus size={15} />安装</>}</Button> : <><IconButton label={`启动 ${name}`} onClick={() => onAction("start")} disabled={Boolean(working) || running}><Play size={16} /></IconButton><IconButton label={`重启 ${name}`} onClick={() => onAction("restart")} disabled={Boolean(working)}><RotateCw size={16} /></IconButton><IconButton label={`停止 ${name}`} onClick={() => onAction("stop")} disabled={Boolean(working) || !running}><Square size={15} /></IconButton><IconButton label={`卸载 ${name}`} onClick={onRemove} disabled={Boolean(working)}><Trash2 size={16} /></IconButton></>}</div></Surface>;
+  const controlsLocked = Boolean(working) || externallyManaged;
+  return <Surface className={`service-control-card${externallyManaged ? " is-externally-managed" : ""}`}><div className="service-control-icon">{name === "Xray" ? <Network size={21} /> : <Server size={21} />}</div><div className="service-control-main"><div><h3>{name}</h3><Badge tone={running ? "good" : installed ? "warn" : "neutral"}>{running ? "运行中" : installed ? "已停止" : "未安装"}</Badge>{externallyManaged ? <Badge tone="info">系统托管</Badge> : null}</div><p>{state?.version || fallbackVersion || "未检测到版本信息"}</p>{externallyManaged ? <small>服务操作已锁定，防止影响服务器上的现有网站。</small> : null}</div><div className="service-control-actions">{!installed ? <Button onClick={() => onAction("install")} disabled={controlsLocked}>{working === `${key}-install` ? <Spinner label="安装中" /> : <><Plus size={15} />安装</>}</Button> : <><IconButton label={`启动 ${name}`} onClick={() => onAction("start")} disabled={controlsLocked || running}><Play size={16} /></IconButton><IconButton label={`重启 ${name}`} onClick={() => onAction("restart")} disabled={controlsLocked}><RotateCw size={16} /></IconButton><IconButton label={`停止 ${name}`} onClick={() => onAction("stop")} disabled={controlsLocked || !running}><Square size={15} /></IconButton><IconButton label={`卸载 ${name}`} onClick={onRemove} disabled={controlsLocked}><Trash2 size={16} /></IconButton></>}</div></Surface>;
 }

@@ -779,10 +779,12 @@ describe("managed server node creation", () => {
     expect(screen.getByRole("textbox", { name: "WireGuard 服务端地址" })).toHaveValue("10.66.66.1/32");
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     const preview = await screen.findByRole("textbox", { name: "受管节点 Xray JSON" });
+    expect(preview).toHaveAttribute("rows", "16");
     expect((preview as HTMLTextAreaElement).value).toContain('"protocol": "wireguard"');
     fireEvent.click(screen.getByRole("button", { name: "创建节点" }));
 
     const config = await screen.findByRole("textbox", { name: "WireGuard 客户端配置" });
+    expect(config).toHaveAttribute("rows", "16");
     const clientPrivateKey = (config as HTMLTextAreaElement).value.match(/^PrivateKey = (.+)$/m)?.[1];
     expect(clientPrivateKey).toMatch(/^[A-Za-z0-9+/]{43}=$/);
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/managed-inbound-resources/wireguard?server_id=3", expect.objectContaining({

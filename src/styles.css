@@ -503,7 +503,8 @@ h2 { font-size: 17px; }
 .badge { min-height: 22px; border-radius: 2px; font-weight: 720; }
 .brand-mark, .brand-mark-large { border-radius: 2px; }
 .brand-mark img, .brand-mark-large img { width: 76%; height: 76%; display: block; object-fit: contain; }
-.field input, .field select, .field textarea, .search-box input { min-height: 42px; border-radius: 2px; }
+.field input, .field select, .search-box input { min-height: 42px; border-radius: 2px; }
+.field textarea { border-radius: 2px; }
 .toggle { border-radius: 999px; }
 .empty-icon, .metric-icon, .settings-icon, .server-icon, .summary-icon { border-radius: 2px; }
 .error-state { border-radius: 2px; }
@@ -1157,10 +1158,15 @@ td { min-height: 62px; }
 
 :root[data-style-theme="flat"] :is(
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
+  select
+) {
+  min-height: 40px;
+}
+:root[data-style-theme="flat"] :is(
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
   select,
   textarea
 ) {
-  min-height: 40px;
   border: 1px solid var(--border-strong);
   border-radius: 6px;
   color: var(--text);

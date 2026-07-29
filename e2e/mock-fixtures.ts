@@ -42,7 +42,9 @@ export const settingsGetResponses: Record<string, unknown> = {
   "/api/admin/system-settings/agent-log": { agent_log_enabled: false },
   "/api/admin/rule-templates": { templates: ["balanced_v3.yaml"], owners: { "balanced_v3.yaml": "admin" } },
   "/api/admin/system-settings/default-template": { default_template_filename: "balanced_v3.yaml" },
-  "/api/admin/system-settings/redeem-template": { redeem_template: "兑换码：{兑换码}" },
+  "/api/admin/system-settings/redeem-template": {
+    redeem_template: "使用教程\n打开机器人 {机器人地址}\n发送兑换码 {兑换码}\n等待机器人确认\n返回主控 {主控域名}\n复制订阅地址",
+  },
   "/api/admin/security-settings": {
     login_rate_max_attempts: 5,
     login_rate_window_minutes: 60,

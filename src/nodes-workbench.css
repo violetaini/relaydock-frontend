@@ -483,7 +483,8 @@
 }
 
 .nw-wireguard-created .nw-code-editor {
-  min-height: clamp(320px, 46vh, 520px);
+  min-height: clamp(320px, 46vh, 520px) !important;
+  overflow: auto;
 }
 
 .nw-inline-note {

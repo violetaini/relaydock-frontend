@@ -88,6 +88,7 @@ describe("settings workbench", () => {
 
     expect(await screen.findByRole("combobox", { name: "节点匹配规则" })).toHaveValue("server_port");
     expect(screen.getByRole("spinbutton", { name: "缓存有效期（分钟）" })).toHaveValue(30);
+    expect(screen.getByRole("textbox", { name: "复制模板" })).toHaveAttribute("rows", "10");
     fireEvent.change(screen.getByRole("combobox", { name: "同步范围" }), { target: { value: "all" } });
     fireEvent.click(screen.getByRole("switch", { name: "节点名称附加剩余流量与到期信息" }));
     fireEvent.click(screen.getByRole("button", { name: "保存订阅设置" }));

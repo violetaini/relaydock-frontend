@@ -295,6 +295,11 @@ async function mockAPI(
       "/api/admin/nodes": { nodes },
       "/api/admin/managed-node-offers": { offers: [] },
       "/api/admin/managed-inbound-resources": { success: true, resources: [] },
+      "/api/admin/managed-inbound-resources/wireguard": {
+        success: true,
+        node_id: 8,
+        client_config: "[Interface]\nPrivateKey = visual-client-private-key\nAddress = 10.66.66.2/32\nDNS = 1.1.1.1, 1.0.0.1\nMTU = 1420\n\n[Peer]\nPublicKey = visual-server-public-key\nAllowedIPs = 0.0.0.0/0\nEndpoint = edge.example.com:51820\nPersistentKeepalive = 25\n",
+      },
       "/api/traffic/summary": trafficResponse,
       "/api/admin/tunnels": tunnels,
       "/api/admin/remote/warp/status": { installed: true, license_active: true, addr_v4: "172.16.0.2", addr_v6: "2606:4700:110:8765::2" },
@@ -769,6 +774,12 @@ for (const viewport of [
       if (item.hiddenHeading) await expect(heading).toBeAttached();
       else await expect(heading).toBeVisible();
       await expect(page.getByText(item.marker, { exact: true }).first()).toBeVisible();
+      if (item.route === "settings") {
+        const redeemTemplate = page.getByRole("textbox", { name: "复制模板" });
+        await expect(redeemTemplate).toHaveAttribute("rows", "10");
+        const redeemTemplateHeight = await redeemTemplate.evaluate((element) => element.getBoundingClientRect().height);
+        expect(redeemTemplateHeight, `${viewport.name} redeem template should remain readable`).toBeGreaterThanOrEqual(200);
+      }
       await expectViewportIntegrity(page, `${viewport.name} route ${item.route}`);
       await page.screenshot({
         path: path.resolve("../docs/change-records/assets/MMX-060", `arcway-${item.route}-${viewport.name}.png`),
@@ -832,7 +843,10 @@ for (const viewport of [
     expect(generatedLayout.actionGap, `${viewport.name} generated config actions should not overlap the editor`).toBeGreaterThanOrEqual(8);
     await expectViewportIntegrity(page, `${viewport.name} generated config editor`);
     await page.getByRole("button", { name: "保存订阅" }).click();
-    await expect(page.getByRole("dialog", { name: "保存生成的订阅" })).toBeVisible();
+    const saveGeneratedDialog = page.getByRole("dialog", { name: "保存生成的订阅" });
+    await expect(saveGeneratedDialog).toBeVisible();
+    const descriptionHeight = await saveGeneratedDialog.getByRole("textbox", { name: "说明" }).evaluate((element) => element.getBoundingClientRect().height);
+    expect(descriptionHeight, `${viewport.name} regular multiline fields should not collapse`).toBeGreaterThanOrEqual(110);
     await expectViewportIntegrity(page, `${viewport.name} generator dialog`);
     await closeDialog(page);
 
@@ -907,7 +921,25 @@ for (const viewport of [
     await expect(page.getByLabel("Shadowsocks 加密方式")).toHaveValue("2022-blake3-aes-128-gcm");
     await expectViewportIntegrity(page, `${viewport.name} managed Shadowsocks configuration`);
     await page.screenshot({ path: path.resolve("../docs/change-records/assets/MMX-100", `managed-node-shadowsocks-${viewport.name}.png`), fullPage: true });
-    await closeDialog(page);
+    await page.getByRole("button", { name: "上一步" }).click();
+    await page.getByRole("combobox", { name: "节点协议" }).selectOption("wireguard");
+    await page.getByRole("button", { name: "下一步" }).click();
+    await page.getByLabel("节点名称").fill("视觉 WireGuard");
+    await page.getByRole("button", { name: "下一步" }).click();
+    const managedNodeDialog = page.getByRole("dialog", { name: "在服务器创建节点" });
+    await managedNodeDialog.getByText("查看将提交的 Xray JSON", { exact: true }).click();
+    const managedNodePreview = managedNodeDialog.getByLabel("受管节点 Xray JSON");
+    await expect(managedNodePreview).toHaveAttribute("rows", "16");
+    const managedNodePreviewHeight = await managedNodePreview.evaluate((element) => element.getBoundingClientRect().height);
+    expect(managedNodePreviewHeight, `${viewport.name} managed node JSON preview should remain readable`).toBeGreaterThanOrEqual(220);
+    await managedNodeDialog.getByRole("button", { name: "创建节点", exact: true }).click();
+    const wireGuardCreatedDialog = page.getByRole("dialog", { name: "WireGuard 节点已创建" });
+    const wireGuardConfig = wireGuardCreatedDialog.getByLabel("WireGuard 客户端配置");
+    await expect(wireGuardConfig).toHaveAttribute("rows", "16");
+    const wireGuardEditorHeight = await wireGuardConfig.evaluate((element) => element.getBoundingClientRect().height);
+    expect(wireGuardEditorHeight, `${viewport.name} WireGuard client config should remain readable`).toBeGreaterThanOrEqual(320);
+    await expectViewportIntegrity(page, `${viewport.name} WireGuard client config`);
+    await wireGuardCreatedDialog.getByRole("button", { name: "完成" }).click();
     await page.getByRole("button", { name: "导入已有节点" }).click();
     await expect(page.getByRole("dialog", { name: "导入外部节点" })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} node import`);

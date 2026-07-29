@@ -588,7 +588,7 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
         <SettingSection icon={<Gauge size={19} />} title="静默模式" description="短时间合并重复的订阅事件">
           <Toggle checked={silent.silent_mode} onChange={(silent_mode) => setSilent({ ...silent, silent_mode })} label="启用静默模式" /><Field label="静默超时（秒）"><input type="number" min="1" value={silent.silent_mode_timeout} onChange={(e) => setSilent({ ...silent, silent_mode_timeout: Number(e.target.value) })} /></Field>
         </SettingSection>
-        <SettingSection icon={<Clipboard size={19} />} title="兑换码文案" description="支持 {兑换码}、{机器人地址}、{主控域名} 占位符"><Field label="复制模板"><textarea value={redeemTemplate} onChange={(e) => setRedeemTemplate(e.target.value)} /></Field></SettingSection>
+        <SettingSection icon={<Clipboard size={19} />} title="兑换码文案" description="支持 {兑换码}、{机器人地址}、{主控域名} 占位符"><Field label="复制模板"><textarea className="settings-redeem-template" rows={10} spellCheck={false} value={redeemTemplate} onChange={(e) => setRedeemTemplate(e.target.value)} /></Field></SettingSection>
         <SaveRow label="保存订阅设置" saving={saving === "subscription"} />
       </form>
 

@@ -1554,7 +1554,7 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
       <div className="form-stack nw-wireguard-created">
         {error ? <ErrorState message={error} /> : null}
         <div className="nw-inline-note"><KeyRound size={16} /><span>配置已保存为正常节点；你也可以立即复制或下载客户端配置。</span></div>
-        <Field label="WireGuard 客户端配置"><textarea className="nw-code-editor" aria-label="WireGuard 客户端配置" readOnly value={wireGuardCreated.clientConfig} /></Field>
+        <Field label="WireGuard 客户端配置"><textarea className="nw-code-editor" aria-label="WireGuard 客户端配置" rows={16} readOnly spellCheck={false} value={wireGuardCreated.clientConfig} /></Field>
         <div className="dialog-actions"><Button variant="secondary" onClick={() => void copyText(wireGuardCreated.clientConfig).catch((reason) => setError(reasonMessage(reason, "复制客户端配置失败")))}><Copy size={16} />复制</Button><Button variant="secondary" onClick={() => { try { downloadText(wireGuardCreated.filename, wireGuardCreated.clientConfig); } catch (reason) { setError(reasonMessage(reason, "下载客户端配置失败")); } }}><FileDown size={16} />下载 .conf</Button><Button onClick={() => onComplete("WireGuard 节点已创建")}><Check size={16} />完成</Button></div>
       </div>
     </Dialog>;
@@ -1605,7 +1605,7 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
       </section> : <section className="managed-wizard-step">
         <div className="managed-step-heading"><span><ShieldCheck size={19} /></span><div><h3>确认创建</h3><p>创建会写入远程 Xray，并在控制端生成对应节点。</p></div></div>
         <dl className="managed-review"><div><dt>服务器</dt><dd>{selectedServer?.name}</dd></div><div><dt>节点名称</dt><dd>{draft.name}</dd></div><div><dt>协议</dt><dd>{protocolLabel(draft.protocol)}</dd></div><div><dt>监听</dt><dd>{draft.port} · {isTunnel ? "TCP + UDP" : isWireGuard ? "UDP" : draft.ipVersion.toUpperCase()}</dd></div><div><dt>入站标识（Tag）</dt><dd><code>{draft.tag}</code></dd></div>{isTunnel ? <div><dt>目标节点</dt><dd>{selectedForwardNode?.node_name} · <code>{draft.targetAddress}:{draft.targetPort}</code></dd></div> : <div><dt>用户目录</dt><dd>{draft.publish && canPublish ? "创建后发布" : "暂不发布"}</dd></div>}</dl>
-        <details className="secure-inbound-preview"><summary>查看将提交的 Xray JSON</summary><textarea className="nw-code-editor" aria-label="受管节点 Xray JSON" readOnly value={JSON.stringify((isWireGuard ? buildManagedWireGuardInbound(draft) : buildManagedInboundRequest(draft).inbound), null, 2)} /></details>
+        <details className="secure-inbound-preview"><summary>查看将提交的 Xray JSON</summary><textarea className="nw-code-editor" aria-label="受管节点 Xray JSON" rows={16} readOnly spellCheck={false} value={JSON.stringify((isWireGuard ? buildManagedWireGuardInbound(draft) : buildManagedInboundRequest(draft).inbound), null, 2)} /></details>
       </section>}
       {!loading ? <div className="dialog-actions managed-wizard-actions"><Button type="button" variant="secondary" onClick={step === 1 ? onClose : () => { setError(""); setStep((current) => current - 1); }} disabled={working}><ArrowLeft size={16} />{step === 1 ? "取消" : "上一步"}</Button>{step < 4 ? <Button type="button" onClick={validateStep} disabled={working || (step === 1 && (!readyServers.length || inventoryWorking || inventoryServerID !== serverID)) || keyWorking || wireGuardKeyWorking}>下一步<ArrowRight size={16} /></Button> : <Button type="button" onClick={() => void submit()} disabled={working}>{working ? <Spinner label="正在创建并校验" /> : <><Server size={16} />创建节点</>}</Button>}</div> : null}
     </div>

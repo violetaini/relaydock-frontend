@@ -113,6 +113,17 @@ describe("settings workbench", () => {
     expect(put).toHaveBeenCalledWith("/api/admin/system-settings/management-features", { enable_management_features: true });
   });
 
+  it("neutralizes the legacy product name in an older backend's redeem template", async () => {
+    const legacyName = ["妙", "妙", "屋", "X"].join("");
+    mockCompleteSettings({
+      "/api/admin/system-settings/redeem-template": { redeem_template: `需要登录 ${legacyName}\n{主控域名}` },
+    });
+    vi.spyOn(api, "put").mockResolvedValue({ success: true });
+    render(<SettingsWorkbenchPage notify={vi.fn()} />);
+
+    expect(await screen.findByRole("textbox", { name: "复制模板" })).toHaveValue("需要登录 RelayDock\n{主控域名}");
+  });
+
   it("falls back to the legacy feature contract when the new endpoint is unavailable", async () => {
     const legacyName = ["miao", "miao", "wu"].join("");
     const legacyPath = `/api/admin/system-settings/${legacyName}-features`;

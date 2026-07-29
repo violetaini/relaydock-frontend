@@ -75,14 +75,14 @@ function ensureSuccess(response: { success?: boolean; error?: string; message?: 
   if (response.success === false) throw new Error(normalizeLegacyPanelText(response.error || response.message || fallback));
 }
 
-export function normalizeLegacyPanelText(value: string): string {
+export function normalizeLegacyPanelText(value: string, replacement = "旧版面板"): string {
   const chineseName = ["妙", "妙", "屋"].join("");
   const latinNames = [
     ["miao", "miao", "wu"].join(""),
     ["miao", "miao", "x"].join(""),
   ];
-  let normalized = value.replace(new RegExp(`${chineseName}[xX]?`, "g"), "旧版面板");
-  for (const name of latinNames) normalized = normalized.replace(new RegExp(`${name}[xX]?`, "gi"), "旧版面板");
+  let normalized = value.replace(new RegExp(`${chineseName}[xX]?`, "g"), replacement);
+  for (const name of latinNames) normalized = normalized.replace(new RegExp(`${name}[xX]?`, "gi"), replacement);
   return normalized;
 }
 

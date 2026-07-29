@@ -24,7 +24,7 @@ import {
   Users,
 } from "lucide-react";
 import { api, ApiError, getToken } from "./api";
-import { MmwMigrationDialog } from "./migration-workbench";
+import { MmwMigrationDialog, normalizeLegacyPanelText } from "./migration-workbench";
 import { TwoFactorSettings } from "./two-factor";
 import type { RemoteServer, ServerListResponse } from "./types";
 import { Badge, Button, ConfirmDialog, ErrorState, Field, IconButton, PageHeader, Spinner, Surface, Toggle } from "./ui";
@@ -373,7 +373,7 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
       setIntervals(intervalData); setDashboardRefreshMs(refreshData.refetch_interval_ms); setProbe(probeData); setServers(serverData.servers ?? []); setShortLink(shortData.enable_short_link);
       setPrefix(prefixData); setOverrideScripts(overrideData.enable_override_scripts); setOutputFormat(formatData.subscription_output_format === "json" ? "json" : "yaml");
       setSilent(silentData); setFeatures(featureData.enable_management_features); setShortCompat(compatData.enable_mmw_short_link_compat); setAgentLog(logData.agent_log_enabled);
-      setTemplates(templateData.templates ?? []); setDefaultTemplate(defaultTemplateData.default_template_filename); setRedeemTemplate(redeemData.redeem_template);
+      setTemplates(templateData.templates ?? []); setDefaultTemplate(defaultTemplateData.default_template_filename); setRedeemTemplate(normalizeLegacyPanelText(redeemData.redeem_template, "RelayDock"));
       setSecurity(secData); setRequireEncryption(encryptData.require_encryption); setPermissions(permissionData.config); setNotifications(notifyData); setApiToken(tokenData.token); setUserSubscription(userSubscriptionData);
       setLoaded(true);
     } catch (reason) { setError(messageOf(reason, "设置加载失败")); } finally { setLoading(false); }

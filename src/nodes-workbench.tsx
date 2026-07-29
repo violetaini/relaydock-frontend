@@ -204,6 +204,7 @@ interface TCPingResult {
   latency: number;
   error?: string;
   loading?: boolean;
+  probe?: string;
 }
 
 interface NodeURI {
@@ -378,6 +379,28 @@ function nodeAddress(node: WorkbenchNode): { host: string; port: number } {
   return { host: typeof config.server === "string" ? config.server : "", port: Number(config.port) || 0 };
 }
 
+function tcpingResultLabel(node: WorkbenchNode, result: TCPingResult | undefined): string {
+  if (result?.loading) return "测试中";
+  if (result?.success && result.probe === "managed_wireguard" && nodeProtocolKey(node.protocol) === "wireguard") {
+    return `${result.latency.toFixed(1)} ms · 管理 RTT`;
+  }
+  if (result?.success) return `${result.latency.toFixed(1)} ms`;
+  if (result?.error) return "失败";
+  return "测延迟";
+}
+
+function tcpingResultTitle(node: WorkbenchNode, result: TCPingResult | undefined): string {
+  if (result?.error) return result.error;
+  if (nodeProtocolKey(node.protocol) === "wireguard") {
+    if (result?.success && result.probe === "managed_wireguard") {
+      return `受管 WireGuard 入站运行正常；${result.latency.toFixed(1)} ms 是主控到节点服务器的管理链路 RTT，不是 WireGuard 公网握手 RTT`;
+    }
+    if (!node.original_server || !node.inbound_tag) return "外部 WireGuard 需要专用探测 Peer，无法安全主动探测";
+    return "测试受管 WireGuard 入站与管理链路 RTT（不是 WireGuard 公网握手 RTT）";
+  }
+  return "点击测试 TCP/UDP 连通延迟";
+}
+
 function isIPHost(host: string): boolean {
   return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || host.includes(":");
 }
@@ -398,6 +421,7 @@ function nodeProtocolKey(protocol: string): string {
   switch (protocol.trim().toLowerCase()) {
     case "shadowsocks": return "ss";
     case "socks": return "socks5";
+    case "wg": return "wireguard";
     case "hysteria":
     case "hy2": return "hysteria2";
     default: return protocol.trim().toLowerCase();
@@ -766,11 +790,9 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
   });
 
   const pingOne = async (node: WorkbenchNode) => {
-    const address = nodeAddress(node);
-    if (!address.host || !address.port) return notify("节点缺少有效的服务器地址", "error");
     setTCPing((current) => ({ ...current, [node.id]: { success: false, latency: 0, loading: true } }));
     try {
-      const result = await api.post<TCPingResult>("/api/admin/tcping", { host: address.host, port: address.port, timeout: 5000, protocol: node.protocol });
+      const result = await api.post<TCPingResult>("/api/admin/tcping", { node_id: node.id, timeout: 5000 });
       setTCPing((current) => ({ ...current, [node.id]: result }));
     } catch (reason) {
       setTCPing((current) => ({ ...current, [node.id]: { success: false, latency: 0, error: reason instanceof Error ? reason.message : "测试失败" } }));
@@ -779,19 +801,15 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
 
   const pingBatch = async () => {
     const targets = selectedNodes.length ? selectedNodes : visible;
-    const valid = targets.filter((node) => { const address = nodeAddress(node); return address.host && address.port; });
-    if (!valid.length) return notify("当前节点没有有效服务器地址", "error");
-    setTCPing((current) => ({ ...current, ...Object.fromEntries(valid.map((node) => [node.id, { success: false, latency: 0, loading: true }])) }));
+    if (!targets.length) return notify("当前没有可测试的节点", "error");
+    setTCPing((current) => ({ ...current, ...Object.fromEntries(targets.map((node) => [node.id, { success: false, latency: 0, loading: true }])) }));
     try {
-      const results = await api.post<TCPingResult[]>("/api/admin/tcping/batch", valid.map((node) => {
-        const address = nodeAddress(node);
-        return { host: address.host, port: address.port, timeout: 5000, protocol: node.protocol };
-      }));
-      setTCPing((current) => ({ ...current, ...Object.fromEntries(valid.map((node, index) => [node.id, results[index]])) }));
+      const results = await api.post<TCPingResult[]>("/api/admin/tcping/batch", targets.map((node) => ({ node_id: node.id, timeout: 5000 })));
+      setTCPing((current) => ({ ...current, ...Object.fromEntries(targets.map((node, index) => [node.id, results[index]])) }));
       notify(`延迟测试完成：成功 ${results.filter((result) => result.success).length}，失败 ${results.filter((result) => !result.success).length}`);
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : "批量延迟测试失败", "error");
-      setTCPing((current) => ({ ...current, ...Object.fromEntries(valid.map((node) => [node.id, { success: false, latency: 0, error: "批量测试失败" }])) }));
+      setTCPing((current) => ({ ...current, ...Object.fromEntries(targets.map((node) => [node.id, { success: false, latency: 0, error: "批量测试失败" }])) }));
     }
   };
 
@@ -921,7 +939,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
             <td className="nw-cell-primary"><div className="nw-node-primary"><Badge tone="info">{displayedNodeProtocol(node).toUpperCase() || "UNKNOWN"}</Badge><span><strong>{node.node_name}</strong><small>#{node.id}{isTunnelNode(node) ? ` · 目标协议 ${node.protocol.toUpperCase()}` : node.node_type === "routed" ? " · 路由出站" : ""}{node.relay_orig_server ? " · 已中转" : ""}</small></span></div></td>
             <td className="nw-cell-owner"><div className="nw-node-tags">{offer?.enabled ? <Badge tone="good">自助发布</Badge> : null}{nodeTags(node).length ? nodeTags(node).slice(0, 3).map((item) => <Badge key={item}>{item}</Badge>) : <span className="muted">未分类</span>}</div><small className="cell-note">{node.original_server || node.created_by || "外部导入"}{node.inbound_tag ? ` · ${node.inbound_tag}` : ""}</small></td>
             <td className="nw-cell-address" data-label="服务器"><code className="nw-address">{address.host || "-"}:{address.port || "-"}</code>{node.relay_orig_server ? <small className="cell-note">原站 {node.relay_orig_server}:{node.relay_orig_port || "-"}</small> : node.original_domain ? <small className="cell-note">原域名 {node.original_domain}</small> : null}</td>
-            <td className="nw-cell-latency" data-label="连通性"><button className={`nw-result-button ${ping?.success ? "is-good" : ping?.error ? "is-bad" : ""}`} disabled={ping?.loading} title={ping?.error || "点击测试 TCP/UDP 连通延迟"} onClick={() => void pingOne(node)}>{ping?.loading ? <Spinner label="" /> : <Zap size={14} />}{ping?.loading ? "测试中" : ping?.success ? `${ping.latency.toFixed(1)} ms` : ping?.error ? "失败" : "测延迟"}</button></td>
+            <td className="nw-cell-latency" data-label="连通性"><button className={`nw-result-button ${ping?.success ? "is-good" : ping?.error ? "is-bad" : ""}`} disabled={ping?.loading} title={tcpingResultTitle(node, ping)} onClick={() => void pingOne(node)}>{ping?.loading ? <Spinner label="" /> : <Zap size={14} />}{tcpingResultLabel(node, ping)}</button></td>
             <td className="nw-cell-speed" data-label="测速">{isAdmin ? <button className="nw-speed-cell" title={speed?.error || "打开节点测速"} onClick={() => setDialog({ kind: "speed", nodeIDs: [node.id] })}><Badge tone={speedTone(speed)}>{resultLabel(speed)}</Badge>{speed?.egress_ip ? <small>{speed.egress_ip}</small> : null}</button> : <Badge tone="neutral">管理员功能</Badge>}</td>
             <td className="nw-cell-status" data-label="状态">{isAdmin ? <button className="nw-status-button" title={`点击${node.enabled ? "停用" : "启用"}`} onClick={() => void update(node, { enabled: !node.enabled }, node.enabled ? "节点已停用" : "节点已启用")}><span className={node.enabled ? "is-on" : ""} />{node.enabled ? "启用" : "停用"}</button> : <Badge tone={node.enabled ? "good" : "neutral"}>{node.enabled ? "启用" : "停用"}</Badge>}</td>
             <td className="nw-cell-actions"><NodeActions node={node} isAdmin={isAdmin} userRouted={userRouted} onEdit={() => setDialog({ kind: "edit", node })} onConfig={() => setDialog({ kind: "config", node })} onQRCode={() => setDialog({ kind: "qr", node })} onRelay={() => setDialog({ kind: "relay", node })} onAnyDoor={() => setDialog({ kind: "anydoor", node })} onCancelRelay={() => cancelRelay(node)} onChain={() => setDialog({ kind: "chain", node })} onResolve={() => setDialog({ kind: "resolve", node })} onRegion={() => setDialog({ kind: "region", node })} onRestore={() => restoreDomain(node)} onRoute={() => setDialog({ kind: "route", node })} onTempSub={() => setDialog({ kind: "temp-sub", nodes: [node] })} onDelete={() => isAdmin ? removeNode(node) : removeUserRouted(node)} /></td>

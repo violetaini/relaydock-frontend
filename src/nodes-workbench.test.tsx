@@ -113,8 +113,8 @@ describe("managed certificate hostname coverage", () => {
 });
 
 describe("WireGuard nodes", () => {
-  it("shows WireGuard through the normal node management workflow", async () => {
-    const wireGuard = node(12, "办公室 WireGuard", "wireguard", "203.0.113.10");
+  it("tests WireGuard by node id and labels the managed control-link RTT", async () => {
+    const wireGuard = node(12, "办公室 WireGuard", "wg", "203.0.113.10");
     const config = {
       name: wireGuard.node_name,
       type: "wireguard",
@@ -136,14 +136,48 @@ describe("WireGuard nodes", () => {
       if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
       throw new Error(`unexpected GET ${path}`);
     });
+    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/tcping") return { success: true, latency: 18.45, probe: "managed_wireguard" } as T;
+      throw new Error(`unexpected POST ${path}`);
+    });
     render(<NodesWorkbench isAdmin notify={vi.fn()} />);
 
     expect(await screen.findByText("办公室 WireGuard")).toBeInTheDocument();
     expect(screen.getAllByText("WIREGUARD")).toHaveLength(2);
     expect(screen.getByText("203.0.113.10:51820")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "测延迟" })).toBeInTheDocument();
+    const latencyButton = screen.getByRole("button", { name: "测延迟" });
+    expect(latencyButton).toHaveAttribute("title", "测试受管 WireGuard 入站与管理链路 RTT（不是 WireGuard 公网握手 RTT）");
+    fireEvent.click(latencyButton);
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/tcping", { node_id: 12, timeout: 5000 }));
+    const result = await screen.findByRole("button", { name: "18.4 ms · 管理 RTT" });
+    expect(result).toHaveAttribute("title", "受管 WireGuard 入站运行正常；18.4 ms 是主控到节点服务器的管理链路 RTT，不是 WireGuard 公网握手 RTT");
     expect(screen.getByRole("button", { name: "更多 办公室 WireGuard 操作" })).toBeInTheDocument();
     expect(screen.queryByText("不进入订阅")).not.toBeInTheDocument();
+  });
+
+  it("submits batch latency requests by node id without client-provided targets", async () => {
+    const wireGuard = node(12, "办公室 WireGuard", "wireguard", "203.0.113.10");
+    const vless = node(13, "香港 VLESS", "vless", "edge.example.com");
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [wireGuard, vless] } as T;
+      if (path === "/api/admin/speedtest/results?latest=1") return { results: [] } as T;
+      if (path === "/api/user/config") return userConfig([12, 13]) as T;
+      if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockResolvedValue([
+      { success: true, latency: 12.3, probe: "managed_wireguard" },
+      { success: true, latency: 8.1, probe: "tcp" },
+    ]);
+    render(<NodesWorkbench isAdmin notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("checkbox", { name: "选择当前结果" }));
+    fireEvent.click(screen.getByRole("button", { name: "延迟" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/tcping/batch", [
+      { node_id: 12, timeout: 5000 },
+      { node_id: 13, timeout: 5000 },
+    ]));
   });
 });
 

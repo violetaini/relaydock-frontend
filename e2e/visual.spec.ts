@@ -1122,7 +1122,7 @@ for (const viewport of [
       await expectViewportIntegrity(page, `${viewport.name} settings ${group}`);
     }
     await page.getByRole("button", { name: "打开迁移向导" }).click();
-    const migrationDialog = page.getByRole("dialog", { name: "从妙妙屋迁移" });
+    const migrationDialog = page.getByRole("dialog", { name: "从旧版面板迁移" });
     await expect(migrationDialog.getByRole("tab", { name: "远程拉取" })).toBeVisible();
     await expect(migrationDialog.getByRole("tab", { name: "上传备份" })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} MMW migration wizard`);

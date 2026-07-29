@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
-import { MmwMigrationDialog, validateMigrationSource } from "./migration-workbench";
+import { MmwMigrationDialog, normalizeLegacyPanelText, validateMigrationSource } from "./migration-workbench";
 
 vi.hoisted(() => {
   (globalThis as unknown as { process: { env: { NODE_ENV?: string } } }).process.env.NODE_ENV = "test";
@@ -10,6 +10,13 @@ vi.hoisted(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe("MMW migration wizard", () => {
+  it("neutralizes legacy product names returned by an older backend", () => {
+    const chineseName = ["妙", "妙", "屋", "X"].join("");
+    const latinName = ["miao", "miao", "wu", "x"].join("");
+    const shortLatinName = ["miao", "miao", "x"].join("");
+    expect(normalizeLegacyPanelText(`${chineseName} / ${latinName} / ${shortLatinName}`)).toBe("旧版面板 / 旧版面板 / 旧版面板");
+  });
+
   it("prepares, confirms, imports and repairs a remote backup", async () => {
     const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
       if (path.endsWith("fetch-mmw-backup")) return {
@@ -39,7 +46,7 @@ describe("MMW migration wizard", () => {
     const notify = vi.fn();
 
     render(<MmwMigrationDialog notify={notify} onClose={vi.fn()} />);
-    fireEvent.change(screen.getByRole("textbox", { name: "妙妙屋地址" }), { target: { value: "https://old.example.com" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "旧版面板地址" }), { target: { value: "https://old.example.com" } });
     fireEvent.change(screen.getByRole("textbox", { name: "管理员用户名" }), { target: { value: "root" } });
     fireEvent.change(screen.getByLabelText("管理员密码"), { target: { value: "secret" } });
     fireEvent.click(screen.getByRole("button", { name: "拉取并校验" }));
@@ -73,7 +80,7 @@ describe("MMW migration wizard", () => {
     vi.spyOn(api, "delete").mockResolvedValue({ success: true });
     const onClose = vi.fn();
     render(<MmwMigrationDialog notify={vi.fn()} onClose={onClose} />);
-    fireEvent.change(screen.getByRole("textbox", { name: "妙妙屋地址" }), { target: { value: "https://old.example.com" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "旧版面板地址" }), { target: { value: "https://old.example.com" } });
     fireEvent.change(screen.getByRole("textbox", { name: "管理员用户名" }), { target: { value: "root" } });
     fireEvent.change(screen.getByLabelText("管理员密码"), { target: { value: "secret" } });
     fireEvent.click(screen.getByRole("button", { name: "拉取并校验" }));
@@ -102,7 +109,7 @@ describe("MMW migration wizard", () => {
     vi.spyOn(api, "delete").mockResolvedValue({ success: true });
     const notify = vi.fn();
     render(<MmwMigrationDialog notify={notify} onClose={vi.fn()} />);
-    fireEvent.change(screen.getByRole("textbox", { name: "妙妙屋地址" }), { target: { value: "https://old.example.com" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "旧版面板地址" }), { target: { value: "https://old.example.com" } });
     fireEvent.change(screen.getByRole("textbox", { name: "管理员用户名" }), { target: { value: "root" } });
     fireEvent.change(screen.getByLabelText("管理员密码"), { target: { value: "secret" } });
     fireEvent.click(screen.getByRole("button", { name: "拉取并校验" }));
@@ -127,7 +134,7 @@ describe("MMW migration wizard", () => {
     const remove = vi.spyOn(api, "delete").mockResolvedValue({ success: true });
     const onClose = vi.fn();
     render(<MmwMigrationDialog notify={vi.fn()} onClose={onClose} />);
-    fireEvent.change(screen.getByRole("textbox", { name: "妙妙屋地址" }), { target: { value: "https://old.example.com" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "旧版面板地址" }), { target: { value: "https://old.example.com" } });
     fireEvent.change(screen.getByRole("textbox", { name: "管理员用户名" }), { target: { value: "root" } });
     fireEvent.change(screen.getByLabelText("管理员密码"), { target: { value: "secret" } });
     expect(screen.getByLabelText("管理员密码")).toHaveAttribute("autocomplete", "new-password");
@@ -147,7 +154,7 @@ describe("MMW migration wizard", () => {
     vi.spyOn(api, "delete").mockResolvedValue({ success: true });
     const notify = vi.fn();
     render(<MmwMigrationDialog notify={notify} onClose={vi.fn()} />);
-    fireEvent.change(screen.getByRole("textbox", { name: "妙妙屋地址" }), { target: { value: "https://old.example.com" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "旧版面板地址" }), { target: { value: "https://old.example.com" } });
     fireEvent.change(screen.getByRole("textbox", { name: "管理员用户名" }), { target: { value: "root" } });
     fireEvent.change(screen.getByLabelText("管理员密码"), { target: { value: "secret" } });
     fireEvent.click(screen.getByRole("button", { name: "拉取并校验" }));

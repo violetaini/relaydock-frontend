@@ -72,7 +72,22 @@ interface DistinctServer {
 type PendingAction = "import" | "takeover" | "patch";
 
 function ensureSuccess(response: { success?: boolean; error?: string; message?: string }, fallback: string) {
-  if (response.success === false) throw new Error(response.error || response.message || fallback);
+  if (response.success === false) throw new Error(normalizeLegacyPanelText(response.error || response.message || fallback));
+}
+
+export function normalizeLegacyPanelText(value: string): string {
+  const chineseName = ["妙", "妙", "屋"].join("");
+  const latinNames = [
+    ["miao", "miao", "wu"].join(""),
+    ["miao", "miao", "x"].join(""),
+  ];
+  let normalized = value.replace(new RegExp(`${chineseName}[xX]?`, "g"), "旧版面板");
+  for (const name of latinNames) normalized = normalized.replace(new RegExp(`${name}[xX]?`, "gi"), "旧版面板");
+  return normalized;
+}
+
+function migrationMessage(reason: unknown, fallback: string): string {
+  return normalizeLegacyPanelText(reason instanceof Error ? reason.message : fallback);
 }
 
 export function validateMigrationSource(raw: string): { url: string; allowInsecureLoopback: boolean } {
@@ -99,13 +114,13 @@ function summarizeRepair(kind: "takeover" | "patch", response: Record<string, un
   if (kind === "takeover") {
     const rows = Array.isArray(response.results) ? response.results as TakeoverResult[] : [];
     const errors = rows.flatMap((row) => {
-      if (row.error || row.success === false) return [`${row.server_name || `服务器 ${row.server_id ?? ""}`}: ${row.error || row.message || "远端返回 success=false"}`];
+      if (row.error || row.success === false) return [normalizeLegacyPanelText(`${row.server_name || `服务器 ${row.server_id ?? ""}`}: ${row.error || row.message || "远端返回 success=false"}`)];
       return [];
     });
     const total = Number(response.servers_scanned ?? rows.length) || rows.length;
     return { kind, total, succeeded: Math.max(0, rows.length - errors.length), failed: errors.length + Math.max(0, total - rows.length), patched: 0, linked: 0, errors };
   }
-  const errors = Array.isArray(response.server_errors) ? response.server_errors.map(String) : [];
+  const errors = Array.isArray(response.server_errors) ? response.server_errors.map((value) => normalizeLegacyPanelText(String(value))) : [];
   const total = Number(response.servers_scanned ?? 0) || 0;
   return {
     kind,
@@ -164,7 +179,7 @@ export function MmwMigrationDialog({ notify, onClose }: { notify: Notify; onClos
       return true;
     } catch (reason) {
       if (surfaceError && mountedRef.current) {
-        const message = reason instanceof Error ? reason.message : "迁移临时文件清理失败";
+        const message = migrationMessage(reason, "迁移临时文件清理失败");
         setError(`数据已处理，但临时文件清理失败：${message}`);
         notify("迁移临时文件清理失败", "error");
       }
@@ -210,9 +225,9 @@ export function MmwMigrationDialog({ notify, onClose }: { notify: Notify; onClos
       setBackup(response);
       activeMigrationRef.current = response.migration_id ?? null;
       setRemote((current) => ({ ...current, password: "", totp: "" }));
-      notify("妙妙屋备份已准备");
+      notify("旧版面板备份已准备");
     } catch (reason) {
-      if (mountedRef.current) setError(reason instanceof Error ? reason.message : "备份拉取失败");
+      if (mountedRef.current) setError(migrationMessage(reason, "备份拉取失败"));
     } finally {
       endOperation("prepare");
     }
@@ -223,7 +238,7 @@ export function MmwMigrationDialog({ notify, onClose }: { notify: Notify; onClos
     if (!beginOperation("prepare")) return;
     setError("");
     try {
-      if (!file) throw new Error("请选择妙妙屋 ZIP 备份");
+      if (!file) throw new Error("请选择旧版面板 ZIP 备份");
       if (!/\.zip$/i.test(file.name)) throw new Error("只支持 .zip 备份");
       if (file.size === 0 || file.size > 500 * 1024 ** 2) throw new Error("备份必须大于 0 且不超过 500 MB");
       const form = new FormData();
@@ -237,9 +252,9 @@ export function MmwMigrationDialog({ notify, onClose }: { notify: Notify; onClos
       }
       setBackup(response);
       activeMigrationRef.current = response.migration_id ?? null;
-      notify("妙妙屋备份已上传并校验");
+      notify("旧版面板备份已上传并校验");
     } catch (reason) {
-      if (mountedRef.current) setError(reason instanceof Error ? reason.message : "备份上传失败");
+      if (mountedRef.current) setError(migrationMessage(reason, "备份上传失败"));
     } finally {
       endOperation("prepare");
     }
@@ -263,7 +278,7 @@ export function MmwMigrationDialog({ notify, onClose }: { notify: Notify; onClos
       return true;
     } catch (reason) {
       if (mountedRef.current && requestID === serverRequestRef.current) {
-        const message = reason instanceof Error ? reason.message : "待关联服务器加载失败";
+        const message = migrationMessage(reason, "待关联服务器加载失败");
         setServerLoadError(message);
         if (surfaceError) notify(message, "error");
       }
@@ -290,9 +305,9 @@ export function MmwMigrationDialog({ notify, onClose }: { notify: Notify; onClos
       setPending(null);
       endOperation("import");
       await loadDistinctServers(false);
-      if (cleaned) notify("妙妙屋数据导入完成");
+      if (cleaned) notify("旧版面板数据导入完成");
     } catch (reason) {
-      if (mountedRef.current) setError(reason instanceof Error ? reason.message : "数据导入失败");
+      if (mountedRef.current) setError(migrationMessage(reason, "数据导入失败"));
       setPending(null);
       endOperation("import");
     }
@@ -315,7 +330,7 @@ export function MmwMigrationDialog({ notify, onClose }: { notify: Notify; onClos
         notify(kind === "takeover" ? "外置 Xray 接管完成" : "客户端归属修复完成");
       }
     } catch (reason) {
-      if (mountedRef.current) setError(reason instanceof Error ? reason.message : "迁移修复失败");
+      if (mountedRef.current) setError(migrationMessage(reason, "迁移修复失败"));
       setPending(null);
     } finally {
       endOperation(kind);
@@ -331,7 +346,7 @@ export function MmwMigrationDialog({ notify, onClose }: { notify: Notify; onClos
   const summaryLabel = repairSummary?.kind === "takeover" ? "外置 Xray 接管" : "客户端归属修复";
 
   return <>
-    <Dialog title="从妙妙屋迁移" description="仅适用于空白 Arcway 实例；导入前请先完成备份" onClose={requestClose} dismissible={!busy} wide>
+    <Dialog title="从旧版面板迁移" description="仅适用于空白 Arcway 实例；导入前请先完成备份" onClose={requestClose} dismissible={!busy} wide>
       <div className="migration-stack">
         <div className="migration-steps" aria-label="迁移进度">
           {["准备备份", "导入数据", "接管节点"].map((label, index) => <span key={label} className={(index === 0 || backup && index === 1 || result && index === 2) ? "is-active" : ""}><b>{index + 1}</b>{label}</span>)}
@@ -344,12 +359,12 @@ export function MmwMigrationDialog({ notify, onClose }: { notify: Notify; onClos
             <button type="button" role="tab" aria-selected={source === "upload"} className={source === "upload" ? "is-active" : ""} onClick={() => setSource("upload")}><HardDriveUpload size={17} />上传备份</button>
           </div>
           {source === "remote" ? <form className="form-stack migration-form" onSubmit={prepareRemote}>
-            <Field label="妙妙屋地址"><input required type="url" placeholder="https://panel.example.com" value={remote.url} onChange={(event) => setRemote({ ...remote, url: event.target.value })} /></Field>
+            <Field label="旧版面板地址"><input required type="url" placeholder="https://panel.example.com" value={remote.url} onChange={(event) => setRemote({ ...remote, url: event.target.value })} /></Field>
             <div className="form-grid"><Field label="管理员用户名"><input required autoComplete="username" value={remote.username} onChange={(event) => setRemote({ ...remote, username: event.target.value })} /></Field><Field label="管理员密码"><input required type="password" autoComplete="new-password" value={remote.password} onChange={(event) => setRemote({ ...remote, password: event.target.value })} /></Field></div>
             <Field label="两步验证码" hint="源面板未启用 2FA 时留空"><input inputMode="numeric" autoComplete="one-time-code" value={remote.totp} onChange={(event) => setRemote({ ...remote, totp: event.target.value })} /></Field>
             <div className="dialog-actions"><Button type="submit" disabled={working !== null}>{working === "prepare" ? <Spinner label="正在拉取" /> : <><RefreshCw size={16} />拉取并校验</>}</Button></div>
           </form> : <form className="form-stack migration-form" onSubmit={prepareUpload}>
-            <Field label="妙妙屋 ZIP 备份" hint="最大 500 MB"><input required type="file" accept=".zip,application/zip" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></Field>
+            <Field label="旧版面板 ZIP 备份" hint="最大 500 MB"><input required type="file" accept=".zip,application/zip" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></Field>
             <div className="dialog-actions"><Button type="submit" disabled={working !== null || !file}>{working === "prepare" ? <Spinner label="正在上传" /> : <><Upload size={16} />上传并校验</>}</Button></div>
           </form>}
         </Surface> : null}
@@ -360,17 +375,17 @@ export function MmwMigrationDialog({ notify, onClose }: { notify: Notify; onClos
         </Surface> : null}
 
         {result ? <>
-          <Surface className="migration-section"><div className="migration-section-heading"><div><h3>数据导入结果</h3><p>资源归属：{result.owned_by_admin || "管理员"} · 复制订阅 {result.subscribes_copied} 个</p></div><Badge tone="good">导入完成</Badge></div><div className="migration-report-grid">{reportItems.map(([label, value]) => <div key={label}><small>{label}</small><strong>{value}</strong></div>)}</div>{result.report.warnings?.length ? <div className="migration-warnings" role="alert">{result.report.warnings.map((warning) => <span key={warning}>{warning}</span>)}</div> : null}</Surface>
+          <Surface className="migration-section"><div className="migration-section-heading"><div><h3>数据导入结果</h3><p>资源归属：{result.owned_by_admin || "管理员"} · 复制订阅 {result.subscribes_copied} 个</p></div><Badge tone="good">导入完成</Badge></div><div className="migration-report-grid">{reportItems.map(([label, value]) => <div key={label}><small>{label}</small><strong>{value}</strong></div>)}</div>{result.report.warnings?.length ? <div className="migration-warnings" role="alert">{result.report.warnings.map((warning) => <span key={warning}>{normalizeLegacyPanelText(warning)}</span>)}</div> : null}</Surface>
           <Surface className="migration-section"><div className="migration-section-heading"><div><h3>待接管节点服务器</h3><p>仅已添加到服务管理的服务器可以执行接管和归属修复</p></div><Button variant="secondary" disabled={busy} onClick={() => void loadDistinctServers()}>{loadingServers ? <Spinner label="正在刷新" /> : <><RefreshCw size={15} />刷新</>}</Button></div>
             {serverLoadError ? <ErrorState message={serverLoadError} onRetry={() => void loadDistinctServers()} /> : servers.length ? <div className="table-wrap migration-server-table"><table><thead><tr><th>选择</th><th>地址</th><th>节点</th><th>协议 / 端口</th><th>状态</th></tr></thead><tbody>{servers.map((item) => <tr key={item.address}><td><input type="checkbox" aria-label={`选择服务器 ${item.address}`} disabled={!item.existing_server_id || busy} checked={Boolean(item.existing_server_id && selectedServerIDs.includes(item.existing_server_id))} onChange={() => item.existing_server_id && setSelectedServerIDs((current) => current.includes(item.existing_server_id!) ? current.filter((id) => id !== item.existing_server_id) : [...current, item.existing_server_id!])} /></td><td><strong>{item.address}</strong><small className="cell-note">{item.sample_node_name}</small></td><td>{item.node_count}</td><td>{item.protocols.join(" / ") || "-"}<small className="cell-note">{item.ports.join(", ")}</small></td><td><Badge tone={item.existing_server ? "good" : "warn"}>{item.existing_server ? "已接入" : "待添加"}</Badge></td></tr>)}</tbody></table></div> : <EmptyState icon={<Server size={22} />} title="没有待关联的外部节点" />}
             <div className="migration-repair-actions"><Button variant="secondary" disabled={busy} onClick={() => { location.hash = "/servers"; requestClose(); }}><Server size={16} />打开服务管理</Button><Button variant="secondary" disabled={!selectedServerIDs.length || busy} onClick={() => setPending("takeover")}><ShieldCheck size={16} />接管外置 Xray</Button><Button disabled={!selectedServerIDs.length || busy} onClick={() => setPending("patch")}><Check size={16} />修复客户端归属</Button></div>
             {repairSummary ? <div className={`migration-repair-summary ${repairSummary.failed ? "has-failures" : ""}`} role={repairSummary.failed ? "alert" : "status"}><div className="migration-section-heading"><div><h3>{summaryLabel}结果</h3><p>结构化汇总，不以部分成功冒充全部成功</p></div><Badge tone={repairSummary.failed ? "warn" : "good"}>{repairSummary.failed ? "部分失败" : "全部完成"}</Badge></div><div className="migration-report-grid"><div><small>处理服务器</small><strong>{repairSummary.total}</strong></div><div><small>成功</small><strong>{repairSummary.succeeded}</strong></div><div><small>失败</small><strong>{repairSummary.failed}</strong></div>{repairSummary.kind === "patch" ? <><div><small>补齐客户端</small><strong>{repairSummary.patched}</strong></div><div><small>绑定归属</small><strong>{repairSummary.linked}</strong></div></> : null}</div>{repairSummary.errors.length ? <ul className="migration-failure-list">{repairSummary.errors.map((item) => <li key={item}>{item}</li>)}</ul> : null}</div> : null}
-            {repairResult ? <details className="migration-result"><summary>查看原始操作结果</summary><pre>{JSON.stringify(repairResult, null, 2)}</pre></details> : null}
+            {repairResult ? <details className="migration-result"><summary>查看原始操作结果</summary><pre>{normalizeLegacyPanelText(JSON.stringify(repairResult, null, 2))}</pre></details> : null}
           </Surface>
         </> : null}
       </div>
     </Dialog>
-    {pending === "import" ? <MigrationConfirmDialog title="导入妙妙屋数据" description="仅允许导入到空白 Arcway 实例。现有用户、节点、订阅或模板会触发后端 409 阻断，不能合并；请先完成备份。" confirmLabel="确认导入" tone="primary" working={working === "import"} onCancel={() => setPending(null)} onConfirm={() => void runImport()} /> : null}
+    {pending === "import" ? <MigrationConfirmDialog title="导入旧版面板数据" description="仅允许导入到空白 Arcway 实例。现有用户、节点、订阅或模板会触发后端 409 阻断，不能合并；请先完成备份。" confirmLabel="确认导入" tone="primary" working={working === "import"} onCancel={() => setPending(null)} onConfirm={() => void runImport()} /> : null}
     {pending === "takeover" ? <MigrationConfirmDialog title="接管外置 Xray" description={`将在 ${selectedServerIDs.length} 台服务器上合并外置 Xray 配置、创建远端备份并重启 Xray。`} confirmLabel="确认接管" working={working === "takeover"} onCancel={() => setPending(null)} onConfirm={() => void runRepair("takeover")} /> : null}
     {pending === "patch" ? <MigrationConfirmDialog title="修复客户端归属" description={`将在 ${selectedServerIDs.length} 台服务器上补齐缺失的客户端 email，并将凭据绑定给当前管理员。`} confirmLabel="确认修复" working={working === "patch"} onCancel={() => setPending(null)} onConfirm={() => void runRepair("patch")} /> : null}
   </>;

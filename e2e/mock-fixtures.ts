@@ -37,7 +37,7 @@ export const settingsGetResponses: Record<string, unknown> = {
   "/api/admin/system-settings/override-scripts": { enable_override_scripts: false },
   "/api/admin/system-settings/subscription-output-format": { subscription_output_format: "yaml" },
   "/api/admin/system-settings/silent-mode": { silent_mode: false, silent_mode_timeout: 15 },
-  "/api/admin/system-settings/miaomiaowu-features": { enable_miaomiaowu_features: true },
+  "/api/admin/system-settings/management-features": { enable_management_features: true },
   "/api/admin/system-settings/mmw-short-link-compat": { enable_mmw_short_link_compat: false },
   "/api/admin/system-settings/agent-log": { agent_log_enabled: false },
   "/api/admin/rule-templates": { templates: ["balanced_v3.yaml"], owners: { "balanced_v3.yaml": "admin" } },

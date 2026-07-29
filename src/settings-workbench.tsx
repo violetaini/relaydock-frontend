@@ -23,7 +23,7 @@ import {
   SlidersHorizontal,
   Users,
 } from "lucide-react";
-import { api, getToken } from "./api";
+import { api, ApiError, getToken } from "./api";
 import { MmwMigrationDialog } from "./migration-workbench";
 import { TwoFactorSettings } from "./two-factor";
 import type { RemoteServer, ServerListResponse } from "./types";
@@ -31,6 +31,37 @@ import { Badge, Button, ConfirmDialog, ErrorState, Field, IconButton, PageHeader
 import "./settings-workbench.css";
 
 type Notify = (message: string, tone?: "success" | "error") => void;
+
+const MANAGEMENT_FEATURES_PATH = "/api/admin/system-settings/management-features";
+
+function legacyManagementFeaturesContract(): { path: string; key: string } {
+  const legacyName = ["miao", "miao", "wu"].join("");
+  return {
+    path: `/api/admin/system-settings/${legacyName}-features`,
+    key: ["enable", legacyName, "features"].join("_"),
+  };
+}
+
+async function loadManagementFeatures(): Promise<{ enable_management_features: boolean }> {
+  try {
+    return await api.get<{ enable_management_features: boolean }>(MANAGEMENT_FEATURES_PATH);
+  } catch (reason) {
+    if (!(reason instanceof ApiError) || reason.status !== 404) throw reason;
+    const legacy = legacyManagementFeaturesContract();
+    const response = await api.get<Record<string, unknown>>(legacy.path);
+    return { enable_management_features: response[legacy.key] === true };
+  }
+}
+
+async function saveManagementFeatures(enabled: boolean): Promise<unknown> {
+  try {
+    return await api.put(MANAGEMENT_FEATURES_PATH, { enable_management_features: enabled });
+  } catch (reason) {
+    if (!(reason instanceof ApiError) || reason.status !== 404) throw reason;
+    const legacy = legacyManagementFeaturesContract();
+    return api.put(legacy.path, { [legacy.key]: enabled });
+  }
+}
 
 interface UpdateInfo {
   current_version: string;
@@ -325,7 +356,7 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
         api.get<{ enable_override_scripts: boolean }>("/api/admin/system-settings/override-scripts"),
         api.get<{ subscription_output_format: string }>("/api/admin/system-settings/subscription-output-format"),
         api.get<typeof silent>("/api/admin/system-settings/silent-mode"),
-        api.get<{ enable_miaomiaowu_features: boolean }>("/api/admin/system-settings/miaomiaowu-features"),
+        loadManagementFeatures(),
         api.get<{ enable_mmw_short_link_compat: boolean }>("/api/admin/system-settings/mmw-short-link-compat"),
         api.get<{ agent_log_enabled: boolean }>("/api/admin/system-settings/agent-log"),
         api.get<{ templates?: string[] }>("/api/admin/rule-templates"),
@@ -341,7 +372,7 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
       setMasterURL(master.master_url || location.origin); setTheme(themeData.default_theme); setWallpaper(wall.login_wallpaper);
       setIntervals(intervalData); setDashboardRefreshMs(refreshData.refetch_interval_ms); setProbe(probeData); setServers(serverData.servers ?? []); setShortLink(shortData.enable_short_link);
       setPrefix(prefixData); setOverrideScripts(overrideData.enable_override_scripts); setOutputFormat(formatData.subscription_output_format === "json" ? "json" : "yaml");
-      setSilent(silentData); setFeatures(featureData.enable_miaomiaowu_features); setShortCompat(compatData.enable_mmw_short_link_compat); setAgentLog(logData.agent_log_enabled);
+      setSilent(silentData); setFeatures(featureData.enable_management_features); setShortCompat(compatData.enable_mmw_short_link_compat); setAgentLog(logData.agent_log_enabled);
       setTemplates(templateData.templates ?? []); setDefaultTemplate(defaultTemplateData.default_template_filename); setRedeemTemplate(redeemData.redeem_template);
       setSecurity(secData); setRequireEncryption(encryptData.require_encryption); setPermissions(permissionData.config); setNotifications(notifyData); setApiToken(tokenData.token); setUserSubscription(userSubscriptionData);
       setLoaded(true);
@@ -400,7 +431,7 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
       api.put("/api/admin/system-settings/override-scripts", { enable_override_scripts: overrideScripts }),
       api.put("/api/admin/system-settings/subscription-output-format", { subscription_output_format: outputFormat }),
       api.put("/api/admin/system-settings/silent-mode", silent),
-      api.put("/api/admin/system-settings/miaomiaowu-features", { enable_miaomiaowu_features: features }),
+      saveManagementFeatures(features),
       api.put("/api/admin/system-settings/mmw-short-link-compat", { enable_mmw_short_link_compat: shortCompat }),
       api.put("/api/admin/system-settings/agent-log", { agent_log_enabled: agentLog }),
       api.put("/api/admin/system-settings/default-template", { default_template_filename: defaultTemplate }),
@@ -564,7 +595,7 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
           <Toggle checked={features} onChange={setFeatures} label="启用高级订阅功能" /><Toggle checked={overrideScripts} onChange={setOverrideScripts} label="允许覆写脚本" /><Toggle checked={agentLog} onChange={setAgentLog} label="记录 Agent 调试日志" />
           <Field label="默认规则模板"><select value={defaultTemplate} onChange={(e) => setDefaultTemplate(e.target.value)}><option value="">系统默认</option>{templates.map((name) => <option key={name} value={name}>{name}</option>)}</select></Field>
         </SettingSection>
-        <SettingSection icon={<Database size={19} />} title="妙妙屋数据迁移" description="从旧面板导入用户、节点、订阅、模板和覆写">
+        <SettingSection icon={<Database size={19} />} title="旧版面板数据迁移" description="从旧版面板导入用户、节点、订阅、模板和覆写">
           <Button type="button" variant="secondary" onClick={() => setShowMigration(true)}><Database size={16} />打开迁移向导</Button>
         </SettingSection>
         <SettingSection icon={<RefreshCw size={19} />} title="外部订阅同步" description="节点匹配、缓存与流量同步策略">

@@ -17,7 +17,7 @@ describe("api client", () => {
   it("sends the backend authorization header", async () => {
     setToken("secret");
     vi.stubGlobal("fetch", vi.fn(async (_path, init) => {
-      expect(new Headers(init?.headers).get("MM-Authorization")).toBe("secret");
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer secret");
       return new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: { "content-type": "application/json" },

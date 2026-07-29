@@ -23,8 +23,8 @@ import {
   SlidersHorizontal,
   Users,
 } from "lucide-react";
-import { api, ApiError, getToken } from "./api";
-import { MmwMigrationDialog, normalizeLegacyPanelText } from "./migration-workbench";
+import { api, getToken } from "./api";
+import { LegacyPanelImportDialog } from "./legacy-panel-import-dialog";
 import { TwoFactorSettings } from "./two-factor";
 import type { RemoteServer, ServerListResponse } from "./types";
 import { Badge, Button, ConfirmDialog, ErrorState, Field, IconButton, PageHeader, Spinner, Surface, Toggle } from "./ui";
@@ -34,33 +34,12 @@ type Notify = (message: string, tone?: "success" | "error") => void;
 
 const MANAGEMENT_FEATURES_PATH = "/api/admin/system-settings/management-features";
 
-function legacyManagementFeaturesContract(): { path: string; key: string } {
-  const legacyName = ["miao", "miao", "wu"].join("");
-  return {
-    path: `/api/admin/system-settings/${legacyName}-features`,
-    key: ["enable", legacyName, "features"].join("_"),
-  };
-}
-
 async function loadManagementFeatures(): Promise<{ enable_management_features: boolean }> {
-  try {
-    return await api.get<{ enable_management_features: boolean }>(MANAGEMENT_FEATURES_PATH);
-  } catch (reason) {
-    if (!(reason instanceof ApiError) || reason.status !== 404) throw reason;
-    const legacy = legacyManagementFeaturesContract();
-    const response = await api.get<Record<string, unknown>>(legacy.path);
-    return { enable_management_features: response[legacy.key] === true };
-  }
+  return api.get<{ enable_management_features: boolean }>(MANAGEMENT_FEATURES_PATH);
 }
 
 async function saveManagementFeatures(enabled: boolean): Promise<unknown> {
-  try {
-    return await api.put(MANAGEMENT_FEATURES_PATH, { enable_management_features: enabled });
-  } catch (reason) {
-    if (!(reason instanceof ApiError) || reason.status !== 404) throw reason;
-    const legacy = legacyManagementFeaturesContract();
-    return api.put(legacy.path, { [legacy.key]: enabled });
-  }
+  return api.put(MANAGEMENT_FEATURES_PATH, { enable_management_features: enabled });
 }
 
 interface UpdateInfo {
@@ -318,7 +297,7 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
   const [outputFormat, setOutputFormat] = useState<"yaml" | "json">("yaml");
   const [silent, setSilent] = useState({ silent_mode: false, silent_mode_timeout: 15 });
   const [features, setFeatures] = useState(true);
-  const [shortCompat, setShortCompat] = useState(false);
+  const [rootShortLinks, setRootShortLinks] = useState(false);
   const [agentLog, setAgentLog] = useState(false);
   const [defaultTemplate, setDefaultTemplate] = useState("");
   const [templates, setTemplates] = useState<string[]>([]);
@@ -343,7 +322,7 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
   const load = useCallback(async () => {
     setLoading(true); setLoaded(false); setError("");
     try {
-      const [master, themeData, wall, intervalData, refreshData, probeData, serverData, shortData, prefixData, overrideData, formatData, silentData, featureData, compatData, logData, templateData, defaultTemplateData, redeemData, secData, encryptData, permissionData, notifyData, tokenData, userSubscriptionData] = await Promise.all([
+      const [master, themeData, wall, intervalData, refreshData, probeData, serverData, shortData, prefixData, overrideData, formatData, silentData, featureData, rootLinksData, logData, templateData, defaultTemplateData, redeemData, secData, encryptData, permissionData, notifyData, tokenData, userSubscriptionData] = await Promise.all([
         api.get<{ master_url: string }>("/api/admin/system-settings/master-url"),
         api.get<{ default_theme: string }>("/api/admin/system-settings/default-theme"),
         api.get<{ login_wallpaper: string }>("/api/admin/system-settings/login-wallpaper"),
@@ -357,7 +336,7 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
         api.get<{ subscription_output_format: string }>("/api/admin/system-settings/subscription-output-format"),
         api.get<typeof silent>("/api/admin/system-settings/silent-mode"),
         loadManagementFeatures(),
-        api.get<{ enable_mmw_short_link_compat: boolean }>("/api/admin/system-settings/mmw-short-link-compat"),
+        api.get<{ enable_root_short_links: boolean }>("/api/admin/system-settings/root-short-links"),
         api.get<{ agent_log_enabled: boolean }>("/api/admin/system-settings/agent-log"),
         api.get<{ templates?: string[] }>("/api/admin/rule-templates"),
         api.get<{ default_template_filename: string }>("/api/admin/system-settings/default-template"),
@@ -372,8 +351,8 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
       setMasterURL(master.master_url || location.origin); setTheme(themeData.default_theme); setWallpaper(wall.login_wallpaper);
       setIntervals(intervalData); setDashboardRefreshMs(refreshData.refetch_interval_ms); setProbe(probeData); setServers(serverData.servers ?? []); setShortLink(shortData.enable_short_link);
       setPrefix(prefixData); setOverrideScripts(overrideData.enable_override_scripts); setOutputFormat(formatData.subscription_output_format === "json" ? "json" : "yaml");
-      setSilent(silentData); setFeatures(featureData.enable_management_features); setShortCompat(compatData.enable_mmw_short_link_compat); setAgentLog(logData.agent_log_enabled);
-      setTemplates(templateData.templates ?? []); setDefaultTemplate(defaultTemplateData.default_template_filename); setRedeemTemplate(normalizeLegacyPanelText(redeemData.redeem_template, "RelayDock"));
+      setSilent(silentData); setFeatures(featureData.enable_management_features); setRootShortLinks(rootLinksData.enable_root_short_links); setAgentLog(logData.agent_log_enabled);
+      setTemplates(templateData.templates ?? []); setDefaultTemplate(defaultTemplateData.default_template_filename); setRedeemTemplate(redeemData.redeem_template);
       setSecurity(secData); setRequireEncryption(encryptData.require_encryption); setPermissions(permissionData.config); setNotifications(notifyData); setApiToken(tokenData.token); setUserSubscription(userSubscriptionData);
       setLoaded(true);
     } catch (reason) { setError(messageOf(reason, "设置加载失败")); } finally { setLoading(false); }
@@ -432,7 +411,7 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
       api.put("/api/admin/system-settings/subscription-output-format", { subscription_output_format: outputFormat }),
       api.put("/api/admin/system-settings/silent-mode", silent),
       saveManagementFeatures(features),
-      api.put("/api/admin/system-settings/mmw-short-link-compat", { enable_mmw_short_link_compat: shortCompat }),
+      api.put("/api/admin/system-settings/root-short-links", { enable_root_short_links: rootShortLinks }),
       api.put("/api/admin/system-settings/agent-log", { agent_log_enabled: agentLog }),
       api.put("/api/admin/system-settings/default-template", { default_template_filename: defaultTemplate }),
       api.put("/api/admin/system-settings/redeem-template", { redeem_template: redeemTemplate }),
@@ -492,7 +471,7 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
     try {
       const headers = new Headers({ Accept: "text/event-stream" });
       const token = getToken();
-      if (token) headers.set("MM-Authorization", token);
+      if (token) headers.set("Authorization", `Bearer ${token}`);
 
       let response: Response;
       try {
@@ -587,7 +566,7 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
       <form className="settings-settings-group" onSubmit={saveSubscription}>
         <SettingsGroupHeading icon={<Link2 size={18} />} title="订阅设置" description="订阅同步、输出格式与生成功能" />
         <SettingSection icon={<Link2 size={19} />} title="订阅链接" description="链接格式、短码与节点名称">
-          <Toggle checked={shortLink} onChange={setShortLink} label="启用短链接" /><Toggle checked={shortCompat} onChange={setShortCompat} label="兼容根路径短码" /><Toggle checked={prefix.enabled} onChange={(enabled) => setPrefix({ ...prefix, enabled })} label="节点名显示流量倍率" />
+          <Toggle checked={shortLink} onChange={setShortLink} label="启用短链接" /><Toggle checked={rootShortLinks} onChange={setRootShortLinks} label="启用根路径短码" /><Toggle checked={prefix.enabled} onChange={(enabled) => setPrefix({ ...prefix, enabled })} label="节点名显示流量倍率" />
           <div className="settings-fields-grid"><Field label="倍率左分隔符"><input maxLength={4} value={prefix.left} onChange={(e) => setPrefix({ ...prefix, left: e.target.value })} /></Field><Field label="倍率右分隔符"><input maxLength={4} value={prefix.right} onChange={(e) => setPrefix({ ...prefix, right: e.target.value })} /></Field></div>
           <Field label="订阅序列化"><select value={outputFormat} onChange={(e) => setOutputFormat(e.target.value as "yaml" | "json")}><option value="yaml">YAML</option><option value="json">JSON</option></select></Field>
         </SettingSection>
@@ -681,7 +660,7 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
       onCancel={() => setConfirmUpdate(false)}
       onConfirm={() => void applyUpdate()}
     /> : null}
-    {showMigration ? <MmwMigrationDialog notify={notify} onClose={() => setShowMigration(false)} /> : null}
+    {showMigration ? <LegacyPanelImportDialog notify={notify} onClose={() => setShowMigration(false)} /> : null}
   </>;
 }
 

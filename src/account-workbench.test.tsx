@@ -170,7 +170,7 @@ describe("account workbench", () => {
       },
     });
     const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string, body?: unknown): Promise<T> => {
-      if (path === "/api/user/api-tokens") return { success: true, token: "mmwx_one_time_secret", name: "CI deploy" } as T;
+      if (path === "/api/user/api-tokens") return { success: true, token: "relaydock_one_time_secret", name: "CI deploy" } as T;
       throw new Error(`unexpected POST ${path} ${JSON.stringify(body)}`);
     });
     const remove = vi.spyOn(api, "delete").mockResolvedValue({ success: true });
@@ -185,14 +185,14 @@ describe("account workbench", () => {
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/user/api-tokens", { name: "CI deploy" }));
     const secretDialog = await screen.findByRole("dialog", { name: "保存个人 API Token" });
-    expect(screen.getByText("mmwx_one_time_secret")).toBeInTheDocument();
+    expect(screen.getByText("relaydock_one_time_secret")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "关闭" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "完成" })).toBeDisabled();
     fireEvent.mouseDown(secretDialog.parentElement!);
     expect(secretDialog).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "复制新 API Token" }));
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith("mmwx_one_time_secret"));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("relaydock_one_time_secret"));
     fireEvent.click(screen.getByRole("checkbox", { name: "我已将这个 Token 保存在安全位置" }));
     fireEvent.click(screen.getByRole("button", { name: "完成" }));
     expect(screen.queryByRole("dialog", { name: "保存个人 API Token" })).not.toBeInTheDocument();

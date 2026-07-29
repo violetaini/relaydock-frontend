@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 
 import { AlertTriangle, ArrowRight, Check, Database, HardDriveUpload, RefreshCw, Server, ShieldCheck, Upload } from "lucide-react";
 import { api, request } from "./api";
 import { Badge, Button, Dialog, EmptyState, ErrorState, Field, Spinner, Surface, formatBytes } from "./ui";
-import "./migration-workbench.css";
+import "./legacy-panel-import-dialog.css";
 
 type Notify = (message: string, tone?: "success" | "error") => void;
 
@@ -72,22 +72,11 @@ interface DistinctServer {
 type PendingAction = "import" | "takeover" | "patch";
 
 function ensureSuccess(response: { success?: boolean; error?: string; message?: string }, fallback: string) {
-  if (response.success === false) throw new Error(normalizeLegacyPanelText(response.error || response.message || fallback));
-}
-
-export function normalizeLegacyPanelText(value: string, replacement = "旧版面板"): string {
-  const chineseName = ["妙", "妙", "屋"].join("");
-  const latinNames = [
-    ["miao", "miao", "wu"].join(""),
-    ["miao", "miao", "x"].join(""),
-  ];
-  let normalized = value.replace(new RegExp(`${chineseName}[xX]?`, "g"), replacement);
-  for (const name of latinNames) normalized = normalized.replace(new RegExp(`${name}[xX]?`, "gi"), replacement);
-  return normalized;
+  if (response.success === false) throw new Error(response.error || response.message || fallback);
 }
 
 function migrationMessage(reason: unknown, fallback: string): string {
-  return normalizeLegacyPanelText(reason instanceof Error ? reason.message : fallback);
+  return reason instanceof Error ? reason.message : fallback;
 }
 
 export function validateMigrationSource(raw: string): { url: string; allowInsecureLoopback: boolean } {
@@ -114,13 +103,13 @@ function summarizeRepair(kind: "takeover" | "patch", response: Record<string, un
   if (kind === "takeover") {
     const rows = Array.isArray(response.results) ? response.results as TakeoverResult[] : [];
     const errors = rows.flatMap((row) => {
-      if (row.error || row.success === false) return [normalizeLegacyPanelText(`${row.server_name || `服务器 ${row.server_id ?? ""}`}: ${row.error || row.message || "远端返回 success=false"}`)];
+      if (row.error || row.success === false) return [`${row.server_name || `服务器 ${row.server_id ?? ""}`}: ${row.error || row.message || "远端返回 success=false"}`];
       return [];
     });
     const total = Number(response.servers_scanned ?? rows.length) || rows.length;
     return { kind, total, succeeded: Math.max(0, rows.length - errors.length), failed: errors.length + Math.max(0, total - rows.length), patched: 0, linked: 0, errors };
   }
-  const errors = Array.isArray(response.server_errors) ? response.server_errors.map((value) => normalizeLegacyPanelText(String(value))) : [];
+  const errors = Array.isArray(response.server_errors) ? response.server_errors.map(String) : [];
   const total = Number(response.servers_scanned ?? 0) || 0;
   return {
     kind,
@@ -133,7 +122,7 @@ function summarizeRepair(kind: "takeover" | "patch", response: Record<string, un
   };
 }
 
-export function MmwMigrationDialog({ notify, onClose }: { notify: Notify; onClose: () => void }) {
+export function LegacyPanelImportDialog({ notify, onClose }: { notify: Notify; onClose: () => void }) {
   const [source, setSource] = useState<"remote" | "upload">("remote");
   const [remote, setRemote] = useState({ url: "", username: "", password: "", totp: "" });
   const [file, setFile] = useState<File | null>(null);
@@ -212,7 +201,7 @@ export function MmwMigrationDialog({ notify, onClose }: { notify: Notify; onClos
     setError("");
     try {
       const sourceURL = validateMigrationSource(remote.url);
-      const response = await api.post<PreparedBackup>("/api/admin/migrate/fetch-mmw-backup", {
+      const response = await api.post<PreparedBackup>("/api/admin/migrate/fetch-legacy-backup", {
         url: sourceURL.url, allow_insecure_loopback: sourceURL.allowInsecureLoopback,
         username: remote.username.trim(), password: remote.password, totp: remote.totp.trim(),
       });
@@ -243,7 +232,7 @@ export function MmwMigrationDialog({ notify, onClose }: { notify: Notify; onClos
       if (file.size === 0 || file.size > 500 * 1024 ** 2) throw new Error("备份必须大于 0 且不超过 500 MB");
       const form = new FormData();
       form.set("backup", file);
-      const response = await request<PreparedBackup>("/api/admin/migrate/upload-mmw-backup", { method: "POST", body: form });
+      const response = await request<PreparedBackup>("/api/admin/migrate/upload-legacy-backup", { method: "POST", body: form });
       ensureSuccess(response, "备份上传失败");
       if (!response.migration_id && !response.db_path) throw new Error("服务端未返回迁移会话 ID");
       if (!mountedRef.current) {
@@ -298,7 +287,7 @@ export function MmwMigrationDialog({ notify, onClose }: { notify: Notify; onClos
       const body = backup.migration_id
         ? { migration_id: backup.migration_id }
         : { db_path: backup.db_path, subscribes_dir: backup.subscribes_dir };
-      const response = await api.post<ImportResult>("/api/admin/migrate/import-mmw", body);
+      const response = await api.post<ImportResult>("/api/admin/migrate/import-legacy-backup", body);
       ensureSuccess(response, "数据导入失败");
       const cleaned = await cleanupMigration(backup.migration_id ?? null, true);
       setResult(response);
@@ -375,12 +364,12 @@ export function MmwMigrationDialog({ notify, onClose }: { notify: Notify; onClos
         </Surface> : null}
 
         {result ? <>
-          <Surface className="migration-section"><div className="migration-section-heading"><div><h3>数据导入结果</h3><p>资源归属：{result.owned_by_admin || "管理员"} · 复制订阅 {result.subscribes_copied} 个</p></div><Badge tone="good">导入完成</Badge></div><div className="migration-report-grid">{reportItems.map(([label, value]) => <div key={label}><small>{label}</small><strong>{value}</strong></div>)}</div>{result.report.warnings?.length ? <div className="migration-warnings" role="alert">{result.report.warnings.map((warning) => <span key={warning}>{normalizeLegacyPanelText(warning)}</span>)}</div> : null}</Surface>
+          <Surface className="migration-section"><div className="migration-section-heading"><div><h3>数据导入结果</h3><p>资源归属：{result.owned_by_admin || "管理员"} · 复制订阅 {result.subscribes_copied} 个</p></div><Badge tone="good">导入完成</Badge></div><div className="migration-report-grid">{reportItems.map(([label, value]) => <div key={label}><small>{label}</small><strong>{value}</strong></div>)}</div>{result.report.warnings?.length ? <div className="migration-warnings" role="alert">{result.report.warnings.map((warning) => <span key={warning}>{warning}</span>)}</div> : null}</Surface>
           <Surface className="migration-section"><div className="migration-section-heading"><div><h3>待接管节点服务器</h3><p>仅已添加到服务管理的服务器可以执行接管和归属修复</p></div><Button variant="secondary" disabled={busy} onClick={() => void loadDistinctServers()}>{loadingServers ? <Spinner label="正在刷新" /> : <><RefreshCw size={15} />刷新</>}</Button></div>
             {serverLoadError ? <ErrorState message={serverLoadError} onRetry={() => void loadDistinctServers()} /> : servers.length ? <div className="table-wrap migration-server-table"><table><thead><tr><th>选择</th><th>地址</th><th>节点</th><th>协议 / 端口</th><th>状态</th></tr></thead><tbody>{servers.map((item) => <tr key={item.address}><td><input type="checkbox" aria-label={`选择服务器 ${item.address}`} disabled={!item.existing_server_id || busy} checked={Boolean(item.existing_server_id && selectedServerIDs.includes(item.existing_server_id))} onChange={() => item.existing_server_id && setSelectedServerIDs((current) => current.includes(item.existing_server_id!) ? current.filter((id) => id !== item.existing_server_id) : [...current, item.existing_server_id!])} /></td><td><strong>{item.address}</strong><small className="cell-note">{item.sample_node_name}</small></td><td>{item.node_count}</td><td>{item.protocols.join(" / ") || "-"}<small className="cell-note">{item.ports.join(", ")}</small></td><td><Badge tone={item.existing_server ? "good" : "warn"}>{item.existing_server ? "已接入" : "待添加"}</Badge></td></tr>)}</tbody></table></div> : <EmptyState icon={<Server size={22} />} title="没有待关联的外部节点" />}
             <div className="migration-repair-actions"><Button variant="secondary" disabled={busy} onClick={() => { location.hash = "/servers"; requestClose(); }}><Server size={16} />打开服务管理</Button><Button variant="secondary" disabled={!selectedServerIDs.length || busy} onClick={() => setPending("takeover")}><ShieldCheck size={16} />接管外置 Xray</Button><Button disabled={!selectedServerIDs.length || busy} onClick={() => setPending("patch")}><Check size={16} />修复客户端归属</Button></div>
             {repairSummary ? <div className={`migration-repair-summary ${repairSummary.failed ? "has-failures" : ""}`} role={repairSummary.failed ? "alert" : "status"}><div className="migration-section-heading"><div><h3>{summaryLabel}结果</h3><p>结构化汇总，不以部分成功冒充全部成功</p></div><Badge tone={repairSummary.failed ? "warn" : "good"}>{repairSummary.failed ? "部分失败" : "全部完成"}</Badge></div><div className="migration-report-grid"><div><small>处理服务器</small><strong>{repairSummary.total}</strong></div><div><small>成功</small><strong>{repairSummary.succeeded}</strong></div><div><small>失败</small><strong>{repairSummary.failed}</strong></div>{repairSummary.kind === "patch" ? <><div><small>补齐客户端</small><strong>{repairSummary.patched}</strong></div><div><small>绑定归属</small><strong>{repairSummary.linked}</strong></div></> : null}</div>{repairSummary.errors.length ? <ul className="migration-failure-list">{repairSummary.errors.map((item) => <li key={item}>{item}</li>)}</ul> : null}</div> : null}
-            {repairResult ? <details className="migration-result"><summary>查看原始操作结果</summary><pre>{normalizeLegacyPanelText(JSON.stringify(repairResult, null, 2))}</pre></details> : null}
+            {repairResult ? <details className="migration-result"><summary>查看原始操作结果</summary><pre>{JSON.stringify(repairResult, null, 2)}</pre></details> : null}
           </Surface>
         </> : null}
       </div>

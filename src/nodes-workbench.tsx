@@ -2326,12 +2326,12 @@ export function TestersDialog({ notify, onClose }: { notify: NodesWorkbenchNotif
     catch (reason) { setError(reasonMessage(reason, "测速端删除失败")); }
     finally { setWorkingID(null); }
   };
-  const masterURL = typeof window === "undefined" ? "https://your-panel.example" : window.location.origin;
-  const scriptBase = "https://raw.githubusercontent.com/mmwx-group/mmwX-plugins/refs/heads/main/speedtest/scripts";
+  const master = typeof window === "undefined" ? "https://your-panel.example" : window.location.origin;
+  const shellValue = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
+  const powershellValue = (value: string) => `'${value.replaceAll("'", "''")}'`;
   const commands = credential ? [
-    { label: "Linux", value: `curl -fsSL ${scriptBase}/install.sh | bash -s -- -master ${masterURL} -token ${credential.token}` },
-    { label: "Windows PowerShell", value: `irm ${scriptBase}/install.ps1 -OutFile install.ps1; .\\install.ps1 -Master ${masterURL} -Token ${credential.token}` },
-    { label: "Docker", value: `docker run -d --name mmwx-speedtester --restart unless-stopped -e MMWX_MASTER=${masterURL} -e MMWX_SPEEDTEST_TOKEN=${credential.token} -e MMWX_SPEEDTEST_NAME=${credential.name} -v mmwx-speedtester-data:/data ghcr.io/mmwx-group/mmwx-speedtester:latest` },
+    { label: "Linux", value: `curl -fsSL ${master}/api/public/relaydock-speedtester/install.sh | sudo env RELAYDOCK_MASTER_URL=${shellValue(master)} RELAYDOCK_SPEEDTEST_TOKEN=${shellValue(credential.token)} RELAYDOCK_SPEEDTEST_NAME=${shellValue(credential.name)} bash` },
+    { label: "Windows PowerShell", value: `$env:RELAYDOCK_MASTER_URL=${powershellValue(master)}; $env:RELAYDOCK_SPEEDTEST_TOKEN=${powershellValue(credential.token)}; $env:RELAYDOCK_SPEEDTEST_NAME=${powershellValue(credential.name)}; irm ${master}/api/public/relaydock-speedtester/install.ps1 | iex` },
   ] : [];
   const copy = async (value: string) => {
     try { await copyText(value); notify("已复制配对信息"); }

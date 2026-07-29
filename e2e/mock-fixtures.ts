@@ -38,7 +38,7 @@ export const settingsGetResponses: Record<string, unknown> = {
   "/api/admin/system-settings/subscription-output-format": { subscription_output_format: "yaml" },
   "/api/admin/system-settings/silent-mode": { silent_mode: false, silent_mode_timeout: 15 },
   "/api/admin/system-settings/management-features": { enable_management_features: true },
-  "/api/admin/system-settings/mmw-short-link-compat": { enable_mmw_short_link_compat: false },
+  "/api/admin/system-settings/root-short-links": { enable_root_short_links: false },
   "/api/admin/system-settings/agent-log": { agent_log_enabled: false },
   "/api/admin/rule-templates": { templates: ["balanced_v3.yaml"], owners: { "balanced_v3.yaml": "admin" } },
   "/api/admin/system-settings/default-template": { default_template_filename: "balanced_v3.yaml" },

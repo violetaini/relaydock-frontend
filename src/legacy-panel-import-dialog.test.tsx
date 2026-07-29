@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
-import { MmwMigrationDialog, normalizeLegacyPanelText, validateMigrationSource } from "./migration-workbench";
+import { LegacyPanelImportDialog, validateMigrationSource } from "./legacy-panel-import-dialog";
 
 vi.hoisted(() => {
   (globalThis as unknown as { process: { env: { NODE_ENV?: string } } }).process.env.NODE_ENV = "test";
@@ -9,24 +9,17 @@ vi.hoisted(() => {
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-describe("MMW migration wizard", () => {
-  it("neutralizes legacy product names returned by an older backend", () => {
-    const chineseName = ["妙", "妙", "屋", "X"].join("");
-    const latinName = ["miao", "miao", "wu", "x"].join("");
-    const shortLatinName = ["miao", "miao", "x"].join("");
-    expect(normalizeLegacyPanelText(`${chineseName} / ${latinName} / ${shortLatinName}`)).toBe("旧版面板 / 旧版面板 / 旧版面板");
-  });
-
+describe("legacy panel import wizard", () => {
   it("prepares, confirms, imports and repairs a remote backup", async () => {
     const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
-      if (path.endsWith("fetch-mmw-backup")) return {
+      if (path.endsWith("fetch-legacy-backup")) return {
         success: true,
         migration_id: "0123456789abcdef0123456789abcdef",
         subscribe_count: 3,
         size_bytes: 4096,
         db_size_bytes: 2048,
       } as T;
-      if (path.endsWith("import-mmw")) return {
+      if (path.endsWith("import-legacy-backup")) return {
         success: true,
         report: {
           users: 2, user_tokens: 2, nodes: 4, subscribe_files: 3, user_subscriptions: 1,
@@ -45,21 +38,21 @@ describe("MMW migration wizard", () => {
     });
     const notify = vi.fn();
 
-    render(<MmwMigrationDialog notify={notify} onClose={vi.fn()} />);
+    render(<LegacyPanelImportDialog notify={notify} onClose={vi.fn()} />);
     fireEvent.change(screen.getByRole("textbox", { name: "旧版面板地址" }), { target: { value: "https://old.example.com" } });
     fireEvent.change(screen.getByRole("textbox", { name: "管理员用户名" }), { target: { value: "root" } });
     fireEvent.change(screen.getByLabelText("管理员密码"), { target: { value: "secret" } });
     fireEvent.click(screen.getByRole("button", { name: "拉取并校验" }));
 
     expect(await screen.findByText("备份已准备")).toBeInTheDocument();
-    expect(post).toHaveBeenCalledWith("/api/admin/migrate/fetch-mmw-backup", expect.objectContaining({ url: "https://old.example.com", username: "root", password: "secret" }));
+    expect(post).toHaveBeenCalledWith("/api/admin/migrate/fetch-legacy-backup", expect.objectContaining({ url: "https://old.example.com", username: "root", password: "secret" }));
     fireEvent.click(screen.getByRole("button", { name: "开始导入" }));
     expect(post).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "确认导入" }));
 
     expect(await screen.findByText("数据导入结果")).toBeInTheDocument();
     expect(screen.getByText("edge.example.com")).toBeInTheDocument();
-    expect(post).toHaveBeenCalledWith("/api/admin/migrate/import-mmw", { migration_id: "0123456789abcdef0123456789abcdef" });
+    expect(post).toHaveBeenCalledWith("/api/admin/migrate/import-legacy-backup", { migration_id: "0123456789abcdef0123456789abcdef" });
     expect(remove).toHaveBeenCalledWith("/api/admin/migrate/cleanup", { migration_id: "0123456789abcdef0123456789abcdef" });
 
     fireEvent.click(screen.getByRole("button", { name: "修复客户端归属" }));
@@ -72,14 +65,14 @@ describe("MMW migration wizard", () => {
     let resolveImport!: (value: unknown) => void;
     const importPromise = new Promise((resolve) => { resolveImport = resolve; });
     const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string, body?: unknown): Promise<T> => {
-      if (path.endsWith("fetch-mmw-backup")) return { success: true, migration_id: "0123456789abcdef0123456789abcdef", subscribe_count: 0, size_bytes: 1, db_size_bytes: 1 } as T;
-      if (path.endsWith("import-mmw")) return importPromise as Promise<T>;
+      if (path.endsWith("fetch-legacy-backup")) return { success: true, migration_id: "0123456789abcdef0123456789abcdef", subscribe_count: 0, size_bytes: 1, db_size_bytes: 1 } as T;
+      if (path.endsWith("import-legacy-backup")) return importPromise as Promise<T>;
       throw new Error(`unexpected POST ${path} ${JSON.stringify(body)}`);
     });
     vi.spyOn(api, "get").mockResolvedValue({ success: true, servers: [] });
     vi.spyOn(api, "delete").mockResolvedValue({ success: true });
     const onClose = vi.fn();
-    render(<MmwMigrationDialog notify={vi.fn()} onClose={onClose} />);
+    render(<LegacyPanelImportDialog notify={vi.fn()} onClose={onClose} />);
     fireEvent.change(screen.getByRole("textbox", { name: "旧版面板地址" }), { target: { value: "https://old.example.com" } });
     fireEvent.change(screen.getByRole("textbox", { name: "管理员用户名" }), { target: { value: "root" } });
     fireEvent.change(screen.getByLabelText("管理员密码"), { target: { value: "secret" } });
@@ -99,8 +92,8 @@ describe("MMW migration wizard", () => {
 
   it("surfaces partial takeover and patch failures", async () => {
     const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
-      if (path.endsWith("fetch-mmw-backup")) return { success: true, migration_id: "0123456789abcdef0123456789abcdef", subscribe_count: 0, size_bytes: 1, db_size_bytes: 1 } as T;
-      if (path.endsWith("import-mmw")) return { success: true, report: { users: 0, user_tokens: 0, nodes: 0, subscribe_files: 0, user_subscriptions: 0, user_settings: 0, templates: 0, custom_rules: 0, override_scripts: 0, external_subscriptions: 0 }, owned_by_admin: "admin", subscribes_copied: 0 } as T;
+      if (path.endsWith("fetch-legacy-backup")) return { success: true, migration_id: "0123456789abcdef0123456789abcdef", subscribe_count: 0, size_bytes: 1, db_size_bytes: 1 } as T;
+      if (path.endsWith("import-legacy-backup")) return { success: true, report: { users: 0, user_tokens: 0, nodes: 0, subscribe_files: 0, user_subscriptions: 0, user_settings: 0, templates: 0, custom_rules: 0, override_scripts: 0, external_subscriptions: 0 }, owned_by_admin: "admin", subscribes_copied: 0 } as T;
       if (path.endsWith("takeover-external-xray")) return { success: true, servers_scanned: 2, results: [{ server_id: 1, server_name: "ok", success: true }, { server_id: 2, server_name: "bad", success: false, error: "offline" }] } as T;
       if (path.endsWith("patch-client-emails")) return { success: true, servers_scanned: 1, clients_patched: [{ inbound_tag: "vless" }], admin_subaccounts_linked: [], server_errors: ["edge: write back failed"] } as T;
       throw new Error(`unexpected POST ${path}`);
@@ -108,7 +101,7 @@ describe("MMW migration wizard", () => {
     vi.spyOn(api, "get").mockResolvedValue({ success: true, servers: [{ address: "edge", node_count: 1, ports: [443], protocols: ["vless"], existing_server: true, existing_server_id: 1, sample_node_name: "Edge" }] });
     vi.spyOn(api, "delete").mockResolvedValue({ success: true });
     const notify = vi.fn();
-    render(<MmwMigrationDialog notify={notify} onClose={vi.fn()} />);
+    render(<LegacyPanelImportDialog notify={notify} onClose={vi.fn()} />);
     fireEvent.change(screen.getByRole("textbox", { name: "旧版面板地址" }), { target: { value: "https://old.example.com" } });
     fireEvent.change(screen.getByRole("textbox", { name: "管理员用户名" }), { target: { value: "root" } });
     fireEvent.change(screen.getByLabelText("管理员密码"), { target: { value: "secret" } });
@@ -133,7 +126,7 @@ describe("MMW migration wizard", () => {
     vi.spyOn(api, "post").mockResolvedValue({ success: true, migration_id: "0123456789abcdef0123456789abcdef", subscribe_count: 0, size_bytes: 1, db_size_bytes: 1 });
     const remove = vi.spyOn(api, "delete").mockResolvedValue({ success: true });
     const onClose = vi.fn();
-    render(<MmwMigrationDialog notify={vi.fn()} onClose={onClose} />);
+    render(<LegacyPanelImportDialog notify={vi.fn()} onClose={onClose} />);
     fireEvent.change(screen.getByRole("textbox", { name: "旧版面板地址" }), { target: { value: "https://old.example.com" } });
     fireEvent.change(screen.getByRole("textbox", { name: "管理员用户名" }), { target: { value: "root" } });
     fireEvent.change(screen.getByLabelText("管理员密码"), { target: { value: "secret" } });
@@ -147,13 +140,13 @@ describe("MMW migration wizard", () => {
 
   it("shows a refresh failure without replacing imported data", async () => {
     vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
-      if (path.endsWith("fetch-mmw-backup")) return { success: true, migration_id: "0123456789abcdef0123456789abcdef", subscribe_count: 0, size_bytes: 1, db_size_bytes: 1 } as T;
+      if (path.endsWith("fetch-legacy-backup")) return { success: true, migration_id: "0123456789abcdef0123456789abcdef", subscribe_count: 0, size_bytes: 1, db_size_bytes: 1 } as T;
       return { success: true, report: { users: 0, user_tokens: 0, nodes: 0, subscribe_files: 0, user_subscriptions: 0, user_settings: 0, templates: 0, custom_rules: 0, override_scripts: 0, external_subscriptions: 0 }, owned_by_admin: "admin", subscribes_copied: 0 } as T;
     });
     vi.spyOn(api, "get").mockResolvedValueOnce({ success: true, servers: [] }).mockRejectedValueOnce(new Error("节点列表断开"));
     vi.spyOn(api, "delete").mockResolvedValue({ success: true });
     const notify = vi.fn();
-    render(<MmwMigrationDialog notify={notify} onClose={vi.fn()} />);
+    render(<LegacyPanelImportDialog notify={notify} onClose={vi.fn()} />);
     fireEvent.change(screen.getByRole("textbox", { name: "旧版面板地址" }), { target: { value: "https://old.example.com" } });
     fireEvent.change(screen.getByRole("textbox", { name: "管理员用户名" }), { target: { value: "root" } });
     fireEvent.change(screen.getByLabelText("管理员密码"), { target: { value: "secret" } });

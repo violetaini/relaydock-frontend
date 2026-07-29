@@ -620,7 +620,7 @@ async function responseFailure(response: Response, fallback: string): Promise<Er
 async function downloadAuthenticated(path: string, fallbackName: string, extraHeaders?: Record<string, string>): Promise<string> {
   const headers = new Headers(extraHeaders);
   const token = getToken();
-  if (token) headers.set("MM-Authorization", token);
+  if (token) headers.set("Authorization", `Bearer ${token}`);
   let response: Response;
   try {
     response = await fetch(path, { method: "GET", headers });
@@ -653,7 +653,7 @@ export async function validateBackupFile(file: File): Promise<ValidatedBackup> {
   if (file.size > 100 * 1024 * 1024) throw new Error("备份文件不能超过 100 MB");
   const prefix = new Uint8Array(await file.slice(0, 8).arrayBuffer());
   const magic = new TextDecoder().decode(prefix);
-  if (magic === "MMWXBKP1") {
+  if (magic === "RLDKBKP1") {
     if (file.size < 52) throw new Error("加密备份头不完整，文件可能已损坏");
     return { encrypted: true, description: "Arcway 加密备份" };
   }

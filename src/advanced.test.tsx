@@ -281,7 +281,7 @@ describe("one-time secret dialog", () => {
 
 function encryptedBackup(name = "arcway.zip.enc") {
   const bytes = new Uint8Array(64);
-  bytes.set(new TextEncoder().encode("MMWXBKP1"));
+  bytes.set(new TextEncoder().encode("RLDKBKP1"));
   return new File([bytes], name, { type: "application/octet-stream" });
 }
 
@@ -318,7 +318,7 @@ describe("backup operations", () => {
     expect(path).toBe("/api/admin/backup/download");
     expect(init?.method).toBe("GET");
     expect(headers.get("X-Backup-Passphrase")).toBe("strong-passphrase");
-    expect(headers.get("MM-Authorization")).toBe("admin-token");
+    expect(headers.get("Authorization")).toBe("Bearer admin-token");
     expect(click).toHaveBeenCalledOnce();
     expect(notify).toHaveBeenCalledWith("加密备份已下载：server-backup.zip.enc");
   });
@@ -389,7 +389,7 @@ describe("debug log operations", () => {
       expect.objectContaining({ method: "GET", headers: expect.any(Headers) }),
     ));
     const headers = new Headers(vi.mocked(globalThis.fetch).mock.calls[0][1]?.headers);
-    expect(headers.get("MM-Authorization")).toBe("user-token");
+    expect(headers.get("Authorization")).toBe("Bearer user-token");
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("服务端副本将自动清理"));
   });
 });

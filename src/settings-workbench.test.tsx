@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, ApiError } from "./api";
+import { api } from "./api";
 import { SettingsWorkbenchPage } from "./settings-workbench";
 
 vi.hoisted(() => {
@@ -24,7 +24,7 @@ function mockCompleteSettings(overrides: Record<string, unknown> = {}, failingPa
     "/api/admin/system-settings/subscription-output-format": { subscription_output_format: "yaml" },
     "/api/admin/system-settings/silent-mode": { silent_mode: false, silent_mode_timeout: 15 },
     "/api/admin/system-settings/management-features": { enable_management_features: true },
-    "/api/admin/system-settings/mmw-short-link-compat": { enable_mmw_short_link_compat: false },
+    "/api/admin/system-settings/root-short-links": { enable_root_short_links: false },
     "/api/admin/system-settings/agent-log": { agent_log_enabled: false },
     "/api/admin/rule-templates": { templates: [] },
     "/api/admin/system-settings/default-template": { default_template_filename: "" },
@@ -111,38 +111,7 @@ describe("settings workbench", () => {
     const configCall = put.mock.calls.find(([path]) => path === "/api/user/config");
     expect(configCall?.[1]).not.toHaveProperty("node_order");
     expect(put).toHaveBeenCalledWith("/api/admin/system-settings/management-features", { enable_management_features: true });
-  });
-
-  it("neutralizes the legacy product name in an older backend's redeem template", async () => {
-    const legacyName = ["妙", "妙", "屋", "X"].join("");
-    mockCompleteSettings({
-      "/api/admin/system-settings/redeem-template": { redeem_template: `需要登录 ${legacyName}\n{主控域名}` },
-    });
-    vi.spyOn(api, "put").mockResolvedValue({ success: true });
-    render(<SettingsWorkbenchPage notify={vi.fn()} />);
-
-    expect(await screen.findByRole("textbox", { name: "复制模板" })).toHaveValue("需要登录 RelayDock\n{主控域名}");
-  });
-
-  it("falls back to the legacy feature contract when the new endpoint is unavailable", async () => {
-    const legacyName = ["miao", "miao", "wu"].join("");
-    const legacyPath = `/api/admin/system-settings/${legacyName}-features`;
-    const legacyKey = ["enable", legacyName, "features"].join("_");
-    const get = mockCompleteSettings({
-      "/api/admin/system-settings/management-features": () => { throw new ApiError("not found", 404); },
-      [legacyPath]: { [legacyKey]: true },
-    });
-    const put = vi.spyOn(api, "put").mockImplementation(async <T,>(path: string): Promise<T> => {
-      if (path === "/api/admin/system-settings/management-features") throw new ApiError("not found", 404);
-      return { success: true } as T;
-    });
-    render(<SettingsWorkbenchPage notify={vi.fn()} />);
-
-    expect(await screen.findByRole("switch", { name: "启用高级订阅功能" })).toBeChecked();
-    expect(get).toHaveBeenCalledWith(legacyPath);
-    fireEvent.click(screen.getByRole("button", { name: "保存订阅设置" }));
-
-    await waitFor(() => expect(put).toHaveBeenCalledWith(legacyPath, { [legacyKey]: true }));
+    expect(put).toHaveBeenCalledWith("/api/admin/system-settings/root-short-links", { enable_root_short_links: false });
   });
 
   it("saves security thresholds without dropping masked Turnstile secrets", async () => {
@@ -262,7 +231,7 @@ describe("settings workbench", () => {
     expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/update/apply-sse?version=0.6.0");
     expect(init.method).toBe("POST");
     expect(init.credentials).toBe("same-origin");
-    expect(new Headers(init.headers).get("MM-Authorization")).toBe("admin-session");
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer admin-session");
     expect(new Headers(init.headers).get("Accept")).toBe("text/event-stream");
     expect(get.mock.calls.some(([path]) => path === "/api/admin/update/status")).toBe(true);
     expect(notify).toHaveBeenCalledWith("系统已更新到 0.6.0");

@@ -14,6 +14,7 @@ import {
   RoutedOutboundDialog,
   SpeedDialog,
   TempSubscriptionDialog,
+  TestersDialog,
   URIManagerDialog,
   managedCertificateMatchesServer,
   managedCertificateNameMatchesHost,
@@ -378,6 +379,24 @@ describe("nodes speedtest workbench", () => {
 
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "卸载 Ookla Speedtest" })).not.toBeInTheDocument());
     expect(screen.getByText("只允许删除面板安装的 Ookla Speedtest")).toBeInTheDocument();
+  });
+
+  it("builds quote-safe RelayDock tester commands from same-origin installers", async () => {
+    vi.spyOn(api, "get").mockResolvedValue({ testers: [] });
+    vi.spyOn(api, "post").mockResolvedValue({ id: 7, token: "tok'en" });
+    render(<TestersDialog notify={vi.fn()} onClose={vi.fn()} />);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "测速端名称" }), { target: { value: "Home O'Brien" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建测速端" }));
+
+    const linuxButton = await screen.findByRole("button", { name: "复制 Linux 安装命令" });
+    const powershellButton = screen.getByRole("button", { name: "复制 Windows PowerShell 安装命令" });
+    const linux = linuxButton.closest(".field")?.querySelector("code")?.textContent;
+    const powershell = powershellButton.closest(".field")?.querySelector("code")?.textContent;
+    const origin = window.location.origin;
+
+    expect(linux).toBe(`curl -fsSL ${origin}/api/public/relaydock-speedtester/install.sh | sudo env RELAYDOCK_MASTER_URL='${origin}' RELAYDOCK_SPEEDTEST_TOKEN='tok'\"'\"'en' RELAYDOCK_SPEEDTEST_NAME='Home O'\"'\"'Brien' bash`);
+    expect(powershell).toBe(`$env:RELAYDOCK_MASTER_URL='${origin}'; $env:RELAYDOCK_SPEEDTEST_TOKEN='tok''en'; $env:RELAYDOCK_SPEEDTEST_NAME='Home O''Brien'; irm ${origin}/api/public/relaydock-speedtester/install.ps1 | iex`);
   });
 });
 

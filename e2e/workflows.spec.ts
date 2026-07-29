@@ -248,7 +248,7 @@ test("creates a server with the exact contract and presents its one-time install
     site_type: "static",
     site_value: "",
   });
-  expect(createCalls[0].headers["mm-authorization"]).toBe("workflow-test-token");
+  expect(createCalls[0].headers.authorization).toBe("Bearer workflow-test-token");
 });
 
 test("parses node URIs, previews them, and sends the complete batch payload", async ({ page }) => {

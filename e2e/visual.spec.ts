@@ -1125,7 +1125,7 @@ for (const viewport of [
     const migrationDialog = page.getByRole("dialog", { name: "从旧版面板迁移" });
     await expect(migrationDialog.getByRole("tab", { name: "远程拉取" })).toBeVisible();
     await expect(migrationDialog.getByRole("tab", { name: "上传备份" })).toBeVisible();
-    await expectViewportIntegrity(page, `${viewport.name} MMW migration wizard`);
+    await expectViewportIntegrity(page, `${viewport.name} legacy panel import wizard`);
     await closeDialog(page);
 
     await page.goto("/#/account");

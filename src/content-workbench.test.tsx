@@ -371,6 +371,7 @@ describe("content workbench subscriptions", () => {
     fireEvent.click(await screen.findByRole("tab", { name: /Provider/ }));
     fireEvent.click(screen.getByRole("button", { name: "Proxy Provider" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Provider 名称" }), { target: { value: "airport-hk" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "处理模式" }), { target: { value: "server" } });
     fireEvent.change(screen.getByRole("textbox", { name: "包含名称（正则）" }), { target: { value: "香港|HK" } });
     fireEvent.change(screen.getByRole("textbox", { name: "GeoIP 国家代码" }), { target: { value: "HK" } });
     fireEvent.click(screen.getByRole("button", { name: "检查匹配" }));
@@ -398,7 +399,7 @@ describe("content workbench subscriptions", () => {
       exclude_type: "",
       geo_ip_filter: "HK",
       override: "",
-      process_mode: "client",
+      process_mode: "server",
     }));
   });
 });

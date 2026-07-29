@@ -113,7 +113,7 @@ describe("managed certificate hostname coverage", () => {
 });
 
 describe("WireGuard nodes", () => {
-  it("tests WireGuard by node id and labels the managed control-link RTT", async () => {
+  it("tests WireGuard by node id and labels the Mihomo end-to-end result", async () => {
     const wireGuard = node(12, "办公室 WireGuard", "wg", "203.0.113.10");
     const config = {
       name: wireGuard.node_name,
@@ -137,7 +137,7 @@ describe("WireGuard nodes", () => {
       throw new Error(`unexpected GET ${path}`);
     });
     const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
-      if (path === "/api/admin/tcping") return { success: true, latency: 18.45, probe: "managed_wireguard" } as T;
+      if (path === "/api/admin/tcping") return { success: true, latency: 18.45, probe: "mihomo_url_test" } as T;
       throw new Error(`unexpected POST ${path}`);
     });
     render(<NodesWorkbench isAdmin notify={vi.fn()} />);
@@ -146,13 +146,33 @@ describe("WireGuard nodes", () => {
     expect(screen.getAllByText("WIREGUARD")).toHaveLength(2);
     expect(screen.getByText("203.0.113.10:51820")).toBeInTheDocument();
     const latencyButton = screen.getByRole("button", { name: "测延迟" });
-    expect(latencyButton).toHaveAttribute("title", "测试受管 WireGuard 入站与管理链路 RTT（不是 WireGuard 公网握手 RTT）");
+    expect(latencyButton).toHaveAttribute("title", "点击使用 Mihomo 发起 HTTPS 204 代理实测；包含协议握手、代理出口和测试站响应，不是纯网络 RTT");
     fireEvent.click(latencyButton);
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/tcping", { node_id: 12, timeout: 5000 }));
-    const result = await screen.findByRole("button", { name: "18.4 ms · 管理 RTT" });
-    expect(result).toHaveAttribute("title", "受管 WireGuard 入站运行正常；18.4 ms 是主控到节点服务器的管理链路 RTT，不是 WireGuard 公网握手 RTT");
+    const result = await screen.findByRole("button", { name: "18.4 ms · 代理实测" });
+    expect(result).toHaveAttribute("title", "Mihomo HTTPS 204 代理实测：18.4 ms，包含协议握手、代理出口和测试站响应，不是纯网络 RTT");
     expect(screen.getByRole("button", { name: "更多 办公室 WireGuard 操作" })).toBeInTheDocument();
     expect(screen.queryByText("不进入订阅")).not.toBeInTheDocument();
+  });
+
+  it("uses the same Mihomo latency wording for ordinary proxy protocols", async () => {
+    const vless = node(13, "香港 VLESS", "vless", "edge.example.com");
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [vless] } as T;
+      if (path === "/api/admin/speedtest/results?latest=1") return { results: [] } as T;
+      if (path === "/api/user/config") return userConfig([13]) as T;
+      if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    vi.spyOn(api, "post").mockResolvedValue({ success: true, latency: 8.14, probe: "mihomo_url_test" });
+    render(<NodesWorkbench isAdmin notify={vi.fn()} />);
+
+    const latencyButton = await screen.findByRole("button", { name: "测延迟" });
+    expect(latencyButton).toHaveAttribute("title", "点击使用 Mihomo 发起 HTTPS 204 代理实测；包含协议握手、代理出口和测试站响应，不是纯网络 RTT");
+    fireEvent.click(latencyButton);
+
+    const result = await screen.findByRole("button", { name: "8.1 ms · 代理实测" });
+    expect(result).toHaveAttribute("title", "Mihomo HTTPS 204 代理实测：8.1 ms，包含协议握手、代理出口和测试站响应，不是纯网络 RTT");
   });
 
   it("submits batch latency requests by node id without client-provided targets", async () => {
@@ -166,8 +186,8 @@ describe("WireGuard nodes", () => {
       throw new Error(`unexpected GET ${path}`);
     });
     const post = vi.spyOn(api, "post").mockResolvedValue([
-      { success: true, latency: 12.3, probe: "managed_wireguard" },
-      { success: true, latency: 8.1, probe: "tcp" },
+      { success: true, latency: 12.3, probe: "mihomo_url_test" },
+      { success: true, latency: 8.1, probe: "mihomo_url_test" },
     ]);
     render(<NodesWorkbench isAdmin notify={vi.fn()} />);
 

@@ -98,6 +98,11 @@ export const settingsGetResponses: Record<string, unknown> = {
     notify_server_tolerance_seconds: 60,
   },
   "/api/admin/system-settings/api-token": { token: "masked-test-token" },
+  "/api/admin/speedtest/mihomo-status": {
+    success: true,
+    ready: true,
+    path: "/opt/arcway/data/bin/mihomo",
+  },
   "/api/admin/update/check": {
     current_version: "0.5.0",
     latest_version: "0.5.1",

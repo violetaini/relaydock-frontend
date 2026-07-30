@@ -403,7 +403,7 @@ test("desktop navigation follows the upstream hierarchy", async ({ page }) => {
     const primaryLabels = page.locator(".sidebar-nav .nav-primary .nav-item > span");
     const utilityItems = page.locator(".sidebar-nav .nav-utility .nav-item");
     const utilityLabels = page.locator(".sidebar-nav .nav-utility .nav-item > span");
-    await expect(primaryLabels).toHaveCount(7);
+    await expect(primaryLabels).toHaveCount(8);
     await expect(utilityItems).toHaveCount(4);
     await expect(utilityLabels).toHaveCount(4);
     await expect(page.locator(".sidebar-nav .nav-secondary")).toHaveCount(0);
@@ -554,7 +554,7 @@ test("desktop layout switch stays visible in both chrome modes and preserves nav
   await expect(page.locator(".console-layout")).toHaveClass(/layout-side/);
   await expect(page.locator(".topbar")).toBeVisible();
   await expect(page.getByRole("navigation", { name: "主导航" })).toBeVisible();
-  await expect(page.locator(".sidebar-nav .nav-item > span")).toHaveCount(11);
+  await expect(page.locator(".sidebar-nav .nav-item > span")).toHaveCount(12);
   await expect(page.locator(".sidebar-brand .sidebar-layout-switch")).toBeVisible();
   await expect(page.locator(".topbar-actions .topbar-layout-switch")).toBeVisible();
   expect(await page.locator(".sidebar").evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(224);
@@ -647,10 +647,6 @@ test("advanced workflows render without runtime errors", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "我分享的服务器" })).toBeVisible();
   await expect(page.getByText("东京控制端")).toBeVisible();
 
-  await page.getByRole("tab", { name: "节点测速" }).click();
-  await expect(page.getByRole("heading", { name: "主控节点测速" })).toBeVisible();
-  await expect(page.getByText("318.6 Mbps")).toBeVisible();
-
   await page.getByRole("tab", { name: "备份恢复" }).click();
   await expect(page.getByRole("heading", { name: "数据备份" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "恢复备份" })).toBeVisible();
@@ -706,6 +702,94 @@ for (const viewport of [
   });
 }
 
+for (const scenario of [
+  { name: "running", label: "运行中", installed: true, running: true, version: "Xray 26.2.6", theme: "light", viewport: { width: 1440, height: 900 } },
+  { name: "running-dark", label: "运行中", installed: true, running: true, version: "Xray 26.2.6", theme: "dark", viewport: { width: 1440, height: 900 } },
+  { name: "stopped", label: "已停止", installed: true, running: false, version: "Xray 26.2.6", theme: "light", viewport: { width: 1440, height: 900 } },
+  { name: "missing", label: "未安装", installed: false, running: false, version: "", theme: "light", viewport: { width: 1440, height: 900 } },
+  { name: "missing-mobile", label: "未安装", installed: false, running: false, version: "", theme: "light", viewport: { width: 390, height: 844 } },
+]) {
+  test(`Xray ${scenario.name} service state matches the management surface`, async ({ page }, testInfo) => {
+    await page.setViewportSize(scenario.viewport);
+    await page.addInitScript((theme) => localStorage.setItem("arcway-theme", theme), scenario.theme);
+    const stateServers = servers.map((server, index) => index === 0 ? {
+      ...server,
+      xray_running: scenario.running,
+      xray_version: scenario.version,
+    } : server);
+    await mockAPI(page, traffic, undefined, {
+      "/api/admin/remote-servers": { success: true, servers: stateServers },
+      "/api/admin/remote/services/status": {
+        success: true,
+        xray: { installed: scenario.installed, running: scenario.running, version: scenario.version },
+        nginx: { installed: true, running: true, version: "nginx/1.24.0" },
+      },
+    });
+    await page.goto("/#/servers");
+
+    const listState = page.locator(".service-card").first().locator(".service-xray-state");
+    await expect(listState).toContainText(scenario.label);
+    await page.getByRole("button", { name: /^管理(?: Hong Kong Edge)?$/ }).first().click();
+    const operations = page.getByRole("dialog", { name: "Hong Kong Edge" });
+    await expect(operations.getByText("Agent 版本", { exact: true })).toBeVisible();
+    await operations.getByRole("tab", { name: "服务控制" }).click();
+    const xray = operations.locator(".service-control-card").first();
+    await expect(xray.locator(".service-control-state")).toContainText(scenario.label);
+    if (scenario.installed) {
+      await expect(xray.getByRole("button", { name: "重启 Xray" })).toBeVisible();
+    } else {
+      await expect(xray.getByRole("button", { name: "安装 Xray" })).toBeVisible();
+    }
+    await expectViewportIntegrity(page, `${scenario.name} Xray service state`);
+    await page.screenshot({ path: testInfo.outputPath(`service-${scenario.name}.png`), fullPage: true });
+  });
+}
+
+for (const viewport of [
+  { name: "desktop", width: 1440, height: 900, theme: "dark" },
+  { name: "mobile", width: 390, height: 844, theme: "light" },
+]) {
+  test(`Xray install terminal remains readable while streaming on ${viewport.name}`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    await page.addInitScript((theme) => localStorage.setItem("arcway-theme", theme), viewport.theme);
+    const missingServers = servers.map((server, index) => index === 0 ? { ...server, xray_running: false, xray_version: "" } : server);
+    await mockAPI(page, traffic, undefined, {
+      "/api/admin/remote-servers": { success: true, servers: missingServers },
+      "/api/admin/remote/services/status": {
+        success: true,
+        xray: { installed: false, running: false, version: "" },
+        nginx: { installed: true, running: true, version: "nginx/1.24.0" },
+      },
+    });
+    let releaseStream = () => undefined;
+    const streamGate = new Promise<void>((resolve) => { releaseStream = resolve; });
+    await page.route("**/api/admin/remote/xray/install-stream**", async (route) => {
+      await streamGate;
+      await route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: 'data: {"type":"output","data":"Downloading Xray core..."}\n\ndata: {"type":"complete","success":true,"message":"installed"}\n\n',
+      });
+    });
+    await page.goto("/#/servers");
+    await page.getByRole("button", { name: /^管理(?: Hong Kong Edge)?$/ }).first().click();
+    const operations = page.getByRole("dialog", { name: "Hong Kong Edge" });
+    await expect(operations.getByText("Agent 版本", { exact: true })).toBeVisible();
+    await operations.getByRole("tab", { name: "服务控制" }).click();
+    await operations.getByRole("button", { name: "安装 Xray" }).click();
+
+    const terminal = page.getByRole("dialog", { name: "安装 Xray" });
+    await expect(terminal).toBeVisible();
+    await expect(terminal.locator(".service-terminal")).toHaveAttribute("aria-busy", "true");
+    await expect(terminal.getByRole("button", { name: "正在执行" })).toBeDisabled();
+    await expectViewportIntegrity(page, `${viewport.name} Xray install terminal`);
+    await page.screenshot({ path: testInfo.outputPath(`service-install-${viewport.name}.png`), fullPage: true });
+
+    releaseStream();
+    await expect(terminal.getByText("执行完成", { exact: true })).toBeVisible();
+  });
+}
+
 for (const viewport of [
   { name: "desktop", width: 1440, height: 900 },
   { name: "mobile", width: 390, height: 844 },
@@ -715,7 +799,9 @@ for (const viewport of [
     await mockAPI(page);
     await page.goto("/#/settings");
 
-    const panel = page.locator(".settings-update-group .settings-workbench-section");
+    const panel = page.locator(".settings-update-group .settings-workbench-section").filter({
+      has: page.getByRole("heading", { name: "系统更新", exact: true }),
+    });
     await expect(page.getByRole("heading", { name: "系统维护", exact: true })).toBeVisible();
     await expect(panel.getByRole("heading", { name: "系统更新", exact: true })).toBeVisible();
     await expect(panel.getByText("0.5.0", { exact: true })).toBeVisible();
@@ -859,12 +945,14 @@ for (const viewport of [
     const serverDialog = page.getByRole("dialog", { name: "Hong Kong Edge" });
     await expect(serverDialog.getByText("Agent 版本", { exact: true })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} server operations`);
-    await expect(serverDialog).toHaveClass(/dialog-extra-wide/);
+    await expect(serverDialog).toHaveClass(/dialog-wide/);
+    await expect(serverDialog).not.toHaveClass(/dialog-extra-wide/);
     await serverDialog.getByRole("tab", { name: "Speedtest" }).click();
     await expect(serverDialog.getByText("服务器线路测速", { exact: true })).toBeVisible();
     await expect(serverDialog.getByText("Ookla Speedtest CLI", { exact: true })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} server speedtest`);
     await serverDialog.getByRole("tab", { name: "Xray 配置" }).click();
+    await expect(serverDialog).toHaveClass(/dialog-extra-wide/);
     await serverDialog.getByRole("button", { name: "读取配置" }).click();
     const configEditor = serverDialog.getByLabel("Xray 配置 JSON");
     await expect(configEditor).toHaveValue(/loglevel/);

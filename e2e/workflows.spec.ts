@@ -175,7 +175,12 @@ const mocks = new WeakMap<Page, StrictApiMock>();
 async function createMock(page: Page) {
   const mock = new StrictApiMock(page)
     .on("GET", "/api/setup/status", () => json({ needs_setup: false }))
-    .on("GET", "/api/user/profile", () => json(profile));
+    .on("GET", "/api/user/profile", () => json(profile))
+    .on("GET", "/api/admin/remote/services/status", () => json({
+      success: true,
+      xray: { installed: true, running: true, version: "25.6.8" },
+      nginx: { installed: true, running: true, version: "nginx/1.26.3" },
+    }));
   await mock.install();
   mocks.set(page, mock);
   return mock;
@@ -233,6 +238,7 @@ test("creates a server with the exact contract and presents its one-time install
     listen_port: 23889,
     domain: "",
     xray_mode: "embedded",
+    nginx_mode: "managed",
     traffic_limit: 25 * 1024 ** 3,
     traffic_used_offset: 0,
     traffic_reset_day: 1,
@@ -411,7 +417,7 @@ test("creates and publishes a managed Shadowsocks 2022 node with exact payload a
   await dialog.getByRole("button", { name: "下一步" }).click();
 
   await dialog.getByLabel("节点名称").fill("  HK SS 2022  ");
-  await dialog.getByLabel("入站 Tag").fill("  ss2022-hk-user  ");
+  await dialog.getByRole("textbox", { name: /入站标识（Tag）/ }).fill("  ss2022-hk-user  ");
   await dialog.getByLabel("监听端口").fill("18443");
   await dialog.getByLabel("Shadowsocks 加密方式").selectOption("2022-blake3-aes-256-gcm");
   await dialog.getByLabel("服务端主密钥").fill(serverKey);
@@ -529,7 +535,7 @@ test("creates plain VLESS WebSocket on an IP-only server without a domain or TLS
   await dialog.getByRole("button", { name: "下一步" }).click();
 
   await dialog.getByLabel("节点名称").fill("IP VLESS WS");
-  await dialog.getByLabel("入站 Tag").fill("vless-ws-ip");
+  await dialog.getByRole("textbox", { name: /入站标识（Tag）/ }).fill("vless-ws-ip");
   await dialog.getByLabel("监听端口").fill("18080");
   await dialog.getByLabel("WebSocket Host（可选）").fill("");
   await dialog.getByLabel("WebSocket 路径").fill("/socket");
@@ -643,7 +649,7 @@ test("submits tunnel server_ids in the order shown after reordering", async ({ p
   await page.getByRole("button", { name: "创建链路" }).click();
   const dialog = page.getByRole("dialog", { name: "创建链式端口转发" });
   await dialog.getByLabel("链路名称").fill("hk-us-media");
-  await dialog.getByLabel("入口端口").fill("24433");
+  await dialog.getByLabel(/全链路端口/).fill("24433");
   await dialog.getByLabel("最终目标地址").fill("media.example.com");
   await dialog.getByLabel("最终目标端口").fill("443");
 
@@ -779,15 +785,32 @@ test("ignores a late WARP response after switching servers", async ({ page }) =>
   await expect(page.getByText("172.16.1.1", { exact: true })).toHaveCount(0);
 });
 
-test("submits download speed parameters and polls a running result to completion", async ({ page }) => {
+test("submits node speed parameters and polls a running result to completion", async ({ page }) => {
   const mock = await createMock(page);
-  const servers = [server(1, "Hong Kong Edge", "198.51.100.11"), server(2, "Tokyo Edge", "198.51.100.12")];
   const nodes = [node(5, "HK Reality"), node(8, "JP Hysteria", "hysteria2")];
   let submitted = false;
   let postSubmitResultRequests = 0;
-  registerAdvancedShell(mock, servers);
   mock
     .on("GET", "/api/admin/nodes", () => json({ nodes }))
+    .on("GET", "/api/admin/managed-node-offers", () => json({ offers: [] }))
+    .on("GET", "/api/user/config", () => json({
+      force_sync_external: false,
+      match_rule: "node_name",
+      sync_scope: "saved_only",
+      keep_node_name: true,
+      cache_expire_minutes: 0,
+      sync_traffic: true,
+      node_name_filter: "",
+      append_sub_info: false,
+      custom_rules_enabled: true,
+      enable_short_link: false,
+      use_new_template_system: true,
+      enable_proxy_provider: false,
+      node_order: [],
+      proxy_groups_source_url: "",
+      client_compatibility_mode: false,
+    }))
+    .on("GET", "/api/admin/speedtest/testers", () => json({ testers: [] }))
     .on("GET", "/api/admin/speedtest/mihomo-status", () => json({ success: true, ready: true, path: "/opt/arcway/data/bin/mihomo" }))
     .on("GET", "/api/admin/speedtest/results", (call) => {
       if (!submitted) return json({ success: true, results: [] });
@@ -800,7 +823,7 @@ test("submits download speed parameters and polls a running result to completion
         source: "master_local",
         down_mbps: running ? 0 : 286.4,
         latency_ms: running ? 0 : 42,
-        test_bytes: running ? 0 : 75 * 1024 ** 2,
+        test_bytes: running ? 0 : 100 * 1024 ** 2,
         status: running ? "running" : "ok",
         egress_ip: running ? "" : "203.0.113.80",
         tested_by: "admin",
@@ -812,26 +835,24 @@ test("submits download speed parameters and polls a running result to completion
       return json({ success: true, id: 41 });
     });
 
-  await page.goto("/#/advanced");
-  await page.getByRole("tab", { name: "节点测速" }).click();
-  const form = page.locator(".speedtest-form");
-  await form.getByLabel("节点").selectOption("8");
-  await form.getByLabel("测试类型").selectOption("download");
-  await form.getByLabel("流量（MB）").fill("75");
-  await form.getByLabel("线程").selectOption("4");
-  await form.getByRole("button", { name: "开始测速" }).click();
+  await page.goto("/#/nodes");
+  await page.getByRole("button", { name: "打开测速工作台" }).click();
+  const dialog = page.getByRole("dialog", { name: "测速工作台" });
+  await dialog.getByLabel("并发线程").selectOption("4");
+  await dialog.getByLabel("流量上限").selectOption(String(100 * 1024 ** 2));
+  await dialog.getByRole("checkbox", { name: "选择测速 JP Hysteria" }).check();
+  await dialog.getByRole("button", { name: "开始测速" }).click();
 
-  await expect(page.getByText("进行中", { exact: true })).toBeVisible();
-  await expect(page.getByText("286.4 Mbps", { exact: true })).toBeVisible({ timeout: 6_000 });
-  await expect(page.getByText("完成", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("进行中", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("286.4 Mbps", { exact: true })).toBeVisible({ timeout: 6_000 });
   expect(postSubmitResultRequests).toBeGreaterThanOrEqual(2);
   expect(mock.callsFor("POST", "/api/admin/speedtest/run").map((call) => call.body)).toEqual([{
     node_id: 8,
-    bytes: 75 * 1024 ** 2,
+    bytes: 100 * 1024 ** 2,
     threads: 4,
     latency_only: false,
   }]);
   for (const call of mock.callsFor("GET", "/api/admin/speedtest/results")) {
-    expect(call.query).toEqual({ limit: "50" });
+    expect(call.query).toEqual({ latest: "1" });
   }
 });

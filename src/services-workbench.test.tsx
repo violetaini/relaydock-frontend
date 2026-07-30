@@ -1,7 +1,7 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
-import { parseSSELog, ServicesWorkbenchPage } from "./services-workbench";
+import { consumeRemoteServiceStream, parseSSELog, ServicesWorkbenchPage } from "./services-workbench";
 import type { RemoteServer } from "./types";
 
 vi.hoisted(() => {
@@ -57,6 +57,7 @@ function mockServerReads(servers: RemoteServer[] = [onlineServer, offlineServer]
   lineSpeedtestTargets?: Record<string, unknown>[];
   certificates?: Record<string, unknown>[];
   deleteImpact?: Record<string, unknown>;
+  serviceStatus?: Record<string, unknown>;
 } = {}) {
   let ddnsStatusRead = 0;
   return vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
@@ -112,11 +113,11 @@ function mockServerReads(servers: RemoteServer[] = [onlineServer, offlineServer]
       ddnsStatusRead += 1;
       return value as T;
     }
-    if (path.includes("/api/admin/remote/services/status")) return {
+    if (path.includes("/api/admin/remote/services/status")) return (resources.serviceStatus ?? {
       success: true,
       xray: { installed: true, running: true, version: "Xray 25.1" },
       nginx: { installed: true, running: true, version: "nginx/1.26" },
-    } as T;
+    }) as T;
     if (path.includes("/api/admin/remote/agent/version-info")) return { server_id: 11, current: "0.3.0", latest: "0.3.1", upgrade_available: true } as T;
     if (path.includes("/api/admin/remote/system/info")) return { success: true, hostname: "edge-hk", uptime: "3600", loadavg: "0.10 0.20 0.30 1/100 1", memory: { MemAvailable: "1024 MB" } } as T;
     if (path.includes("/api/admin/remote-servers/reveal-token")) return { success: true, token: "revealed-server-token", pull_token: "existing-agent-token", agent_token: "existing-agent-token", install_command: "authoritative-install-command" } as T;
@@ -139,12 +140,51 @@ function mockServerReads(servers: RemoteServer[] = [onlineServer, offlineServer]
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   localStorage.clear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe("service management workbench", () => {
+  it("does not overlap service status polling batches", async () => {
+    vi.useFakeTimers();
+    let resolveFirstStatus!: (value: unknown) => void;
+    const firstStatus = new Promise((resolve) => { resolveFirstStatus = resolve; });
+    let statusRequests = 0;
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/remote-servers") return { success: true, servers: [onlineServer] } as T;
+      if (path.includes("/api/admin/remote/services/status")) {
+        statusRequests += 1;
+        if (statusRequests === 1) return await firstStatus as T;
+        return {
+          success: true,
+          xray: { installed: true, running: true, version: "Xray 25.1" },
+          nginx: { installed: true, running: true, version: "nginx/1.26" },
+        } as T;
+      }
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(statusRequests).toBe(1);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(45_000); });
+    expect(statusRequests).toBe(1);
+
+    await act(async () => {
+      resolveFirstStatus({
+        success: true,
+        xray: { installed: true, running: true, version: "Xray 25.1" },
+        nginx: { installed: true, running: true, version: "nginx/1.26" },
+      });
+      await Promise.resolve();
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+    expect(statusRequests).toBe(2);
+  });
+
   it("keeps advanced operations reachable from service management", async () => {
     const onOpenAdvanced = vi.fn();
     mockServerReads();
@@ -335,7 +375,7 @@ describe("service management workbench", () => {
 
   it("updates an external Xray core only after confirmation", async () => {
     mockServerReads([onlineServer]);
-    const fetchMock = vi.fn().mockResolvedValue(new Response('data: {"success":true,"message":"updated"}\n\n', {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('data: {"type":"output","data":"Downloading Xray"}\n\ndata: {"type":"complete","success":true,"message":"updated"}\n\n', {
       status: 200,
       headers: { "content-type": "text/event-stream" },
     }));
@@ -356,7 +396,97 @@ describe("service management workbench", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/remote/xray/install-stream?server_id=11");
     expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({ method: "POST" }));
+    const terminal = screen.getByRole("dialog", { name: "更新 Xray" });
+    expect(within(terminal).getByRole("log", { name: "远端执行日志" })).toHaveTextContent("Downloading Xray");
+    expect(within(terminal).getByText("执行完成")).toBeInTheDocument();
     expect(notify).toHaveBeenCalledWith("Xray 更新完成");
+  });
+
+  it("shows the external Xray missing state and a full install action", async () => {
+    mockServerReads([{ ...onlineServer, xray_version: "", xray_running: false }], {
+      serviceStatus: {
+        success: true,
+        xray: { installed: false, running: false, version: "" },
+        nginx: { installed: true, running: true, version: "nginx/1.26" },
+      },
+    });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(dialog).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(dialog).getByRole("tab", { name: "服务控制" }));
+
+    const xrayHeading = within(dialog).getByRole("heading", { name: "Xray" });
+    const xrayCard = xrayHeading.closest(".service-control-card");
+    expect(xrayCard).toHaveClass("is-missing");
+    expect(within(xrayCard as HTMLElement).getByText("未安装")).toBeInTheDocument();
+    expect(within(xrayCard as HTMLElement).getByRole("button", { name: "安装 Xray" })).toBeEnabled();
+  });
+
+  it("streams fragmented install output into a locked terminal until completion", async () => {
+    mockServerReads([{ ...onlineServer, xray_version: "", xray_running: false }], {
+      serviceStatus: {
+        success: true,
+        xray: { installed: false, running: false, version: "" },
+        nginx: { installed: true, running: true, version: "nginx/1.26" },
+      },
+    });
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const stream = new ReadableStream<Uint8Array>({ start(value) { controller = value; } });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(stream, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    })));
+    const notify = vi.fn();
+    render(<ServicesWorkbenchPage notify={notify} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const management = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(management).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(management).getByRole("tab", { name: "服务控制" }));
+    fireEvent.click(within(management).getByRole("button", { name: "安装 Xray" }));
+
+    const terminal = await screen.findByRole("dialog", { name: "安装 Xray" });
+    expect(within(terminal).queryByRole("button", { name: "关闭" })).not.toBeInTheDocument();
+    expect(within(terminal).getByRole("button", { name: "正在执行" })).toBeDisabled();
+
+    const encoder = new TextEncoder();
+    controller.enqueue(encoder.encode('data: {"type":"output","data":"Down'));
+    controller.enqueue(encoder.encode('loading Xray"}\n\n'));
+    await waitFor(() => expect(within(terminal).getByRole("log", { name: "远端执行日志" })).toHaveTextContent("Downloading Xray"));
+    expect(terminal.querySelector(".service-terminal-status")).toHaveTextContent("正在执行");
+
+    controller.enqueue(encoder.encode('data: {"type":"complete","success":true,"message":"installed"}\n'));
+    controller.enqueue(encoder.encode("\n"));
+    controller.close();
+    await waitFor(() => expect(within(terminal).getByText("执行完成")).toBeInTheDocument());
+    expect(within(terminal).getAllByRole("button", { name: "关闭" }).every((button) => !button.hasAttribute("disabled"))).toBe(true);
+    expect(notify).toHaveBeenCalledWith("Xray 安装完成");
+  });
+
+  it("rejects an error event even when the stream later claims completion", async () => {
+    const response = new Response('data: {"type":"output","data":"starting"}\n\ndata: {"type":"error","message":"install failed"}\n\ndata: {"type":"complete","success":true,"message":"done"}\n\n');
+    const output: string[] = [];
+    await expect(consumeRemoteServiceStream(response, (value) => output.push(value))).rejects.toThrow("install failed");
+    expect(output).toEqual(["starting"]);
+  });
+
+  it("cancels and releases an open stream after an error event", async () => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const cancel = vi.fn((_reason?: unknown) => { throw new Error("cancel failed"); });
+    const stream = new ReadableStream<Uint8Array>({
+      start(value) { controller = value; },
+      cancel,
+    });
+    const result = consumeRemoteServiceStream(new Response(stream), vi.fn());
+
+    controller.enqueue(new TextEncoder().encode('data: {"type":"error","message":"install failed"}\n\n'));
+
+    await expect(result).rejects.toThrow("install failed");
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(cancel.mock.calls[0][0]).toMatchObject({ message: "install failed" });
+    expect(stream.locked).toBe(false);
   });
 
   it("keeps embedded Xray core maintenance tied to Agent updates", async () => {

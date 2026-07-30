@@ -65,6 +65,40 @@ export async function request<T>(path: string, init: RequestInit = {}, options: 
   return payload as T;
 }
 
+export async function requestStream(path: string, init: RequestInit = {}, options: RequestOptions = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  const token = getToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  if (options.idempotencyKey && !headers.has("Idempotency-Key")) headers.set("Idempotency-Key", options.idempotencyKey);
+  if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(path, { ...init, headers });
+  } catch {
+    throw new ApiError("无法连接控制端，请检查网络或服务状态", 0);
+  }
+
+  if (!response.ok) {
+    const contentType = response.headers.get("content-type") ?? "";
+    const payload = contentType.includes("application/json")
+      ? await response.json().catch(() => null) as { error?: string; message?: string } | null
+      : await response.text().catch(() => "");
+    const message = typeof payload === "string"
+      ? payload
+      : payload?.error ?? payload?.message ?? `请求失败 (${response.status})`;
+    if (response.status === 401 && !options.suppressUnauthorizedEvent) {
+      window.dispatchEvent(new CustomEvent("arcway:unauthorized"));
+    }
+    throw new ApiError(message || `请求失败 (${response.status})`, response.status);
+  }
+
+  if (!response.body) throw new ApiError("远端未返回可读取的执行日志", response.status);
+  return response;
+}
+
 export const api = {
   get: <T>(path: string, options?: RequestOptions) => request<T>(path, {}, options),
   post: <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>(path, {

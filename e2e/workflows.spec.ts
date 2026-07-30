@@ -180,6 +180,12 @@ async function createMock(page: Page) {
       success: true,
       xray: { installed: true, running: true, version: "25.6.8" },
       nginx: { installed: true, running: true, version: "nginx/1.26.3" },
+    }))
+    .on("GET", "/api/admin/remote/agent/version-info", (call) => json({
+      server_id: Number(call.query.server_id),
+      current: "0.3.4",
+      latest: "0.3.4",
+      upgrade_available: false,
     }));
   await mock.install();
   mocks.set(page, mock);

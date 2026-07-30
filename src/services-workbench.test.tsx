@@ -210,6 +210,36 @@ describe("service management workbench", () => {
     expect(localStorage.getItem("arcway-services-view")).toBe("list");
   });
 
+  it("keeps only WS, Xray and Agent controls while rotating dual-stack addresses in one slot", async () => {
+    vi.useFakeTimers();
+    mockServerReads([onlineServer]);
+    const { container } = render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const address = screen.getByRole("button", { name: /Edge Hong Kong 当前 IPv4 203\.0\.113\.11/ });
+    expect(address).toHaveTextContent("203.0.113.11");
+    expect(address).toHaveTextContent("1/2");
+    expect(container.querySelectorAll(".service-address")).toHaveLength(1);
+    expect(container.querySelector(".service-card-meta")).not.toBeInTheDocument();
+    expect(container.querySelector(".service-connection-policy")).not.toBeInTheDocument();
+    const controls = container.querySelector(".service-runtime-controls");
+    expect(controls).not.toBeNull();
+    expect(within(controls as HTMLElement).getByText("WS")).toBeInTheDocument();
+    expect(within(controls as HTMLElement).getByText("Xray")).toBeInTheDocument();
+    expect(within(controls as HTMLElement).getByText("v0.3.0")).toBeInTheDocument();
+
+    fireEvent.mouseEnter(address);
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    expect(address).toHaveTextContent("203.0.113.11");
+    fireEvent.mouseLeave(address);
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    expect(address).toHaveTextContent("2001:db8::11");
+    expect(address).toHaveTextContent("2/2");
+    fireEvent.click(address);
+    expect(address).toHaveTextContent("203.0.113.11");
+    expect(address).toHaveTextContent("1/2");
+  });
+
   it("never falls back to unselected online servers when an offline server is selected", async () => {
     mockServerReads();
     render(<ServicesWorkbenchPage notify={vi.fn()} />);
@@ -386,9 +416,8 @@ describe("service management workbench", () => {
     expect(notify).toHaveBeenCalledWith("Xray 安装完成");
   });
 
-  it("restarts and confirms an Xray update from the installed card quick menu", async () => {
+  it("updates an installed Xray directly from the compact server-card control", async () => {
     mockServerReads([onlineServer]);
-    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true, message: "restarted" });
     const fetchMock = vi.fn().mockResolvedValue(new Response('data: {"type":"output","data":"Updating Xray"}\n\ndata: {"type":"complete","success":true,"message":"updated"}\n\n', {
       status: 200,
       headers: { "content-type": "text/event-stream" },
@@ -396,18 +425,10 @@ describe("service management workbench", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<ServicesWorkbenchPage notify={vi.fn()} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "管理 Edge Hong Kong Xray 25.1" }));
-    const restartMenu = screen.getByRole("menu", { name: "Edge Hong Kong Xray 快捷操作" });
-    fireEvent.click(within(restartMenu).getByRole("menuitem", { name: "重启 Xray" }));
-
-    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote/services/control?server_id=11", { service: "xray", action: "restart" }));
-    expect(fetchMock).not.toHaveBeenCalled();
-    const xrayButton = await screen.findByRole("button", { name: "管理 Edge Hong Kong Xray 25.1" });
-    await waitFor(() => expect(xrayButton).toBeEnabled());
+    const xrayButton = await screen.findByRole("button", { name: "更新 Edge Hong Kong Xray v25.1" });
+    expect(within(xrayButton).getByText("Xray")).toBeInTheDocument();
+    expect(within(xrayButton).queryByText("25.1")).not.toBeInTheDocument();
     fireEvent.click(xrayButton);
-    const updateMenu = screen.getByRole("menu", { name: "Edge Hong Kong Xray 快捷操作" });
-    fireEvent.click(within(updateMenu).getByRole("menuitem", { name: "更新 / 重装核心" }));
-
     expect(fetchMock).not.toHaveBeenCalled();
     const confirm = screen.getByRole("dialog", { name: "更新 Xray" });
     fireEvent.click(within(confirm).getByRole("button", { name: "确认更新" }));
@@ -430,7 +451,7 @@ describe("service management workbench", () => {
     const upgradeButton = await screen.findByRole("button", { name: "升级 Edge Hong Kong Agent" });
     expect(upgradeButton).toHaveClass("has-update");
     expect(upgradeButton).toHaveAttribute("title", expect.stringContaining("上游最新 v0.3.1"));
-    expect(within(upgradeButton).getByText("Agent v0.3.0")).toBeInTheDocument();
+    expect(within(upgradeButton).getByText("v0.3.0")).toBeInTheDocument();
     expect(upgradeButton.querySelector("i")).toBeInTheDocument();
     fireEvent.click(upgradeButton);
 
@@ -443,7 +464,13 @@ describe("service management workbench", () => {
   });
 
   it("loads live service state and restarts Xray through the remote control API", async () => {
-    mockServerReads([onlineServer]);
+    mockServerReads([onlineServer], {
+      serviceStatus: {
+        success: true,
+        xray: { installed: true, running: true, version: "Xray 26.3.27 (Xray, Penetrates Everything.) Custom (go1.26.5 linux/amd64)" },
+        nginx: { installed: true, running: true, version: "nginx/1.26" },
+      },
+    });
     const post = vi.spyOn(api, "post").mockResolvedValue({ success: true, message: "restarted" });
     render(<ServicesWorkbenchPage notify={vi.fn()} />);
 
@@ -451,6 +478,8 @@ describe("service management workbench", () => {
     const dialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
     await waitFor(() => expect(within(dialog).getByText("0.3.0")).toBeInTheDocument());
     fireEvent.click(within(dialog).getByRole("tab", { name: "服务控制" }));
+    expect(within(dialog).getByText("v26.3.27")).toBeInTheDocument();
+    expect(within(dialog).queryByText(/Penetrates Everything|go1\.26\.5|linux\/amd64/)).not.toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "重启 Xray" }));
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote/services/control?server_id=11", { service: "xray", action: "restart" }));

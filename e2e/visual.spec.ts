@@ -18,6 +18,7 @@ const servers = [
     status: "online",
     last_heartbeat: new Date().toISOString(),
     ip_address: "198.51.100.14",
+    ip_address_v6: "2001:db8:100::14",
     ipv6_enabled: true,
     connection_mode: "websocket",
     current_upload_speed: 1840000,
@@ -727,8 +728,16 @@ for (const scenario of [
     });
     await page.goto("/#/servers");
 
-    const listState = page.locator(".service-card").first().locator(".service-xray-state");
-    await expect(listState).toContainText(scenario.label);
+    const firstCard = page.locator(".service-card").first();
+    const listState = firstCard.locator(".service-xray-state");
+    const cardState = scenario.running ? "running" : scenario.installed ? "stopped" : "missing";
+    await expect(listState).toHaveClass(new RegExp(`is-${cardState}`));
+    await expect(listState).toContainText(scenario.installed ? "Xray" : "安装 Xray");
+    await expect(listState).not.toContainText("Penetrates Everything");
+    const address = firstCard.locator(".service-address");
+    if ((await address.getAttribute("aria-label"))?.includes("当前 IPv6")) await address.click();
+    await expect(address).toContainText("198.51.100.14");
+    await expect(address).toContainText("1/2");
     await expect(page.locator(".service-card").first().locator(".service-agent-version")).toContainText("v0.3.4");
     await expectViewportIntegrity(page, `${scenario.name} server card`);
     await page.screenshot({ path: testInfo.outputPath(`service-${scenario.name}-card.png`), fullPage: true });

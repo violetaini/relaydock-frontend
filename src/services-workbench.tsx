@@ -1398,6 +1398,12 @@ function cleanVersion(value: string | undefined): string {
   return (value ?? "").trim().replace(/^xray\s+/i, "").replace(/^v(?=\d)/i, "");
 }
 
+function cleanXrayVersion(value: string | undefined): string {
+  const match = (value ?? "").trim().match(/^xray\s+v?(\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?)/i)
+    ?? (value ?? "").trim().match(/^v?(\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?)/i);
+  return match?.[1] ?? "";
+}
+
 function connectionPolicyLabel(mode: string): string {
   if (mode === "auto") return "自动";
   if (mode === "pull") return "Pull";
@@ -1447,8 +1453,8 @@ function XrayQuickControl({ server, status, working, compact = false, onAction }
   const installed = embedded || (live?.installed ?? Boolean(server.xray_running || server.xray_version));
   const running = live?.running ?? Boolean(server.xray_running);
   const state = running ? "running" : installed ? "stopped" : "missing";
-  const version = cleanVersion(live?.version || server.xray_version);
-  const label = state === "missing" ? "Xray 未安装" : version ? `Xray ${version}` : embedded ? "内嵌 Xray" : `Xray ${state === "running" ? "运行中" : "已停止"}`;
+  const version = cleanXrayVersion(live?.version || server.xray_version);
+  const label = state === "missing" ? "安装 Xray" : "Xray";
   const disabled = !isConnected(server) || server.is_federated || working;
   const loading = status?.loading && !status.loaded;
 
@@ -1465,22 +1471,27 @@ function XrayQuickControl({ server, status, working, compact = false, onAction }
     setMenuOpen(false);
     onAction(action);
   };
-  const directAction: XrayQuickAction = !installed ? "install" : !running ? "start" : "update";
+  const directAction: XrayQuickAction = !installed ? "install" : !running ? "start" : embedded ? "restart" : "update";
   const ariaLabel = loading
     ? `正在读取 ${server.name} Xray 状态`
     : !installed
       ? `安装 ${server.name} Xray`
-      : embedded
+      : compact && !running
+        ? `启动 ${server.name} Xray`
+        : compact && !embedded
+          ? `更新 ${server.name} Xray${version ? ` v${version}` : ""}`
+          : embedded
         ? `管理 ${server.name} 内嵌 Xray`
-        : `管理 ${server.name} Xray ${version || ""}`.trim();
+        : `管理 ${server.name} Xray${version ? ` v${version}` : ""}`;
+  const versionTitle = version ? ` v${version}` : "";
 
   return <div ref={menuRef} className={`service-xray-quick ${compact ? "is-compact" : ""}`}>
-    <button type="button" className={`service-xray-state is-${loading ? "loading" : state}`} aria-label={ariaLabel} aria-haspopup={!compact && installed ? "menu" : undefined} aria-expanded={!compact && installed ? menuOpen : undefined} title={loading ? "正在读取 Xray 状态" : `${label} · ${running ? "运行中" : installed ? "已停止" : "点击安装"}`} disabled={disabled || loading} onClick={() => compact || !installed ? choose(directAction) : setMenuOpen((open) => !open)}>
+    <button type="button" className={`service-xray-state is-${loading ? "loading" : state}`} aria-label={ariaLabel} aria-haspopup={!compact && installed ? "menu" : undefined} aria-expanded={!compact && installed ? menuOpen : undefined} title={loading ? "正在读取 Xray 状态" : `Xray${versionTitle} · ${running ? embedded ? "运行中，点击重启" : "运行中，点击更新" : installed ? "已停止，点击启动" : "未安装，点击安装"}`} disabled={disabled || loading} onClick={() => compact || !installed ? choose(directAction) : setMenuOpen((open) => !open)}>
       {working || loading ? <RefreshCw className="service-spin" size={13} /> : state === "missing" ? <Download size={13} /> : <i />}
       <span className="service-xray-copy">
         <b>{working ? "处理中" : label}</b>
-        {!working && !loading ? <small>{running ? "运行中" : installed ? "已停止" : "点击安装"}</small> : null}
       </span>
+      {compact && running && !embedded && !working && !loading ? <HardDriveDownload className="service-xray-update-icon" size={13} /> : null}
       {!compact && installed && !working ? <ChevronDown size={12} /> : null}
     </button>
     {menuOpen && !compact ? <div className="service-xray-menu" role="menu" aria-label={`${server.name} Xray 快捷操作`}>
@@ -1489,6 +1500,40 @@ function XrayQuickControl({ server, status, working, compact = false, onAction }
       {!embedded ? <button role="menuitem" onClick={() => choose("update")}><HardDriveDownload size={14} />更新 / 重装核心</button> : null}
     </div> : null}
   </div>;
+}
+
+function ServerAddressCarousel({ server }: { server: ManagedServer }) {
+  const addresses = useMemo(() => {
+    const values = [
+      server.ip_address ? { family: "IPv4", value: server.ip_address } : null,
+      server.ipv6_enabled && server.ip_address_v6 ? { family: "IPv6", value: server.ip_address_v6 } : null,
+    ].filter((item): item is { family: string; value: string } => Boolean(item));
+    return values.filter((item, index) => values.findIndex((candidate) => candidate.value === item.value) === index);
+  }, [server.ip_address, server.ip_address_v6, server.ipv6_enabled]);
+  const addressKey = addresses.map((item) => `${item.family}:${item.value}`).join("|");
+  const [index, setIndex] = useState(0);
+  const [paused, setPaused] = useState(false);
+
+  useEffect(() => { setIndex(0); }, [addressKey]);
+  useEffect(() => {
+    if (addresses.length < 2 || paused) return;
+    const timer = window.setInterval(() => setIndex((current) => (current + 1) % addresses.length), 3_000);
+    return () => window.clearInterval(timer);
+  }, [addressKey, addresses.length, paused]);
+
+  const currentIndex = addresses.length ? index % addresses.length : 0;
+  const current = addresses[currentIndex] ?? { family: "IPv4", value: "IP 未上报" };
+  const count = addresses.length;
+  const switchAddress = () => {
+    if (count > 1) setIndex((currentIndex + 1) % count);
+  };
+
+  const addressTitle = count > 1 ? `${addresses.map((item) => `${item.family}: ${item.value}`).join("\n")}\n点击切换地址` : current.family;
+
+  return <button type="button" className="service-address" aria-label={`${server.name} 当前 ${current.family} ${current.value}${count > 1 ? `，第 ${currentIndex + 1} 个，共 ${count} 个，点击切换` : ""}`} title={addressTitle} disabled={count < 2} onClick={switchAddress} onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)} onFocus={() => setPaused(true)} onBlur={() => setPaused(false)}>
+    <span key={`${addressKey}:${currentIndex}`} className="service-address-value">{current.value}</span>
+    {count > 1 ? <small className="service-address-count" aria-hidden="true">{currentIndex + 1}/{count}</small> : null}
+  </button>;
 }
 
 function ServerCard({ server, serviceStatus, agentVersion, checked, credentialsLoading, xrayWorking, agentWorking, style, onCheck, onOpen, onXrayAction, onAgentUpgrade, onEdit, onCredentials, onDelete }: {
@@ -1516,7 +1561,7 @@ function ServerCard({ server, serviceStatus, agentVersion, checked, credentialsL
       <div className="service-card-head">
         <label className="service-select" title="选择服务器"><input type="checkbox" checked={checked} onChange={(event) => onCheck(event.target.checked)} aria-label={`选择 ${server.name}`} /></label>
         <span className={`service-server-icon ${connected ? "is-online" : ""}`}>{connected ? <Wifi size={19} /> : <WifiOff size={19} />}</span>
-        <div className="service-card-title"><strong>{server.name}</strong><small>{server.domain || server.ip_address || "等待 Agent 上报地址"}</small></div>
+        <div className="service-card-title"><strong>{server.name}</strong>{server.domain ? <small>{server.domain}</small> : null}</div>
         <Badge tone={connected ? "good" : statusTone(server.status)}>{connected ? "在线" : "离线"}</Badge>
       </div>
       <div className="service-badges">
@@ -1526,12 +1571,11 @@ function ServerCard({ server, serviceStatus, agentVersion, checked, credentialsL
         {server.warp_installed ? <Badge tone="info">WARP</Badge> : null}
       </div>
       <div className="service-runtime-row">
-        <div className="service-address" title={server.ip_address || "IPv4 未上报"}><Network size={14} /><span>{server.ip_address || "IPv4 未上报"}</span></div>
+        <ServerAddressCarousel server={server} />
         <div className="service-runtime-controls">
-          <span className="service-connection-policy" title="Agent 安装时确定的连接策略"><Settings2 size={13} />{connectionPolicyLabel(server.connection_mode)}</span>
           <span className={`service-transport is-${transport ? transport.toLowerCase() : "offline"}`} title={transport ? "当前连接通道（根据 Agent 在线状态推断）" : "Agent 离线，当前没有活动数据通道"}>{transport ? <Wifi size={12} /> : <WifiOff size={12} />}{transport || "--"}</span>
-          <XrayQuickControl server={server} status={serviceStatus} working={xrayWorking} onAction={onXrayAction} />
-          <AgentVersionButton server={server} version={agentVersion} working={agentWorking} onUpgrade={onAgentUpgrade} />
+          <XrayQuickControl compact server={server} status={serviceStatus} working={xrayWorking} onAction={onXrayAction} />
+          <AgentVersionButton compact server={server} version={agentVersion} working={agentWorking} onUpgrade={onAgentUpgrade} />
         </div>
       </div>
       <div className="service-live-panel">
@@ -1542,9 +1586,6 @@ function ServerCard({ server, serviceStatus, agentVersion, checked, credentialsL
           <div className="service-traffic-caption"><small>{server.traffic_reset_day ? `每月 ${server.traffic_reset_day} 日重置` : "无需重置"}</small><small>{server.inbounds?.length ?? 0} 个入站</small></div>
         </div>
         <div className="service-heartbeat"><Activity size={13} /><span>最后心跳：{relativeTime(server.last_heartbeat)}</span></div>
-      </div>
-      <div className="service-card-meta">
-        <span>{server.ipv6_enabled && server.ip_address_v6 ? `IPv6 ${server.ip_address_v6}` : "IPv6 未启用或未上报"}</span>
       </div>
       <div className="service-card-actions">
         <div className="service-card-primary-actions"><Button variant="secondary" onClick={() => onOpen("config")} disabled={!connected}><Code2 size={16} />Xray 配置</Button><Button variant="secondary" aria-label="管理" onClick={() => onOpen("overview")}><Settings2 size={16} />Agent 管理</Button></div>
@@ -2955,6 +2996,8 @@ function ServiceControlCard({ name, state, fallbackVersion, working, externallyM
   const controlsLocked = Boolean(working) || externallyManaged;
   const xrayCoreLocked = name === "Xray" && (embeddedCore || !allowCoreMaintenance);
   const coreNote = embeddedCore ? "内嵌核心随 Agent 更新，不单独安装、更新或卸载。" : name === "Xray" && !allowCoreMaintenance ? "共享服务器的核心由拥有方控制端管理。" : "";
+  const rawVersion = state?.version || fallbackVersion;
+  const displayVersion = name === "Xray" ? cleanXrayVersion(rawVersion) : rawVersion;
   const activeAction = working.startsWith(`${key}-`) ? working.slice(key.length + 1) : "";
   const visualState = activeAction ? "working" : running ? "running" : installed ? "stopped" : "missing";
   const statusLabel = activeAction
@@ -2969,7 +3012,7 @@ function ServiceControlCard({ name, state, fallbackVersion, working, externallyM
       <div className="service-control-icon">{activeAction ? <RotateCw className="service-spin" size={20} /> : name === "Xray" ? <Network size={21} /> : <Server size={21} />}</div>
       <div className="service-control-main">
         <div><h3>{name}</h3><span className={`service-control-state is-${visualState}`} aria-live="polite">{activeAction ? <RotateCw className="service-spin" size={12} /> : !installed ? <Trash2 size={12} /> : <i />}{statusLabel}</span>{embeddedCore ? <Badge tone="info">内嵌核心</Badge> : null}{externallyManaged ? <Badge tone="info">系统托管</Badge> : null}</div>
-        <p>{state?.version || fallbackVersion || "未检测到版本信息"}</p>
+        <p>{displayVersion ? `${name === "Xray" ? "v" : ""}${displayVersion}` : "未检测到版本信息"}</p>
         {coreNote ? <small>{coreNote}</small> : externallyManaged ? <small>服务操作已锁定，防止影响服务器上的现有网站。</small> : null}
       </div>
     </div>

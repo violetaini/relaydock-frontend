@@ -890,6 +890,11 @@ for (const viewport of [
       if (item.hiddenHeading) await expect(heading).toBeAttached();
       else await expect(heading).toBeVisible();
       await expect(page.getByText(item.marker, { exact: true }).first()).toBeVisible();
+      if (item.route === "certificates" && viewport.name === "desktop") {
+        const headers = page.locator(".cw-certificate-table thead th");
+        await expect(headers).toHaveCount(6);
+        await expect(headers.first()).toHaveCSS("vertical-align", "middle");
+      }
       if (item.route === "settings") {
         const redeemTemplate = page.getByRole("textbox", { name: "复制模板" });
         await expect(redeemTemplate).toHaveAttribute("rows", "10");

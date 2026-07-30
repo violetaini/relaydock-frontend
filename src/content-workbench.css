@@ -70,6 +70,7 @@
 .cw-managed-table .table-wrap { max-width: 100%; }
 .cw-managed-table table { width: 100%; table-layout: fixed; }
 .cw-managed-table th, .cw-managed-table td { min-width: 0; vertical-align: top; }
+.cw-managed-table th { vertical-align: middle; }
 .cw-managed-table td > strong,
 .cw-managed-table .cw-file-name strong,
 .cw-managed-table .cw-file-name small { display: block; }

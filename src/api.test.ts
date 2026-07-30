@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { api, getToken, setToken } from "./api";
+import { api, getToken, openDashboardSocket, setToken } from "./api";
 
 describe("api client", () => {
   beforeEach(() => {
@@ -49,5 +49,42 @@ describe("api client", () => {
       .rejects.toEqual(expect.objectContaining({ status: 401, message: "invalid 2FA code" }));
     expect(unauthorized).not.toHaveBeenCalled();
     window.removeEventListener("arcway:unauthorized", unauthorized);
+  });
+
+  it("reports dashboard socket connectivity and stops reconnecting after cleanup", () => {
+    class FakeWebSocket {
+      static instances: FakeWebSocket[] = [];
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onclose: (() => void) | null = null;
+      constructor(readonly url: string) { FakeWebSocket.instances.push(this); }
+      close() { this.onclose?.(); }
+    }
+    setToken("socket-token");
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const onMessage = vi.fn();
+    const onOpen = vi.fn();
+    const onClose = vi.fn();
+
+    const cleanupSocket = openDashboardSocket(onMessage, { onOpen, onClose });
+    const socket = FakeWebSocket.instances[0];
+    expect(socket.url).toContain("/api/ws/dashboard?token=socket-token");
+    socket.onopen?.();
+    socket.onmessage?.({ data: JSON.stringify({ type: "realtime" }) });
+    expect(onOpen).toHaveBeenCalledOnce();
+    expect(onMessage).toHaveBeenCalledWith({ type: "realtime" });
+
+    socket.onclose?.();
+    expect(onClose).toHaveBeenCalledOnce();
+    cleanupSocket();
+    expect(onClose).toHaveBeenCalledOnce();
+    vi.unstubAllGlobals();
+  });
+
+  it("reports dashboard fallback immediately when no session token exists", () => {
+    const onClose = vi.fn();
+    const cleanupSocket = openDashboardSocket(vi.fn(), { onClose });
+    expect(onClose).toHaveBeenCalledOnce();
+    cleanupSocket();
   });
 });

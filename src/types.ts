@@ -44,6 +44,7 @@ export interface RemoteServer {
   traffic_stats_mode: string;
   traffic_source: string;
   ws_connected: boolean;
+  fallback_to_pull?: boolean;
   encrypted: boolean;
   agent_uninstall_v2?: boolean;
   warp_installed?: boolean;
@@ -153,6 +154,12 @@ export interface NodeListResponse {
 export interface RealtimeMessage {
   type: string;
   servers?: RemoteServer[];
+  serverId?: number;
+  services?: {
+    success?: boolean;
+    xray?: { installed: boolean; running: boolean; version?: string };
+    nginx?: { installed: boolean; running: boolean; version?: string };
+  };
   userConnections?: Record<string, number>;
   trafficSummary?: TrafficSummary;
 }

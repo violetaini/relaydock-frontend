@@ -729,6 +729,9 @@ for (const scenario of [
 
     const listState = page.locator(".service-card").first().locator(".service-xray-state");
     await expect(listState).toContainText(scenario.label);
+    await expect(page.locator(".service-card").first().locator(".service-agent-version")).toContainText("v0.3.4");
+    await expectViewportIntegrity(page, `${scenario.name} server card`);
+    await page.screenshot({ path: testInfo.outputPath(`service-${scenario.name}-card.png`), fullPage: true });
     await page.getByRole("button", { name: /^管理(?: Hong Kong Edge)?$/ }).first().click();
     const operations = page.getByRole("dialog", { name: "Hong Kong Edge" });
     await expect(operations.getByText("Agent 版本", { exact: true })).toBeVisible();

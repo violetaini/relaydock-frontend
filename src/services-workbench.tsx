@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import {
   Activity,
   ArrowDownToLine,
   ArrowUpFromLine,
   Check,
+  ChevronDown,
   Clipboard,
   Cloud,
   Code2,
   Copy,
+  Download,
   Eye,
   FileKey2,
   Gauge,
@@ -34,8 +36,8 @@ import {
   WifiOff,
   Wrench,
 } from "lucide-react";
-import { api, request, requestStream } from "./api";
-import type { NginxMode, RemoteServer, ServerListResponse, SharedServerToken } from "./types";
+import { api, openDashboardSocket, requestStream } from "./api";
+import type { NginxMode, RealtimeMessage, RemoteServer, ServerListResponse, SharedServerToken } from "./types";
 import {
   buildTrojanInbound,
   buildWireGuardClientProfile,
@@ -272,6 +274,18 @@ interface AgentVersionResponse {
   upgrade_available: boolean;
   current_error?: string;
   latest_error?: string;
+}
+
+interface CachedAgentVersion extends Partial<AgentVersionResponse> {
+  loading: boolean;
+  loaded: boolean;
+}
+
+type XrayQuickAction = "start" | "stop" | "restart" | "install" | "update";
+
+interface QuickXrayConfirmation {
+  server: ManagedServer;
+  action: "stop" | "update";
 }
 
 interface SystemInfoResponse extends ActionResponse {
@@ -787,6 +801,8 @@ function parseRoutingValues(value: string): string[] {
 export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Notify; onOpenAdvanced?: () => void }) {
   const [servers, setServers] = useState<ManagedServer[]>([]);
   const [serviceStatuses, setServiceStatuses] = useState<Record<number, CachedServiceStatus>>({});
+  const [agentVersions, setAgentVersions] = useState<Record<number, CachedAgentVersion>>({});
+  const [dashboardConnected, setDashboardConnected] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
@@ -796,7 +812,7 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
   const [createOpen, setCreateOpen] = useState(false);
   const [sharedOpen, setSharedOpen] = useState(false);
   const [editing, setEditing] = useState<ManagedServer | null>(null);
-  const [details, setDetails] = useState<ManagedServer | null>(null);
+  const [details, setDetails] = useState<{ server: ManagedServer; initialTab: OperationTab } | null>(null);
   const [credentials, setCredentials] = useState<Credentials | null>(null);
   const [credentialsLoading, setCredentialsLoading] = useState<number | null>(null);
   const [deleting, setDeleting] = useState<ManagedServer | null>(null);
@@ -804,73 +820,158 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
   const [deleteError, setDeleteError] = useState("");
   const [deleteRefreshVersion, setDeleteRefreshVersion] = useState(0);
   const [upgrade, setUpgrade] = useState<UpgradeState | null>(null);
+  const [quickWorking, setQuickWorking] = useState<{ serverId: number; action: XrayQuickAction } | null>(null);
+  const [quickConfirm, setQuickConfirm] = useState<QuickXrayConfirmation | null>(null);
+  const [quickTerminal, setQuickTerminal] = useState<ServiceTerminalState | null>(null);
+  const serviceRefreshes = useRef(new Set<number>());
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
+  const load = useCallback(async (quiet = false) => {
+    if (!quiet) {
+      setLoading(true);
+      setError("");
+    }
     try {
       const response = assertSuccess(await api.get<ServerListResponse>("/api/admin/remote-servers"), "服务器列表加载失败");
       setServers((response.servers ?? []) as ManagedServer[]);
       setSelected((current) => current.filter((id) => (response.servers ?? []).some((server) => server.id === id)));
     } catch (reason) {
-      setError(messageFrom(reason, "服务器列表加载失败"));
+      if (!quiet) setError(messageFrom(reason, "服务器列表加载失败"));
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   }, []);
 
   useEffect(() => { void load(); }, [load]);
 
-  useEffect(() => {
-    let active = true;
-    let refreshing = false;
-    const targets = servers.filter(isConnected);
-    const targetIDs = new Set(targets.map((server) => server.id));
-    setServiceStatuses((current) => Object.fromEntries(
-      Object.entries(current).filter(([id]) => targetIDs.has(Number(id))),
-    ));
-    if (!targets.length) return () => { active = false; };
-
-    const refresh = async () => {
-      if (refreshing) return;
-      refreshing = true;
+  const refreshServiceStatuses = useCallback(async (serverIDs: number[]) => {
+    const targets = [...new Set(serverIDs)].filter((id) => !serviceRefreshes.current.has(id));
+    if (!targets.length) return;
+    for (const id of targets) serviceRefreshes.current.add(id);
+    setServiceStatuses((current) => {
+      const next = { ...current };
+      for (const id of targets) {
+        const previous = current[id];
+        next[id] = { ...previous, loading: !previous?.loaded, loaded: previous?.loaded ?? false };
+      }
+      return next;
+    });
+    try {
+      const results = await Promise.all(targets.map(async (id) => {
+        try {
+          const status = assertSuccess(await api.get<ServiceStatusResponse>(`/api/admin/remote/services/status?server_id=${id}`), "读取服务状态失败");
+          return { id, status };
+        } catch {
+          return { id, status: null };
+        }
+      }));
       setServiceStatuses((current) => {
         const next = { ...current };
-        for (const server of targets) {
-          const previous = current[server.id];
-          next[server.id] = { ...previous, loading: !previous?.loaded, loaded: previous?.loaded ?? false };
+        for (const result of results) {
+          const previous = current[result.id];
+          next[result.id] = result.status
+            ? { ...result.status, loading: false, loaded: true }
+            : { ...previous, loading: false, loaded: previous?.loaded ?? false };
         }
         return next;
       });
-      try {
-        const results = await Promise.all(targets.map(async (server) => {
-          try {
-            const status = assertSuccess(await api.get<ServiceStatusResponse>(`/api/admin/remote/services/status?server_id=${server.id}`), "读取服务状态失败");
-            return { id: server.id, status };
-          } catch {
-            return { id: server.id, status: null };
-          }
-        }));
-        if (!active) return;
-        setServiceStatuses((current) => {
-          const next = { ...current };
-          for (const result of results) {
-            const previous = current[result.id];
-            next[result.id] = result.status
-              ? { ...result.status, loading: false, loaded: true }
-              : { ...previous, loading: false, loaded: previous?.loaded ?? false };
-          }
-          return next;
-        });
-      } finally {
-        refreshing = false;
-      }
-    };
+    } finally {
+      for (const id of targets) serviceRefreshes.current.delete(id);
+    }
+  }, []);
 
-    void refresh();
-    const timer = window.setInterval(() => { void refresh(); }, 15_000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, [servers]);
+  const refreshAgentVersions = useCallback(async (serverIDs: number[]) => {
+    if (!serverIDs.length) return;
+    setAgentVersions((current) => {
+      const next = { ...current };
+      for (const id of serverIDs) {
+        const previous = current[id];
+        next[id] = { ...previous, loading: !previous?.loaded, loaded: previous?.loaded ?? false };
+      }
+      return next;
+    });
+    const results = await Promise.all(serverIDs.map(async (id) => {
+      try {
+        return { id, version: await api.get<AgentVersionResponse>(`/api/admin/remote/agent/version-info?server_id=${id}`) };
+      } catch {
+        return { id, version: null };
+      }
+    }));
+    setAgentVersions((current) => {
+      const next = { ...current };
+      for (const result of results) {
+        const previous = current[result.id];
+        next[result.id] = result.version
+          ? { ...result.version, loading: false, loaded: true }
+          : { ...previous, loading: false, loaded: previous?.loaded ?? false };
+      }
+      return next;
+    });
+  }, []);
+
+  useEffect(() => openDashboardSocket((payload) => {
+    const message = payload as RealtimeMessage;
+    if (message.type === "realtime" && message.servers) {
+      setServers(message.servers as ManagedServer[]);
+      return;
+    }
+    if (message.type === "server-status" && message.serverId && message.services?.success !== false) {
+      setServiceStatuses((current) => ({
+        ...current,
+        [message.serverId as number]: {
+          xray: message.services?.xray,
+          nginx: message.services?.nginx,
+          loading: false,
+          loaded: true,
+        },
+      }));
+    }
+  }, {
+    onOpen: () => setDashboardConnected(true),
+    onClose: () => setDashboardConnected(false),
+  }), []);
+
+  useEffect(() => {
+    if (dashboardConnected) return;
+    const timer = window.setInterval(() => { void load(true); }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [dashboardConnected, load]);
+
+  const connectedKey = servers.filter(isConnected).map((server) => server.id).sort((a, b) => a - b).join(",");
+  const fallbackStatusKey = servers
+    .filter((server) => isConnected(server) && (!dashboardConnected || !server.ws_connected))
+    .map((server) => server.id)
+    .sort((a, b) => a - b)
+    .join(",");
+  const versionTargetKey = servers
+    .filter((server) => isConnected(server) && !server.is_federated)
+    .map((server) => server.id)
+    .sort((a, b) => a - b)
+    .join(",");
+
+  useEffect(() => {
+    const connectedIDs = connectedKey.split(",").map(Number).filter(Boolean);
+    const connectedSet = new Set(connectedIDs);
+    setServiceStatuses((current) => Object.fromEntries(Object.entries(current).filter(([id]) => connectedSet.has(Number(id)))));
+    if (!connectedIDs.length) return;
+    void refreshServiceStatuses(connectedIDs);
+  }, [connectedKey, refreshServiceStatuses]);
+
+  useEffect(() => {
+    const fallbackIDs = fallbackStatusKey.split(",").map(Number).filter(Boolean);
+    if (!fallbackIDs.length) return;
+    const timer = window.setInterval(() => { void refreshServiceStatuses(fallbackIDs); }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [fallbackStatusKey, refreshServiceStatuses]);
+
+  useEffect(() => {
+    const targetIDs = versionTargetKey.split(",").map(Number).filter(Boolean);
+    const targetSet = new Set(targetIDs);
+    setAgentVersions((current) => Object.fromEntries(Object.entries(current).filter(([id]) => targetSet.has(Number(id)))));
+    if (!targetIDs.length) return;
+    void refreshAgentVersions(targetIDs);
+    const timer = window.setInterval(() => { void refreshAgentVersions(targetIDs); }, 10 * 60_000);
+    return () => window.clearInterval(timer);
+  }, [refreshAgentVersions, versionTargetKey]);
 
   const visible = useMemo(() => {
     const keyword = query.trim().toLowerCase();
@@ -885,9 +986,10 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
   }, [filter, query, servers]);
 
   const online = servers.filter(isConnected);
-  const selectedOnline = servers.filter((server) => selected.includes(server.id) && isConnected(server));
+  const onlineOwned = online.filter((server) => !server.is_federated);
+  const selectedOnline = servers.filter((server) => selected.includes(server.id) && isConnected(server) && !server.is_federated);
   const hasSelection = selected.length > 0;
-  const upgradeTargets = hasSelection ? selectedOnline : online;
+  const upgradeTargets = hasSelection ? selectedOnline : onlineOwned;
   const upgradeLabel = hasSelection
     ? `升级选中在线 (${selectedOnline.length}/${selected.length})`
     : "批量升级 Agent";
@@ -963,22 +1065,96 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
       const server = targets[index];
       setUpgrade({ ...state, current: index, done, failed, logs: [...logs], running: true });
       try {
-        const raw = await request<string>(`/api/admin/remote/agent/upgrade-stream?server_id=${server.id}`, {
+        const response = await requestStream(`/api/admin/remote/agent/upgrade-stream?server_id=${server.id}`, {
           method: "POST",
           headers: { Accept: "text/event-stream" },
         });
-        const result = parseSSELog(typeof raw === "string" ? raw : JSON.stringify(raw));
-        logs.push(`${server.name}: ${result}`);
+        let liveOutput = "";
+        const result = await consumeRemoteServiceStream(response, (output) => {
+          liveOutput += `${liveOutput && !liveOutput.endsWith("\n") ? "\n" : ""}${output}${output.endsWith("\n") ? "" : "\n"}`;
+          setUpgrade({ ...state, current: index, done, failed, logs: [...logs, `${server.name}\n${liveOutput}`], running: true });
+        });
+        logs.push(`${server.name}\n${liveOutput}${liveOutput && !liveOutput.endsWith("\n") ? "\n" : ""}[完成] ${result}`);
         done++;
       } catch (reason) {
-        logs.push(`${server.name}: ${messageFrom(reason, "升级失败")}`);
+        logs.push(`${server.name}\n[失败] ${messageFrom(reason, "升级失败")}`);
         failed++;
       }
     }
     setUpgrade({ ...state, current: targets.length, done, failed, logs, running: false });
     notify(failed ? `Agent 升级完成：${done} 成功，${failed} 失败` : `${done} 台 Agent 已完成升级`, failed ? "error" : "success");
-    await load();
+    await Promise.all([load(true), refreshAgentVersions(targets.map((server) => server.id))]);
   };
+
+  const executeXrayAction = async (server: ManagedServer, action: XrayQuickAction) => {
+    const actionLabel = action === "install" ? "安装" : action === "update" ? "更新" : action === "start" ? "启动" : action === "stop" ? "停止" : "重启";
+    const streamed = action === "install" || action === "update";
+    let streamCompleted = false;
+    setQuickWorking({ serverId: server.id, action });
+    setQuickConfirm(null);
+    if (streamed) {
+      setQuickTerminal({
+        title: `${actionLabel} Xray`,
+        description: `${server.name} · 远端实时执行日志`,
+        output: `正在连接 ${server.name}...\n`,
+        running: true,
+        outcome: "running",
+      });
+    }
+    try {
+      if (streamed) {
+        const response = await requestStream(`/api/admin/remote/xray/install-stream?server_id=${server.id}`, { method: "POST", headers: { Accept: "text/event-stream" } });
+        const completionMessage = await consumeRemoteServiceStream(response, (output) => {
+          setQuickTerminal((current) => current ? {
+            ...current,
+            output: `${current.output}${current.output.endsWith("\n") ? "" : "\n"}${output}${output.endsWith("\n") ? "" : "\n"}`,
+          } : current);
+        });
+        streamCompleted = true;
+        setQuickTerminal((current) => current ? {
+          ...current,
+          output: `${current.output}${current.output.endsWith("\n") ? "" : "\n"}[完成] ${completionMessage}\n`,
+          running: false,
+          outcome: "success",
+        } : current);
+      } else {
+        assertSuccess(await api.post<ActionResponse>(`/api/admin/remote/services/control?server_id=${server.id}`, { service: "xray", action }), `Xray ${actionLabel}失败`);
+      }
+      notify(`Xray ${actionLabel}完成`);
+      await Promise.all([refreshServiceStatuses([server.id]), load(true)]);
+    } catch (reason) {
+      const message = messageFrom(reason, `Xray ${actionLabel}失败`);
+      if (streamed && !streamCompleted) {
+        setQuickTerminal((current) => current ? {
+          ...current,
+          output: `${current.output}${current.output.endsWith("\n") ? "" : "\n"}[失败] ${message}\n`,
+          running: false,
+          outcome: "error",
+        } : current);
+      }
+      notify(message, "error");
+    } finally {
+      setQuickWorking(null);
+    }
+  };
+
+  const requestXrayAction = (server: ManagedServer, action: XrayQuickAction) => {
+    if (!isConnected(server)) {
+      notify(`${server.name} 的 Agent 当前离线`, "error");
+      return;
+    }
+    if (server.is_federated) {
+      notify("共享服务器只能查看 Xray 状态", "error");
+      return;
+    }
+    if (action === "stop" || action === "update") {
+      setQuickConfirm({ server, action });
+      return;
+    }
+    void executeXrayAction(server, action);
+  };
+
+  const detailsServer = details ? servers.find((server) => server.id === details.server.id) ?? details.server : null;
 
   return (
     <div className="services-workbench">
@@ -1006,6 +1182,7 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
           ))}
         </div>
         <label className="services-search"><Search size={17} /><input aria-label="搜索服务器" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="名称、IP、域名或版本" /></label>
+        <span className={`services-live-state ${dashboardConnected ? "is-live" : "is-fallback"}`} title={dashboardConnected ? "服务器、速率和流量由控制端实时推送" : "实时通道重连中，当前使用 15 秒回退刷新"}><i />{dashboardConnected ? "实时同步" : "回退刷新"}</span>
         <div className="services-view-switch" role="group" aria-label="服务视图">
           <IconButton className={view === "cards" ? "is-active" : ""} label="卡片视图" onClick={() => changeView("cards")}><Grid2X2 size={17} /></IconButton>
           <IconButton className={view === "list" ? "is-active" : ""} label="列表视图" onClick={() => changeView("list")}><List size={18} /></IconButton>
@@ -1016,19 +1193,38 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
         <Surface><EmptyState icon={<Server size={24} />} title={servers.length ? "没有匹配的服务器" : "尚未接入服务器"} description={servers.length ? "调整搜索词或状态筛选" : "创建服务器后会得到 Agent 安装命令"} action={!servers.length ? <Button onClick={() => setCreateOpen(true)}><Plus size={16} />添加服务器</Button> : undefined} /></Surface>
       ) : view === "cards" ? (
         <div className="services-card-grid">
-          {visible.map((server) => <ServerCard key={server.id} server={server} serviceStatus={serviceStatuses[server.id]} checked={selected.includes(server.id)} credentialsLoading={credentialsLoading === server.id} onCheck={(checked) => setSelected((current) => checked ? [...new Set([...current, server.id])] : current.filter((id) => id !== server.id))} onOpen={() => setDetails(server)} onEdit={() => setEditing(server)} onCredentials={() => void revealCredentials(server)} onDelete={() => openDeleteServer(server)} />)}
+          {visible.map((server, index) => <ServerCard
+            key={server.id}
+            server={server}
+            serviceStatus={serviceStatuses[server.id]}
+            agentVersion={agentVersions[server.id]}
+            checked={selected.includes(server.id)}
+            credentialsLoading={credentialsLoading === server.id}
+            xrayWorking={quickWorking?.serverId === server.id}
+            agentWorking={Boolean(upgrade?.running && upgrade.serverIDs.includes(server.id))}
+            style={{ "--service-card-index": Math.min(index, 8) } as CSSProperties}
+            onCheck={(checked) => setSelected((current) => checked ? [...new Set([...current, server.id])] : current.filter((id) => id !== server.id))}
+            onOpen={(initialTab) => setDetails({ server, initialTab })}
+            onXrayAction={(action) => requestXrayAction(server, action)}
+            onAgentUpgrade={() => void runUpgrade([server])}
+            onEdit={() => setEditing(server)}
+            onCredentials={() => void revealCredentials(server)}
+            onDelete={() => openDeleteServer(server)}
+          />)}
         </div>
       ) : (
-        <ServerTable servers={visible} serviceStatuses={serviceStatuses} selected={selected} credentialsLoading={credentialsLoading} onSelect={setSelected} onOpen={setDetails} onEdit={setEditing} onCredentials={(server) => void revealCredentials(server)} onDelete={openDeleteServer} />
+        <ServerTable servers={visible} serviceStatuses={serviceStatuses} agentVersions={agentVersions} selected={selected} credentialsLoading={credentialsLoading} quickWorking={quickWorking} upgrade={upgrade} onSelect={setSelected} onOpen={(server) => setDetails({ server, initialTab: "overview" })} onXrayAction={requestXrayAction} onAgentUpgrade={(server) => void runUpgrade([server])} onEdit={setEditing} onCredentials={(server) => void revealCredentials(server)} onDelete={openDeleteServer} />
       )}
 
       {createOpen ? <CreateServerDialog onClose={() => setCreateOpen(false)} onCreated={async (result) => { setCreateOpen(false); await load(); if (result.server && result.install_command) setCredentials({ server: result.server, token: result.server.token ?? "", pullToken: result.server.pull_token ?? "", agentToken: result.server.agent_token ?? "", command: result.install_command }); notify("服务器已创建"); }} /> : null}
       {sharedOpen ? <AddSharedServerDialog onClose={() => setSharedOpen(false)} onCreated={async () => { setSharedOpen(false); notify("共享服务器已接入"); await load(); }} /> : null}
       {editing ? <EditServerDialog server={editing} onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); notify("服务器设置已保存"); await load(); }} /> : null}
-      {details ? <ServerOperationsDialog server={details} notify={notify} onClose={() => setDetails(null)} onChanged={load} onUpgrade={() => void runUpgrade([details])} /> : null}
+      {details && detailsServer ? <ServerOperationsDialog key={`${details.server.id}-${details.initialTab}`} server={detailsServer} initialTab={details.initialTab} notify={notify} onClose={() => setDetails(null)} onChanged={() => load(true)} onUpgrade={() => void runUpgrade([detailsServer])} /> : null}
       {credentials ? <CredentialsDialog value={credentials} notify={notify} onClose={() => setCredentials(null)} /> : null}
       {deleting ? <DeleteServerDialog server={deleting} working={deleteWorking} error={deleteError} refreshVersion={deleteRefreshVersion} onCancel={closeDeleteServer} onConfirm={(shared) => void deleteServer(shared)} /> : null}
       {upgrade ? <UpgradeDialog state={upgrade} servers={servers} onClose={() => !upgrade.running && setUpgrade(null)} /> : null}
+      {quickConfirm ? <ConfirmDialog title={quickConfirm.action === "update" ? "更新 Xray" : "停止 Xray"} description={quickConfirm.action === "update" ? `将从 Xray 上游下载最新版并在 ${quickConfirm.server.name} 上更新或重装，现有代理连接会短暂中断。` : `停止 ${quickConfirm.server.name} 上的 Xray 会立即中断由它承载的连接。`} confirmLabel={quickConfirm.action === "update" ? "确认更新" : "确认停止"} working={Boolean(quickWorking)} onCancel={() => !quickWorking && setQuickConfirm(null)} onConfirm={() => void executeXrayAction(quickConfirm.server, quickConfirm.action)} /> : null}
+      {quickTerminal ? <RemoteServiceTerminalDialog terminal={quickTerminal} onClose={() => !quickTerminal.running && setQuickTerminal(null)} /> : null}
     </div>
   );
 }
@@ -1198,32 +1394,125 @@ function formatImpactCount(value: number | undefined): string {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value).toLocaleString() : "—";
 }
 
-function XrayStatusPill({ server, status }: { server: ManagedServer; status?: CachedServiceStatus }) {
-  if (status?.loading && !status.loaded) {
-    return <span className="service-xray-state is-loading" role="status" aria-label="正在读取 Xray 状态"><RefreshCw className="service-spin" size={12} />Xray</span>;
-  }
-  const live = status?.loaded ? status.xray : undefined;
-  const installed = live?.installed ?? Boolean(server.xray_running || server.xray_version);
-  const running = live?.running ?? Boolean(server.xray_running);
-  const state = running ? "running" : installed ? "stopped" : "missing";
-  return <span className={`service-xray-state is-${state}`}>{state === "missing" ? <Trash2 size={12} /> : <i />}{`Xray ${running ? "运行中" : installed ? "已停止" : "未安装"}`}</span>;
+function cleanVersion(value: string | undefined): string {
+  return (value ?? "").trim().replace(/^xray\s+/i, "").replace(/^v(?=\d)/i, "");
 }
 
-function ServerCard({ server, serviceStatus, checked, credentialsLoading, onCheck, onOpen, onEdit, onCredentials, onDelete }: {
+function connectionPolicyLabel(mode: string): string {
+  if (mode === "auto") return "自动";
+  if (mode === "pull") return "Pull";
+  if (mode === "push" || mode === "http") return "HTTP";
+  return "WebSocket";
+}
+
+function activeTransport(server: ManagedServer): "WS" | "HTTP" | "Pull" {
+  if (server.ws_connected) return "WS";
+  if (server.fallback_to_pull || server.connection_mode === "pull") return "Pull";
+  return "HTTP";
+}
+
+function AgentVersionButton({ server, version, working, compact = false, onUpgrade }: {
+  server: ManagedServer;
+  version?: CachedAgentVersion;
+  working: boolean;
+  compact?: boolean;
+  onUpgrade: () => void;
+}) {
+  if (server.is_federated) return null;
+  const current = cleanVersion(version?.current);
+  const latest = cleanVersion(version?.latest);
+  const upgradeAvailable = Boolean(version?.upgrade_available);
+  const label = current ? `${compact ? "" : "Agent "}v${current}` : compact ? "Agent --" : "Agent 未知";
+  const title = current
+    ? `Agent 当前 v${current}${latest ? `，上游最新 v${latest}` : ""}；${upgradeAvailable ? "点击升级" : "点击重新安装最新版"}`
+    : "未能读取 Agent 版本；点击重新安装最新版";
+  return <button type="button" className={`service-agent-version ${upgradeAvailable ? "has-update" : ""} ${compact ? "is-compact" : ""}`} aria-label={`${upgradeAvailable ? "升级" : "重新安装"} ${server.name} Agent`} title={title} disabled={!isConnected(server) || working} onClick={onUpgrade}>
+    {working || version?.loading && !version.loaded ? <RefreshCw className="service-spin" size={13} /> : <UploadCloud size={13} />}
+    <span>{working ? "Agent 更新中" : label}</span>
+    {upgradeAvailable && !working ? <i aria-hidden="true" /> : null}
+  </button>;
+}
+
+function XrayQuickControl({ server, status, working, compact = false, onAction }: {
+  server: ManagedServer;
+  status?: CachedServiceStatus;
+  working: boolean;
+  compact?: boolean;
+  onAction: (action: XrayQuickAction) => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const embedded = server.xray_mode === "embedded";
+  const live = status?.loaded ? status.xray : undefined;
+  const installed = embedded || (live?.installed ?? Boolean(server.xray_running || server.xray_version));
+  const running = live?.running ?? Boolean(server.xray_running);
+  const state = running ? "running" : installed ? "stopped" : "missing";
+  const version = cleanVersion(live?.version || server.xray_version);
+  const label = state === "missing" ? "Xray 未安装" : version ? `Xray ${version}` : embedded ? "内嵌 Xray" : `Xray ${state === "running" ? "运行中" : "已停止"}`;
+  const disabled = !isConnected(server) || server.is_federated || working;
+  const loading = status?.loading && !status.loaded;
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [menuOpen]);
+
+  const choose = (action: XrayQuickAction) => {
+    setMenuOpen(false);
+    onAction(action);
+  };
+  const directAction: XrayQuickAction = !installed ? "install" : !running ? "start" : "update";
+  const ariaLabel = loading
+    ? `正在读取 ${server.name} Xray 状态`
+    : !installed
+      ? `安装 ${server.name} Xray`
+      : embedded
+        ? `管理 ${server.name} 内嵌 Xray`
+        : `管理 ${server.name} Xray ${version || ""}`.trim();
+
+  return <div ref={menuRef} className={`service-xray-quick ${compact ? "is-compact" : ""}`}>
+    <button type="button" className={`service-xray-state is-${loading ? "loading" : state}`} aria-label={ariaLabel} aria-haspopup={!compact && installed ? "menu" : undefined} aria-expanded={!compact && installed ? menuOpen : undefined} title={loading ? "正在读取 Xray 状态" : `${label} · ${running ? "运行中" : installed ? "已停止" : "点击安装"}`} disabled={disabled || loading} onClick={() => compact || !installed ? choose(directAction) : setMenuOpen((open) => !open)}>
+      {working || loading ? <RefreshCw className="service-spin" size={13} /> : state === "missing" ? <Download size={13} /> : <i />}
+      <span className="service-xray-copy">
+        <b>{working ? "处理中" : label}</b>
+        {!working && !loading ? <small>{running ? "运行中" : installed ? "已停止" : "点击安装"}</small> : null}
+      </span>
+      {!compact && installed && !working ? <ChevronDown size={12} /> : null}
+    </button>
+    {menuOpen && !compact ? <div className="service-xray-menu" role="menu" aria-label={`${server.name} Xray 快捷操作`}>
+      {running ? <button role="menuitem" onClick={() => choose("restart")}><RotateCw size={14} />重启 Xray</button> : <button role="menuitem" onClick={() => choose("start")}><Play size={14} />启动 Xray</button>}
+      {running ? <button role="menuitem" onClick={() => choose("stop")}><Square size={14} />停止 Xray</button> : null}
+      {!embedded ? <button role="menuitem" onClick={() => choose("update")}><HardDriveDownload size={14} />更新 / 重装核心</button> : null}
+    </div> : null}
+  </div>;
+}
+
+function ServerCard({ server, serviceStatus, agentVersion, checked, credentialsLoading, xrayWorking, agentWorking, style, onCheck, onOpen, onXrayAction, onAgentUpgrade, onEdit, onCredentials, onDelete }: {
   server: ManagedServer;
   serviceStatus?: CachedServiceStatus;
+  agentVersion?: CachedAgentVersion;
   checked: boolean;
   credentialsLoading: boolean;
+  xrayWorking: boolean;
+  agentWorking: boolean;
+  style?: CSSProperties;
   onCheck: (checked: boolean) => void;
-  onOpen: () => void;
+  onOpen: (initialTab: OperationTab) => void;
+  onXrayAction: (action: XrayQuickAction) => void;
+  onAgentUpgrade: () => void;
   onEdit: () => void;
   onCredentials: () => void;
   onDelete: () => void;
 }) {
   const connected = isConnected(server);
   const usage = server.traffic_limit > 0 ? Math.min(100, server.traffic_used / server.traffic_limit * 100) : 0;
+  const transport = connected ? activeTransport(server) : null;
   return (
-    <Surface className={`service-card ${checked ? "is-selected" : ""}`}>
+    <Surface style={style} className={`service-card ${connected ? "is-online" : "is-offline"} ${checked ? "is-selected" : ""}`}>
       <div className="service-card-head">
         <label className="service-select" title="选择服务器"><input type="checkbox" checked={checked} onChange={(event) => onCheck(event.target.checked)} aria-label={`选择 ${server.name}`} /></label>
         <span className={`service-server-icon ${connected ? "is-online" : ""}`}>{connected ? <Wifi size={19} /> : <WifiOff size={19} />}</span>
@@ -1232,25 +1521,33 @@ function ServerCard({ server, serviceStatus, checked, credentialsLoading, onChec
       </div>
       <div className="service-badges">
         {server.is_federated ? <Badge tone="info">共享</Badge> : null}
-        <XrayStatusPill server={server} status={serviceStatus} />
+        <Badge tone="neutral">{server.xray_mode === "embedded" ? "内嵌 Xray" : "外置 Xray"}</Badge>
         {server.encrypted ? <Badge tone="good"><ShieldCheck size={12} />加密连接</Badge> : null}
         {server.warp_installed ? <Badge tone="info">WARP</Badge> : null}
       </div>
-      <div className="service-metrics">
-        <span><small>实时上行</small><strong><ArrowUpFromLine size={14} />{formatBytes(server.current_upload_speed, true)}</strong></span>
-        <span><small>实时下行</small><strong><ArrowDownToLine size={14} />{formatBytes(server.current_download_speed, true)}</strong></span>
-        <span><small>入站</small><strong>{server.inbounds?.length ?? 0}</strong></span>
+      <div className="service-runtime-row">
+        <div className="service-address" title={server.ip_address || "IPv4 未上报"}><Network size={14} /><span>{server.ip_address || "IPv4 未上报"}</span></div>
+        <div className="service-runtime-controls">
+          <span className="service-connection-policy" title="Agent 安装时确定的连接策略"><Settings2 size={13} />{connectionPolicyLabel(server.connection_mode)}</span>
+          <span className={`service-transport is-${transport ? transport.toLowerCase() : "offline"}`} title={transport ? "当前连接通道（根据 Agent 在线状态推断）" : "Agent 离线，当前没有活动数据通道"}>{transport ? <Wifi size={12} /> : <WifiOff size={12} />}{transport || "--"}</span>
+          <XrayQuickControl server={server} status={serviceStatus} working={xrayWorking} onAction={onXrayAction} />
+          <AgentVersionButton server={server} version={agentVersion} working={agentWorking} onUpgrade={onAgentUpgrade} />
+        </div>
       </div>
-      <div className="service-traffic">
-        <div><small>本期流量</small><strong>{formatBytes(server.traffic_used)}{server.traffic_limit > 0 ? ` / ${formatBytes(server.traffic_limit)}` : ""}</strong></div>
-        <span><i style={{ width: server.traffic_limit > 0 ? `${usage}%` : "0%" }} /></span>
+      <div className="service-live-panel">
+        <div className="service-speed-row"><span><Activity size={14} />实时网速</span><strong><i className="is-up">↑ {formatBytes(server.current_upload_speed, true)}</i><i className="is-down">↓ {formatBytes(server.current_download_speed, true)}</i></strong></div>
+        <div className="service-traffic">
+          <div><small>流量统计</small><strong>{formatBytes(server.traffic_used)}{server.traffic_limit > 0 ? ` / ${formatBytes(server.traffic_limit)}` : " · 不限流量"}</strong></div>
+          <span className={server.traffic_limit > 0 ? "" : "is-unlimited"} aria-label={server.traffic_limit > 0 ? `已使用 ${usage.toFixed(1)}%` : "不限流量"}><i style={{ width: server.traffic_limit > 0 ? `${usage}%` : "100%" }} /></span>
+          <div className="service-traffic-caption"><small>{server.traffic_reset_day ? `每月 ${server.traffic_reset_day} 日重置` : "无需重置"}</small><small>{server.inbounds?.length ?? 0} 个入站</small></div>
+        </div>
+        <div className="service-heartbeat"><Activity size={13} /><span>最后心跳：{relativeTime(server.last_heartbeat)}</span></div>
       </div>
       <div className="service-card-meta">
-        <span>{server.ip_address || "IPv4 未上报"}{server.ipv6_enabled && server.ip_address_v6 ? ` · ${server.ip_address_v6}` : ""}</span>
-        <span>{server.xray_version || server.xray_mode || "external"} · {relativeTime(server.last_heartbeat)}</span>
+        <span>{server.ipv6_enabled && server.ip_address_v6 ? `IPv6 ${server.ip_address_v6}` : "IPv6 未启用或未上报"}</span>
       </div>
       <div className="service-card-actions">
-        <Button variant="ghost" onClick={onOpen}><Wrench size={16} />管理</Button>
+        <div className="service-card-primary-actions"><Button variant="secondary" onClick={() => onOpen("config")} disabled={!connected}><Code2 size={16} />Xray 配置</Button><Button variant="secondary" aria-label="管理" onClick={() => onOpen("overview")}><Settings2 size={16} />Agent 管理</Button></div>
         <IconButton label={`编辑 ${server.name}`} onClick={onEdit}><Pencil size={16} /></IconButton>
         {!server.is_federated ? <IconButton label={`查看 ${server.name} 安装凭据`} onClick={onCredentials} disabled={credentialsLoading}>{credentialsLoading ? <RefreshCw className="service-spin" size={16} /> : <KeyRound size={16} />}</IconButton> : null}
         <IconButton label={`删除 ${server.name}`} onClick={onDelete}><Trash2 size={16} /></IconButton>
@@ -1259,22 +1556,28 @@ function ServerCard({ server, serviceStatus, checked, credentialsLoading, onChec
   );
 }
 
-function ServerTable({ servers, serviceStatuses, selected, credentialsLoading, onSelect, onOpen, onEdit, onCredentials, onDelete }: {
+function ServerTable({ servers, serviceStatuses, agentVersions, selected, credentialsLoading, quickWorking, upgrade, onSelect, onOpen, onXrayAction, onAgentUpgrade, onEdit, onCredentials, onDelete }: {
   servers: ManagedServer[];
   serviceStatuses: Record<number, CachedServiceStatus>;
+  agentVersions: Record<number, CachedAgentVersion>;
   selected: number[];
   credentialsLoading: number | null;
+  quickWorking: { serverId: number; action: XrayQuickAction } | null;
+  upgrade: UpgradeState | null;
   onSelect: (ids: number[]) => void;
   onOpen: (server: ManagedServer) => void;
+  onXrayAction: (server: ManagedServer, action: XrayQuickAction) => void;
+  onAgentUpgrade: (server: ManagedServer) => void;
   onEdit: (server: ManagedServer) => void;
   onCredentials: (server: ManagedServer) => void;
   onDelete: (server: ManagedServer) => void;
 }) {
   const allChecked = servers.length > 0 && servers.every((server) => selected.includes(server.id));
   return (
-    <Surface className="table-surface service-table-surface"><div className="table-wrap"><table><thead><tr><th><input aria-label="选择全部服务器" type="checkbox" checked={allChecked} onChange={(event) => onSelect(event.target.checked ? Array.from(new Set([...selected, ...servers.map((server) => server.id)])) : selected.filter((id) => !servers.some((server) => server.id === id)))} /></th><th>服务器</th><th>连接</th><th>实时速度</th><th>本期流量</th><th>Xray</th><th aria-label="操作" /></tr></thead><tbody>{servers.map((server) => {
+    <Surface className="table-surface service-table-surface"><div className="table-wrap"><table><thead><tr><th><input aria-label="选择全部服务器" type="checkbox" checked={allChecked} onChange={(event) => onSelect(event.target.checked ? Array.from(new Set([...selected, ...servers.map((server) => server.id)])) : selected.filter((id) => !servers.some((server) => server.id === id)))} /></th><th>服务器</th><th>连接</th><th>实时速度</th><th>本期流量</th><th>核心 / Agent</th><th aria-label="操作" /></tr></thead><tbody>{servers.map((server) => {
       const connected = isConnected(server);
-      return <tr key={server.id}><td><input aria-label={`选择 ${server.name}`} type="checkbox" checked={selected.includes(server.id)} onChange={(event) => onSelect(event.target.checked ? [...new Set([...selected, server.id])] : selected.filter((id) => id !== server.id))} /></td><td><button className="service-name-button" onClick={() => onOpen(server)}><span className={`service-server-icon ${connected ? "is-online" : ""}`}>{connected ? <Wifi size={16} /> : <WifiOff size={16} />}</span><span><strong>{server.name}</strong><small>{server.domain || server.ip_address || "地址待上报"}</small></span></button></td><td><Badge tone={connected ? "good" : statusTone(server.status)}>{connected ? "WebSocket" : server.status || "离线"}</Badge><small className="cell-note">{relativeTime(server.last_heartbeat)}</small></td><td><span className="speed-pair"><small><ArrowUpFromLine size={13} />{formatBytes(server.current_upload_speed, true)}</small><small><ArrowDownToLine size={13} />{formatBytes(server.current_download_speed, true)}</small></span></td><td><strong>{formatBytes(server.traffic_used)}</strong><small className="cell-note">{server.traffic_limit ? `限额 ${formatBytes(server.traffic_limit)}` : "不限额"}</small></td><td><XrayStatusPill server={server} status={serviceStatuses[server.id]} /><small className="cell-note">{serviceStatuses[server.id]?.xray?.version || server.xray_version || server.xray_mode || "external"}</small></td><td><div className="service-row-actions"><IconButton label={`管理 ${server.name}`} onClick={() => onOpen(server)}><Settings2 size={16} /></IconButton><IconButton label={`编辑 ${server.name}`} onClick={() => onEdit(server)}><Pencil size={16} /></IconButton>{!server.is_federated ? <IconButton label={`查看 ${server.name} 安装凭据`} onClick={() => onCredentials(server)} disabled={credentialsLoading === server.id}>{credentialsLoading === server.id ? <RefreshCw className="service-spin" size={16} /> : <KeyRound size={16} />}</IconButton> : null}<IconButton label={`删除 ${server.name}`} onClick={() => onDelete(server)}><Trash2 size={16} /></IconButton></div></td></tr>;
+      const transport = activeTransport(server);
+      return <tr key={server.id}><td><input aria-label={`选择 ${server.name}`} type="checkbox" checked={selected.includes(server.id)} onChange={(event) => onSelect(event.target.checked ? [...new Set([...selected, server.id])] : selected.filter((id) => id !== server.id))} /></td><td><button className="service-name-button" onClick={() => onOpen(server)}><span className={`service-server-icon ${connected ? "is-online" : ""}`}>{connected ? <Wifi size={16} /> : <WifiOff size={16} />}</span><span><strong>{server.name}</strong><small>{server.domain || server.ip_address || "地址待上报"}</small></span></button></td><td><Badge tone={connected ? "good" : statusTone(server.status)}>{connected ? transport : server.status || "离线"}</Badge><small className="cell-note">{connectionPolicyLabel(server.connection_mode)} · {relativeTime(server.last_heartbeat)}</small></td><td><span className="speed-pair"><small><ArrowUpFromLine size={13} />{formatBytes(server.current_upload_speed, true)}</small><small><ArrowDownToLine size={13} />{formatBytes(server.current_download_speed, true)}</small></span></td><td><strong>{formatBytes(server.traffic_used)}</strong><small className="cell-note">{server.traffic_limit ? `限额 ${formatBytes(server.traffic_limit)}` : "不限额"}</small></td><td><div className="service-version-stack"><XrayQuickControl compact server={server} status={serviceStatuses[server.id]} working={quickWorking?.serverId === server.id} onAction={(action) => onXrayAction(server, action)} /><AgentVersionButton compact server={server} version={agentVersions[server.id]} working={Boolean(upgrade?.running && upgrade.serverIDs.includes(server.id))} onUpgrade={() => onAgentUpgrade(server)} /></div></td><td><div className="service-row-actions"><IconButton label={`管理 ${server.name}`} onClick={() => onOpen(server)}><Settings2 size={16} /></IconButton><IconButton label={`编辑 ${server.name}`} onClick={() => onEdit(server)}><Pencil size={16} /></IconButton>{!server.is_federated ? <IconButton label={`查看 ${server.name} 安装凭据`} onClick={() => onCredentials(server)} disabled={credentialsLoading === server.id}>{credentialsLoading === server.id ? <RefreshCw className="service-spin" size={16} /> : <KeyRound size={16} />}</IconButton> : null}<IconButton label={`删除 ${server.name}`} onClick={() => onDelete(server)}><Trash2 size={16} /></IconButton></div></td></tr>;
     })}</tbody></table></div></Surface>
   );
 }
@@ -1474,6 +1777,15 @@ function UpgradeDialog({ state, servers, onClose }: { state: UpgradeState; serve
   return <Dialog title="Agent 批量升级" description={state.running ? `正在处理 ${current?.name ?? "服务器"}` : "升级任务已结束"} onClose={onClose} dismissible={!state.running} wide><div className="upgrade-summary"><span><strong>{state.done}</strong><small>成功</small></span><span><strong>{state.failed}</strong><small>失败</small></span><span><strong>{state.serverIDs.length - state.done - state.failed}</strong><small>待处理</small></span></div><div className="upgrade-progress"><span><i style={{ width: `${progress}%` }} /></span><small>{progress}%</small></div><pre className="service-log" aria-label="Agent 升级日志">{state.logs.length ? state.logs.join("\n\n") : "等待远端 Agent 返回升级结果..."}</pre><div className="dialog-actions"><Button onClick={onClose} disabled={state.running}>{state.running ? <Spinner label="升级进行中" /> : <><Check size={16} />关闭</>}</Button></div></Dialog>;
 }
 
+function RemoteServiceTerminalDialog({ terminal, onClose }: { terminal: ServiceTerminalState; onClose: () => void }) {
+  const outputRef = useRef<HTMLPreElement>(null);
+  useEffect(() => {
+    const output = outputRef.current;
+    if (output) output.scrollTop = output.scrollHeight;
+  }, [terminal.output]);
+  return <Dialog title={terminal.title} description={terminal.description} onClose={onClose} wide dismissible={!terminal.running}><div className={`service-terminal is-${terminal.outcome}`} aria-busy={terminal.running}><div className="service-terminal-status" role="status"><span /> <strong>{terminal.running ? "正在执行" : terminal.outcome === "success" ? "执行完成" : "执行失败"}</strong></div><pre ref={outputRef} className="service-terminal-output" role="log" aria-label="远端执行日志" aria-live="polite">{terminal.output}{terminal.running ? <span className="service-terminal-cursor">▌</span> : null}</pre><div className="dialog-actions"><Button variant="secondary" aria-label={terminal.running ? "正在执行" : "关闭"} onClick={onClose} disabled={terminal.running}>{terminal.running ? <Spinner label="正在执行" /> : "关闭"}</Button></div></div></Dialog>;
+}
+
 function DDNSOverviewPanel({ status, working, onRetry }: { status: DDNSStatusResponse | null; working: boolean; onRetry: () => void }) {
   const enabled = Boolean(status?.ddns_enabled);
   const provider = status?.ddns_provider_id
@@ -1507,8 +1819,8 @@ function DDNSOverviewPanel({ status, working, onRetry }: { status: DDNSStatusRes
 
 type OperationTab = "overview" | "services" | "speedtest" | "inbounds" | "outbounds" | "routing" | "config" | "sharing";
 
-function ServerOperationsDialog({ server, notify, onClose, onChanged, onUpgrade }: { server: ManagedServer; notify: Notify; onClose: () => void; onChanged: () => Promise<void>; onUpgrade: () => void }) {
-  const [tab, setTab] = useState<OperationTab>("overview");
+function ServerOperationsDialog({ server, initialTab = "overview", notify, onClose, onChanged, onUpgrade }: { server: ManagedServer; initialTab?: OperationTab; notify: Notify; onClose: () => void; onChanged: () => Promise<void>; onUpgrade: () => void }) {
+  const [tab, setTab] = useState<OperationTab>(initialTab);
   const [status, setStatus] = useState<ServiceStatusResponse | null>(null);
   const [version, setVersion] = useState<AgentVersionResponse | null>(null);
   const [system, setSystem] = useState<SystemInfoResponse | null>(null);
@@ -1526,13 +1838,7 @@ function ServerOperationsDialog({ server, notify, onClose, onChanged, onUpgrade 
   const [shares, setShares] = useState<SharedServerToken[]>([]);
   const [shareLabel, setShareLabel] = useState("");
   const [newShareToken, setNewShareToken] = useState("");
-  const terminalOutputRef = useRef<HTMLPreElement>(null);
   const reusesExistingNginx = server.nginx_mode === "reuse_existing";
-
-  useEffect(() => {
-    const output = terminalOutputRef.current;
-    if (output) output.scrollTop = output.scrollHeight;
-  }, [terminal?.output]);
 
   const refreshDDNSStatus = useCallback(async () => {
     const result = assertSuccess(await api.get<DDNSStatusResponse>(`/api/admin/servers/${server.id}/ddns-status`), "读取 DDNS 状态失败");
@@ -1773,7 +2079,7 @@ function ServerOperationsDialog({ server, notify, onClose, onChanged, onUpgrade 
     {!loading && tab === "config" ? <div className="service-config-panel">{!configLoaded ? <EmptyState icon={<Code2 size={23} />} title="读取 Agent 上的 Xray 配置" description="编辑前会从目标服务器读取当前配置，不使用本地缓存。" action={<Button onClick={() => void loadConfig()} disabled={working === "config-load"}>{working === "config-load" ? <Spinner label="正在读取" /> : <><Clipboard size={16} />读取配置</>}</Button>} /> : <><div className="service-config-head"><span><strong>{configPath || "config.json"}</strong><small>{configDirty ? "存在未保存更改" : "已与 Agent 同步"}</small></span><div><Button variant="ghost" onClick={() => void loadConfig()} disabled={Boolean(working)}><RefreshCw size={15} />重新读取</Button><Button variant="secondary" onClick={() => void testConfig()} disabled={Boolean(working) || !config.trim()}>{working === "config-test" ? <Spinner label="预检中" /> : <><ShieldCheck size={15} />预检</>}</Button><Button onClick={() => void saveConfig()} disabled={Boolean(working) || !configDirty}>{working === "config-save" ? <Spinner label="保存中" /> : <><Check size={15} />保存配置</>}</Button></div></div><textarea className="service-code-editor" aria-label="Xray 配置 JSON" spellCheck={false} value={config} onChange={(event) => { setConfig(event.target.value); setConfigDirty(true); }} /></>}</div> : null}
     {!loading && tab === "sharing" ? <div className="service-sharing"><form onSubmit={createShare} className="service-share-create"><Field label="令牌备注"><input required value={shareLabel} onChange={(event) => setShareLabel(event.target.value)} placeholder="提供给分控制端 A" /></Field><Button type="submit" disabled={working === "share-create"}>{working === "share-create" ? <Spinner label="生成中" /> : <><FileKey2 size={16} />生成分享令牌</>}</Button></form>{newShareToken ? <div className="credential-warning"><KeyRound size={19} /><span><strong>仅显示一次</strong><code>{newShareToken}</code></span><IconButton label="复制新分享令牌" onClick={() => navigator.clipboard.writeText(newShareToken).then(() => notify("分享令牌已复制")).catch(() => notify("复制失败", "error"))}><Copy size={17} /></IconButton></div> : null}<div className="service-share-list">{shares.length ? shares.map((share) => <div key={share.id}><span><strong>{share.label || `令牌 #${share.id}`}</strong><small>{share.revoked_at ? `已于 ${share.revoked_at} 吊销` : `创建于 ${share.created_at}`}</small></span><Badge tone={share.revoked_at ? "neutral" : "good"}>{share.revoked_at ? "已吊销" : "有效"}</Badge>{!share.revoked_at ? <IconButton label={`吊销 ${share.label || share.id}`} onClick={() => void revokeShare(share.id)} disabled={working === `share-${share.id}`}><Trash2 size={16} /></IconButton> : null}</div>) : <EmptyState icon={<FileKey2 size={22} />} title="暂无分享令牌" description="生成后可在其他 Arcway 控制端接入这台服务器" />}</div></div> : null}
     {confirm ? <ConfirmDialog title={confirmTitle} description={confirmDescription} confirmLabel={confirm.action === "update" ? "确认更新" : confirm.action === "remove" ? "确认卸载" : "确认停止"} working={Boolean(working)} onCancel={() => !working && setConfirm(null)} onConfirm={() => void serviceAction(confirm.service, confirm.action)} /> : null}
-    {terminal ? <Dialog title={terminal.title} description={terminal.description} onClose={() => !terminal.running && setTerminal(null)} wide dismissible={!terminal.running}><div className={`service-terminal is-${terminal.outcome}`} aria-busy={terminal.running}><div className="service-terminal-status" role="status"><span /> <strong>{terminal.running ? "正在执行" : terminal.outcome === "success" ? "执行完成" : "执行失败"}</strong></div><pre ref={terminalOutputRef} className="service-terminal-output" role="log" aria-label="远端执行日志" aria-live="polite">{terminal.output}{terminal.running ? <span className="service-terminal-cursor">▌</span> : null}</pre><div className="dialog-actions"><Button variant="secondary" aria-label={terminal.running ? "正在执行" : "关闭"} onClick={() => setTerminal(null)} disabled={terminal.running}>{terminal.running ? <Spinner label="正在执行" /> : "关闭"}</Button></div></div></Dialog> : null}
+    {terminal ? <RemoteServiceTerminalDialog terminal={terminal} onClose={() => !terminal.running && setTerminal(null)} /> : null}
   </Dialog>;
 }
 

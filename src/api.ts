@@ -119,9 +119,17 @@ export const api = {
   }, options),
 };
 
-export function openDashboardSocket(onMessage: (data: unknown) => void): () => void {
+interface DashboardSocketOptions {
+  onOpen?: () => void;
+  onClose?: () => void;
+}
+
+export function openDashboardSocket(onMessage: (data: unknown) => void, options: DashboardSocketOptions = {}): () => void {
   const token = getToken();
-  if (!token) return () => undefined;
+  if (!token) {
+    options.onClose?.();
+    return () => undefined;
+  }
   const scheme = location.protocol === "https:" ? "wss:" : "ws:";
   let socket: WebSocket | undefined;
   let retryTimer: number | undefined;
@@ -131,12 +139,16 @@ export function openDashboardSocket(onMessage: (data: unknown) => void): () => v
   const connect = () => {
     if (stopped) return;
     socket = new WebSocket(`${scheme}//${location.host}/api/ws/dashboard?token=${encodeURIComponent(token)}`);
-    socket.onopen = () => { attempts = 0; };
+    socket.onopen = () => {
+      attempts = 0;
+      options.onOpen?.();
+    };
     socket.onmessage = (event) => {
       try { onMessage(JSON.parse(event.data)); } catch { /* Ignore malformed frames. */ }
     };
     socket.onclose = () => {
       if (stopped) return;
+      options.onClose?.();
       attempts += 1;
       retryTimer = window.setTimeout(connect, Math.min(30_000, 1_000 * 2 ** attempts));
     };

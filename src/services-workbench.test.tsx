@@ -359,6 +359,89 @@ describe("service management workbench", () => {
     }));
   });
 
+  it("installs a missing external Xray directly from the server card", async () => {
+    mockServerReads([{ ...onlineServer, xray_version: "", xray_running: false }], {
+      serviceStatus: {
+        success: true,
+        xray: { installed: false, running: false, version: "" },
+        nginx: { installed: true, running: true, version: "nginx/1.26" },
+      },
+    });
+    const fetchMock = vi.fn().mockResolvedValue(new Response('data: {"type":"output","data":"Installing Xray"}\n\ndata: {"type":"complete","success":true,"message":"installed"}\n\n', {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const notify = vi.fn();
+    render(<ServicesWorkbenchPage notify={notify} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "安装 Edge Hong Kong Xray" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/remote/xray/install-stream?server_id=11");
+    expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({ method: "POST" }));
+    const terminal = await screen.findByRole("dialog", { name: "安装 Xray" });
+    expect(within(terminal).getByRole("log", { name: "远端执行日志" })).toHaveTextContent("Installing Xray");
+    expect(within(terminal).getByText("执行完成")).toBeInTheDocument();
+    expect(notify).toHaveBeenCalledWith("Xray 安装完成");
+  });
+
+  it("restarts and confirms an Xray update from the installed card quick menu", async () => {
+    mockServerReads([onlineServer]);
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true, message: "restarted" });
+    const fetchMock = vi.fn().mockResolvedValue(new Response('data: {"type":"output","data":"Updating Xray"}\n\ndata: {"type":"complete","success":true,"message":"updated"}\n\n', {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理 Edge Hong Kong Xray 25.1" }));
+    const restartMenu = screen.getByRole("menu", { name: "Edge Hong Kong Xray 快捷操作" });
+    fireEvent.click(within(restartMenu).getByRole("menuitem", { name: "重启 Xray" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote/services/control?server_id=11", { service: "xray", action: "restart" }));
+    expect(fetchMock).not.toHaveBeenCalled();
+    const xrayButton = await screen.findByRole("button", { name: "管理 Edge Hong Kong Xray 25.1" });
+    await waitFor(() => expect(xrayButton).toBeEnabled());
+    fireEvent.click(xrayButton);
+    const updateMenu = screen.getByRole("menu", { name: "Edge Hong Kong Xray 快捷操作" });
+    fireEvent.click(within(updateMenu).getByRole("menuitem", { name: "更新 / 重装核心" }));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    const confirm = screen.getByRole("dialog", { name: "更新 Xray" });
+    fireEvent.click(within(confirm).getByRole("button", { name: "确认更新" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/remote/xray/install-stream?server_id=11");
+    expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({ method: "POST" }));
+  });
+
+  it("shows the Agent upgrade indicator and upgrades directly from the server card", async () => {
+    mockServerReads([onlineServer]);
+    const fetchMock = vi.fn().mockResolvedValue(new Response('data: {"type":"output","data":"Downloading Agent"}\n\ndata: {"type":"complete","success":true,"message":"upgraded"}\n\n', {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const notify = vi.fn();
+    render(<ServicesWorkbenchPage notify={notify} />);
+
+    const upgradeButton = await screen.findByRole("button", { name: "升级 Edge Hong Kong Agent" });
+    expect(upgradeButton).toHaveClass("has-update");
+    expect(upgradeButton).toHaveAttribute("title", expect.stringContaining("上游最新 v0.3.1"));
+    expect(within(upgradeButton).getByText("Agent v0.3.0")).toBeInTheDocument();
+    expect(upgradeButton.querySelector("i")).toBeInTheDocument();
+    fireEvent.click(upgradeButton);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/remote/agent/upgrade-stream?server_id=11");
+    expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({ method: "POST" }));
+    const dialog = await screen.findByRole("dialog", { name: "Agent 批量升级" });
+    expect(within(dialog).getByLabelText("Agent 升级日志")).toHaveTextContent("Downloading Agent");
+    expect(notify).toHaveBeenCalledWith("1 台 Agent 已完成升级", "success");
+  });
+
   it("loads live service state and restarts Xray through the remote control API", async () => {
     mockServerReads([onlineServer]);
     const post = vi.spyOn(api, "post").mockResolvedValue({ success: true, message: "restarted" });

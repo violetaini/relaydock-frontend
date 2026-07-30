@@ -141,6 +141,7 @@ afterEach(() => {
   cleanup();
   localStorage.clear();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("service management workbench", () => {
@@ -330,6 +331,48 @@ describe("service management workbench", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "重启 Xray" }));
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote/services/control?server_id=11", { service: "xray", action: "restart" }));
+  });
+
+  it("updates an external Xray core only after confirmation", async () => {
+    mockServerReads([onlineServer]);
+    const fetchMock = vi.fn().mockResolvedValue(new Response('data: {"success":true,"message":"updated"}\n\n', {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const notify = vi.fn();
+    render(<ServicesWorkbenchPage notify={notify} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(dialog).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(dialog).getByRole("tab", { name: "服务控制" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "更新 Xray" }));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    const confirm = screen.getByRole("dialog", { name: "更新 Xray" });
+    fireEvent.click(within(confirm).getByRole("button", { name: "确认更新" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/remote/xray/install-stream?server_id=11");
+    expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({ method: "POST" }));
+    expect(notify).toHaveBeenCalledWith("Xray 更新完成");
+  });
+
+  it("keeps embedded Xray core maintenance tied to Agent updates", async () => {
+    mockServerReads([{ ...onlineServer, xray_mode: "embedded" }]);
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(dialog).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(dialog).getByRole("tab", { name: "服务控制" }));
+
+    expect(within(dialog).getByText("内嵌核心")).toBeInTheDocument();
+    expect(within(dialog).getByText("内嵌核心随 Agent 更新，不单独安装、更新或卸载。")).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "更新 Xray" })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "卸载 Xray" })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "安装 Xray" })).not.toBeInTheDocument();
   });
 
   it("runs Ookla Speedtest for the server currently open in service management", async () => {

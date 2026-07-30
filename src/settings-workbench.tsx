@@ -5,6 +5,7 @@ import {
   Clipboard,
   Code2,
   Copy,
+  Cpu,
   Database,
   Download,
   Eye,
@@ -60,6 +61,22 @@ interface UpdateProgress {
   step: string;
   progress: number;
   message: string;
+}
+
+interface MihomoCoreStatus {
+  ready: boolean;
+  path: string;
+  source: "env" | "managed" | "path" | "none" | string;
+  current_version: string;
+  target_version: string;
+  manageable: boolean;
+  update_available: boolean;
+  latest_error?: string;
+}
+
+interface MihomoStatusResponse {
+  success: boolean;
+  status: MihomoCoreStatus;
 }
 
 type UpdateRunState = "idle" | "running" | "restarting" | "success" | "error";
@@ -318,6 +335,10 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
   const [updateLog, setUpdateLog] = useState<UpdateProgress[]>([]);
   const [updateRunError, setUpdateRunError] = useState("");
   const [confirmUpdate, setConfirmUpdate] = useState(false);
+  const [mihomoStatus, setMihomoStatus] = useState<MihomoCoreStatus | null>(null);
+  const [mihomoLoading, setMihomoLoading] = useState(true);
+  const [mihomoWorking, setMihomoWorking] = useState(false);
+  const [mihomoError, setMihomoError] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true); setLoaded(false); setError("");
@@ -373,10 +394,42 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
     }
   }, []);
 
+  const loadMihomoStatus = useCallback(async () => {
+    setMihomoLoading(true);
+    setMihomoError("");
+    try {
+      const response = await api.get<MihomoStatusResponse>("/api/admin/speedtest/mihomo-status");
+      setMihomoStatus(response.status);
+    } catch (reason) {
+      setMihomoError(messageOf(reason, "读取 Mihomo 状态失败"));
+    } finally {
+      setMihomoLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void load();
     void checkUpdate();
-  }, [checkUpdate, load]);
+    void loadMihomoStatus();
+  }, [checkUpdate, load, loadMihomoStatus]);
+
+  const installMihomo = async () => {
+    setMihomoWorking(true);
+    setMihomoError("");
+    try {
+      const response = await api.post<MihomoStatusResponse>("/api/admin/speedtest/mihomo/install");
+      setMihomoStatus(response.status);
+      notify(response.status.current_version
+        ? `主控 Mihomo ${response.status.current_version} 已就绪`
+        : "主控 Mihomo 已安装");
+    } catch (reason) {
+      const message = messageOf(reason, "Mihomo 安装失败");
+      setMihomoError(message);
+      notify(message, "error");
+    } finally {
+      setMihomoWorking(false);
+    }
+  };
 
   const save = async (key: string, operation: () => Promise<unknown>, message: string) => {
     setSaving(key); setError("");
@@ -641,6 +694,14 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
           onCheck={() => void checkUpdate()}
           onApply={() => setConfirmUpdate(true)}
         />
+        <MihomoCorePanel
+          status={mihomoStatus}
+          loading={mihomoLoading}
+          working={mihomoWorking}
+          error={mihomoError}
+          onRefresh={() => void loadMihomoStatus()}
+          onInstall={() => void installMihomo()}
+        />
       </section>
 
       <section className="settings-settings-group settings-account-group">
@@ -733,6 +794,56 @@ function SystemUpdatePanel({ info, checking, checkError, runState, progress, log
       {info?.release_url ? <a className="button button-secondary" href={info.release_url} target="_blank" rel="noreferrer"><ExternalLink size={16} />查看发布页</a> : null}
       <Button type="button" variant="secondary" onClick={onCheck} disabled={checking || running}><RefreshCw size={16} />{checking ? "正在检查" : "检查更新"}</Button>
       <Button type="button" onClick={onApply} disabled={!canApply || running}><Download size={16} />立即更新</Button>
+    </div>
+  </SettingSection>;
+}
+
+function MihomoCorePanel({ status, loading, working, error, onRefresh, onInstall }: {
+  status: MihomoCoreStatus | null;
+  loading: boolean;
+  working: boolean;
+  error: string;
+  onRefresh: () => void;
+  onInstall: () => void;
+}) {
+  const sourceLabel = status?.source === "managed"
+    ? "Arcway 管理"
+    : status?.source === "env"
+      ? "MIHOMO_BIN"
+      : status?.source === "path"
+        ? "系统 PATH"
+        : "未安装";
+  const actionLabel = status?.ready
+    ? status.update_available && status.target_version
+      ? `更新到 ${status.target_version}`
+      : "检查并更新"
+    : `安装 ${status?.target_version || "上游最新版"}`;
+  const canInstall = Boolean(status?.manageable);
+
+  return <SettingSection icon={<Cpu size={19} />} title="主控 Mihomo 核心" description="仅供主控本机节点测速使用；家用测速端和远程 Agent 各自管理核心">
+    <div className="system-update-versions" aria-label="Mihomo 核心状态">
+      <div><span>当前版本</span><strong>{status?.current_version || (loading ? "读取中" : "未安装")}</strong></div>
+      <div><span>上游最新版</span><strong>{status?.target_version || (loading ? "读取中" : status && !status.manageable ? "不支持自动安装" : status?.latest_error ? "检查失败" : "尚未获取")}</strong></div>
+      <div><span>来源</span><strong>{sourceLabel}</strong></div>
+      <div className="system-update-status"><span>状态</span>{loading
+        ? <Badge tone="info">正在检查</Badge>
+        : status?.ready && status.update_available
+          ? <Badge tone="warn">可更新</Badge>
+          : status?.ready
+            ? <Badge tone="good">已就绪</Badge>
+            : status?.manageable
+              ? <Badge tone="neutral">待安装</Badge>
+              : <Badge tone="neutral">外部管理</Badge>}</div>
+    </div>
+    {status?.source === "env" || status?.source === "path" ? <div className="system-update-notice" role="note"><Shield size={17} /><span>当前核心由 {sourceLabel} 提供，Arcway 不会覆盖它；请在对应位置自行更新。</span></div> : null}
+    {status?.source === "none" && status.manageable ? <div className="system-update-command"><div><strong>新装机按需安装</strong><span>可现在安装上游最新版；若暂不安装，首次从主控执行节点测速时仍会自动安装。</span></div></div> : null}
+    {status?.source === "none" && !status.manageable ? <div className="system-update-notice" role="note"><Shield size={17} /><span>当前平台不支持自动安装 Mihomo；请通过 MIHOMO_BIN 提供兼容核心。</span></div> : null}
+    {status?.latest_error ? <div className="system-update-notice" role="note"><Shield size={17} /><span>暂时无法读取 Mihomo 上游版本；点击检查并更新时会再次尝试。{status.latest_error}</span></div> : null}
+    {status?.path ? <div className="system-update-command-line"><code>{status.path}</code></div> : null}
+    {error ? <div className="system-update-error" role="alert">{error}</div> : null}
+    <div className="system-update-actions">
+      <Button type="button" variant="secondary" onClick={onRefresh} disabled={loading || working}><RefreshCw size={16} />刷新状态</Button>
+      {canInstall ? <Button type="button" onClick={onInstall} disabled={working}>{working ? <Spinner label={status?.ready ? "更新中" : "安装中"} /> : <><Download size={16} />{actionLabel}</>}</Button> : null}
     </div>
   </SettingSection>;
 }

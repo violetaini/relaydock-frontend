@@ -45,6 +45,14 @@ function mockCompleteSettings(overrides: Record<string, unknown> = {}, failingPa
       download_url: "", release_notes: "", deployment_mode: "standalone",
       update_scope: "full", external_web_root: false, can_apply: true,
     },
+    "/api/admin/speedtest/mihomo-status": {
+      success: true,
+      status: {
+        ready: true, path: "data/bin/mihomo", source: "managed",
+        current_version: "1.19.29", target_version: "1.19.29",
+        manageable: true, update_available: false,
+      },
+    },
     "/api/user/config": {
       force_sync_external: true, match_rule: "server_port", sync_scope: "saved_only",
       keep_node_name: true, cache_expire_minutes: 30, sync_traffic: true,
@@ -65,6 +73,69 @@ function mockCompleteSettings(overrides: Record<string, unknown> = {}, failingPa
 }
 
 describe("settings workbench", () => {
+  it("lets the administrator update an Arcway-managed Mihomo core", async () => {
+    mockCompleteSettings({
+      "/api/admin/speedtest/mihomo-status": {
+        success: true,
+        status: {
+          ready: true, path: "data/bin/mihomo", source: "managed",
+          current_version: "1.19.28", target_version: "1.19.29",
+          manageable: true, update_available: true,
+        },
+      },
+    });
+    const post = vi.spyOn(api, "post").mockResolvedValue({
+      success: true,
+      status: {
+        ready: true, path: "data/bin/mihomo", source: "managed",
+        current_version: "1.19.29", target_version: "1.19.29",
+        manageable: true, update_available: false,
+      },
+    });
+    const notify = vi.fn();
+    render(<SettingsWorkbenchPage notify={notify} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "更新到 1.19.29" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/speedtest/mihomo/install"));
+    expect(notify).toHaveBeenCalledWith("主控 Mihomo 1.19.29 已就绪");
+    expect(screen.getByRole("button", { name: "检查并更新" })).toBeInTheDocument();
+  });
+
+  it("lets the administrator recheck upstream when managed Mihomo is current", async () => {
+    mockCompleteSettings();
+    const post = vi.spyOn(api, "post").mockResolvedValue({
+      success: true,
+      status: {
+        ready: true, path: "data/bin/mihomo", source: "managed",
+        current_version: "1.19.29", target_version: "1.19.29",
+        manageable: true, update_available: false,
+      },
+    });
+    render(<SettingsWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "检查并更新" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/speedtest/mihomo/install"));
+  });
+
+  it("does not offer automatic Mihomo installation on unsupported platforms", async () => {
+    mockCompleteSettings({
+      "/api/admin/speedtest/mihomo-status": {
+        success: true,
+        status: {
+          ready: false, path: "", source: "none",
+          current_version: "", target_version: "",
+          manageable: false, update_available: false,
+        },
+      },
+    });
+    render(<SettingsWorkbenchPage notify={vi.fn()} />);
+
+    expect(await screen.findByText("当前平台不支持自动安装 Mihomo；请通过 MIHOMO_BIN 提供兼容核心。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /安装.*Mihomo|安装上游最新版/ })).not.toBeInTheDocument();
+  });
+
   it("loads and saves the general settings as a scoped group", async () => {
     mockCompleteSettings();
     const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });

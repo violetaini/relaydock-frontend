@@ -149,13 +149,14 @@
 .service-badges { min-height: 23px; display: flex; flex-wrap: wrap; gap: 6px; }
 .service-badges .badge { gap: 4px; }
 
-.service-runtime-row { min-width: 0; display: flex; flex-direction: column; gap: 9px; }
-.service-address { width: fit-content; max-width: 100%; min-height: 18px; padding: 0; display: flex; align-items: center; gap: 7px; border: 0; color: var(--text-soft); background: transparent; text-align: left; }
+.service-runtime-row { min-width: 0; }
+.service-address { width: 100%; min-width: 0; min-height: 38px; padding: 0 2px; display: flex; align-items: center; gap: 7px; border: 0; color: var(--text-soft); background: transparent; text-align: left; }
 .service-address:not(:disabled) { cursor: pointer; }
 .service-address:disabled { cursor: default; opacity: 1; }
-.service-address-value { overflow: hidden; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; animation: service-address-enter .22s ease-out both; }
+.service-address-viewport { min-width: 0; overflow: hidden; flex: 1; scroll-behavior: smooth; }
+.service-address-value { display: block; width: max-content; min-width: max-content; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; animation: service-address-enter .22s ease-out both; }
 .service-address-count { flex: 0 0 auto; color: var(--text-faint); font: 9px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.service-runtime-controls { min-width: 0; display: flex; align-items: stretch; flex-wrap: wrap; gap: 6px; }
+.service-runtime-controls { min-width: 0; display: grid; grid-template-columns: minmax(70px, 1fr) auto minmax(92px, 1fr) minmax(82px, auto); align-items: stretch; gap: 6px; }
 .service-transport {
   min-height: 38px;
   padding: 0 9px;
@@ -176,7 +177,7 @@
 .service-transport.is-pull { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 25%, var(--border)); background: var(--amber-soft); }
 .service-transport.is-offline { color: var(--text-faint); }
 
-.service-xray-quick { position: relative; min-width: 0; flex: 1 1 128px; }
+.service-xray-quick { position: relative; min-width: 0; }
 .service-xray-state {
   width: 100%;
   min-width: 0;
@@ -232,7 +233,7 @@
 
 .service-agent-version {
   position: relative;
-  min-width: 105px;
+  min-width: 82px;
   min-height: 38px;
   padding: 0 9px;
   display: inline-flex;
@@ -790,7 +791,17 @@
   .service-card { padding: 14px; gap: 11px; }
   .service-card-head { gap: 8px; }
   .service-server-icon { width: 32px; height: 32px; flex-basis: 32px; }
-  .service-runtime-controls { display: grid; grid-template-columns: minmax(48px, .55fr) minmax(88px, 1fr) minmax(88px, 1fr); }
+  .service-runtime-controls { grid-template-columns: minmax(48px, 1fr) auto minmax(80px, 1fr) minmax(76px, auto); gap: 5px; }
+  .service-address,
+  .service-transport,
+  .service-xray-state,
+  .service-agent-version { min-height: 34px; }
+  .service-address { padding: 0 1px; gap: 5px; }
+  .service-address-value { font-size: 10px; }
+  .service-address-count { font-size: 8px; }
+  .service-transport { padding: 0 7px; }
+  .service-xray-state { padding: 4px 6px; gap: 5px; }
+  .service-agent-version { min-width: 76px; padding: 0 7px; gap: 5px; }
   .service-transport,
   .service-agent-version { min-width: 0; width: 100%; }
   .service-xray-quick { min-width: 0; }

@@ -708,6 +708,7 @@ for (const scenario of [
   { name: "running-dark", label: "运行中", installed: true, running: true, version: "Xray 26.2.6", theme: "dark", viewport: { width: 1440, height: 900 } },
   { name: "stopped", label: "已停止", installed: true, running: false, version: "Xray 26.2.6", theme: "light", viewport: { width: 1440, height: 900 } },
   { name: "missing", label: "未安装", installed: false, running: false, version: "", theme: "light", viewport: { width: 1440, height: 900 } },
+  { name: "running-mobile", label: "运行中", installed: true, running: true, version: "Xray 26.2.6", theme: "light", viewport: { width: 390, height: 844 } },
   { name: "missing-mobile", label: "未安装", installed: false, running: false, version: "", theme: "light", viewport: { width: 390, height: 844 } },
 ]) {
   test(`Xray ${scenario.name} service state matches the management surface`, async ({ page }, testInfo) => {
@@ -738,9 +739,26 @@ for (const scenario of [
     if ((await address.getAttribute("aria-label"))?.includes("当前 IPv6")) await address.click();
     await expect(address).toContainText("198.51.100.14");
     await expect(address).toContainText("1/2");
+    if (scenario.viewport.width <= 390) {
+      await expect.poll(() => address.locator(".service-address-viewport").evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+    }
     await expect(page.locator(".service-card").first().locator(".service-agent-version")).toContainText("v0.3.4");
+    await expect(firstCard.locator(".service-runtime-controls").locator(".service-address")).toHaveCount(1);
     await expectViewportIntegrity(page, `${scenario.name} server card`);
     await page.screenshot({ path: testInfo.outputPath(`service-${scenario.name}-card.png`), fullPage: true });
+    if (scenario.installed) {
+      await listState.click();
+      const quickMenu = page.getByRole("menu", { name: "Hong Kong Edge Xray 快捷操作" });
+      if (scenario.running) {
+        await expect(quickMenu.getByRole("menuitem", { name: "重启 Xray" })).toBeVisible();
+        await expect(quickMenu.getByRole("menuitem", { name: "暂停 Xray" })).toBeVisible();
+      } else {
+        await expect(quickMenu.getByRole("menuitem", { name: "开启 Xray" })).toBeVisible();
+      }
+      await expect(quickMenu.getByRole("menuitem", { name: "更新 / 重装核心" })).toBeVisible();
+      await expectViewportIntegrity(page, `${scenario.name} Xray quick menu`);
+      await page.screenshot({ path: testInfo.outputPath(`service-${scenario.name}-card-menu.png`), fullPage: true });
+    }
     await page.getByRole("button", { name: /^管理(?: Hong Kong Edge)?$/ }).first().click();
     const operations = page.getByRole("dialog", { name: "Hong Kong Edge" });
     await expect(operations.getByText("Agent 版本", { exact: true })).toBeVisible();

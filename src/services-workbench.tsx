@@ -1087,7 +1087,7 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
   };
 
   const executeXrayAction = async (server: ManagedServer, action: XrayQuickAction) => {
-    const actionLabel = action === "install" ? "安装" : action === "update" ? "更新" : action === "start" ? "启动" : action === "stop" ? "停止" : "重启";
+    const actionLabel = action === "install" ? "安装" : action === "update" ? "更新" : action === "start" ? "开启" : action === "stop" ? "暂停" : "重启";
     const streamed = action === "install" || action === "update";
     let streamCompleted = false;
     setQuickWorking({ serverId: server.id, action });
@@ -1223,7 +1223,7 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
       {credentials ? <CredentialsDialog value={credentials} notify={notify} onClose={() => setCredentials(null)} /> : null}
       {deleting ? <DeleteServerDialog server={deleting} working={deleteWorking} error={deleteError} refreshVersion={deleteRefreshVersion} onCancel={closeDeleteServer} onConfirm={(shared) => void deleteServer(shared)} /> : null}
       {upgrade ? <UpgradeDialog state={upgrade} servers={servers} onClose={() => !upgrade.running && setUpgrade(null)} /> : null}
-      {quickConfirm ? <ConfirmDialog title={quickConfirm.action === "update" ? "更新 Xray" : "停止 Xray"} description={quickConfirm.action === "update" ? `将从 Xray 上游下载最新版并在 ${quickConfirm.server.name} 上更新或重装，现有代理连接会短暂中断。` : `停止 ${quickConfirm.server.name} 上的 Xray 会立即中断由它承载的连接。`} confirmLabel={quickConfirm.action === "update" ? "确认更新" : "确认停止"} working={Boolean(quickWorking)} onCancel={() => !quickWorking && setQuickConfirm(null)} onConfirm={() => void executeXrayAction(quickConfirm.server, quickConfirm.action)} /> : null}
+      {quickConfirm ? <ConfirmDialog title={quickConfirm.action === "update" ? "更新 Xray" : "暂停 Xray"} description={quickConfirm.action === "update" ? `将从 Xray 上游下载最新版并在 ${quickConfirm.server.name} 上更新或重装，现有代理连接会短暂中断。` : `暂停 ${quickConfirm.server.name} 上的 Xray 会立即中断由它承载的连接。`} confirmLabel={quickConfirm.action === "update" ? "确认更新" : "确认暂停"} working={Boolean(quickWorking)} onCancel={() => !quickWorking && setQuickConfirm(null)} onConfirm={() => void executeXrayAction(quickConfirm.server, quickConfirm.action)} /> : null}
       {quickTerminal ? <RemoteServiceTerminalDialog terminal={quickTerminal} onClose={() => !quickTerminal.running && setQuickTerminal(null)} /> : null}
     </div>
   );
@@ -1486,7 +1486,7 @@ function XrayQuickControl({ server, status, working, compact = false, onAction }
   const versionTitle = version ? ` v${version}` : "";
 
   return <div ref={menuRef} className={`service-xray-quick ${compact ? "is-compact" : ""}`}>
-    <button type="button" className={`service-xray-state is-${loading ? "loading" : state}`} aria-label={ariaLabel} aria-haspopup={!compact && installed ? "menu" : undefined} aria-expanded={!compact && installed ? menuOpen : undefined} title={loading ? "正在读取 Xray 状态" : `Xray${versionTitle} · ${running ? embedded ? "运行中，点击重启" : "运行中，点击更新" : installed ? "已停止，点击启动" : "未安装，点击安装"}`} disabled={disabled || loading} onClick={() => compact || !installed ? choose(directAction) : setMenuOpen((open) => !open)}>
+    <button type="button" className={`service-xray-state is-${loading ? "loading" : state}`} aria-label={ariaLabel} aria-haspopup={!compact && installed ? "menu" : undefined} aria-expanded={!compact && installed ? menuOpen : undefined} title={loading ? "正在读取 Xray 状态" : `Xray${versionTitle} · ${installed ? "点击打开快捷操作" : "未安装，点击安装"}`} disabled={disabled || loading} onClick={() => compact || !installed ? choose(directAction) : setMenuOpen((open) => !open)}>
       {working || loading ? <RefreshCw className="service-spin" size={13} /> : state === "missing" ? <Download size={13} /> : <i />}
       <span className="service-xray-copy">
         <b>{working ? "处理中" : label}</b>
@@ -1495,8 +1495,8 @@ function XrayQuickControl({ server, status, working, compact = false, onAction }
       {!compact && installed && !working ? <ChevronDown size={12} /> : null}
     </button>
     {menuOpen && !compact ? <div className="service-xray-menu" role="menu" aria-label={`${server.name} Xray 快捷操作`}>
-      {running ? <button role="menuitem" onClick={() => choose("restart")}><RotateCw size={14} />重启 Xray</button> : <button role="menuitem" onClick={() => choose("start")}><Play size={14} />启动 Xray</button>}
-      {running ? <button role="menuitem" onClick={() => choose("stop")}><Square size={14} />停止 Xray</button> : null}
+      {running ? <button role="menuitem" onClick={() => choose("restart")}><RotateCw size={14} />重启 Xray</button> : <button role="menuitem" onClick={() => choose("start")}><Play size={14} />开启 Xray</button>}
+      {running ? <button role="menuitem" onClick={() => choose("stop")}><Square size={14} />暂停 Xray</button> : null}
       {!embedded ? <button role="menuitem" onClick={() => choose("update")}><HardDriveDownload size={14} />更新 / 重装核心</button> : null}
     </div> : null}
   </div>;
@@ -1513,6 +1513,8 @@ function ServerAddressCarousel({ server }: { server: ManagedServer }) {
   const addressKey = addresses.map((item) => `${item.family}:${item.value}`).join("|");
   const [index, setIndex] = useState(0);
   const [paused, setPaused] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const viewportRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => { setIndex(0); }, [addressKey]);
   useEffect(() => {
@@ -1524,14 +1526,58 @@ function ServerAddressCarousel({ server }: { server: ManagedServer }) {
   const currentIndex = addresses.length ? index % addresses.length : 0;
   const current = addresses[currentIndex] ?? { family: "IPv4", value: "IP 未上报" };
   const count = addresses.length;
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const reset = () => {
+      if (typeof viewport.scrollTo === "function") viewport.scrollTo({ left: 0, behavior: "auto" });
+      else viewport.scrollLeft = 0;
+    };
+    const measure = () => setOverflowing(viewport.scrollWidth > viewport.clientWidth + 1);
+    reset();
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(viewport);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [addressKey, currentIndex]);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport || !overflowing || paused) return;
+    let timeout: number | undefined;
+    const scrollTo = (left: number) => {
+      if (typeof viewport.scrollTo === "function") viewport.scrollTo({ left, behavior: "smooth" });
+      else viewport.scrollLeft = left;
+    };
+    const sweep = () => {
+      const max = Math.max(0, viewport.scrollWidth - viewport.clientWidth);
+      if (max <= 1) return;
+      scrollTo(max);
+      timeout = window.setTimeout(() => {
+        scrollTo(0);
+        timeout = window.setTimeout(sweep, Math.max(2_800, max * 24) + 1_000);
+      }, Math.max(2_800, max * 24) + 1_200);
+    };
+    timeout = window.setTimeout(sweep, 900);
+    return () => {
+      if (timeout !== undefined) window.clearTimeout(timeout);
+      if (typeof viewport.scrollTo === "function") viewport.scrollTo({ left: viewport.scrollLeft, behavior: "auto" });
+    };
+  }, [addressKey, currentIndex, overflowing, paused]);
+
   const switchAddress = () => {
     if (count > 1) setIndex((currentIndex + 1) % count);
   };
 
   const addressTitle = count > 1 ? `${addresses.map((item) => `${item.family}: ${item.value}`).join("\n")}\n点击切换地址` : current.family;
 
-  return <button type="button" className="service-address" aria-label={`${server.name} 当前 ${current.family} ${current.value}${count > 1 ? `，第 ${currentIndex + 1} 个，共 ${count} 个，点击切换` : ""}`} title={addressTitle} disabled={count < 2} onClick={switchAddress} onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)} onFocus={() => setPaused(true)} onBlur={() => setPaused(false)}>
-    <span key={`${addressKey}:${currentIndex}`} className="service-address-value">{current.value}</span>
+  return <button type="button" className={`service-address ${overflowing ? "is-overflowing" : ""}`} aria-label={`${server.name} 当前 ${current.family} ${current.value}${count > 1 ? `，第 ${currentIndex + 1} 个，共 ${count} 个，点击切换` : ""}`} title={addressTitle} disabled={count < 2} onClick={switchAddress} onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)} onFocus={() => setPaused(true)} onBlur={() => setPaused(false)}>
+    <span ref={viewportRef} className="service-address-viewport"><span key={`${addressKey}:${currentIndex}`} className="service-address-value">{current.value}</span></span>
     {count > 1 ? <small className="service-address-count" aria-hidden="true">{currentIndex + 1}/{count}</small> : null}
   </button>;
 }
@@ -1571,10 +1617,10 @@ function ServerCard({ server, serviceStatus, agentVersion, checked, credentialsL
         {server.warp_installed ? <Badge tone="info">WARP</Badge> : null}
       </div>
       <div className="service-runtime-row">
-        <ServerAddressCarousel server={server} />
         <div className="service-runtime-controls">
+          <ServerAddressCarousel server={server} />
           <span className={`service-transport is-${transport ? transport.toLowerCase() : "offline"}`} title={transport ? "当前连接通道（根据 Agent 在线状态推断）" : "Agent 离线，当前没有活动数据通道"}>{transport ? <Wifi size={12} /> : <WifiOff size={12} />}{transport || "--"}</span>
-          <XrayQuickControl compact server={server} status={serviceStatus} working={xrayWorking} onAction={onXrayAction} />
+          <XrayQuickControl server={server} status={serviceStatus} working={xrayWorking} onAction={onXrayAction} />
           <AgentVersionButton compact server={server} version={agentVersion} working={agentWorking} onUpgrade={onAgentUpgrade} />
         </div>
       </div>

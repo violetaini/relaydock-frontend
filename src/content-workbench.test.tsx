@@ -169,7 +169,7 @@ describe("content workbench templates", () => {
 });
 
 describe("content workbench subscriptions", () => {
-  it("includes a normal WireGuard node in generated subscriptions", async () => {
+  it("includes a normal WireGuard node and GEO defaults in generated subscriptions", async () => {
     const wireGuard = {
       id: 12,
       node_name: "办公室 WireGuard",
@@ -205,6 +205,16 @@ describe("content workbench subscriptions", () => {
     expect(generated).toContain('"type":"wireguard"');
     expect(generated).toContain('"private-key":"encrypted-client-private-key"');
     expect(generated).toContain('"allowed-ips":["0.0.0.0/0"]');
+    expect(generated).toContain([
+      "geodata-mode: true",
+      "geo-auto-update: true",
+      "geo-update-interval: 24",
+      "geox-url:",
+      "  geoip: https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat",
+      "  geosite: https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat",
+      "  mmdb: https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/country.mmdb",
+      "  asn: https://github.com/xishang0128/geoip/releases/download/latest/GeoLite2-ASN.mmdb",
+    ].join("\n"));
     expect(notify).toHaveBeenCalledWith("订阅配置已生成");
   });
 

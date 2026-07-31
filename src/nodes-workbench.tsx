@@ -298,7 +298,11 @@ export interface ManagedNodeOffer {
   sort_order: number;
 }
 
-const protocols = ["vmess", "vless", "trojan", "ss", "socks5", "http", "hysteria2", "tuic", "anytls", "wireguard", "snell"];
+const protocols = ["vmess", "vless", "trojan", "ss", "socks5", "http", "hysteria2", "tuic", "anytls", "wireguard"];
+
+function isSnellProxy(proxy: Record<string, unknown>): boolean {
+  return String(proxy.type || proxy.protocol || "").trim().toLowerCase() === "snell";
+}
 
 export interface ManagedCertificate {
   id: number;
@@ -650,7 +654,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
     for (const node of sourceScopedNodes) counts[displayedNodeProtocol(node)] = (counts[displayedNodeProtocol(node)] || 0) + 1;
     return counts;
   }, [sourceScopedNodes]);
-  const protocolFilterOptions = useMemo(() => Array.from(new Set([...protocols, ...Object.keys(protocolCounts)])).filter((item) => protocolCounts[item]), [protocolCounts]);
+  const protocolFilterOptions = useMemo(() => Array.from(new Set([...protocols, ...Object.keys(protocolCounts)])).filter((item) => item !== "snell" && protocolCounts[item]), [protocolCounts]);
   const protocolScopedNodes = useMemo(() => protocol === "all" ? sourceScopedNodes : sourceScopedNodes.filter((node) => displayedNodeProtocol(node) === protocol), [protocol, sourceScopedNodes]);
   const allTags = useMemo(() => Array.from(new Set(protocolScopedNodes.flatMap(nodeTags))).sort((a, b) => a.localeCompare(b, "zh-CN")), [protocolScopedNodes]);
   const sourceCounts = useMemo(() => {
@@ -1114,6 +1118,7 @@ export function NodeEditor({ node, offer, onClose, onComplete }: { node?: Workbe
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
   const tunnelNode = isTunnelNode(node);
+  const protocolOptions = form.protocol && !protocols.includes(form.protocol.toLowerCase()) ? [form.protocol, ...protocols] : protocols;
   const selfServiceProtocolReady = !tunnelNode && managedSelfServiceConfigSupported(form.protocol, form.config);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -1166,7 +1171,7 @@ export function NodeEditor({ node, offer, onClose, onComplete }: { node?: Workbe
   return <Dialog title={node ? `编辑 ${node.node_name}` : "手工添加节点"} description="基础字段会同步写回完整 Clash JSON 配置" onClose={onClose} wide>
     <form className="form-stack" onSubmit={submit}>
       {error ? <ErrorState message={error} /> : null}
-      <div className="form-grid"><Field label="节点名称"><input autoFocus required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field><Field label="协议"><select value={form.protocol} onChange={(event) => setForm({ ...form, protocol: event.target.value })}>{protocols.map((item) => <option value={item} key={item}>{item.toUpperCase()}</option>)}</select></Field></div>
+      <div className="form-grid"><Field label="节点名称"><input autoFocus required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field><Field label="协议"><select value={form.protocol} onChange={(event) => setForm({ ...form, protocol: event.target.value })}>{protocolOptions.map((item) => <option value={item} key={item}>{item.toUpperCase()}</option>)}</select></Field></div>
       <div className="form-grid"><Field label="服务器地址"><input required value={form.server} onChange={(event) => setForm({ ...form, server: event.target.value })} placeholder="example.com 或 IP" /></Field><Field label="端口"><input required type="number" min="1" max="65535" value={form.port} onChange={(event) => setForm({ ...form, port: event.target.value })} /></Field></div>
       <Field label="标签" hint="多个标签使用逗号分隔"><input value={form.tags} onChange={(event) => setForm({ ...form, tags: event.target.value })} placeholder="香港, 高级线路" /></Field>
       <Field label="原始 URI（可选）"><input value={form.rawURL} onChange={(event) => setForm({ ...form, rawURL: event.target.value })} placeholder="vless://..." /></Field>
@@ -1592,7 +1597,7 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
         <div className="managed-step-heading"><span><Network size={19} /></span><div><h3>选择协议与安全组合</h3><p>仅显示当前 Agent 可安全创建的协议组合。</p></div></div>
         <div className="form-grid"><Field label="协议"><select aria-label="节点协议" value={selectedFamily} onChange={(event) => { const family = event.target.value as ManagedProtocolFamily; const first = managedProtocolOptions.find((item) => item.family === family); if (first) chooseProtocol(first.value); }}>{managedProtocolFamilies.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field><Field label="传输与安全预设"><select aria-label="节点传输与安全预设" value={draft.protocol} onChange={(event) => chooseProtocol(event.target.value as ManagedProtocol)}>{familyProtocols.map((option) => { const wssOption = isManagedWSSProtocol(option.value); const disabled = wssOption && !wssReady; const reason = !selectedServer?.domain?.trim() ? "服务器未配置域名" : "缺少匹配的有效证书"; return <option key={option.value} value={option.value} disabled={disabled}>{option.label}{disabled ? `（${reason}）` : ""}</option>; })}</select></Field></div>
         <div className="managed-import-only"><span><Shield size={16} /></span><div><strong>{selectedProtocol?.label}</strong><small>{selectedProtocol?.detail}</small></div></div>
-        <div className="managed-import-only"><span><Upload size={16} /></span><div><strong>TUIC 与自定义协议</strong><small>已有节点请使用“导入已有节点”；AnyTLS、Snell 可在服务器的高级入站中配置。</small></div></div>
+        <div className="managed-import-only"><span><Upload size={16} /></span><div><strong>TUIC 与外部节点</strong><small>已有节点请使用“导入已有节点”；AnyTLS 可在服务器的高级入站中配置。</small></div></div>
       </section> : step === 3 ? <section className="managed-wizard-step">
         <div className="managed-step-heading"><span><Settings2 size={19} /></span><div><h3>配置 {protocolLabel(draft.protocol)}</h3><p>界面只展示当前协议需要的字段。</p></div></div>
         <div className="form-grid"><Field label="节点名称"><input autoFocus required value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder={`${selectedServer?.name || "节点"} ${protocolLabel(draft.protocol)}`} /></Field><Field label="入站标识（Tag）" hint="Xray 内部唯一标识，同一服务器不可重复"><input required value={draft.tag} onChange={(event) => setDraft({ ...draft, tag: event.target.value })} /></Field></div>
@@ -1657,15 +1662,21 @@ function ImportDialog({ onClose, onComplete }: { onClose: () => void; onComplete
   const [tag, setTag] = useState("");
   const [skipCert, setSkipCert] = useState(false);
   const [proxies, setProxies] = useState<Record<string, unknown>[]>([]);
+  const [ignoredSnell, setIgnoredSnell] = useState(0);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
   const parse = async () => {
-    setWorking(true); setError("");
+    setWorking(true); setError(""); setIgnoredSnell(0);
     try {
       const response = mode === "url"
         ? await api.post<ParseNodesResponse>("/api/admin/nodes/fetch-subscription", { url: url.trim(), user_agent: userAgent.trim(), force_node_skip_cert: skipCert })
         : await api.post<ParseNodesResponse>("/api/admin/nodes/parse-uris", { content, force_node_skip_cert: skipCert });
-      setProxies(response.proxies ?? []);
+      const parsed = response.proxies ?? [];
+      const supported = parsed.filter((proxy) => !isSnellProxy(proxy));
+      const ignored = parsed.length - supported.length;
+      setIgnoredSnell(ignored);
+      if (!supported.length && ignored) throw new Error("Snell 当前不在支持范围内，未导入任何节点");
+      setProxies(supported);
       if (!tag && response.suggested_tag) setTag(response.suggested_tag);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "解析失败"); }
     finally { setWorking(false); }
@@ -1673,6 +1684,7 @@ function ImportDialog({ onClose, onComplete }: { onClose: () => void; onComplete
   const save = async () => {
     setWorking(true); setError("");
     try {
+      if (proxies.some(isSnellProxy)) throw new Error("Snell 当前不在支持范围内，已阻止导入");
       const tags = tag.trim() ? [tag.trim()] : [];
       const nodes = proxies.map((proxy, index) => {
         const normalized: Record<string, unknown> = { ...proxy, name: String(proxy.name || `未命名节点 ${index + 1}`) };
@@ -1684,7 +1696,7 @@ function ImportDialog({ onClose, onComplete }: { onClose: () => void; onComplete
     finally { setWorking(false); }
   };
   return <Dialog title="导入外部节点" description="支持分享链接、Clash YAML、Base64、Surge 行与订阅 URL" onClose={onClose} wide>
-    <div className="form-stack">{error ? <ErrorState message={error} /> : null}<div className="nw-tabs" role="tablist"><button role="tab" aria-selected={mode === "content"} className={mode === "content" ? "is-active" : ""} onClick={() => { setMode("content"); setProxies([]); }}><Clipboard size={16} />粘贴内容</button><button role="tab" aria-selected={mode === "url"} className={mode === "url" ? "is-active" : ""} onClick={() => { setMode("url"); setProxies([]); }}><Globe2 size={16} />订阅 URL</button></div>
+    <div className="form-stack">{error ? <ErrorState message={error} /> : null}{ignoredSnell && proxies.length ? <div className="nw-inline-note"><Shield size={16} /><span>已忽略 {ignoredSnell} 个 Snell 节点；当前版本不支持创建或导入 Snell。</span></div> : null}<div className="nw-tabs" role="tablist"><button role="tab" aria-selected={mode === "content"} className={mode === "content" ? "is-active" : ""} onClick={() => { setMode("content"); setProxies([]); setIgnoredSnell(0); }}><Clipboard size={16} />粘贴内容</button><button role="tab" aria-selected={mode === "url"} className={mode === "url" ? "is-active" : ""} onClick={() => { setMode("url"); setProxies([]); setIgnoredSnell(0); }}><Globe2 size={16} />订阅 URL</button></div>
       {!proxies.length ? <>
         {mode === "content" ? <Field label="节点内容"><textarea autoFocus rows={12} value={content} onChange={(event) => setContent(event.target.value)} placeholder="vless://...&#10;trojan://...&#10;或粘贴完整 Clash YAML" /></Field> : <><Field label="订阅地址"><input autoFocus required type="url" value={url} onChange={(event) => setURL(event.target.value)} placeholder="https://example.com/subscribe" /></Field><Field label="User-Agent"><input value={userAgent} onChange={(event) => setUserAgent(event.target.value)} /></Field></>}
         <div className="form-grid"><Field label="分类标签"><input value={tag} onChange={(event) => setTag(event.target.value)} placeholder="例如：机场 A" /></Field><div className="field toggle-field"><span className="field-label">TLS 选项</span><Toggle checked={skipCert} onChange={setSkipCert} label="强制跳过证书校验" /></div></div>

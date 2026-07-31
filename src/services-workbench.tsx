@@ -306,6 +306,14 @@ interface XrayVersionsResponse extends ActionResponse {
   warning?: string;
 }
 
+interface XrayUpdateCheck {
+  checking: boolean;
+  checked: boolean;
+  supported: boolean;
+  latestStable: string;
+  error: string;
+}
+
 interface SystemInfoResponse extends ActionResponse {
   hostname?: string;
   uptime?: string;
@@ -1466,6 +1474,11 @@ function compareVersionTags(left: string, right: string): number {
   return 0;
 }
 
+function preferredStableXrayVersion(result: XrayVersionsResponse): string {
+  const releases = result.versions ?? result.releases ?? [];
+  return result.latest_stable || releases.find((release) => !release.prerelease)?.version || result.latest || releases[0]?.version || "";
+}
+
 function XrayVersionDialog({ server, currentVersion, working, onCancel, onConfirm }: {
   server: ManagedServer;
   currentVersion?: string;
@@ -1612,6 +1625,7 @@ function XrayQuickControl({ server, status, working, compact = false, onAction }
   onAction: (action: XrayQuickAction) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [updateCheck, setUpdateCheck] = useState<XrayUpdateCheck>({ checking: false, checked: false, supported: true, latestStable: "", error: "" });
   const menuRef = useRef<HTMLDivElement>(null);
   const embedded = server.xray_mode === "embedded";
   const live = status?.loaded ? status.xray : undefined;
@@ -1632,11 +1646,52 @@ function XrayQuickControl({ server, status, working, compact = false, onAction }
     return () => document.removeEventListener("pointerdown", close);
   }, [menuOpen]);
 
+  useEffect(() => {
+    if (!menuOpen || compact || embedded || !installed) return;
+    let active = true;
+    setUpdateCheck({ checking: true, checked: false, supported: true, latestStable: "", error: "" });
+    void api.get<XrayVersionsResponse>(`/api/admin/remote/xray/versions?server_id=${server.id}`)
+      .then((response) => {
+        if (!active) return;
+        const checked = assertSuccess(response, "检查 Xray 更新失败");
+        setUpdateCheck({
+          checking: false,
+          checked: true,
+          supported: checked.version_selection_supported !== false,
+          latestStable: preferredStableXrayVersion(checked),
+          error: "",
+        });
+      })
+      .catch((reason) => {
+        if (!active) return;
+        setUpdateCheck({ checking: false, checked: true, supported: false, latestStable: "", error: messageFrom(reason, "检查 Xray 更新失败") });
+      });
+    return () => { active = false; };
+  }, [compact, embedded, installed, menuOpen, server.id]);
+
   const choose = (action: XrayQuickAction) => {
     setMenuOpen(false);
     onAction(action);
   };
   const directAction: XrayQuickAction = !installed ? "install" : !running ? "start" : embedded ? "restart" : "update";
+  const latestStable = cleanXrayVersion(updateCheck.latestStable);
+  const updateAvailable = updateCheck.checked
+    && updateCheck.supported
+    && Boolean(version && latestStable)
+    && compareVersionTags(latestStable, version) > 0;
+  const updateLabel = updateCheck.checking
+    ? "检查更新..."
+    : updateCheck.error
+      ? "检查更新失败"
+      : updateCheck.checked && !updateCheck.supported
+        ? "需升级 Agent"
+        : !updateCheck.checked
+          ? "检查更新"
+          : !version
+            ? "当前版本未知"
+            : updateAvailable
+              ? `更新到 v${latestStable}`
+              : `已是最新版 v${version}`;
   const ariaLabel = loading
     ? `正在读取 ${server.name} Xray 状态`
     : !installed
@@ -1661,8 +1716,11 @@ function XrayQuickControl({ server, status, working, compact = false, onAction }
     </button>
     {menuOpen && !compact ? <div className="service-xray-menu" role="menu" aria-label={`${server.name} Xray 快捷操作`}>
       {running ? <button role="menuitem" onClick={() => choose("restart")}><RotateCw size={14} />重启 Xray</button> : <button role="menuitem" onClick={() => choose("start")}><Play size={14} />开启 Xray</button>}
-      {running ? <button role="menuitem" onClick={() => choose("stop")}><Square size={14} />暂停 Xray</button> : null}
-      {!embedded ? <button role="menuitem" onClick={() => choose("update")}><HardDriveDownload size={14} />更新 / 重装核心</button> : null}
+      {running ? <button role="menuitem" className="is-danger" onClick={() => choose("stop")}><Square size={14} />暂停 Xray</button> : null}
+      {!embedded ? <>
+        <button role="menuitem" disabled={!updateAvailable} title={updateCheck.error || (!version ? "无法识别当前 Xray 版本" : undefined)} onClick={() => choose("update")}><HardDriveDownload size={14} />{updateLabel}</button>
+        <button role="menuitem" onClick={() => choose("update")}><Settings2 size={14} />选择 / 重装核心</button>
+      </> : null}
     </div> : null}
   </div>;
 }
@@ -2681,6 +2739,7 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
     const normalizedProtocol = protocol.trim();
     if (!normalizedTag) throw new Error("Tag 不能为空");
     if (!normalizedProtocol) throw new Error("协议不能为空");
+    if (kind === "inbound" && editor?.mode === "create" && normalizedProtocol.toLowerCase() === "snell") throw new Error("Snell 当前不在支持范围内");
     resource.tag = normalizedTag;
     resource.protocol = normalizedProtocol;
     if (kind === "inbound") {
@@ -2780,7 +2839,7 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
   };
 
   const protocols = kind === "inbound"
-    ? ["vless", "vmess", "trojan", "shadowsocks", "socks", "http", "dokodemo-door", "wireguard", "hysteria2", "anytls", "snell"]
+    ? ["vless", "vmess", "trojan", "shadowsocks", "socks", "http", "dokodemo-door", "wireguard", "hysteria2", "anytls"]
     : ["freedom", "blackhole", "vless", "vmess", "trojan", "shadowsocks", "socks", "http", "wireguard", "dns"];
 
   return <div className="xray-resource-workbench">

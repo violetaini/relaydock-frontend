@@ -222,6 +222,46 @@ describe("managed offer protocol guard", () => {
   });
 });
 
+describe("unsupported Snell imports", () => {
+  it("removes Snell from a mixed import before saving supported nodes", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [node(1, "香港 A")] } as T;
+      if (path === "/api/admin/speedtest/results?latest=1") return { results: [] } as T;
+      if (path === "/api/user/config") return userConfig([1]) as T;
+      if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string, body?: unknown): Promise<T> => {
+      if (path === "/api/admin/nodes/parse-uris") return {
+        proxies: [
+          { name: "Supported VLESS", type: "vless", server: "edge.example.com", port: 443 },
+          { name: "Unsupported Snell", type: "snell", server: "snell.example.com", port: 443 },
+        ],
+      } as T;
+      if (path === "/api/admin/nodes/batch") {
+        const nodes = (body as { nodes: WorkbenchNode[] }).nodes;
+        return { nodes: nodes.map((item, index) => ({ ...item, id: index + 10 })) } as T;
+      }
+      throw new Error(`unexpected POST ${path}`);
+    });
+    render(<NodesWorkbench isAdmin notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "导入已有节点" }));
+    const dialog = screen.getByRole("dialog", { name: "导入外部节点" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "节点内容" }), { target: { value: "mixed subscription" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "解析并预览" }));
+
+    expect(await within(dialog).findByText("识别到 1 个节点")).toBeInTheDocument();
+    expect(within(dialog).getByText(/已忽略 1 个 Snell 节点/)).toBeInTheDocument();
+    expect(within(dialog).queryByText("Unsupported Snell")).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存 1 个节点" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/nodes/batch", {
+      nodes: [expect.objectContaining({ node_name: "Supported VLESS", protocol: "vless" })],
+    }));
+  });
+});
+
 describe("nodes speedtest workbench", () => {
   it("submits the selected nodes with the exact asynchronous speedtest contract", async () => {
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {

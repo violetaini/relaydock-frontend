@@ -80,6 +80,8 @@
 .cw-managed-table .cw-file-name small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cw-managed-table .cw-table-actions { flex-wrap: nowrap; }
 .cw-certificate-table table { min-width: 1160px; }
+.cw-certificate-table thead th { height: 50px; padding-top: 12px; padding-bottom: 12px; line-height: 1.35; vertical-align: middle; }
+.cw-certificate-table tbody td { padding-top: 14px; padding-bottom: 14px; }
 .cw-certificate-table th:nth-child(1) { width: 23%; }
 .cw-certificate-table th:nth-child(2) { width: 15%; }
 .cw-certificate-table th:nth-child(3) { width: 17%; }

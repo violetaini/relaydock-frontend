@@ -51,13 +51,17 @@ describe("api client", () => {
     window.removeEventListener("arcway:unauthorized", unauthorized);
   });
 
-  it("reports dashboard socket connectivity and stops reconnecting after cleanup", () => {
+  it("reports dashboard socket connectivity, reconnects with backoff and stops after cleanup", async () => {
+    vi.useFakeTimers();
     class FakeWebSocket {
       static instances: FakeWebSocket[] = [];
+      static OPEN = 1;
       onopen: (() => void) | null = null;
       onmessage: ((event: { data: string }) => void) | null = null;
       onclose: (() => void) | null = null;
+      readyState = FakeWebSocket.OPEN;
       constructor(readonly url: string) { FakeWebSocket.instances.push(this); }
+      send() { /* Ping frames are intentionally ignored by the fake. */ }
       close() { this.onclose?.(); }
     }
     setToken("socket-token");
@@ -76,8 +80,13 @@ describe("api client", () => {
 
     socket.onclose?.();
     expect(onClose).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(FakeWebSocket.instances).toHaveLength(2);
     cleanupSocket();
     expect(onClose).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 

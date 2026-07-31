@@ -230,8 +230,9 @@
   animation: service-menu-enter .14s ease-out both;
 }
 .service-xray-menu button { min-height: 34px; padding: 0 9px; display: flex; align-items: center; gap: 8px; border-radius: 3px; color: var(--text-soft); background: transparent; font-size: 11px; text-align: left; }
-.service-xray-menu button:hover { color: var(--text); background: var(--surface-muted); }
-.service-xray-menu button:nth-child(2) { color: var(--red); }
+.service-xray-menu button:not(:disabled):hover { color: var(--text); background: var(--surface-muted); }
+.service-xray-menu button.is-danger { color: var(--red); }
+.service-xray-menu button:disabled { cursor: not-allowed; color: var(--text-faint); opacity: .62; }
 
 .xray-version-summary { margin-bottom: 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
 .xray-version-summary > span { min-width: 0; min-height: 54px; padding: 9px 11px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: 8px; border-right: 1px solid var(--border); background: var(--surface-muted); }

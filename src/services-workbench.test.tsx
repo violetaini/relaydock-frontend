@@ -164,8 +164,12 @@ describe("service management workbench", () => {
     let resolveFirstStatus!: (value: unknown) => void;
     const firstStatus = new Promise((resolve) => { resolveFirstStatus = resolve; });
     let statusRequests = 0;
+    let serverListRequests = 0;
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
-      if (path === "/api/admin/remote-servers") return { success: true, servers: [onlineServer] } as T;
+      if (path === "/api/admin/remote-servers") {
+        serverListRequests += 1;
+        return { success: true, servers: [onlineServer] } as T;
+      }
       if (path.includes("/api/admin/remote/services/status")) {
         statusRequests += 1;
         if (statusRequests === 1) return await firstStatus as T;
@@ -184,6 +188,7 @@ describe("service management workbench", () => {
 
     await act(async () => { await vi.advanceTimersByTimeAsync(45_000); });
     expect(statusRequests).toBe(1);
+    expect(serverListRequests).toBeGreaterThanOrEqual(3);
 
     await act(async () => {
       resolveFirstStatus({
@@ -448,7 +453,7 @@ describe("service management workbench", () => {
     const menu = screen.getByRole("menu", { name: "Edge Hong Kong Xray 快捷操作" });
     expect(within(menu).getByRole("menuitem", { name: "重启 Xray" })).toBeInTheDocument();
     expect(within(menu).getByRole("menuitem", { name: "暂停 Xray" })).toBeInTheDocument();
-    fireEvent.click(within(menu).getByRole("menuitem", { name: "更新 / 重装核心" }));
+    fireEvent.click(await within(menu).findByRole("menuitem", { name: "更新到 v26.3.27" }));
     const confirm = screen.getByRole("dialog", { name: "更新 Xray" });
     fireEvent.click(await within(confirm).findByRole("button", { name: "更新到 v26.3.27" }));
 
@@ -468,7 +473,7 @@ describe("service management workbench", () => {
     render(<ServicesWorkbenchPage notify={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "管理 Edge Hong Kong Xray v25.1" }));
-    fireEvent.click(within(screen.getByRole("menu", { name: "Edge Hong Kong Xray 快捷操作" })).getByRole("menuitem", { name: "更新 / 重装核心" }));
+    fireEvent.click(within(screen.getByRole("menu", { name: "Edge Hong Kong Xray 快捷操作" })).getByRole("menuitem", { name: "选择 / 重装核心" }));
     const dialog = screen.getByRole("dialog", { name: "更新 Xray" });
     fireEvent.click(await within(dialog).findByRole("radio", { name: /v26\.7\.28/ }));
 
@@ -491,7 +496,7 @@ describe("service management workbench", () => {
     render(<ServicesWorkbenchPage notify={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "管理 Edge Hong Kong Xray v25.1" }));
-    fireEvent.click(within(screen.getByRole("menu", { name: "Edge Hong Kong Xray 快捷操作" })).getByRole("menuitem", { name: "更新 / 重装核心" }));
+    fireEvent.click(within(screen.getByRole("menu", { name: "Edge Hong Kong Xray 快捷操作" })).getByRole("menuitem", { name: "选择 / 重装核心" }));
     const dialog = screen.getByRole("dialog", { name: "更新 Xray" });
 
     expect(await within(dialog).findByText("请先升级 Agent")).toBeInTheDocument();
@@ -512,8 +517,40 @@ describe("service management workbench", () => {
 
     const menu = screen.getByRole("menu", { name: "Edge Hong Kong Xray 快捷操作" });
     expect(within(menu).getByRole("menuitem", { name: "开启 Xray" })).toBeInTheDocument();
-    expect(within(menu).getByRole("menuitem", { name: "更新 / 重装核心" })).toBeInTheDocument();
+    expect(await within(menu).findByRole("menuitem", { name: "更新到 v26.3.27" })).toBeEnabled();
+    expect(within(menu).getByRole("menuitem", { name: "选择 / 重装核心" })).toBeEnabled();
     expect(within(menu).queryByRole("menuitem", { name: "暂停 Xray" })).not.toBeInTheDocument();
+  });
+
+  it("disables one-click Xray update when the installed core is already current", async () => {
+    const currentServer = { ...onlineServer, xray_version: "Xray 26.3.27" };
+    mockServerReads([currentServer], {
+      serviceStatus: {
+        success: true,
+        xray: { installed: true, running: true, version: "Xray 26.3.27" },
+        nginx: { installed: true, running: true, version: "nginx/1.26" },
+      },
+      xrayVersions: {
+        success: true,
+        version_selection_supported: true,
+        latest: "v26.7.28",
+        latest_stable: "v26.3.27",
+        versions: [
+          { version: "v26.7.28", name: "v26.7.28", prerelease: true },
+          { version: "v26.3.27", name: "v26.3.27", prerelease: false },
+        ],
+      },
+    });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理 Edge Hong Kong Xray v26.3.27" }));
+    const menu = screen.getByRole("menu", { name: "Edge Hong Kong Xray 快捷操作" });
+
+    expect(await within(menu).findByRole("menuitem", { name: "已是最新版 v26.3.27" })).toBeDisabled();
+    const selector = within(menu).getByRole("menuitem", { name: "选择 / 重装核心" });
+    expect(selector).toBeEnabled();
+    fireEvent.click(selector);
+    expect(screen.getByRole("dialog", { name: "更新 Xray" })).toBeInTheDocument();
   });
 
   it("shows the Agent upgrade indicator and requires confirmation before upgrading", async () => {
@@ -1043,6 +1080,7 @@ describe("service management workbench", () => {
     fireEvent.click(await within(dialog).findByRole("button", { name: "添加入站" }));
     expect(await screen.findByRole("dialog", { name: "添加入站" })).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("tab", { name: /高级 JSON/ }));
+    expect(within(dialog).queryByRole("option", { name: "snell" })).not.toBeInTheDocument();
     fireEvent.change(within(dialog).getByRole("textbox", { name: "入站 Tag" }), { target: { value: "socks-private" } });
     fireEvent.change(within(dialog).getByRole("spinbutton", { name: "入站监听端口" }), { target: { value: "2080" } });
     fireEvent.change(within(dialog).getByRole("textbox", { name: "入站高级 JSON" }), { target: { value: JSON.stringify({ tag: "ignored", protocol: "socks", settings: { auth: "noauth", udp: true }, sniffing: { enabled: true } }) } });

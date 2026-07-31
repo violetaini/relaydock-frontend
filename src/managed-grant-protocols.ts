@@ -104,11 +104,6 @@ export const managedGrantProtocolGroups: ManagedGrantProtocolGroup[] = [
     label: "AnyTLS",
     profiles: [{ value: "anytls", family: "anytls", label: "AnyTLS", detail: "TCP · TLS" }],
   },
-  {
-    value: "snell",
-    label: "Snell",
-    profiles: [{ value: "snell", family: "snell", label: "Snell", detail: "TCP" }],
-  },
 ];
 
 export const managedGrantProtocolOptions = managedGrantProtocolGroups.map(({ value, label }) => ({ value, label }));

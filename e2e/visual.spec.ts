@@ -755,7 +755,8 @@ for (const scenario of [
       } else {
         await expect(quickMenu.getByRole("menuitem", { name: "开启 Xray" })).toBeVisible();
       }
-      await expect(quickMenu.getByRole("menuitem", { name: "更新 / 重装核心" })).toBeVisible();
+      await expect(quickMenu.getByRole("menuitem", { name: `已是最新版 v${scenario.version.replace(/^Xray\s*/i, "")}` })).toBeDisabled();
+      await expect(quickMenu.getByRole("menuitem", { name: "选择 / 重装核心" })).toBeEnabled();
       await expectViewportIntegrity(page, `${scenario.name} Xray quick menu`);
       await page.screenshot({ path: testInfo.outputPath(`service-${scenario.name}-card-menu.png`), fullPage: true });
     }
@@ -890,10 +891,19 @@ for (const viewport of [
       if (item.hiddenHeading) await expect(heading).toBeAttached();
       else await expect(heading).toBeVisible();
       await expect(page.getByText(item.marker, { exact: true }).first()).toBeVisible();
-      if (item.route === "certificates" && viewport.name === "desktop") {
+      if (item.route === "certificates") {
         const headers = page.locator(".cw-certificate-table thead th");
         await expect(headers).toHaveCount(6);
-        await expect(headers.first()).toHaveCSS("vertical-align", "middle");
+        if (viewport.name === "desktop") {
+          await expect(headers.first()).toHaveCSS("vertical-align", "middle");
+          await expect(headers.first()).toHaveCSS("padding-top", "12px");
+          await expect(headers.first()).toHaveCSS("padding-bottom", "12px");
+        } else {
+          await expect(page.locator(".cw-certificate-table thead")).toHaveCSS("display", "none");
+          const firstCard = page.locator(".cw-certificate-table tbody tr").first();
+          const cardBox = await firstCard.boundingBox();
+          expect(cardBox?.width ?? 0).toBeLessThanOrEqual(viewport.width);
+        }
       }
       if (item.route === "settings") {
         const redeemTemplate = page.getByRole("textbox", { name: "复制模板" });
@@ -918,7 +928,9 @@ for (const viewport of [
   { name: "mobile", width: 390, height: 844 },
 ]) {
   test(`primary workbench entry points open cleanly on ${viewport.name}`, async ({ page }) => {
-    test.setTimeout(60_000);
+    // This scenario deliberately walks every primary workbench and opens its
+    // modal surface. Cold Chromium/CI runs regularly need more than one minute.
+    test.setTimeout(120_000);
     const pageErrors: string[] = [];
     const unknownPaths: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));

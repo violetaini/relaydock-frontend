@@ -233,6 +233,35 @@
 .service-xray-menu button:hover { color: var(--text); background: var(--surface-muted); }
 .service-xray-menu button:nth-child(2) { color: var(--red); }
 
+.xray-version-summary { margin-bottom: 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.xray-version-summary > span { min-width: 0; min-height: 54px; padding: 9px 11px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: 8px; border-right: 1px solid var(--border); background: var(--surface-muted); }
+.xray-version-summary > span:last-child { border-right: 0; }
+.xray-version-summary svg { grid-row: 1 / 3; color: var(--accent); }
+.xray-version-summary strong { overflow: hidden; font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.xray-version-summary small { color: var(--text-soft); font-size: 10px; }
+.xray-version-options { max-height: min(46vh, 390px); overflow-y: auto; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 6px; }
+.xray-version-options > label { min-width: 0; min-height: 52px; padding: 8px 11px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; border-bottom: 1px solid var(--border); background: var(--surface); cursor: pointer; transition: background .14s ease, border-color .14s ease; }
+.xray-version-options > label:last-child { border-bottom: 0; }
+.xray-version-options > label:hover { background: var(--surface-muted); }
+.xray-version-options > label.is-selected { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.xray-version-options input { width: 16px; height: 16px; accent-color: var(--accent); }
+.xray-version-options label > span:not(.xray-version-flags) { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.xray-version-options strong { font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.xray-version-options small { overflow: hidden; color: var(--text-soft); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.xray-version-flags { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.xray-version-note,
+.xray-version-warning,
+.xray-version-blocker { margin-top: 10px; padding: 9px 10px; display: flex; align-items: flex-start; gap: 8px; border: 1px solid var(--border); border-radius: 5px; color: var(--text-soft); background: var(--surface-muted); font-size: 10px; line-height: 1.5; }
+.xray-version-note svg,
+.xray-version-warning svg,
+.xray-version-blocker svg { flex: 0 0 auto; margin-top: 1px; }
+.xray-version-note svg { color: var(--accent); }
+.xray-version-warning { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 28%, var(--border)); background: var(--amber-soft); }
+.xray-version-blocker { margin-top: 0; color: var(--red); border-color: color-mix(in srgb, var(--red) 28%, var(--border)); background: var(--red-soft); }
+.xray-version-blocker > span { display: flex; flex-direction: column; gap: 3px; }
+.xray-version-blocker strong { color: inherit; font-size: 12px; }
+.xray-version-blocker small { color: var(--text-soft); font-size: 10px; }
+
 .service-agent-version {
   position: relative;
   min-width: 82px;
@@ -807,6 +836,12 @@
   .service-transport,
   .service-agent-version { min-width: 0; width: 100%; }
   .service-xray-quick { min-width: 0; }
+  .xray-version-summary { grid-template-columns: 1fr; }
+  .xray-version-summary > span { border-right: 0; border-bottom: 1px solid var(--border); }
+  .xray-version-summary > span:last-child { border-bottom: 0; }
+  .xray-version-options { max-height: 44vh; }
+  .xray-version-options > label { grid-template-columns: auto minmax(0, 1fr); }
+  .xray-version-flags { grid-column: 2; justify-content: flex-start; }
   .service-speed-row { align-items: flex-start; flex-direction: column; }
   .service-speed-row > strong { width: 100%; justify-content: space-between; }
   .service-card-actions { grid-template-columns: repeat(3, auto); justify-content: end; }

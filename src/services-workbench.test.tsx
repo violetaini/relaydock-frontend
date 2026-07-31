@@ -58,6 +58,7 @@ function mockServerReads(servers: RemoteServer[] = [onlineServer, offlineServer]
   certificates?: Record<string, unknown>[];
   deleteImpact?: Record<string, unknown>;
   serviceStatus?: Record<string, unknown>;
+  xrayVersions?: Record<string, unknown>;
 } = {}) {
   let ddnsStatusRead = 0;
   return vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
@@ -117,6 +118,16 @@ function mockServerReads(servers: RemoteServer[] = [onlineServer, offlineServer]
       success: true,
       xray: { installed: true, running: true, version: "Xray 25.1" },
       nginx: { installed: true, running: true, version: "nginx/1.26" },
+    }) as T;
+    if (path.includes("/api/admin/remote/xray/versions")) return (resources.xrayVersions ?? {
+      success: true,
+      version_selection_supported: true,
+      latest: "v26.7.28",
+      latest_stable: "v26.3.27",
+      versions: [
+        { version: "v26.7.28", name: "v26.7.28", prerelease: true, published_at: "2026-07-28T12:00:00Z" },
+        { version: "v26.3.27", name: "v26.3.27", prerelease: false, published_at: "2026-03-27T12:00:00Z" },
+      ],
     }) as T;
     if (path.includes("/api/admin/remote/agent/version-info")) return { server_id: 11, current: "0.3.0", latest: "0.3.1", upgrade_available: true } as T;
     if (path.includes("/api/admin/remote/system/info")) return { success: true, hostname: "edge-hk", uptime: "3600", loadavg: "0.10 0.20 0.30 1/100 1", memory: { MemAvailable: "1024 MB" } } as T;
@@ -438,11 +449,52 @@ describe("service management workbench", () => {
     expect(within(menu).getByRole("menuitem", { name: "暂停 Xray" })).toBeInTheDocument();
     fireEvent.click(within(menu).getByRole("menuitem", { name: "更新 / 重装核心" }));
     const confirm = screen.getByRole("dialog", { name: "更新 Xray" });
-    fireEvent.click(within(confirm).getByRole("button", { name: "确认更新" }));
+    fireEvent.click(await within(confirm).findByRole("button", { name: "更新到 v26.3.27" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/remote/xray/install-stream?server_id=11");
     expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({ method: "POST" }));
+    expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({ body: JSON.stringify({ version: "v26.3.27" }) }));
+  });
+
+  it("lets the operator select an official Xray prerelease explicitly", async () => {
+    mockServerReads([onlineServer]);
+    const fetchMock = vi.fn().mockResolvedValue(new Response('data: {"type":"complete","success":true,"message":"updated"}\n\n', {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理 Edge Hong Kong Xray v25.1" }));
+    fireEvent.click(within(screen.getByRole("menu", { name: "Edge Hong Kong Xray 快捷操作" })).getByRole("menuitem", { name: "更新 / 重装核心" }));
+    const dialog = screen.getByRole("dialog", { name: "更新 Xray" });
+    fireEvent.click(await within(dialog).findByRole("radio", { name: /v26\.7\.28/ }));
+
+    expect(within(dialog).getByText(/尚未通过 Arcway 完整协议验收/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "更新到 v26.7.28" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({ body: JSON.stringify({ version: "v26.7.28" }) }));
+  });
+
+  it("blocks version selection until the external-Xray Agent is upgraded", async () => {
+    mockServerReads([onlineServer], {
+      xrayVersions: {
+        success: true,
+        version_selection_supported: false,
+        support_error: "当前 Agent 不支持指定 Xray 版本，请先升级 Agent",
+        versions: [],
+      },
+    });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理 Edge Hong Kong Xray v25.1" }));
+    fireEvent.click(within(screen.getByRole("menu", { name: "Edge Hong Kong Xray 快捷操作" })).getByRole("menuitem", { name: "更新 / 重装核心" }));
+    const dialog = screen.getByRole("dialog", { name: "更新 Xray" });
+
+    expect(await within(dialog).findByText("请先升级 Agent")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "选择版本" })).toBeDisabled();
   });
 
   it("offers start and update from a stopped Xray card menu", async () => {
@@ -528,11 +580,12 @@ describe("service management workbench", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     const confirm = screen.getByRole("dialog", { name: "更新 Xray" });
-    fireEvent.click(within(confirm).getByRole("button", { name: "确认更新" }));
+    fireEvent.click(await within(confirm).findByRole("button", { name: "更新到 v26.3.27" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/remote/xray/install-stream?server_id=11");
     expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({ method: "POST" }));
+    expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({ body: JSON.stringify({ version: "v26.3.27" }) }));
     const terminal = screen.getByRole("dialog", { name: "更新 Xray" });
     expect(within(terminal).getByRole("log", { name: "远端执行日志" })).toHaveTextContent("Downloading Xray");
     expect(within(terminal).getByText("执行完成")).toBeInTheDocument();

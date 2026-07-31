@@ -288,6 +288,24 @@ interface QuickXrayConfirmation {
   action: "stop" | "update";
 }
 
+interface XrayReleaseOption {
+  version: string;
+  name?: string;
+  prerelease: boolean;
+  published_at?: string;
+}
+
+interface XrayVersionsResponse extends ActionResponse {
+  versions?: XrayReleaseOption[];
+  releases?: XrayReleaseOption[];
+  latest?: string;
+  latest_stable?: string;
+  version_selection_supported?: boolean;
+  support_error?: string;
+  stale?: boolean;
+  warning?: string;
+}
+
 interface SystemInfoResponse extends ActionResponse {
   hostname?: string;
   uptime?: string;
@@ -1086,7 +1104,7 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
     await Promise.all([load(true), refreshAgentVersions(targets.map((server) => server.id))]);
   };
 
-  const executeXrayAction = async (server: ManagedServer, action: XrayQuickAction) => {
+  const executeXrayAction = async (server: ManagedServer, action: XrayQuickAction, version?: string) => {
     const actionLabel = action === "install" ? "安装" : action === "update" ? "更新" : action === "start" ? "开启" : action === "stop" ? "暂停" : "重启";
     const streamed = action === "install" || action === "update";
     let streamCompleted = false;
@@ -1103,7 +1121,11 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
     }
     try {
       if (streamed) {
-        const response = await requestStream(`/api/admin/remote/xray/install-stream?server_id=${server.id}`, { method: "POST", headers: { Accept: "text/event-stream" } });
+        const response = await requestStream(`/api/admin/remote/xray/install-stream?server_id=${server.id}`, {
+          method: "POST",
+          headers: { Accept: "text/event-stream" },
+          body: action === "update" && version ? JSON.stringify({ version }) : undefined,
+        });
         const completionMessage = await consumeRemoteServiceStream(response, (output) => {
           setQuickTerminal((current) => current ? {
             ...current,
@@ -1223,7 +1245,8 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
       {credentials ? <CredentialsDialog value={credentials} notify={notify} onClose={() => setCredentials(null)} /> : null}
       {deleting ? <DeleteServerDialog server={deleting} working={deleteWorking} error={deleteError} refreshVersion={deleteRefreshVersion} onCancel={closeDeleteServer} onConfirm={(shared) => void deleteServer(shared)} /> : null}
       {upgrade ? <UpgradeDialog state={upgrade} servers={servers} onClose={() => !upgrade.running && setUpgrade(null)} /> : null}
-      {quickConfirm ? <ConfirmDialog title={quickConfirm.action === "update" ? "更新 Xray" : "暂停 Xray"} description={quickConfirm.action === "update" ? `将从 Xray 上游下载最新版并在 ${quickConfirm.server.name} 上更新或重装，现有代理连接会短暂中断。` : `暂停 ${quickConfirm.server.name} 上的 Xray 会立即中断由它承载的连接。`} confirmLabel={quickConfirm.action === "update" ? "确认更新" : "确认暂停"} working={Boolean(quickWorking)} onCancel={() => !quickWorking && setQuickConfirm(null)} onConfirm={() => void executeXrayAction(quickConfirm.server, quickConfirm.action)} /> : null}
+      {quickConfirm?.action === "update" ? <XrayVersionDialog server={quickConfirm.server} currentVersion={serviceStatuses[quickConfirm.server.id]?.xray?.version || quickConfirm.server.xray_version} working={Boolean(quickWorking)} onCancel={() => !quickWorking && setQuickConfirm(null)} onConfirm={(version) => void executeXrayAction(quickConfirm.server, "update", version)} /> : null}
+      {quickConfirm?.action === "stop" ? <ConfirmDialog title="暂停 Xray" description={`暂停 ${quickConfirm.server.name} 上的 Xray 会立即中断由它承载的连接。`} confirmLabel="确认暂停" working={Boolean(quickWorking)} onCancel={() => !quickWorking && setQuickConfirm(null)} onConfirm={() => void executeXrayAction(quickConfirm.server, "stop")} /> : null}
       {quickTerminal ? <RemoteServiceTerminalDialog terminal={quickTerminal} onClose={() => !quickTerminal.running && setQuickTerminal(null)} /> : null}
     </div>
   );
@@ -1402,6 +1425,102 @@ function cleanXrayVersion(value: string | undefined): string {
   const match = (value ?? "").trim().match(/^xray\s+v?(\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?)/i)
     ?? (value ?? "").trim().match(/^v?(\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?)/i);
   return match?.[1] ?? "";
+}
+
+function compareVersionTags(left: string, right: string): number {
+  const a = left.replace(/^v/i, "").split(".").map((part) => Number.parseInt(part, 10));
+  const b = right.replace(/^v/i, "").split(".").map((part) => Number.parseInt(part, 10));
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const difference = (a[index] || 0) - (b[index] || 0);
+    if (difference) return difference;
+  }
+  return 0;
+}
+
+function XrayVersionDialog({ server, currentVersion, working, onCancel, onConfirm }: {
+  server: ManagedServer;
+  currentVersion?: string;
+  working: boolean;
+  onCancel: () => void;
+  onConfirm: (version: string) => void;
+}) {
+  const [result, setResult] = useState<XrayVersionsResponse | null>(null);
+  const [selected, setSelected] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [reload, setReload] = useState(0);
+  const current = cleanXrayVersion(currentVersion);
+  const currentTag = current ? `v${current}` : "";
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError("");
+    void api.get<XrayVersionsResponse>(`/api/admin/remote/xray/versions?server_id=${server.id}`)
+      .then((response) => {
+        if (!active) return;
+        const checked = assertSuccess(response, "读取 Xray 版本失败");
+        const releases = checked.versions ?? checked.releases ?? [];
+        const preferred = [checked.latest_stable, checked.latest, releases[0]?.version]
+          .find((version) => Boolean(version && releases.some((release) => release.version === version))) ?? "";
+        setResult(checked);
+        setSelected(preferred);
+      })
+      .catch((reason) => {
+        if (!active) return;
+        setResult(null);
+        setSelected("");
+        setError(messageFrom(reason, "读取 Xray 版本失败"));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, [reload, server.id]);
+
+  const releases = result?.versions ?? result?.releases ?? [];
+  const selectedRelease = releases.find((release) => release.version === selected);
+  const supported = result?.version_selection_supported !== false;
+  const reinstall = Boolean(selected && currentTag && selected === currentTag);
+  const downgrade = Boolean(selected && currentTag && compareVersionTags(selected, currentTag) < 0);
+  const confirmLabel = reinstall ? `重装 ${selected}` : selected ? `更新到 ${selected}` : "选择版本";
+
+  return <Dialog title="更新 Xray" description={`${server.name}${current ? ` · 当前 v${current}` : " · 当前版本未知"}`} onClose={onCancel} dismissible={!working} wide>
+    {loading ? <div className="center-state"><Spinner label="正在读取官方版本" /></div> : null}
+    {!loading && error ? <ErrorState message={error} onRetry={() => setReload((value) => value + 1)} /> : null}
+    {!loading && !error && !supported ? <div className="xray-version-blocker" role="alert"><TriangleAlert size={19} /><span><strong>请先升级 Agent</strong><small>{result?.support_error || "当前 Agent 不支持指定 Xray 内核版本，已阻止不确定的更新操作。"}</small></span></div> : null}
+    {!loading && !error && supported && releases.length ? <>
+      <div className="xray-version-summary">
+        <span><HardDriveDownload size={18} /><strong>{result?.latest_stable || result?.latest || releases[0].version}</strong><small>默认稳定版</small></span>
+        {result?.latest && result.latest !== result.latest_stable ? <span><TriangleAlert size={18} /><strong>{result.latest}</strong><small>最新预览版</small></span> : null}
+      </div>
+      <div className="xray-version-options" role="radiogroup" aria-label="Xray 内核版本">
+        {releases.map((release) => {
+          const isCurrent = currentTag === release.version;
+          const isLatestStable = result?.latest_stable === release.version;
+          const published = release.published_at ? new Date(release.published_at).toLocaleDateString("zh-CN") : "";
+          return <label key={release.version} className={selected === release.version ? "is-selected" : ""}>
+            <input type="radio" name={`xray-version-${server.id}`} value={release.version} checked={selected === release.version} onChange={() => setSelected(release.version)} />
+            <span><strong>{release.version}</strong><small>{published || release.name || "官方 Release"}</small></span>
+            <span className="xray-version-flags">
+              {isCurrent ? <Badge tone="neutral">当前</Badge> : null}
+              {isLatestStable ? <Badge tone="good">稳定</Badge> : null}
+              {release.prerelease ? <Badge tone="warn">预览</Badge> : null}
+            </span>
+          </label>;
+        })}
+      </div>
+      {result?.stale || result?.warning ? <div className="xray-version-note" role="status"><RefreshCw size={15} /><span>{result.warning || "GitHub 暂时不可达，正在使用最近一次成功同步的官方版本列表。"}</span></div> : null}
+      {selectedRelease?.prerelease || downgrade ? <div className="xray-version-warning" role="alert"><TriangleAlert size={16} /><span>{selectedRelease?.prerelease ? `${selected} 是预览版，尚未通过 Arcway 完整协议验收。` : `${selected} 低于当前 ${currentTag}，确认后将执行降级安装。`}</span></div> : null}
+    </> : null}
+    {!loading && !error && supported && !releases.length ? <ErrorState message="官方版本列表为空，请稍后重试" onRetry={() => setReload((value) => value + 1)} /> : null}
+    <div className="dialog-actions">
+      <Button type="button" variant="secondary" onClick={onCancel} disabled={working}>取消</Button>
+      <Button type="button" onClick={() => onConfirm(selected)} disabled={working || loading || Boolean(error) || !supported || !selected}>
+        {working ? <Spinner label="正在处理" /> : confirmLabel}
+      </Button>
+    </div>
+  </Dialog>;
 }
 
 function connectionPolicyLabel(mode: string): string {
@@ -1980,7 +2099,7 @@ function ServerOperationsDialog({ server, initialTab = "overview", notify, onClo
     }
   };
 
-  const serviceAction = async (service: "xray" | "nginx", action: "start" | "stop" | "restart" | "install" | "remove" | "update") => {
+  const serviceAction = async (service: "xray" | "nginx", action: "start" | "stop" | "restart" | "install" | "remove" | "update", version?: string) => {
     if (service === "nginx" && reusesExistingNginx) {
       setError("当前服务器复用系统已有 Nginx，Arcway 不会安装、卸载或控制该服务。");
       return;
@@ -2004,7 +2123,11 @@ function ServerOperationsDialog({ server, initialTab = "overview", notify, onClo
     }
     try {
       if (streamed) {
-        const response = await requestStream(`/api/admin/remote/${service}/${action === "remove" ? "remove-stream" : "install-stream"}?server_id=${server.id}`, { method: "POST", headers: { Accept: "text/event-stream" } });
+        const response = await requestStream(`/api/admin/remote/${service}/${action === "remove" ? "remove-stream" : "install-stream"}?server_id=${server.id}`, {
+          method: "POST",
+          headers: { Accept: "text/event-stream" },
+          body: service === "xray" && action === "update" && version ? JSON.stringify({ version }) : undefined,
+        });
         const completionMessage = await consumeRemoteServiceStream(response, (output) => {
           setTerminal((current) => current ? {
             ...current,
@@ -2165,7 +2288,8 @@ function ServerOperationsDialog({ server, initialTab = "overview", notify, onClo
     {!loading && tab === "routing" ? <XrayRoutingWorkbench serverId={server.id} notify={notify} /> : null}
     {!loading && tab === "config" ? <div className="service-config-panel">{!configLoaded ? <EmptyState icon={<Code2 size={23} />} title="读取 Agent 上的 Xray 配置" description="编辑前会从目标服务器读取当前配置，不使用本地缓存。" action={<Button onClick={() => void loadConfig()} disabled={working === "config-load"}>{working === "config-load" ? <Spinner label="正在读取" /> : <><Clipboard size={16} />读取配置</>}</Button>} /> : <><div className="service-config-head"><span><strong>{configPath || "config.json"}</strong><small>{configDirty ? "存在未保存更改" : "已与 Agent 同步"}</small></span><div><Button variant="ghost" onClick={() => void loadConfig()} disabled={Boolean(working)}><RefreshCw size={15} />重新读取</Button><Button variant="secondary" onClick={() => void testConfig()} disabled={Boolean(working) || !config.trim()}>{working === "config-test" ? <Spinner label="预检中" /> : <><ShieldCheck size={15} />预检</>}</Button><Button onClick={() => void saveConfig()} disabled={Boolean(working) || !configDirty}>{working === "config-save" ? <Spinner label="保存中" /> : <><Check size={15} />保存配置</>}</Button></div></div><textarea className="service-code-editor" aria-label="Xray 配置 JSON" spellCheck={false} value={config} onChange={(event) => { setConfig(event.target.value); setConfigDirty(true); }} /></>}</div> : null}
     {!loading && tab === "sharing" ? <div className="service-sharing"><form onSubmit={createShare} className="service-share-create"><Field label="令牌备注"><input required value={shareLabel} onChange={(event) => setShareLabel(event.target.value)} placeholder="提供给分控制端 A" /></Field><Button type="submit" disabled={working === "share-create"}>{working === "share-create" ? <Spinner label="生成中" /> : <><FileKey2 size={16} />生成分享令牌</>}</Button></form>{newShareToken ? <div className="credential-warning"><KeyRound size={19} /><span><strong>仅显示一次</strong><code>{newShareToken}</code></span><IconButton label="复制新分享令牌" onClick={() => navigator.clipboard.writeText(newShareToken).then(() => notify("分享令牌已复制")).catch(() => notify("复制失败", "error"))}><Copy size={17} /></IconButton></div> : null}<div className="service-share-list">{shares.length ? shares.map((share) => <div key={share.id}><span><strong>{share.label || `令牌 #${share.id}`}</strong><small>{share.revoked_at ? `已于 ${share.revoked_at} 吊销` : `创建于 ${share.created_at}`}</small></span><Badge tone={share.revoked_at ? "neutral" : "good"}>{share.revoked_at ? "已吊销" : "有效"}</Badge>{!share.revoked_at ? <IconButton label={`吊销 ${share.label || share.id}`} onClick={() => void revokeShare(share.id)} disabled={working === `share-${share.id}`}><Trash2 size={16} /></IconButton> : null}</div>) : <EmptyState icon={<FileKey2 size={22} />} title="暂无分享令牌" description="生成后可在其他 Arcway 控制端接入这台服务器" />}</div></div> : null}
-    {confirm ? <ConfirmDialog title={confirmTitle} description={confirmDescription} confirmLabel={confirm.action === "update" ? "确认更新" : confirm.action === "remove" ? "确认卸载" : "确认停止"} working={Boolean(working)} onCancel={() => !working && setConfirm(null)} onConfirm={() => void serviceAction(confirm.service, confirm.action)} /> : null}
+    {confirm?.service === "xray" && confirm.action === "update" ? <XrayVersionDialog server={server} currentVersion={status?.xray?.version || server.xray_version} working={Boolean(working)} onCancel={() => !working && setConfirm(null)} onConfirm={(selectedVersion) => void serviceAction("xray", "update", selectedVersion)} /> : null}
+    {confirm && !(confirm.service === "xray" && confirm.action === "update") ? <ConfirmDialog title={confirmTitle} description={confirmDescription} confirmLabel={confirm.action === "remove" ? "确认卸载" : "确认停止"} working={Boolean(working)} onCancel={() => !working && setConfirm(null)} onConfirm={() => void serviceAction(confirm.service, confirm.action)} /> : null}
     {terminal ? <RemoteServiceTerminalDialog terminal={terminal} onClose={() => !terminal.running && setTerminal(null)} /> : null}
   </Dialog>;
 }

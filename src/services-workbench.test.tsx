@@ -59,6 +59,7 @@ function mockServerReads(servers: RemoteServer[] = [onlineServer, offlineServer]
   deleteImpact?: Record<string, unknown>;
   serviceStatus?: Record<string, unknown>;
   xrayVersions?: Record<string, unknown>;
+  agentVersion?: Record<string, unknown>;
 } = {}) {
   let ddnsStatusRead = 0;
   return vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
@@ -129,7 +130,7 @@ function mockServerReads(servers: RemoteServer[] = [onlineServer, offlineServer]
         { version: "v26.3.27", name: "v26.3.27", prerelease: false, published_at: "2026-03-27T12:00:00Z" },
       ],
     }) as T;
-    if (path.includes("/api/admin/remote/agent/version-info")) return { server_id: 11, current: "0.3.0", latest: "0.3.1", upgrade_available: true } as T;
+    if (path.includes("/api/admin/remote/agent/version-info")) return (resources.agentVersion ?? { server_id: 11, current: "0.3.0", latest: "0.3.1", upgrade_available: true }) as T;
     if (path.includes("/api/admin/remote/system/info")) return { success: true, hostname: "edge-hk", uptime: "3600", loadavg: "0.10 0.20 0.30 1/100 1", memory: { MemAvailable: "1024 MB" } } as T;
     if (path.includes("/api/admin/remote-servers/reveal-token")) return { success: true, token: "revealed-server-token", pull_token: "existing-agent-token", agent_token: "existing-agent-token", install_command: "authoritative-install-command" } as T;
     if (path === "/api/admin/remote/inbounds?server_id=11") return { success: true, inbounds: resources.inbounds ?? [] } as T;
@@ -260,10 +261,10 @@ describe("service management workbench", () => {
 
     await screen.findByText("Edge Hong Kong");
     fireEvent.click(screen.getByRole("checkbox", { name: "选择 Edge Tokyo" }));
-    expect(screen.getByRole("button", { name: /升级选中在线 \(0\/1\)/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /升级选中 Agent \(0\/1\)/ })).toBeDisabled();
 
     fireEvent.click(screen.getByRole("checkbox", { name: "选择 Edge Hong Kong" }));
-    expect(screen.getByRole("button", { name: /升级选中在线 \(1\/2\)/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /升级选中 Agent \(1\/2\)/ })).toBeEnabled();
   });
 
   it("creates a server with connection, traffic and runtime settings", async () => {
@@ -515,7 +516,7 @@ describe("service management workbench", () => {
     expect(within(menu).queryByRole("menuitem", { name: "暂停 Xray" })).not.toBeInTheDocument();
   });
 
-  it("shows the Agent upgrade indicator and upgrades directly from the server card", async () => {
+  it("shows the Agent upgrade indicator and requires confirmation before upgrading", async () => {
     mockServerReads([onlineServer]);
     const fetchMock = vi.fn().mockResolvedValue(new Response('data: {"type":"output","data":"Downloading Agent"}\n\ndata: {"type":"complete","success":true,"message":"upgraded"}\n\n', {
       status: 200,
@@ -532,12 +533,39 @@ describe("service management workbench", () => {
     expect(upgradeButton.querySelector("i")).toBeInTheDocument();
     fireEvent.click(upgradeButton);
 
+    const confirm = await screen.findByRole("dialog", { name: "升级 Agent" });
+    expect(within(confirm).getByText(/Edge Hong Kong 将从 v0\.3\.0 升级到 v0\.3\.1/)).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+    fireEvent.click(within(confirm).getByRole("button", { name: "确认升级" }));
+
     await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/remote/agent/upgrade-stream?server_id=11");
     expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({ method: "POST" }));
     const dialog = await screen.findByRole("dialog", { name: "Agent 批量升级" });
     expect(within(dialog).getByLabelText("Agent 升级日志")).toHaveTextContent("Downloading Agent");
     expect(notify).toHaveBeenCalledWith("1 台 Agent 已完成升级", "success");
+  });
+
+  it("disables every Agent upgrade entry when the current version is latest", async () => {
+    mockServerReads([onlineServer], {
+      agentVersion: { server_id: 11, current: "0.4.8", latest: "0.4.8", upgrade_available: false },
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    const agentButton = await screen.findByRole("button", { name: "Edge Hong Kong Agent 已是最新版" });
+    expect(agentButton).toBeDisabled();
+    expect(agentButton).toHaveAttribute("title", "Agent 当前已是上游最新版 v0.4.8");
+    expect(agentButton).not.toHaveClass("has-update");
+    expect(screen.getByRole("button", { name: "Agent 已是最新版" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "管理" }));
+    const details = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    const detailsUpgrade = await within(details).findByRole("button", { name: "已是最新版" });
+    expect(detailsUpgrade).toBeDisabled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Agent 批量升级" })).not.toBeInTheDocument();
   });
 
   it("loads live service state and restarts Xray through the remote control API", async () => {

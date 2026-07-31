@@ -401,6 +401,12 @@ interface UpgradeState {
   running: boolean;
 }
 
+interface AgentUpgradeCandidate {
+  server: ManagedServer;
+  current: string;
+  latest: string;
+}
+
 interface CreateServerForm {
   name: string;
   ipAddress: string;
@@ -838,6 +844,7 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
   const [deleteError, setDeleteError] = useState("");
   const [deleteRefreshVersion, setDeleteRefreshVersion] = useState(0);
   const [upgrade, setUpgrade] = useState<UpgradeState | null>(null);
+  const [upgradeConfirm, setUpgradeConfirm] = useState<AgentUpgradeCandidate[] | null>(null);
   const [quickWorking, setQuickWorking] = useState<{ serverId: number; action: XrayQuickAction } | null>(null);
   const [quickConfirm, setQuickConfirm] = useState<QuickXrayConfirmation | null>(null);
   const [quickTerminal, setQuickTerminal] = useState<ServiceTerminalState | null>(null);
@@ -1007,10 +1014,14 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
   const onlineOwned = online.filter((server) => !server.is_federated);
   const selectedOnline = servers.filter((server) => selected.includes(server.id) && isConnected(server) && !server.is_federated);
   const hasSelection = selected.length > 0;
-  const upgradeTargets = hasSelection ? selectedOnline : onlineOwned;
+  const upgradePool = hasSelection ? selectedOnline : onlineOwned;
+  const upgradeTargets = upgradePool.filter((server) => canUpgradeAgent(agentVersions[server.id]));
+  const allTargetVersionsCurrent = upgradePool.length > 0 && upgradePool.every((server) => agentVersionIsCurrent(agentVersions[server.id]));
   const upgradeLabel = hasSelection
-    ? `升级选中在线 (${selectedOnline.length}/${selected.length})`
-    : "批量升级 Agent";
+    ? `升级选中 Agent (${upgradeTargets.length}/${selected.length})`
+    : upgradeTargets.length
+      ? `批量升级 Agent (${upgradeTargets.length})`
+      : allTargetVersionsCurrent ? "Agent 已是最新版" : "暂无可用 Agent 更新";
 
   const changeView = (next: ViewMode) => {
     setView(next);
@@ -1070,6 +1081,23 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
     } finally {
       setDeleteWorking(false);
     }
+  };
+
+  const requestAgentUpgrade = (targets: ManagedServer[], overrideVersion?: AgentVersionResponse) => {
+    const candidates = targets.flatMap((server) => {
+      const cachedVersion = agentVersions[server.id];
+      const usesOverride = Boolean(overrideVersion && targets.length === 1);
+      const version = usesOverride ? overrideVersion : cachedVersion;
+      if (!version?.upgrade_available || (!usesOverride && !canUpgradeAgent(cachedVersion))) return [];
+      const latest = cleanVersion(version.latest);
+      if (!latest || version.latest_error) return [];
+      return [{ server, current: cleanVersion(version.current) || "未知", latest }];
+    });
+    if (!candidates.length) {
+      notify("没有检测到可用的 Agent 更新", "error");
+      return;
+    }
+    setUpgradeConfirm(candidates);
   };
 
   const runUpgrade = async (targets: ManagedServer[]) => {
@@ -1187,7 +1215,7 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
         actions={<>
           <IconButton label="刷新服务器" onClick={() => void load()} disabled={loading}><RefreshCw size={18} /></IconButton>
           {onOpenAdvanced ? <Button variant="secondary" onClick={onOpenAdvanced}><Wrench size={17} />高级运维</Button> : null}
-          <Button variant="secondary" onClick={() => void runUpgrade(upgradeTargets)} disabled={!upgradeTargets.length || Boolean(upgrade?.running)}><UploadCloud size={17} />{upgradeLabel}</Button>
+          <Button variant="secondary" title={upgradeTargets.length ? `检测到 ${upgradeTargets.length} 台 Agent 可升级` : allTargetVersionsCurrent ? "目标 Agent 均已是最新版" : "未检测到可用的新版本"} onClick={() => requestAgentUpgrade(upgradeTargets)} disabled={!upgradeTargets.length || Boolean(upgrade?.running)}><UploadCloud size={17} />{upgradeLabel}</Button>
           <Button variant="secondary" onClick={() => setSharedOpen(true)}><Cloud size={17} />添加共享服务器</Button>
           <Button onClick={() => setCreateOpen(true)}><Plus size={17} />添加服务器</Button>
         </>}
@@ -1228,22 +1256,23 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
             onCheck={(checked) => setSelected((current) => checked ? [...new Set([...current, server.id])] : current.filter((id) => id !== server.id))}
             onOpen={(initialTab) => setDetails({ server, initialTab })}
             onXrayAction={(action) => requestXrayAction(server, action)}
-            onAgentUpgrade={() => void runUpgrade([server])}
+            onAgentUpgrade={() => requestAgentUpgrade([server])}
             onEdit={() => setEditing(server)}
             onCredentials={() => void revealCredentials(server)}
             onDelete={() => openDeleteServer(server)}
           />)}
         </div>
       ) : (
-        <ServerTable servers={visible} serviceStatuses={serviceStatuses} agentVersions={agentVersions} selected={selected} credentialsLoading={credentialsLoading} quickWorking={quickWorking} upgrade={upgrade} onSelect={setSelected} onOpen={(server) => setDetails({ server, initialTab: "overview" })} onXrayAction={requestXrayAction} onAgentUpgrade={(server) => void runUpgrade([server])} onEdit={setEditing} onCredentials={(server) => void revealCredentials(server)} onDelete={openDeleteServer} />
+        <ServerTable servers={visible} serviceStatuses={serviceStatuses} agentVersions={agentVersions} selected={selected} credentialsLoading={credentialsLoading} quickWorking={quickWorking} upgrade={upgrade} onSelect={setSelected} onOpen={(server) => setDetails({ server, initialTab: "overview" })} onXrayAction={requestXrayAction} onAgentUpgrade={(server) => requestAgentUpgrade([server])} onEdit={setEditing} onCredentials={(server) => void revealCredentials(server)} onDelete={openDeleteServer} />
       )}
 
       {createOpen ? <CreateServerDialog onClose={() => setCreateOpen(false)} onCreated={async (result) => { setCreateOpen(false); await load(); if (result.server && result.install_command) setCredentials({ server: result.server, token: result.server.token ?? "", pullToken: result.server.pull_token ?? "", agentToken: result.server.agent_token ?? "", command: result.install_command }); notify("服务器已创建"); }} /> : null}
       {sharedOpen ? <AddSharedServerDialog onClose={() => setSharedOpen(false)} onCreated={async () => { setSharedOpen(false); notify("共享服务器已接入"); await load(); }} /> : null}
       {editing ? <EditServerDialog server={editing} onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); notify("服务器设置已保存"); await load(); }} /> : null}
-      {details && detailsServer ? <ServerOperationsDialog key={`${details.server.id}-${details.initialTab}`} server={detailsServer} initialTab={details.initialTab} notify={notify} onClose={() => setDetails(null)} onChanged={() => load(true)} onUpgrade={() => void runUpgrade([detailsServer])} /> : null}
+      {details && detailsServer ? <ServerOperationsDialog key={`${details.server.id}-${details.initialTab}`} server={detailsServer} initialTab={details.initialTab} notify={notify} onClose={() => setDetails(null)} onChanged={() => load(true)} onUpgrade={(version) => requestAgentUpgrade([detailsServer], version)} /> : null}
       {credentials ? <CredentialsDialog value={credentials} notify={notify} onClose={() => setCredentials(null)} /> : null}
       {deleting ? <DeleteServerDialog server={deleting} working={deleteWorking} error={deleteError} refreshVersion={deleteRefreshVersion} onCancel={closeDeleteServer} onConfirm={(shared) => void deleteServer(shared)} /> : null}
+      {upgradeConfirm ? <ConfirmDialog title="升级 Agent" description={upgradeConfirm.length === 1 ? `${upgradeConfirm[0].server.name} 将从 ${upgradeConfirm[0].current === "未知" ? "未知版本" : `v${upgradeConfirm[0].current}`} 升级到 v${upgradeConfirm[0].latest}。升级期间 Agent 会短暂重启。` : `将把 ${upgradeConfirm.length} 台 Agent 升级到 ${[...new Set(upgradeConfirm.map((candidate) => `v${candidate.latest}`))].join("、")}。升级期间 Agent 会依次短暂重启。`} confirmLabel="确认升级" tone="primary" onCancel={() => setUpgradeConfirm(null)} onConfirm={() => { const targets = upgradeConfirm.map((candidate) => candidate.server); setUpgradeConfirm(null); void runUpgrade(targets); }} /> : null}
       {upgrade ? <UpgradeDialog state={upgrade} servers={servers} onClose={() => !upgrade.running && setUpgrade(null)} /> : null}
       {quickConfirm?.action === "update" ? <XrayVersionDialog server={quickConfirm.server} currentVersion={serviceStatuses[quickConfirm.server.id]?.xray?.version || quickConfirm.server.xray_version} working={Boolean(quickWorking)} onCancel={() => !quickWorking && setQuickConfirm(null)} onConfirm={(version) => void executeXrayAction(quickConfirm.server, "update", version)} /> : null}
       {quickConfirm?.action === "stop" ? <ConfirmDialog title="暂停 Xray" description={`暂停 ${quickConfirm.server.name} 上的 Xray 会立即中断由它承载的连接。`} confirmLabel="确认暂停" working={Boolean(quickWorking)} onCancel={() => !quickWorking && setQuickConfirm(null)} onConfirm={() => void executeXrayAction(quickConfirm.server, "stop")} /> : null}
@@ -1536,6 +1565,14 @@ function activeTransport(server: ManagedServer): "WS" | "HTTP" | "Pull" {
   return "HTTP";
 }
 
+function canUpgradeAgent(version?: CachedAgentVersion): boolean {
+  return Boolean(version?.loaded && !version.loading && version.upgrade_available && cleanVersion(version.latest) && !version.latest_error);
+}
+
+function agentVersionIsCurrent(version?: CachedAgentVersion): boolean {
+  return Boolean(version?.loaded && !version.loading && !version.upgrade_available && cleanVersion(version.latest) && !version.latest_error);
+}
+
 function AgentVersionButton({ server, version, working, compact = false, onUpgrade }: {
   server: ManagedServer;
   version?: CachedAgentVersion;
@@ -1546,13 +1583,22 @@ function AgentVersionButton({ server, version, working, compact = false, onUpgra
   if (server.is_federated) return null;
   const current = cleanVersion(version?.current);
   const latest = cleanVersion(version?.latest);
-  const upgradeAvailable = Boolean(version?.upgrade_available);
+  const checking = Boolean(version?.loading);
+  const upgradeAvailable = canUpgradeAgent(version);
+  const currentVersion = agentVersionIsCurrent(version);
   const label = current ? `${compact ? "" : "Agent "}v${current}` : compact ? "Agent --" : "Agent 未知";
-  const title = current
-    ? `Agent 当前 v${current}${latest ? `，上游最新 v${latest}` : ""}；${upgradeAvailable ? "点击升级" : "点击重新安装最新版"}`
-    : "未能读取 Agent 版本；点击重新安装最新版";
-  return <button type="button" className={`service-agent-version ${upgradeAvailable ? "has-update" : ""} ${compact ? "is-compact" : ""}`} aria-label={`${upgradeAvailable ? "升级" : "重新安装"} ${server.name} Agent`} title={title} disabled={!isConnected(server) || working} onClick={onUpgrade}>
-    {working || version?.loading && !version.loaded ? <RefreshCw className="service-spin" size={13} /> : <UploadCloud size={13} />}
+  const title = upgradeAvailable
+    ? `Agent 当前 v${current || "未知"}，上游最新 v${latest}；点击后确认升级`
+    : currentVersion
+      ? `Agent 当前已是上游最新版 v${latest}`
+      : version?.latest_error || "尚未读取到可用的新版本";
+  const ariaLabel = upgradeAvailable
+    ? `升级 ${server.name} Agent`
+    : currentVersion
+      ? `${server.name} Agent 已是最新版`
+      : `暂不可升级 ${server.name} Agent`;
+  return <button type="button" className={`service-agent-version ${upgradeAvailable ? "has-update" : ""} ${compact ? "is-compact" : ""}`} aria-label={ariaLabel} title={title} disabled={!isConnected(server) || working || !upgradeAvailable} onClick={onUpgrade}>
+    {working || checking ? <RefreshCw className="service-spin" size={13} /> : upgradeAvailable ? <UploadCloud size={13} /> : currentVersion ? <Check size={13} /> : <TriangleAlert size={13} />}
     <span>{working ? "Agent 更新中" : label}</span>
     {upgradeAvailable && !working ? <i aria-hidden="true" /> : null}
   </button>;
@@ -2025,7 +2071,7 @@ function DDNSOverviewPanel({ status, working, onRetry }: { status: DDNSStatusRes
 
 type OperationTab = "overview" | "services" | "speedtest" | "inbounds" | "outbounds" | "routing" | "config" | "sharing";
 
-function ServerOperationsDialog({ server, initialTab = "overview", notify, onClose, onChanged, onUpgrade }: { server: ManagedServer; initialTab?: OperationTab; notify: Notify; onClose: () => void; onChanged: () => Promise<void>; onUpgrade: () => void }) {
+function ServerOperationsDialog({ server, initialTab = "overview", notify, onClose, onChanged, onUpgrade }: { server: ManagedServer; initialTab?: OperationTab; notify: Notify; onClose: () => void; onChanged: () => Promise<void>; onUpgrade: (version: AgentVersionResponse) => void }) {
   const [tab, setTab] = useState<OperationTab>(initialTab);
   const [status, setStatus] = useState<ServiceStatusResponse | null>(null);
   const [version, setVersion] = useState<AgentVersionResponse | null>(null);
@@ -2278,9 +2324,11 @@ function ServerOperationsDialog({ server, initialTab = "overview", notify, onClo
       ? `将从 ${server.name} 卸载 ${confirmServiceLabel}，现有配置和节点可能立即不可用。`
       : `停止 ${confirmServiceLabel} 会中断由该服务承载的连接。`;
   const needsExtraWideDialog = tab === "inbounds" || tab === "outbounds" || tab === "routing" || tab === "config";
+  const agentUpgradeAvailable = Boolean(version?.upgrade_available && cleanVersion(version.latest) && !version.latest_error);
+  const agentVersionCurrent = Boolean(version && !version.upgrade_available && cleanVersion(version.latest) && !version.latest_error);
 
   return <Dialog title={server.name} description={`${server.domain || server.ip_address || "地址待上报"} · ${isConnected(server) ? "Agent 在线" : "Agent 离线"}`} onClose={() => !working && onClose()} wide extraWide={needsExtraWideDialog}><div className="service-operation-tabs" role="tablist">{tabs.map((item) => <button key={item.key} role="tab" aria-selected={tab === item.key} className={tab === item.key ? "is-active" : ""} onClick={() => setTab(item.key)}>{item.icon}{item.label}</button>)}</div>{error ? <ErrorState message={error} onRetry={() => void loadStatus()} /> : null}{loading ? <div className="center-state"><Spinner label="正在读取 Agent 状态" /></div> : null}
-    {!loading && tab === "overview" ? <div className="service-overview"><div className="service-overview-grid"><InfoTile label="连接状态" value={isConnected(server) ? "在线" : "离线"} detail={server.encrypted ? "加密 WebSocket" : server.connection_mode} icon={<Wifi size={18} />} /><InfoTile label="Agent 版本" value={version?.current || system?.agent_version || "未知"} detail={version?.latest ? `最新 ${version.latest}` : version?.latest_error || "未读取最新版本"} icon={<UploadCloud size={18} />} /><InfoTile label="主机名" value={system?.hostname || server.name} detail={system?.uptime ? `运行 ${Math.floor(Number(system.uptime) / 3600)} 小时` : relativeTime(server.last_heartbeat)} icon={<Server size={18} />} /><InfoTile label="系统负载" value={system?.loadavg?.split(" ").slice(0, 3).join(" / ") || "暂无"} detail={system?.memory?.MemAvailable ? `可用内存 ${system.memory.MemAvailable}` : "Agent 未上报内存"} icon={<Gauge size={18} />} /></div><Surface className="service-address-panel"><h3>连接与流量</h3><dl><div><dt>IPv4</dt><dd>{server.ip_address || "未上报"}</dd></div><div><dt>IPv6</dt><dd>{server.ipv6_enabled ? server.ip_address_v6 || "未上报" : "已关闭"}</dd></div><div><dt>节点域名</dt><dd>{server.domain || "未设置"}</dd></div><div><dt>Agent 端口</dt><dd>{server.listen_port || 23889}</dd></div><div><dt>统计口径</dt><dd>{server.traffic_source === "system" ? "系统网卡" : "Xray 聚合"} / {server.traffic_stats_mode || "both"}</dd></div><div><dt>本期流量</dt><dd>{formatBytes(server.traffic_used)}{server.traffic_limit ? ` / ${formatBytes(server.traffic_limit)}` : "（不限）"}</dd></div></dl></Surface><DDNSOverviewPanel status={ddnsStatus} working={working === "ddns-test"} onRetry={() => void triggerDDNS()} /><div className="dialog-actions"><Button variant="secondary" onClick={() => void loadStatus()}><RefreshCw size={16} />刷新状态</Button><Button onClick={onUpgrade} disabled={!isConnected(server)}><UploadCloud size={16} />{version?.upgrade_available ? "升级 Agent" : "重新安装 / 升级 Agent"}</Button></div></div> : null}
+    {!loading && tab === "overview" ? <div className="service-overview"><div className="service-overview-grid"><InfoTile label="连接状态" value={isConnected(server) ? "在线" : "离线"} detail={server.encrypted ? "加密 WebSocket" : server.connection_mode} icon={<Wifi size={18} />} /><InfoTile label="Agent 版本" value={version?.current || system?.agent_version || "未知"} detail={version?.latest ? `最新 ${version.latest}` : version?.latest_error || "未读取最新版本"} icon={<UploadCloud size={18} />} /><InfoTile label="主机名" value={system?.hostname || server.name} detail={system?.uptime ? `运行 ${Math.floor(Number(system.uptime) / 3600)} 小时` : relativeTime(server.last_heartbeat)} icon={<Server size={18} />} /><InfoTile label="系统负载" value={system?.loadavg?.split(" ").slice(0, 3).join(" / ") || "暂无"} detail={system?.memory?.MemAvailable ? `可用内存 ${system.memory.MemAvailable}` : "Agent 未上报内存"} icon={<Gauge size={18} />} /></div><Surface className="service-address-panel"><h3>连接与流量</h3><dl><div><dt>IPv4</dt><dd>{server.ip_address || "未上报"}</dd></div><div><dt>IPv6</dt><dd>{server.ipv6_enabled ? server.ip_address_v6 || "未上报" : "已关闭"}</dd></div><div><dt>节点域名</dt><dd>{server.domain || "未设置"}</dd></div><div><dt>Agent 端口</dt><dd>{server.listen_port || 23889}</dd></div><div><dt>统计口径</dt><dd>{server.traffic_source === "system" ? "系统网卡" : "Xray 聚合"} / {server.traffic_stats_mode || "both"}</dd></div><div><dt>本期流量</dt><dd>{formatBytes(server.traffic_used)}{server.traffic_limit ? ` / ${formatBytes(server.traffic_limit)}` : "（不限）"}</dd></div></dl></Surface><DDNSOverviewPanel status={ddnsStatus} working={working === "ddns-test"} onRetry={() => void triggerDDNS()} /><div className="dialog-actions"><Button variant="secondary" onClick={() => void loadStatus()}><RefreshCw size={16} />刷新状态</Button><Button title={agentUpgradeAvailable ? `升级到 v${cleanVersion(version?.latest)}` : agentVersionCurrent ? "当前已是最新版" : version?.latest_error || "未读取到可用的新版本"} onClick={() => version && onUpgrade(version)} disabled={!isConnected(server) || !agentUpgradeAvailable}><UploadCloud size={16} />{agentUpgradeAvailable ? "升级 Agent" : agentVersionCurrent ? "已是最新版" : "暂不可升级"}</Button></div></div> : null}
     {!loading && tab === "services" ? <div className="service-control-stack">{reusesExistingNginx ? <div className="service-nginx-reuse-notice" role="note"><ShieldCheck size={18} /><span><strong>正在复用系统已有 Nginx</strong><small>Arcway 仅下发独立站点配置并执行预检与安全重载，不安装、不卸载、不覆盖主配置，也不接管服务启停。</small></span></div> : null}<ServiceControlCard name="Xray" state={status?.xray} fallbackVersion={server.xray_version} working={working} embeddedCore={server.xray_mode === "embedded"} allowCoreMaintenance={!server.is_federated} onAction={(action) => action === "stop" ? setConfirm({ service: "xray", action }) : void serviceAction("xray", action)} onUpdate={() => setConfirm({ service: "xray", action: "update" })} onRemove={() => setConfirm({ service: "xray", action: "remove" })} /><ServiceControlCard name="Nginx" state={status?.nginx} working={working} externallyManaged={reusesExistingNginx} onAction={(action) => action === "stop" ? setConfirm({ service: "nginx", action }) : void serviceAction("nginx", action)} onRemove={() => setConfirm({ service: "nginx", action: "remove" })} /></div> : null}
     {!loading && tab === "speedtest" ? <ServerSpeedtestPanel server={server} notify={notify} /> : null}
     {!loading && tab === "inbounds" ? <XrayResourcesWorkbench serverId={server.id} serverDomain={server.domain} serverIPv4={server.ip_address} serverIPv6={server.ip_address_v6} nginxMode={server.nginx_mode || "managed"} kind="inbound" notify={notify} /> : null}

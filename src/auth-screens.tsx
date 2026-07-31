@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Activity, ArrowDown, ArrowRight, ArrowUp, Check, KeyRound, LockKeyhole, LogIn, Network, Server, ShieldCheck, Wifi, WifiOff } from "lucide-react";
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
+import { Activity, ArrowDown, ArrowRight, ArrowUp, Check, Cpu, Gauge, Grid2X2, HardDrive, KeyRound, List, LockKeyhole, LogIn, MemoryStick, Network, Server, ShieldCheck } from "lucide-react";
 import { api, ApiError, setToken } from "./api";
 import { BRAND_NAME, BrandMark } from "./brand";
 import type { Session } from "./types";
-import { Badge, Button, ErrorState, Field, IconButton, Spinner, Surface, formatBytes } from "./ui";
+import { Button, ErrorState, Field, Spinner, formatBytes } from "./ui";
 
 declare global {
   interface Window {
@@ -108,45 +108,201 @@ export function SetupScreen({ onComplete }: { onComplete: () => void }) {
 
 export interface PublicProbeServer {
   name?: string;
-  upload_speed: number;
-  download_speed: number;
-  traffic_used: number;
-  traffic_limit: number;
-  online: boolean;
+  upload_speed?: number;
+  download_speed?: number;
+  traffic_used?: number;
+  traffic_limit?: number;
+  cpu_pct?: number;
+  loadavg?: string;
+  mem_used?: number;
+  mem_total?: number;
+  disk_used?: number;
+  disk_total?: number;
+  online?: boolean;
 }
 
 export interface PublicProbeState {
   enabled: boolean;
   title?: string;
+  logo?: string;
+  block_login?: boolean;
   show_name?: boolean;
+  metric_cpu?: boolean;
+  metric_mem?: boolean;
+  metric_disk?: boolean;
+  metric_traffic?: boolean;
+  metric_speed?: boolean;
+  // The public endpoint uses these aliases so it never needs to expose the
+  // administrative metric_* configuration in a public response.
+  show_cpu?: boolean;
+  show_memory?: boolean;
+  show_disk?: boolean;
+  show_traffic?: boolean;
+  show_speed?: boolean;
   servers?: PublicProbeServer[];
+}
+
+const publicProbeDefaults: PublicProbeState = {
+  enabled: false,
+  servers: [],
+};
+
+function booleanValue(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+function boundedText(value: unknown, maxLength = 96): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.trim();
+  if (!text || text.length > maxLength || /[\r\n\u0000]/.test(text)) return undefined;
+  return text;
+}
+
+function publicProbeServer(value: unknown): PublicProbeServer | null {
+  if (!value || typeof value !== "object") return null;
+  const source = value as Record<string, unknown>;
+  return {
+    name: typeof source.name === "string" ? source.name : undefined,
+    online: booleanValue(source.online),
+    upload_speed: finiteNumber(source.upload_speed),
+    download_speed: finiteNumber(source.download_speed),
+    traffic_used: finiteNumber(source.traffic_used),
+    traffic_limit: finiteNumber(source.traffic_limit),
+    cpu_pct: finiteNumber(source.cpu_pct),
+    loadavg: boundedText(source.loadavg),
+    mem_used: finiteNumber(source.mem_used),
+    mem_total: finiteNumber(source.mem_total),
+    disk_used: finiteNumber(source.disk_used),
+    disk_total: finiteNumber(source.disk_total),
+  };
+}
+
+/**
+ * Keep the browser-side representation deliberately narrow. Public frames are
+ * untrusted and this drops fields that are not part of the probe contract.
+ */
+export function normalizePublicProbeState(value: unknown): PublicProbeState | null {
+  if (!value || typeof value !== "object") return null;
+  const source = value as Record<string, unknown>;
+  if (typeof source.enabled !== "boolean") return null;
+  const servers = Array.isArray(source.servers)
+    ? source.servers.map(publicProbeServer).filter((server): server is PublicProbeServer => server !== null)
+    : [];
+  return {
+    enabled: source.enabled,
+    title: typeof source.title === "string" ? source.title : undefined,
+    logo: typeof source.logo === "string" ? source.logo : undefined,
+    block_login: booleanValue(source.block_login),
+    show_name: booleanValue(source.show_name),
+    metric_cpu: booleanValue(source.metric_cpu),
+    metric_mem: booleanValue(source.metric_mem),
+    metric_disk: booleanValue(source.metric_disk),
+    metric_traffic: booleanValue(source.metric_traffic),
+    metric_speed: booleanValue(source.metric_speed),
+    show_cpu: booleanValue(source.show_cpu),
+    show_memory: booleanValue(source.show_memory),
+    show_disk: booleanValue(source.show_disk),
+    show_traffic: booleanValue(source.show_traffic),
+    show_speed: booleanValue(source.show_speed),
+    servers,
+  };
+}
+
+export function emptyPublicProbeState(): PublicProbeState {
+  return { ...publicProbeDefaults, servers: [] };
+}
+
+function isProbeMetricEnabled(probe: PublicProbeState, publicKey: "show_cpu" | "show_memory" | "show_disk" | "show_traffic" | "show_speed", adminKey: "metric_cpu" | "metric_mem" | "metric_disk" | "metric_traffic" | "metric_speed", fallback: boolean) {
+  return probe[publicKey] ?? probe[adminKey] ?? fallback;
+}
+
+function percent(value: number | undefined, total?: number): number | undefined {
+  if (value === undefined) return undefined;
+  const output = total && total > 0 ? value / total * 100 : value;
+  return Number.isFinite(output) ? Math.min(100, Math.max(0, output)) : undefined;
+}
+
+function formatPercent(value: number | undefined) {
+  if (value === undefined) return "--";
+  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)}%`;
+}
+
+function loadAverageDetail(value: string | undefined) {
+  const values = value?.split(/\s+/).slice(0, 3).join(" / ");
+  return values ? `负载 ${values}` : undefined;
+}
+
+function ProbeMetric({ icon, label, value, progress, detail }: { icon: ReactNode; label: string; value: string; progress?: number; detail?: string }) {
+  return <div className="public-probe-metric">
+    <div className="public-probe-metric-heading"><span>{icon}</span><small>{label}</small><strong>{value}</strong></div>
+    {progress !== undefined ? <span className="public-probe-meter" aria-label={`${label} ${value}`} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}><i style={{ width: `${progress}%` }} /></span> : null}
+    {detail ? <small className="public-probe-metric-detail">{detail}</small> : null}
+  </div>;
 }
 
 export function PublicProbeScreen({ probe, onLogin }: { probe: PublicProbeState; onLogin: () => void }) {
   const servers = probe.servers ?? [];
-  const online = servers.filter((server) => server.online).length;
+  const [layout, setLayout] = useState<"grid" | "list">("grid");
+  const showCPU = isProbeMetricEnabled(probe, "show_cpu", "metric_cpu", false);
+  const showMemory = isProbeMetricEnabled(probe, "show_memory", "metric_mem", false);
+  const showDisk = isProbeMetricEnabled(probe, "show_disk", "metric_disk", false);
+  const showTraffic = isProbeMetricEnabled(probe, "show_traffic", "metric_traffic", true);
+  const showSpeed = isProbeMetricEnabled(probe, "show_speed", "metric_speed", true);
+  const title = probe.title?.trim() || "服务器状态";
+  const logo = probe.logo?.trim();
   return (
     <main className="public-probe">
       <header className="public-probe-header">
-        <div className="brand"><span className="brand-mark"><Activity size={20} /></span><h1>{probe.title?.trim() || "Service Status"}</h1></div>
-        <IconButton label="进入管理登录" onClick={onLogin}><LogIn size={18} /></IconButton>
+        <div className="public-probe-header-inner">
+          <div className="public-probe-brand">
+            {logo ? <img src={logo} alt="" referrerPolicy="no-referrer" /> : <Activity size={18} aria-hidden="true" />}
+            <h1>{title}</h1>
+          </div>
+          <div className="public-probe-controls" role="group" aria-label="页面视图">
+            <button type="button" className={`public-probe-view-button ${layout === "grid" ? "is-active" : ""}`} aria-label="网格视图" title="网格视图" aria-pressed={layout === "grid"} onClick={() => setLayout("grid")}><Grid2X2 size={16} /></button>
+            <button type="button" className={`public-probe-view-button ${layout === "list" ? "is-active" : ""}`} aria-label="列表视图" title="列表视图" aria-pressed={layout === "list"} onClick={() => setLayout("list")}><List size={17} /></button>
+            {!probe.block_login ? <button type="button" className="public-probe-login" onClick={onLogin}><LogIn size={16} />登录</button> : null}
+          </div>
+        </div>
       </header>
       <section className="public-probe-content">
-        <div className="public-probe-summary">
-          <span><strong>{online}</strong><small>在线</small></span>
-          <span><strong>{servers.length - online}</strong><small>离线</small></span>
-          <span><strong>{servers.length}</strong><small>监测服务</small></span>
-        </div>
-        {servers.length ? <div className="public-probe-grid">{servers.map((server, index) => {
+        {servers.length ? <div className={`public-probe-grid ${layout === "list" ? "is-list" : ""}`}>{servers.map((server, index) => {
           const used = Math.max(0, Number(server.traffic_used) || 0);
           const limit = Math.max(0, Number(server.traffic_limit) || 0);
-          const percentage = limit > 0 ? Math.min(100, used / limit * 100) : 0;
-          return <Surface className="public-probe-item" key={`${server.name || "service"}-${index}`}>
-            <div className="public-probe-item-heading"><span className={server.online ? "is-online" : ""}>{server.online ? <Wifi size={18} /> : <WifiOff size={18} />}</span><strong>{probe.show_name && server.name ? server.name : `Service ${index + 1}`}</strong><Badge tone={server.online ? "good" : "bad"}>{server.online ? "Online" : "Offline"}</Badge></div>
-            <div className="public-probe-speeds"><span><ArrowUp size={15} /><small>Upload</small><strong>{formatBytes(server.upload_speed, true)}</strong></span><span><ArrowDown size={15} /><small>Download</small><strong>{formatBytes(server.download_speed, true)}</strong></span></div>
-            <div className="public-probe-traffic"><span><small>Traffic</small><strong>{formatBytes(used)}{limit > 0 ? ` / ${formatBytes(limit)}` : ""}</strong></span>{limit > 0 ? <div aria-label={`流量使用率 ${percentage.toFixed(1)}%`}><i style={{ width: `${percentage}%` }} /></div> : null}</div>
-          </Surface>;
-        })}</div> : <Surface className="public-probe-empty"><Server size={24} /><strong>No services configured</strong></Surface>}
+          const trafficPercent = limit > 0 ? percent(used, limit) : undefined;
+          // A state transition can race a final public frame in transit. Do
+          // not turn that frame into a healthy-looking offline card; the API
+          // also omits these values once an Agent is offline.
+          const cpuPercent = server.online ? percent(server.cpu_pct) : undefined;
+          const memoryPercent = server.online ? percent(server.mem_used, server.mem_total) : undefined;
+          const diskPercent = server.online ? percent(server.disk_used, server.disk_total) : undefined;
+          const visibleMetrics = [
+            showCPU && cpuPercent !== undefined,
+            showMemory && memoryPercent !== undefined,
+            showDisk && diskPercent !== undefined,
+            showTraffic,
+          ].filter(Boolean).length;
+          return <article className={`public-probe-item ${server.online ? "is-online" : "is-offline"}`} key={`${server.name || "service"}-${index}`} style={{ "--public-probe-order": index } as CSSProperties}>
+            <header className="public-probe-item-heading">
+              <span className="public-probe-status"><i /><strong>{probe.show_name && server.name ? server.name : `#${index + 1}`}</strong></span>
+              <small>{server.online ? "在线" : "离线"}</small>
+            </header>
+            <div className={`public-probe-metrics public-probe-metrics-${Math.min(4, Math.max(1, visibleMetrics))}`}>
+              {showCPU && cpuPercent !== undefined ? <ProbeMetric icon={<Cpu size={14} />} label="CPU" value={formatPercent(cpuPercent)} progress={cpuPercent} detail={loadAverageDetail(server.loadavg)} /> : null}
+              {showMemory && memoryPercent !== undefined ? <ProbeMetric icon={<MemoryStick size={14} />} label="内存" value={formatPercent(memoryPercent)} progress={memoryPercent} detail={server.mem_used !== undefined && server.mem_total !== undefined ? `${formatBytes(server.mem_used)} / ${formatBytes(server.mem_total)}` : undefined} /> : null}
+              {showDisk && diskPercent !== undefined ? <ProbeMetric icon={<HardDrive size={14} />} label="磁盘" value={formatPercent(diskPercent)} progress={diskPercent} detail={server.disk_used !== undefined && server.disk_total !== undefined ? `${formatBytes(server.disk_used)} / ${formatBytes(server.disk_total)}` : undefined} /> : null}
+              {showTraffic ? <ProbeMetric icon={<Gauge size={14} />} label="流量" value={formatBytes(used)} progress={trafficPercent} detail={limit > 0 ? `配额 ${formatBytes(limit)}` : undefined} /> : null}
+            </div>
+            {showSpeed ? <footer className="public-probe-item-footer">
+              <div className="public-probe-speeds"><span className="is-download"><ArrowDown size={15} /><strong>{formatBytes(server.download_speed, true)}</strong></span><span className="is-upload"><ArrowUp size={15} /><strong>{formatBytes(server.upload_speed, true)}</strong></span></div>
+            </footer> : null}
+          </article>;
+        })}</div> : <div className="public-probe-empty"><Server size={24} /><strong>暂无可公开的服务器状态</strong></div>}
       </section>
     </main>
   );

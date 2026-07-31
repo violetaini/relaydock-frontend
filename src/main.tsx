@@ -1,7 +1,7 @@
 import { StrictMode, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { api, ApiError, getToken, setToken } from "./api";
-import { LoginScreen, PublicProbeScreen, SetupScreen, type PublicProbeState } from "./auth-screens";
+import { LoginScreen, PublicProbeScreen, SetupScreen, emptyPublicProbeState, normalizePublicProbeState, type PublicProbeState } from "./auth-screens";
 import { BRAND_NAME, BrandMark } from "./brand";
 import { ConsoleApp } from "./console";
 import type { Profile, Session } from "./types";
@@ -11,13 +11,23 @@ import "./modern-theme.css";
 
 type BootState = "loading" | "setup" | "login" | "ready" | "error";
 
+function publicProbeFrame(value: unknown): PublicProbeState | null {
+  const direct = normalizePublicProbeState(value);
+  if (direct) return direct;
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  return normalizePublicProbeState(record.data)
+    ?? normalizePublicProbeState(record.probe)
+    ?? normalizePublicProbeState(record.payload);
+}
+
 export function App() {
   const [state, setState] = useState<BootState>("loading");
   const [profile, setProfile] = useState<Profile | null>(null);
   const [error, setError] = useState("");
   const [publicReady, setPublicReady] = useState(false);
   const [wallpaper, setWallpaper] = useState("");
-  const [probe, setProbe] = useState<PublicProbeState>({ enabled: false, servers: [] });
+  const [probe, setProbe] = useState<PublicProbeState>(emptyPublicProbeState);
   const [loginRequested, setLoginRequested] = useState(() => location.hash.replace(/^#\/?/, "") === "login");
 
   const bootstrap = useCallback(async () => {
@@ -64,15 +74,114 @@ export function App() {
     setPublicReady(false);
     Promise.all([
       api.get<{ login_wallpaper?: string }>("/api/public/login-wallpaper").catch(() => ({ login_wallpaper: "" })),
-      api.get<PublicProbeState>("/api/public/probe-servers").catch(() => ({ enabled: false, servers: [] })),
+      api.get<unknown>("/api/public/probe-servers").catch(() => emptyPublicProbeState()),
     ]).then(([wallpaperResponse, probeResponse]) => {
       if (cancelled) return;
       setWallpaper(wallpaperResponse.login_wallpaper?.trim() ?? "");
-      setProbe({ ...probeResponse, servers: probeResponse.servers ?? [] });
+      setProbe(publicProbeFrame(probeResponse) ?? emptyPublicProbeState());
       setPublicReady(true);
     });
     return () => { cancelled = true; };
   }, [state]);
+  useEffect(() => {
+    if (state !== "login" || loginRequested || !probe.enabled) return;
+
+    let stopped = false;
+    let socket: WebSocket | null = null;
+    let pollTimer: number | undefined;
+    let reconnectTimer: number | undefined;
+    let connectionFallbackTimer: number | undefined;
+    let reconnectAttempts = 0;
+
+    const update = (value: unknown) => {
+      const next = publicProbeFrame(value);
+      if (!stopped && next) setProbe(next);
+    };
+    const poll = async () => {
+      try {
+        update(await api.get<unknown>("/api/public/probe-servers"));
+      } catch {
+        // The last valid snapshot remains visible while public polling retries.
+      }
+    };
+    const startPolling = () => {
+      if (pollTimer !== undefined) return;
+      void poll();
+      pollTimer = window.setInterval(() => { void poll(); }, 5_000);
+    };
+    const stopPolling = () => {
+      if (pollTimer === undefined) return;
+      window.clearInterval(pollTimer);
+      pollTimer = undefined;
+    };
+    const scheduleReconnect = () => {
+      if (stopped || reconnectTimer !== undefined) return;
+      startPolling();
+      const delay = Math.min(30_000, 1_000 * 2 ** reconnectAttempts);
+      reconnectAttempts += 1;
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = undefined;
+        connect();
+      }, delay);
+    };
+    const connect = () => {
+      if (stopped || typeof window.WebSocket !== "function") {
+        startPolling();
+        return;
+      }
+      const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+      let closed = false;
+      let opened = false;
+      const disconnect = () => {
+        if (closed) return;
+        closed = true;
+        if (connectionFallbackTimer !== undefined) {
+          window.clearTimeout(connectionFallbackTimer);
+          connectionFallbackTimer = undefined;
+        }
+        if (socket === next) socket = null;
+        scheduleReconnect();
+      };
+      let next: WebSocket;
+      try {
+        next = new window.WebSocket(`${protocol}//${location.host}/api/public/probe-ws`);
+      } catch {
+        scheduleReconnect();
+        return;
+      }
+      socket = next;
+      connectionFallbackTimer = window.setTimeout(() => {
+        if (!opened) startPolling();
+      }, 5_000);
+      next.onopen = () => {
+        if (stopped || socket !== next) return;
+        opened = true;
+        reconnectAttempts = 0;
+        if (connectionFallbackTimer !== undefined) {
+          window.clearTimeout(connectionFallbackTimer);
+          connectionFallbackTimer = undefined;
+        }
+        stopPolling();
+      };
+      next.onmessage = (event) => {
+        try { update(JSON.parse(String(event.data))); } catch { /* Ignore non-snapshot frames. */ }
+      };
+      next.onerror = () => {
+        next.close();
+        disconnect();
+      };
+      next.onclose = disconnect;
+    };
+
+    connect();
+    return () => {
+      stopped = true;
+      stopPolling();
+      if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
+      if (connectionFallbackTimer !== undefined) window.clearTimeout(connectionFallbackTimer);
+      socket?.close();
+    };
+  }, [loginRequested, probe.enabled, state]);
   useEffect(() => {
     const unauthorized = () => {
       if (state !== "ready") return;

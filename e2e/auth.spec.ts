@@ -43,7 +43,25 @@ test("public probe remains separate from the management login", async ({ page })
       enabled: true,
       title: "Edge Service Status",
       show_name: true,
-      servers: [{ name: "Hong Kong Edge", upload_speed: 1024, download_speed: 4096, traffic_used: 1048576, traffic_limit: 10485760, online: true }],
+      show_cpu: true,
+      show_memory: true,
+      show_disk: true,
+      show_traffic: true,
+      show_speed: true,
+      servers: [{
+        name: "Hong Kong Edge",
+        upload_speed: 1024,
+        download_speed: 4096,
+        traffic_used: 1048576,
+        traffic_limit: 10485760,
+        cpu_pct: 12.5,
+        loadavg: "0.12 0.08 0.03",
+        mem_used: 3 * 1024 ** 3,
+        mem_total: 8 * 1024 ** 3,
+        disk_used: 18 * 1024 ** 3,
+        disk_total: 50 * 1024 ** 3,
+        online: true,
+      }],
     });
     if (request.method() === "GET" && pathname === "/api/captcha/config") return fulfill(route, { enabled: false, site_key: "" });
     return fulfill(route, { error: `unexpected ${request.method()} ${pathname}` }, 500);
@@ -53,8 +71,11 @@ test("public probe remains separate from the management login", async ({ page })
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Edge Service Status" })).toBeVisible();
   await expect(page.getByText("Hong Kong Edge")).toBeVisible();
+  await expect(page.getByRole("progressbar", { name: "CPU 13%" })).toBeVisible();
+  await expect(page.getByRole("progressbar", { name: "内存 38%" })).toBeVisible();
+  await expect(page.getByRole("progressbar", { name: "磁盘 36%" })).toBeVisible();
   await assertViewport(page);
-  await page.getByRole("button", { name: "进入管理登录" }).click();
+  await page.getByRole("button", { name: "登录" }).click();
   await expect(page.getByRole("heading", { name: "进入控制台" })).toBeVisible();
   await assertViewport(page);
 });

@@ -48,7 +48,7 @@ describe("application bootstrap", () => {
     expect(getToken()).toBe("");
   });
 
-  it("renders the configured public probe and keeps the management login reachable", async () => {
+  it("renders the configured public probe metrics and keeps the management login reachable", async () => {
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
       if (path === "/api/setup/status") return { needs_setup: false } as T;
       if (path === "/api/public/login-wallpaper") return { login_wallpaper: "https://images.example/login.jpg" } as T;
@@ -56,7 +56,25 @@ describe("application bootstrap", () => {
         enabled: true,
         title: "Edge Service Status",
         show_name: true,
-        servers: [{ name: "Hong Kong Edge", upload_speed: 1024, download_speed: 2048, traffic_used: 4096, traffic_limit: 8192, online: true }],
+        show_cpu: true,
+        show_memory: true,
+        show_disk: true,
+        show_traffic: true,
+        show_speed: true,
+        servers: [{
+          name: "Hong Kong Edge",
+          upload_speed: 1024,
+          download_speed: 2048,
+          traffic_used: 4096,
+          traffic_limit: 8192,
+          cpu_pct: 12.5,
+          loadavg: "0.12 0.08 0.03",
+          mem_used: 3 * 1024 ** 3,
+          mem_total: 8 * 1024 ** 3,
+          disk_used: 18 * 1024 ** 3,
+          disk_total: 50 * 1024 ** 3,
+          online: true,
+        }],
       } as T;
       if (path === "/api/captcha/config") return { enabled: false, site_key: "" } as T;
       throw new Error(`unexpected GET ${path}`);
@@ -66,8 +84,50 @@ describe("application bootstrap", () => {
 
     expect(await screen.findByRole("heading", { name: "Edge Service Status" })).toBeInTheDocument();
     expect(screen.getByText("Hong Kong Edge")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "进入管理登录" }));
+    expect(screen.getByRole("progressbar", { name: "CPU 13%" })).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "内存 38%" })).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "磁盘 36%" })).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "流量 4.0 KB" })).toBeInTheDocument();
+    expect(screen.getByText("负载 0.12 / 0.08 / 0.03")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "列表视图" }));
+    expect(screen.getByRole("button", { name: "列表视图" })).toHaveAttribute("aria-pressed", "true");
+    expect(document.querySelector(".public-probe-grid")).toHaveClass("is-list");
+    fireEvent.click(screen.getByRole("button", { name: "登录" }));
     expect(await screen.findByRole("heading", { name: "进入控制台" })).toBeInTheDocument();
     expect(document.querySelector(".auth-layout")).toHaveStyle({ backgroundImage: "url(https://images.example/login.jpg)" });
+  });
+
+  it("keeps the management login hidden when the public probe requests it", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/setup/status") return { needs_setup: false } as T;
+      if (path === "/api/public/login-wallpaper") return { login_wallpaper: "" } as T;
+      if (path === "/api/public/probe-servers") return {
+        enabled: true,
+        title: "Operations Status",
+        block_login: true,
+        show_cpu: true,
+        show_memory: true,
+        show_disk: true,
+        servers: [{
+          online: false,
+          traffic_used: 0,
+          cpu_pct: 75,
+          mem_used: 6 * 1024 ** 3,
+          mem_total: 8 * 1024 ** 3,
+          disk_used: 40 * 1024 ** 3,
+          disk_total: 50 * 1024 ** 3,
+        }],
+      } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Operations Status" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "登录" })).not.toBeInTheDocument();
+    expect(screen.getByText("离线")).toBeInTheDocument();
+    expect(screen.queryByText("CPU")).not.toBeInTheDocument();
+    expect(screen.queryByText("内存")).not.toBeInTheDocument();
+    expect(screen.queryByText("磁盘")).not.toBeInTheDocument();
   });
 });

@@ -79,6 +79,20 @@ interface MihomoStatusResponse {
   status: MihomoCoreStatus;
 }
 
+interface ProbeDisguiseSettings {
+  enabled: boolean;
+  title: string;
+  logo: string;
+  block_login: boolean;
+  server_ids: number[];
+  show_name: boolean;
+  metric_cpu: boolean;
+  metric_mem: boolean;
+  metric_disk: boolean;
+  metric_traffic: boolean;
+  metric_speed: boolean;
+}
+
 type UpdateRunState = "idle" | "running" | "restarting" | "success" | "error";
 
 function normalizedVersion(value: string): string {
@@ -273,6 +287,28 @@ const defaultUserSubscription: UserSubscriptionConfig = {
   client_compatibility_mode: false,
 };
 
+const defaultProbeDisguise: ProbeDisguiseSettings = {
+  enabled: false,
+  title: "",
+  logo: "",
+  block_login: false,
+  server_ids: [],
+  show_name: false,
+  metric_cpu: true,
+  metric_mem: true,
+  metric_disk: true,
+  metric_traffic: true,
+  metric_speed: true,
+};
+
+function normalizeProbeDisguise(value: Partial<ProbeDisguiseSettings>): ProbeDisguiseSettings {
+  return {
+    ...defaultProbeDisguise,
+    ...value,
+    server_ids: Array.isArray(value.server_ids) ? value.server_ids.filter((id): id is number => Number.isInteger(id)) : [],
+  };
+}
+
 function userSubscriptionPayload(config: UserSubscriptionConfig) {
   return {
     force_sync_external: config.force_sync_external,
@@ -306,7 +342,7 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
   const [wallpaper, setWallpaper] = useState("");
   const [intervals, setIntervals] = useState({ speed_collect_interval: 3, traffic_collect_interval: 60, traffic_check_interval: 120, heartbeat_interval: 30, report_interval: 5 });
   const [dashboardRefreshMs, setDashboardRefreshMs] = useState(5000);
-  const [probe, setProbe] = useState({ enabled: false, title: "", server_ids: [] as number[], show_name: false });
+  const [probe, setProbe] = useState<ProbeDisguiseSettings>(defaultProbeDisguise);
   const [servers, setServers] = useState<RemoteServer[]>([]);
   const [shortLink, setShortLink] = useState(true);
   const [prefix, setPrefix] = useState({ enabled: false, left: "「", right: "」" });
@@ -349,7 +385,7 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
         api.get<{ login_wallpaper: string }>("/api/admin/system-settings/login-wallpaper"),
         api.get<typeof intervals>("/api/admin/system-settings/intervals"),
         api.get<{ refetch_interval_ms: number }>("/api/system-config/refetch-interval"),
-        api.get<typeof probe>("/api/admin/system-settings/probe-disguise"),
+        api.get<ProbeDisguiseSettings>("/api/admin/system-settings/probe-disguise"),
         api.get<ServerListResponse>("/api/admin/remote-servers"),
         api.get<{ enable_short_link: boolean }>("/api/admin/system-settings/short-link"),
         api.get<typeof prefix>("/api/admin/system-settings/node-name-multiplier-prefix"),
@@ -370,7 +406,7 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
         api.get<UserSubscriptionConfig>("/api/user/config"),
       ]);
       setMasterURL(master.master_url || location.origin); setTheme(themeData.default_theme); setWallpaper(wall.login_wallpaper);
-      setIntervals(intervalData); setDashboardRefreshMs(refreshData.refetch_interval_ms); setProbe(probeData); setServers(serverData.servers ?? []); setShortLink(shortData.enable_short_link);
+      setIntervals(intervalData); setDashboardRefreshMs(refreshData.refetch_interval_ms); setProbe(normalizeProbeDisguise(probeData)); setServers(serverData.servers ?? []); setShortLink(shortData.enable_short_link);
       setPrefix(prefixData); setOverrideScripts(overrideData.enable_override_scripts); setOutputFormat(formatData.subscription_output_format === "json" ? "json" : "yaml");
       setSilent(silentData); setFeatures(featureData.enable_management_features); setRootShortLinks(rootLinksData.enable_root_short_links); setAgentLog(logData.agent_log_enabled);
       setTemplates(templateData.templates ?? []); setDefaultTemplate(defaultTemplateData.default_template_filename); setRedeemTemplate(redeemData.redeem_template);
@@ -607,10 +643,19 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
           <Field label="默认主题"><select value={theme} onChange={(e) => setTheme(e.target.value)}><option value="flat">扁平</option><option value="pixel">像素</option><option value="anime">动漫</option></select></Field>
           <Field label="登录页壁纸 URL" hint="留空使用内置背景"><input type="url" value={wallpaper} onChange={(e) => setWallpaper(e.target.value)} placeholder="https://..." /></Field>
         </SettingSection>
-        <SettingSection icon={<Eye size={19} />} title="探针伪装" description="公开探针页面仅暴露选定服务器状态">
+        <SettingSection icon={<Eye size={19} />} title="探针伪装" description="公开状态页只暴露所选服务器的脱敏运行指标">
           <Toggle checked={probe.enabled} onChange={(enabled) => setProbe({ ...probe, enabled })} label="启用公开探针伪装" />
           <Toggle checked={probe.show_name} onChange={(show_name) => setProbe({ ...probe, show_name })} label="显示服务器名称" />
+          <Toggle checked={probe.block_login} onChange={(block_login) => setProbe({ ...probe, block_login })} label="隐藏公开页登录入口" />
           <Field label="页面标题"><input value={probe.title} onChange={(e) => setProbe({ ...probe, title: e.target.value })} /></Field>
+          <Field label="页面徽标 URL" hint="可留空，支持站内路径或 http(s) 地址"><input value={probe.logo} onChange={(e) => setProbe({ ...probe, logo: e.target.value })} placeholder="/assets/status.svg 或 https://..." /></Field>
+          <div className="settings-fields-grid" role="group" aria-label="公开探针指标">
+            <Toggle checked={probe.metric_cpu} onChange={(metric_cpu) => setProbe({ ...probe, metric_cpu })} label="公开显示 CPU" />
+            <Toggle checked={probe.metric_mem} onChange={(metric_mem) => setProbe({ ...probe, metric_mem })} label="公开显示内存" />
+            <Toggle checked={probe.metric_disk} onChange={(metric_disk) => setProbe({ ...probe, metric_disk })} label="公开显示磁盘" />
+            <Toggle checked={probe.metric_traffic} onChange={(metric_traffic) => setProbe({ ...probe, metric_traffic })} label="公开显示流量" />
+            <Toggle checked={probe.metric_speed} onChange={(metric_speed) => setProbe({ ...probe, metric_speed })} label="公开显示实时速率" />
+          </div>
           <div className="settings-check-list">{servers.map((server) => <label className="checkbox-row" key={server.id}><input type="checkbox" checked={probe.server_ids.includes(server.id)} onChange={() => setProbe({ ...probe, server_ids: probe.server_ids.includes(server.id) ? probe.server_ids.filter((id) => id !== server.id) : [...probe.server_ids, server.id] })} /><span>{server.name}</span></label>)}</div>
         </SettingSection>
         <SaveRow label="保存基础设置" saving={saving === "general"} />

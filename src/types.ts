@@ -43,6 +43,13 @@ export interface RemoteServer {
   traffic_used: number;
   traffic_stats_mode: string;
   traffic_source: string;
+  country_code?: string;
+  cpu_pct?: number;
+  loadavg?: string;
+  mem_used?: number;
+  mem_total?: number;
+  disk_used?: number;
+  disk_total?: number;
   ws_connected: boolean;
   fallback_to_pull?: boolean;
   encrypted: boolean;

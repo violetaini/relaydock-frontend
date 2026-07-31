@@ -63,6 +63,7 @@ describe("application bootstrap", () => {
         show_speed: true,
         servers: [{
           name: "Hong Kong Edge",
+          country_code: "HK",
           upload_speed: 1024,
           download_speed: 2048,
           traffic_used: 4096,
@@ -84,6 +85,7 @@ describe("application bootstrap", () => {
 
     expect(await screen.findByRole("heading", { name: "Edge Service Status" })).toBeInTheDocument();
     expect(screen.getByText("Hong Kong Edge")).toBeInTheDocument();
+    expect(screen.getByTitle("HK")).toHaveTextContent("\u{1F1ED}\u{1F1F0}");
     expect(screen.getByRole("progressbar", { name: "CPU 13%" })).toBeInTheDocument();
     expect(screen.getByRole("progressbar", { name: "内存 38%" })).toBeInTheDocument();
     expect(screen.getByRole("progressbar", { name: "磁盘 36%" })).toBeInTheDocument();

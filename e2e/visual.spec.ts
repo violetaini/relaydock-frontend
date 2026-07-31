@@ -26,6 +26,13 @@ const servers = [
     xray_running: true,
     xray_version: "25.6.8",
     xray_mode: "external",
+    country_code: "HK",
+    cpu_pct: 12.4,
+    loadavg: "0.12 0.08 0.03",
+    mem_used: 3 * 1024 ** 3,
+    mem_total: 8 * 1024 ** 3,
+    disk_used: 40 * 1024 ** 3,
+    disk_total: 100 * 1024 ** 3,
     traffic_limit: 1099511627776,
     traffic_used: 237296943104,
     traffic_stats_mode: "both",
@@ -47,6 +54,13 @@ const servers = [
     xray_running: true,
     xray_version: "25.6.8",
     xray_mode: "external",
+    country_code: "US",
+    cpu_pct: 37.8,
+    loadavg: "0.42 0.31 0.28",
+    mem_used: 9 * 1024 ** 3,
+    mem_total: 16 * 1024 ** 3,
+    disk_used: 170 * 1024 ** 3,
+    disk_total: 250 * 1024 ** 3,
     traffic_limit: 0,
     traffic_used: 78296943104,
     traffic_stats_mode: "both",
@@ -404,13 +418,15 @@ test("desktop navigation follows the upstream hierarchy", async ({ page }) => {
     const primaryLabels = page.locator(".sidebar-nav .nav-primary .nav-item > span");
     const utilityItems = page.locator(".sidebar-nav .nav-utility .nav-item");
     const utilityLabels = page.locator(".sidebar-nav .nav-utility .nav-item > span");
+    const visibleUtilityLabels = page.locator(".sidebar-nav .nav-utility .nav-item:not(.nav-probe-link) > span");
     await expect(primaryLabels).toHaveCount(8);
-    await expect(utilityItems).toHaveCount(4);
-    await expect(utilityLabels).toHaveCount(4);
+    await expect(utilityItems).toHaveCount(5);
+    await expect(utilityLabels).toHaveCount(5);
+    await expect(page.getByRole("link", { name: "返回探针" })).toHaveAttribute("title", "返回探针");
     await expect(page.locator(".sidebar-nav .nav-secondary")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "更多功能", exact: true })).toHaveCount(0);
     await expect(page.locator(".sidebar-brand")).toContainText("RelayDock");
-    const clipped = await primaryLabels.or(utilityLabels).evaluateAll((elements) => elements.flatMap((element) => {
+    const clipped = await primaryLabels.or(visibleUtilityLabels).evaluateAll((elements) => elements.flatMap((element) => {
       const label = element.textContent?.trim() || "<empty>";
       const style = window.getComputedStyle(element);
       const rect = element.getBoundingClientRect();
@@ -555,9 +571,10 @@ test("desktop layout switch stays visible in both chrome modes and preserves nav
   await expect(page.locator(".console-layout")).toHaveClass(/layout-side/);
   await expect(page.locator(".topbar")).toBeVisible();
   await expect(page.getByRole("navigation", { name: "主导航" })).toBeVisible();
-  await expect(page.locator(".sidebar-nav .nav-item > span")).toHaveCount(12);
+  await expect(page.locator(".sidebar-nav .nav-item > span")).toHaveCount(13);
   await expect(page.locator(".sidebar-brand .sidebar-layout-switch")).toBeVisible();
   await expect(page.locator(".topbar-actions .topbar-layout-switch")).toBeVisible();
+  await expect(page.getByRole("button", { name: "返回探针" })).toBeVisible();
   expect(await page.locator(".sidebar").evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(224);
   expect(await page.locator(".console-layout").evaluate((element) => getComputedStyle(element).getPropertyValue("--app-header-height").trim())).toBe("68px");
   const chrome = await page.evaluate(() => {

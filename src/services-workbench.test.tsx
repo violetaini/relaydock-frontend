@@ -24,6 +24,13 @@ const onlineServer: RemoteServer = {
   xray_running: true,
   xray_version: "Xray 25.1",
   xray_mode: "external",
+  country_code: "HK",
+  cpu_pct: 12.4,
+  loadavg: "0.12 0.08 0.03",
+  mem_used: 3 * 1024 ** 3,
+  mem_total: 8 * 1024 ** 3,
+  disk_used: 40 * 1024 ** 3,
+  disk_total: 100 * 1024 ** 3,
   traffic_limit: 100 * 1024 ** 3,
   traffic_used: 25 * 1024 ** 3,
   traffic_stats_mode: "both",
@@ -258,6 +265,23 @@ describe("service management workbench", () => {
     fireEvent.click(address);
     expect(address).toHaveTextContent("203.0.113.11");
     expect(address).toHaveTextContent("1/2");
+  });
+
+  it("shows country, live host resources, network speed and traffic on a service card", async () => {
+    mockServerReads([onlineServer]);
+    const { container } = render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    await screen.findByText("Edge Hong Kong");
+    const card = container.querySelector(".service-card") as HTMLElement;
+    expect(within(card).getByTitle("HK")).toHaveTextContent("\u{1F1ED}\u{1F1F0}");
+    expect(within(card).getByText("CPU")).toBeInTheDocument();
+    expect(within(card).getByText("12%")).toBeInTheDocument();
+    expect(within(card).getByText("内存")).toBeInTheDocument();
+    expect(within(card).getByText("38%")).toBeInTheDocument();
+    expect(within(card).getByText("磁盘")).toBeInTheDocument();
+    expect(within(card).getByText("40%")).toBeInTheDocument();
+    expect(within(card).getByText("实时网速")).toBeInTheDocument();
+    expect(within(card).getByText("流量统计")).toBeInTheDocument();
   });
 
   it("never falls back to unselected online servers when an offline server is selected", async () => {

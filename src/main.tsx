@@ -29,6 +29,7 @@ export function App() {
   const [wallpaper, setWallpaper] = useState("");
   const [probe, setProbe] = useState<PublicProbeState>(emptyPublicProbeState);
   const [loginRequested, setLoginRequested] = useState(() => location.hash.replace(/^#\/?/, "") === "login");
+  const [probePreview, setProbePreview] = useState(() => new URLSearchParams(location.search).get("probe") === "1");
 
   const bootstrap = useCallback(async () => {
     setState("loading");
@@ -69,7 +70,7 @@ export function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
   useEffect(() => {
-    if (state !== "login") return;
+    if (state !== "login" && !probePreview) return;
     let cancelled = false;
     setPublicReady(false);
     Promise.all([
@@ -82,9 +83,10 @@ export function App() {
       setPublicReady(true);
     });
     return () => { cancelled = true; };
-  }, [state]);
+  }, [probePreview, state]);
   useEffect(() => {
-    if (state !== "login" || loginRequested || !probe.enabled) return;
+    const showingProbe = probePreview || (state === "login" && !loginRequested);
+    if (!showingProbe || !probe.enabled) return;
 
     let stopped = false;
     let socket: WebSocket | null = null;
@@ -181,7 +183,7 @@ export function App() {
       if (connectionFallbackTimer !== undefined) window.clearTimeout(connectionFallbackTimer);
       socket?.close();
     };
-  }, [loginRequested, probe.enabled, state]);
+  }, [loginRequested, probe.enabled, probePreview, state]);
   useEffect(() => {
     const unauthorized = () => {
       if (state !== "ready") return;
@@ -207,6 +209,17 @@ export function App() {
     setState("login");
   };
 
+  const leaveProbePreview = () => {
+    const next = new URL(location.href);
+    next.searchParams.delete("probe");
+    history.replaceState(null, "", `${next.pathname}${next.search}${next.hash}`);
+    setProbePreview(false);
+    if (state === "login") {
+      location.hash = "/login";
+      setLoginRequested(true);
+    }
+  };
+
   if (state === "loading") {
     return <main className="boot-screen"><BrandMark className="brand-mark-large" size={32} /><strong>{BRAND_NAME}</strong><Spinner label="正在连接控制端" /></main>;
   }
@@ -215,6 +228,8 @@ export function App() {
   }
   if (state === "setup") return <SetupScreen onComplete={() => setState("login")} />;
   if (state === "login" && !publicReady) return <main className="boot-screen"><BrandMark className="brand-mark-large" size={32} /><Spinner label="正在加载入口" /></main>;
+  if (probePreview && !publicReady) return <main className="boot-screen"><BrandMark className="brand-mark-large" size={32} /><Spinner label="正在加载公开探针" /></main>;
+  if (probePreview && probe.enabled) return <PublicProbeScreen probe={probe} onLogin={leaveProbePreview} loginLabel="返回控制台" />;
   if (state === "login" && probe.enabled && !loginRequested) return <PublicProbeScreen probe={probe} onLogin={() => { location.hash = "/login"; setLoginRequested(true); }} />;
   if (state === "login") return <LoginScreen wallpaper={wallpaper} onLogin={onLogin} />;
   if (profile) return <ConsoleApp profile={profile} onLogout={logout} />;

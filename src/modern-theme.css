@@ -1790,8 +1790,10 @@
 
 @media (min-width: 1360px) and (max-width: 1679px) {
   :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-brand {
-    min-width: 160px;
-    padding-inline: 14px 10px;
+    width: 136px;
+    min-width: 136px;
+    padding-inline: 7px;
+    gap: 6px;
   }
   :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-nav { column-gap: 9px; }
   :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-footer {
@@ -1807,7 +1809,7 @@
 }
 
 @media (min-width: 1360px) and (max-width: 1439px) {
-  :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-brand { min-width: 144px; }
+  :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-brand { min-width: 136px; }
   :root[data-style-theme="flat"] .console-layout.layout-top :is(.nav-primary, .nav-utility) .nav-item {
     padding-inline: 1px;
     gap: 3px;
@@ -1815,8 +1817,34 @@
   }
 }
 
+@media (min-width: 1041px) and (max-width: 1359px) {
+  :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-nav {
+    padding: 9px 6px 9px 10px;
+    gap: 9px;
+  }
+  :root[data-style-theme="flat"] .console-layout.layout-top :is(.nav-primary, .nav-utility) .nav-item {
+    width: 87px;
+    min-width: 87px;
+    padding-inline: 4px;
+    gap: 4px;
+    font-size: 12px;
+  }
+}
+
+/* The public status page is a destination, but it should not force the
+   desktop navigation to scroll. Keep its name in side and compact layouts;
+   the wide one-row header already has a labelled tooltip on the eye icon. */
+@media (min-width: 1360px) {
+  .console-layout.layout-top .nav-probe-link {
+    width: 36px;
+    padding-inline: 0;
+    justify-content: center;
+  }
+  .console-layout.layout-top .nav-probe-link > span { display: none; }
+}
+
 @media (min-width: 1440px) and (max-width: 1679px) {
-  :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-brand { min-width: 144px; }
+  :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-brand { min-width: 136px; }
   :root[data-style-theme="flat"] .console-layout.layout-top :is(.nav-primary, .nav-utility) .nav-item {
     padding-inline: 1px;
     gap: 3px;

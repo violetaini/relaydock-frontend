@@ -50,6 +50,7 @@ test("public probe remains separate from the management login", async ({ page })
       show_speed: true,
       servers: [{
         name: "Hong Kong Edge",
+        country_code: "HK",
         upload_speed: 1024,
         download_speed: 4096,
         traffic_used: 1048576,
@@ -71,9 +72,11 @@ test("public probe remains separate from the management login", async ({ page })
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Edge Service Status" })).toBeVisible();
   await expect(page.getByText("Hong Kong Edge")).toBeVisible();
+  await expect(page.getByTitle("HK")).toContainText("\u{1F1ED}\u{1F1F0}");
   await expect(page.getByRole("progressbar", { name: "CPU 13%" })).toBeVisible();
   await expect(page.getByRole("progressbar", { name: "内存 38%" })).toBeVisible();
   await expect(page.getByRole("progressbar", { name: "磁盘 36%" })).toBeVisible();
+  await expect(page.locator(".public-probe-item")).toHaveCSS("opacity", "1");
   await assertViewport(page);
   await page.getByRole("button", { name: "登录" }).click();
   await expect(page.getByRole("heading", { name: "进入控制台" })).toBeVisible();

@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Clipboard,
   Copy,
+  Eye,
   FileText,
   Gauge,
   Link2,
@@ -150,6 +151,12 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
   const [toast, setToast] = useState<ToastState | null>(null);
   const [userPages, setUserPages] = useState<string[] | null>(profile.is_admin ? [] : null);
   const [identity, setIdentity] = useState(profile);
+  const publicProbeURL = useMemo(() => {
+    const target = new URL(location.href);
+    target.hash = "";
+    target.searchParams.set("probe", "1");
+    return target.toString();
+  }, []);
 
   useEffect(() => {
     const updateIdentity = (event: Event) => {
@@ -252,6 +259,7 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
             </> : null}
           </NavGroup>
           <NavGroup label="常用管理" className="nav-utility">
+            <a className="nav-item nav-probe-link" href={publicProbeURL} target="_blank" rel="noreferrer" aria-label="返回探针" title="返回探针"><Eye size={18} /><span>返回探针</span></a>
             {profile.is_admin ? <NavItem active={page === "certificates"} icon={<ShieldCheck size={18} />} label="证书管理" onClick={() => navigate("certificates")} /> : null}
             {pageAllowed("templates", profile.is_admin, userPages) ? <NavItem active={page === "templates"} icon={<Clipboard size={18} />} label="模板管理" onClick={() => navigate("templates")} /> : null}
             {pageAllowed("subscribeFiles", profile.is_admin, userPages) ? <NavItem active={page === "subscribeFiles"} icon={<FileText size={18} />} label="订阅管理" onClick={() => navigate("subscribeFiles")} /> : null}
@@ -278,6 +286,7 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
           </div>
           <div className="topbar-actions">
             <span className="control-state"><span className="status-dot status-good" />控制端在线</span>
+            <Button className="topbar-probe-link" variant="secondary" aria-label="返回探针" title="返回探针" onClick={() => window.open(publicProbeURL, "_blank", "noopener,noreferrer")}><Eye size={16} /><span>返回探针</span></Button>
             <IconButton className="topbar-layout-switch" label="切换到顶部栏" onClick={toggleLayout}><PanelTop size={19} /></IconButton>
             <IconButton className="mobile-page-shortcut" label="返回流量信息" onClick={() => navigate("dashboard")}><Activity size={18} /></IconButton>
             <IconButton label={themeLabel} onClick={toggleTheme}>{themeIcon}</IconButton>

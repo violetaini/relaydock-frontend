@@ -143,8 +143,11 @@
 .service-card-title { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
 .service-card-title strong,
 .service-card-title small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.service-card-title strong { font-size: 14px; }
+.service-card-title strong { display: flex; align-items: center; gap: 6px; font-size: 14px; }
 .service-card-title small { font-size: 11px; }
+.service-country { width: 20px; height: 18px; flex: 0 0 20px; display: inline-flex; align-items: center; justify-content: center; color: var(--blue); border: 1px solid var(--border); background: var(--surface-muted); font-size: 13px; line-height: 1; }
+.service-country svg { width: 12px; height: 12px; }
+.service-country-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .service-badges { min-height: 23px; display: flex; flex-wrap: wrap; gap: 6px; }
 .service-badges .badge { gap: 4px; }
@@ -287,6 +290,18 @@
 .service-agent-version:disabled { cursor: not-allowed; opacity: .62; }
 
 .service-live-panel { min-width: 0; padding: 12px 13px; display: flex; flex-direction: column; gap: 11px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-muted); }
+.service-host-metrics { min-width: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.service-host-metric { position: relative; min-width: 0; min-height: 50px; padding: 7px 7px 9px; display: grid; grid-template-columns: 14px minmax(0, 1fr); column-gap: 5px; align-items: start; overflow: hidden; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); }
+.service-host-metric-icon { color: var(--blue); line-height: 0; }
+.service-host-metric-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.service-host-metric-copy small { overflow: hidden; color: var(--text-soft); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.service-host-metric-copy strong { overflow: hidden; color: var(--text); font: 700 11px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.service-host-metric > i { position: absolute; right: 7px; bottom: 5px; left: 7px; height: 3px; overflow: hidden; background: var(--surface-muted); }
+.service-host-metric > i::after { width: var(--service-host-meter); max-width: 100%; height: 100%; display: block; content: ""; background: var(--blue); transition: width .25s ease; }
+.service-host-metric.is-green .service-host-metric-icon { color: var(--green); }
+.service-host-metric.is-green > i::after { background: var(--green); }
+.service-host-metric.is-amber .service-host-metric-icon { color: var(--amber); }
+.service-host-metric.is-amber > i::after { background: var(--amber); }
 .service-speed-row { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .service-speed-row > span { display: flex; align-items: center; gap: 6px; color: var(--text-soft); font-size: 11px; font-weight: 700; }
 .service-speed-row > span svg { color: var(--text-faint); }
@@ -335,6 +350,11 @@
 .service-name-button small { max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .service-name-button:hover strong { color: var(--accent); }
 .service-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 1px; }
+.service-resource-compact { min-width: 110px; display: grid; grid-template-columns: repeat(3, auto); gap: 7px; color: var(--text-soft); font: 700 10px/1.25 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.service-resource-compact span { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.service-resource-compact span:nth-child(1) svg { color: var(--blue); }
+.service-resource-compact span:nth-child(2) svg { color: var(--green); }
+.service-resource-compact span:nth-child(3) svg { color: var(--amber); }
 
 .service-toggle-grid { min-height: 40px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: center; gap: 12px; }
 .service-advanced-fields { border: 1px solid var(--border); border-radius: 6px; background: var(--surface-muted); }

@@ -19,6 +19,7 @@ import {
   Palette,
   RefreshCw,
   Save,
+  Search,
   Send,
   Shield,
   SlidersHorizontal,
@@ -28,7 +29,7 @@ import { api, getToken } from "./api";
 import { LegacyPanelImportDialog } from "./legacy-panel-import-dialog";
 import { TwoFactorSettings } from "./two-factor";
 import type { RemoteServer, ServerListResponse } from "./types";
-import { Badge, Button, ConfirmDialog, ErrorState, Field, IconButton, PageHeader, Spinner, Surface, Toggle } from "./ui";
+import { Badge, Button, ConfirmDialog, Dialog, ErrorState, Field, IconButton, PageHeader, Spinner, Surface, Toggle } from "./ui";
 import "./settings-workbench.css";
 
 type Notify = (message: string, tone?: "success" | "error") => void;
@@ -85,6 +86,9 @@ interface ProbeDisguiseSettings {
   logo: string;
   block_login: boolean;
   server_ids: number[];
+  // The API expands this into the current server IDs for display, while the
+  // sentinel preserves automatic inclusion of servers created later.
+  server_ids_default: boolean;
   show_name: boolean;
   metric_cpu: boolean;
   metric_mem: boolean;
@@ -293,6 +297,7 @@ const defaultProbeDisguise: ProbeDisguiseSettings = {
   logo: "",
   block_login: false,
   server_ids: [],
+  server_ids_default: false,
   show_name: false,
   metric_cpu: true,
   metric_mem: true,
@@ -306,6 +311,7 @@ function normalizeProbeDisguise(value: Partial<ProbeDisguiseSettings>): ProbeDis
     ...defaultProbeDisguise,
     ...value,
     server_ids: Array.isArray(value.server_ids) ? value.server_ids.filter((id): id is number => Number.isInteger(id)) : [],
+    server_ids_default: value.server_ids_default === true,
   };
 }
 
@@ -344,6 +350,9 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
   const [dashboardRefreshMs, setDashboardRefreshMs] = useState(5000);
   const [probe, setProbe] = useState<ProbeDisguiseSettings>(defaultProbeDisguise);
   const [servers, setServers] = useState<RemoteServer[]>([]);
+  const [probeServerPickerOpen, setProbeServerPickerOpen] = useState(false);
+  const [probeServerDraft, setProbeServerDraft] = useState<number[]>([]);
+  const [probeServerSearch, setProbeServerSearch] = useState("");
   const [shortLink, setShortLink] = useState(true);
   const [prefix, setPrefix] = useState({ enabled: false, left: "「", right: "」" });
   const [overrideScripts, setOverrideScripts] = useState(false);
@@ -376,6 +385,39 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
   const [mihomoWorking, setMihomoWorking] = useState(false);
   const [mihomoError, setMihomoError] = useState("");
 
+  const knownProbeServerIDs = servers.map((server) => server.id);
+  const knownProbeServerIDSet = new Set(knownProbeServerIDs);
+  const validProbeServerIDs = (ids: number[]) => Array.from(new Set(ids.filter((id) => knownProbeServerIDSet.has(id))));
+  const selectedProbeServerIDs = probe.server_ids_default ? knownProbeServerIDs : validProbeServerIDs(probe.server_ids);
+  const selectedProbeServerCount = selectedProbeServerIDs.length;
+
+  const openProbeServerPicker = () => {
+    setProbeServerDraft(selectedProbeServerIDs);
+    setProbeServerSearch("");
+    setProbeServerPickerOpen(true);
+  };
+
+  const visibleProbeServers = servers.filter((server) => {
+    const query = probeServerSearch.trim().toLocaleLowerCase();
+    if (!query) return true;
+    return [server.name, server.ip_address, server.domain].filter(Boolean).join(" ").toLocaleLowerCase().includes(query);
+  });
+  const visibleProbeServerDraft = validProbeServerIDs(probeServerDraft);
+  const allProbeServersSelected = knownProbeServerIDs.length > 0 && knownProbeServerIDs.every((id) => visibleProbeServerDraft.includes(id));
+
+  const toggleProbeServer = (serverID: number) => {
+    setProbeServerDraft((current) => {
+      const currentIDs = validProbeServerIDs(current);
+      return currentIDs.includes(serverID)
+        ? currentIDs.filter((id) => id !== serverID)
+        : [...currentIDs, serverID];
+    });
+  };
+
+  const toggleAllProbeServers = () => {
+    setProbeServerDraft(allProbeServersSelected ? [] : knownProbeServerIDs);
+  };
+
   const load = useCallback(async () => {
     setLoading(true); setLoaded(false); setError("");
     try {
@@ -405,8 +447,16 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
         api.get<{ token: string }>("/api/admin/system-settings/api-token"),
         api.get<UserSubscriptionConfig>("/api/user/config"),
       ]);
+      const loadedServers = serverData.servers ?? [];
+      const loadedProbe = normalizeProbeDisguise(probeData);
+      const loadedServerIDs = new Set(loadedServers.map((server) => server.id));
       setMasterURL(master.master_url || location.origin); setTheme(themeData.default_theme); setWallpaper(wall.login_wallpaper);
-      setIntervals(intervalData); setDashboardRefreshMs(refreshData.refetch_interval_ms); setProbe(normalizeProbeDisguise(probeData)); setServers(serverData.servers ?? []); setShortLink(shortData.enable_short_link);
+      setIntervals(intervalData); setDashboardRefreshMs(refreshData.refetch_interval_ms); setProbe({
+        ...loadedProbe,
+        server_ids: loadedProbe.server_ids_default
+          ? loadedServers.map((server) => server.id)
+          : loadedProbe.server_ids.filter((id) => loadedServerIDs.has(id)),
+      }); setServers(loadedServers); setShortLink(shortData.enable_short_link);
       setPrefix(prefixData); setOverrideScripts(overrideData.enable_override_scripts); setOutputFormat(formatData.subscription_output_format === "json" ? "json" : "yaml");
       setSilent(silentData); setFeatures(featureData.enable_management_features); setRootShortLinks(rootLinksData.enable_root_short_links); setAgentLog(logData.agent_log_enabled);
       setTemplates(templateData.templates ?? []); setDefaultTemplate(defaultTemplateData.default_template_filename); setRedeemTemplate(redeemData.redeem_template);
@@ -479,12 +529,18 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
     void save("general", async () => {
       const normalizedRefreshMs = Number.isFinite(dashboardRefreshMs) ? Math.min(60000, Math.max(1000, dashboardRefreshMs)) : 5000;
       const reportInterval = Math.round(normalizedRefreshMs / 1000);
+      const probePayload: Partial<ProbeDisguiseSettings> = { ...probe };
+      if (probe.server_ids_default) {
+        delete probePayload.server_ids;
+      } else {
+        probePayload.server_ids = validProbeServerIDs(probe.server_ids);
+      }
       await Promise.all([
         api.put("/api/admin/system-settings/master-url", { master_url: masterURL.trim().replace(/\/$/, "") }),
         api.put("/api/admin/system-settings/default-theme", { default_theme: theme }),
         api.put("/api/admin/system-settings/login-wallpaper", { login_wallpaper: wallpaper.trim() }),
         api.put("/api/admin/system-settings/intervals", { ...intervals, report_interval: reportInterval }),
-        api.put("/api/admin/system-settings/probe-disguise", probe),
+        api.put("/api/admin/system-settings/probe-disguise", probePayload),
       ]);
       await api.put("/api/admin/system-settings/dashboard-refresh", { refetch_interval_ms: normalizedRefreshMs });
       document.documentElement.dataset.styleTheme = theme;
@@ -643,7 +699,7 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
           <Field label="默认主题"><select value={theme} onChange={(e) => setTheme(e.target.value)}><option value="flat">扁平</option><option value="pixel">像素</option><option value="anime">动漫</option></select></Field>
           <Field label="登录页壁纸 URL" hint="留空使用内置背景"><input type="url" value={wallpaper} onChange={(e) => setWallpaper(e.target.value)} placeholder="https://..." /></Field>
         </SettingSection>
-        <SettingSection icon={<Eye size={19} />} title="探针伪装" description="公开状态页只暴露所选服务器的脱敏运行指标">
+        <SettingSection icon={<Eye size={19} />} title="伪装" description="公开状态页只暴露所选服务器的脱敏运行指标">
           <Toggle checked={probe.enabled} onChange={(enabled) => setProbe({ ...probe, enabled })} label="启用公开探针伪装" />
           <Toggle checked={probe.show_name} onChange={(show_name) => setProbe({ ...probe, show_name })} label="显示服务器名称" />
           <Toggle checked={probe.block_login} onChange={(block_login) => setProbe({ ...probe, block_login })} label="隐藏公开页登录入口" />
@@ -656,7 +712,13 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
             <Toggle checked={probe.metric_traffic} onChange={(metric_traffic) => setProbe({ ...probe, metric_traffic })} label="公开显示流量" />
             <Toggle checked={probe.metric_speed} onChange={(metric_speed) => setProbe({ ...probe, metric_speed })} label="公开显示实时速率" />
           </div>
-          <div className="settings-check-list">{servers.map((server) => <label className="checkbox-row" key={server.id}><input type="checkbox" checked={probe.server_ids.includes(server.id)} onChange={() => setProbe({ ...probe, server_ids: probe.server_ids.includes(server.id) ? probe.server_ids.filter((id) => id !== server.id) : [...probe.server_ids, server.id] })} /><span>{server.name}</span></label>)}</div>
+          <div className="field probe-server-field">
+            <span className="field-label">服务器</span>
+            <div className="probe-server-summary">
+              <span>{probe.server_ids_default ? `默认全部 / ${servers.length}` : selectedProbeServerCount ? `已选择 ${selectedProbeServerCount} / ${servers.length}` : `未选择 / ${servers.length}`}</span>
+              <Button type="button" variant="secondary" onClick={openProbeServerPicker}>选择</Button>
+            </div>
+          </div>
         </SettingSection>
         <SaveRow label="保存基础设置" saving={saving === "general"} />
       </form>
@@ -767,6 +829,34 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
       onConfirm={() => void applyUpdate()}
     /> : null}
     {showMigration ? <LegacyPanelImportDialog notify={notify} onClose={() => setShowMigration(false)} /> : null}
+    {probeServerPickerOpen ? <Dialog title="选择服务器" description={`已选择 ${visibleProbeServerDraft.length} / ${servers.length}`} onClose={() => setProbeServerPickerOpen(false)} wide>
+      <div className="probe-server-picker">
+        <div className="probe-server-picker-toolbar">
+          <div className="probe-server-picker-search">
+            <Search size={17} aria-hidden="true" />
+            <input autoFocus value={probeServerSearch} onChange={(event) => setProbeServerSearch(event.target.value)} placeholder="搜索名称、IP 或域名" aria-label="搜索服务器" />
+          </div>
+          <Button type="button" variant="secondary" aria-pressed={allProbeServersSelected} onClick={toggleAllProbeServers} disabled={!servers.length}>{allProbeServersSelected ? "取消全选" : "全选"}</Button>
+        </div>
+        <div className="probe-server-picker-list" role="group" aria-label="公开显示服务器">
+          {visibleProbeServers.length ? visibleProbeServers.map((server) => <label className="probe-server-picker-option" key={server.id}>
+            <input type="checkbox" checked={visibleProbeServerDraft.includes(server.id)} onChange={() => toggleProbeServer(server.id)} />
+            <span>
+              <strong>{server.name}</strong>
+              {server.ip_address || server.domain ? <small>{[server.ip_address, server.domain].filter(Boolean).join(" · ")}</small> : null}
+            </span>
+          </label>) : <p className="probe-server-picker-empty">没有匹配的服务器</p>}
+        </div>
+        <div className="probe-server-picker-footer"><span>{visibleProbeServerDraft.length} 台服务器已选择</span><div className="dialog-actions"><Button type="button" variant="secondary" onClick={() => setProbeServerPickerOpen(false)}>取消</Button><Button type="button" onClick={() => {
+          const selectedIDs = validProbeServerIDs(probeServerDraft);
+          const keepDefaultSelection = knownProbeServerIDs.length === 0
+            ? probe.server_ids_default
+            : knownProbeServerIDs.every((id) => selectedIDs.includes(id));
+          setProbe({ ...probe, server_ids: selectedIDs, server_ids_default: keepDefaultSelection });
+          setProbeServerPickerOpen(false);
+        }}>完成</Button></div></div>
+      </div>
+    </Dialog> : null}
   </>;
 }
 

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
-import { Activity, ArrowDown, ArrowRight, ArrowUp, Check, Cpu, Gauge, Grid2X2, HardDrive, KeyRound, List, LockKeyhole, LogIn, MemoryStick, Network, Server, ShieldCheck } from "lucide-react";
+import { Activity, ArrowDown, ArrowRight, ArrowUp, Check, Cpu, Gauge, Globe2, Grid2X2, HardDrive, KeyRound, List, LockKeyhole, LogIn, MemoryStick, Network, Server, ShieldCheck } from "lucide-react";
 import { api, ApiError, setToken } from "./api";
 import { BRAND_NAME, BrandMark } from "./brand";
+import { countryFlag, normalizeCountryCode } from "./country-flag";
 import type { Session } from "./types";
 import { Button, ErrorState, Field, Spinner, formatBytes } from "./ui";
 
@@ -108,6 +109,7 @@ export function SetupScreen({ onComplete }: { onComplete: () => void }) {
 
 export interface PublicProbeServer {
   name?: string;
+  country_code?: string;
   upload_speed?: number;
   download_speed?: number;
   traffic_used?: number;
@@ -168,6 +170,7 @@ function publicProbeServer(value: unknown): PublicProbeServer | null {
   const source = value as Record<string, unknown>;
   return {
     name: typeof source.name === "string" ? source.name : undefined,
+    country_code: normalizeCountryCode(source.country_code),
     online: booleanValue(source.online),
     upload_speed: finiteNumber(source.upload_speed),
     download_speed: finiteNumber(source.download_speed),
@@ -245,7 +248,7 @@ function ProbeMetric({ icon, label, value, progress, detail }: { icon: ReactNode
   </div>;
 }
 
-export function PublicProbeScreen({ probe, onLogin }: { probe: PublicProbeState; onLogin: () => void }) {
+export function PublicProbeScreen({ probe, onLogin, loginLabel = "登录" }: { probe: PublicProbeState; onLogin: () => void; loginLabel?: string }) {
   const servers = probe.servers ?? [];
   const [layout, setLayout] = useState<"grid" | "list">("grid");
   const showCPU = isProbeMetricEnabled(probe, "show_cpu", "metric_cpu", false);
@@ -255,6 +258,10 @@ export function PublicProbeScreen({ probe, onLogin }: { probe: PublicProbeState;
   const showSpeed = isProbeMetricEnabled(probe, "show_speed", "metric_speed", true);
   const title = probe.title?.trim() || "服务器状态";
   const logo = probe.logo?.trim();
+  const onlineCount = servers.filter((server) => server.online).length;
+  const totalUpload = servers.reduce((total, server) => total + Math.max(0, Number(server.upload_speed) || 0), 0);
+  const totalDownload = servers.reduce((total, server) => total + Math.max(0, Number(server.download_speed) || 0), 0);
+  const totalTraffic = servers.reduce((total, server) => total + Math.max(0, Number(server.traffic_used) || 0), 0);
   return (
     <main className="public-probe">
       <header className="public-probe-header">
@@ -266,11 +273,17 @@ export function PublicProbeScreen({ probe, onLogin }: { probe: PublicProbeState;
           <div className="public-probe-controls" role="group" aria-label="页面视图">
             <button type="button" className={`public-probe-view-button ${layout === "grid" ? "is-active" : ""}`} aria-label="网格视图" title="网格视图" aria-pressed={layout === "grid"} onClick={() => setLayout("grid")}><Grid2X2 size={16} /></button>
             <button type="button" className={`public-probe-view-button ${layout === "list" ? "is-active" : ""}`} aria-label="列表视图" title="列表视图" aria-pressed={layout === "list"} onClick={() => setLayout("list")}><List size={17} /></button>
-            {!probe.block_login ? <button type="button" className="public-probe-login" onClick={onLogin}><LogIn size={16} />登录</button> : null}
+            {!probe.block_login ? <button type="button" className="public-probe-login" onClick={onLogin}><LogIn size={16} />{loginLabel}</button> : null}
           </div>
         </div>
       </header>
       <section className="public-probe-content">
+        <div className="public-probe-summary" aria-label="服务器总览">
+          <span><i className="is-online" />在线 <strong>{onlineCount}</strong><small>/ {servers.length}</small></span>
+          {showSpeed ? <span><ArrowDown size={14} />下行 <strong>{formatBytes(totalDownload, true)}</strong></span> : null}
+          {showSpeed ? <span><ArrowUp size={14} />上行 <strong>{formatBytes(totalUpload, true)}</strong></span> : null}
+          {showTraffic ? <span><Gauge size={14} />累计流量 <strong>{formatBytes(totalTraffic)}</strong></span> : null}
+        </div>
         {servers.length ? <div className={`public-probe-grid ${layout === "list" ? "is-list" : ""}`}>{servers.map((server, index) => {
           const used = Math.max(0, Number(server.traffic_used) || 0);
           const limit = Math.max(0, Number(server.traffic_limit) || 0);
@@ -287,9 +300,10 @@ export function PublicProbeScreen({ probe, onLogin }: { probe: PublicProbeState;
             showDisk && diskPercent !== undefined,
             showTraffic,
           ].filter(Boolean).length;
+          const flag = countryFlag(server.country_code);
           return <article className={`public-probe-item ${server.online ? "is-online" : "is-offline"}`} key={`${server.name || "service"}-${index}`} style={{ "--public-probe-order": index } as CSSProperties}>
             <header className="public-probe-item-heading">
-              <span className="public-probe-status"><i /><strong>{probe.show_name && server.name ? server.name : `#${index + 1}`}</strong></span>
+              <span className="public-probe-status"><i /><span className="public-probe-country" title={server.country_code || "地区未知"}>{flag || <Globe2 size={15} />}</span><strong>{probe.show_name && server.name ? server.name : `服务器 #${index + 1}`}</strong></span>
               <small>{server.online ? "在线" : "离线"}</small>
             </header>
             <div className={`public-probe-metrics public-probe-metrics-${Math.min(4, Math.max(1, visibleMetrics))}`}>

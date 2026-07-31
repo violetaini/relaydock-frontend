@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
 import { SettingsWorkbenchPage } from "./settings-workbench";
@@ -150,6 +150,108 @@ describe("settings workbench", () => {
     expect(put).toHaveBeenCalledWith("/api/admin/system-settings/intervals", expect.objectContaining({ report_interval: 5 }));
     expect(put).toHaveBeenCalledWith("/api/admin/system-settings/dashboard-refresh", { refetch_interval_ms: 5000 });
     expect(notify).toHaveBeenCalledWith("基础设置已保存");
+  });
+
+  it("keeps public probe server selection compact until the picker is confirmed", async () => {
+    mockCompleteSettings({
+      "/api/admin/system-settings/probe-disguise": {
+        enabled: true,
+        title: "状态页",
+        server_ids: [11, 12],
+        show_name: true,
+        metric_cpu: true,
+        metric_mem: true,
+        metric_disk: true,
+        metric_traffic: true,
+        metric_speed: true,
+      },
+      "/api/admin/remote-servers": {
+        success: true,
+        servers: [
+          { id: 11, name: "Edge Hong Kong", ip_address: "203.0.113.11" },
+          { id: 12, name: "Edge Tokyo", ip_address: "203.0.113.12" },
+          { id: 13, name: "Oracle Seoul", ip_address: "203.0.113.13" },
+        ],
+      },
+    });
+    render(<SettingsWorkbenchPage notify={vi.fn()} />);
+
+    await screen.findByRole("heading", { name: "伪装" });
+    const compactField = screen.getByText("服务器").closest(".probe-server-field") as HTMLElement;
+    expect(within(compactField).getByText("已选择 2 / 3")).toBeInTheDocument();
+    expect(within(compactField).queryByRole("checkbox")).not.toBeInTheDocument();
+
+    fireEvent.click(within(compactField).getByRole("button", { name: "选择" }));
+    const dialog = screen.getByRole("dialog", { name: "选择服务器" });
+    const seoul = within(dialog).getByRole("checkbox", { name: /Oracle Seoul/ });
+    expect(seoul).not.toBeChecked();
+    fireEvent.click(seoul);
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    expect(within(compactField).getByText("已选择 2 / 3")).toBeInTheDocument();
+
+    fireEvent.click(within(compactField).getByRole("button", { name: "选择" }));
+    const confirmedDialog = screen.getByRole("dialog", { name: "选择服务器" });
+    fireEvent.click(within(confirmedDialog).getByRole("checkbox", { name: /Oracle Seoul/ }));
+    fireEvent.click(within(confirmedDialog).getByRole("button", { name: "完成" }));
+    expect(within(compactField).getByText("默认全部 / 3")).toBeInTheDocument();
+  });
+
+  it("keeps the default probe selection dynamic", async () => {
+    mockCompleteSettings({
+      "/api/admin/system-settings/probe-disguise": {
+        enabled: true,
+        title: "状态页",
+        server_ids: [11, 12, 99],
+        server_ids_default: true,
+        show_name: true,
+      },
+      "/api/admin/remote-servers": {
+        success: true,
+        servers: [
+          { id: 11, name: "Edge Hong Kong", ip_address: "203.0.113.11" },
+          { id: 12, name: "Edge Tokyo", ip_address: "203.0.113.12" },
+        ],
+      },
+    });
+    const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
+    render(<SettingsWorkbenchPage notify={vi.fn()} />);
+
+    const compactField = (await screen.findByText("服务器")).closest(".probe-server-field") as HTMLElement;
+    expect(within(compactField).getByText("默认全部 / 2")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存基础设置" }));
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/system-settings/probe-disguise", expect.objectContaining({ server_ids_default: true })));
+    const defaultProbeCall = put.mock.calls.find(([path]) => path === "/api/admin/system-settings/probe-disguise");
+    expect(defaultProbeCall?.[1]).not.toHaveProperty("server_ids");
+  });
+
+  it("drops deleted servers from the explicit probe selection", async () => {
+    mockCompleteSettings({
+      "/api/admin/system-settings/probe-disguise": {
+        enabled: true,
+        title: "状态页",
+        server_ids: [11, 99],
+        server_ids_default: false,
+        show_name: true,
+      },
+      "/api/admin/remote-servers": {
+        success: true,
+        servers: [
+          { id: 11, name: "Edge Hong Kong", ip_address: "203.0.113.11" },
+          { id: 12, name: "Edge Tokyo", ip_address: "203.0.113.12" },
+        ],
+      },
+    });
+    render(<SettingsWorkbenchPage notify={vi.fn()} />);
+
+    const compactField = (await screen.findByText("服务器")).closest(".probe-server-field") as HTMLElement;
+    expect(within(compactField).getByText("已选择 1 / 2")).toBeInTheDocument();
+    fireEvent.click(within(compactField).getByRole("button", { name: "选择" }));
+    const dialog = screen.getByRole("dialog", { name: "选择服务器" });
+    expect(within(dialog).getByText("已选择 1 / 2")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "全选" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消全选" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "完成" }));
+    expect(within(compactField).getByText("未选择 / 2")).toBeInTheDocument();
   });
 
   it("loads and saves the full user subscription contract without overwriting node order", async () => {

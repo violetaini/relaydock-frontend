@@ -9,14 +9,18 @@ import {
   Cloud,
   Code2,
   Copy,
+  Cpu,
   Download,
   Eye,
   FileKey2,
   Gauge,
+  Globe2,
   Grid2X2,
+  HardDrive,
   HardDriveDownload,
   KeyRound,
   List,
+  MemoryStick,
   Network,
   Pencil,
   Play,
@@ -37,6 +41,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { api, openDashboardSocket, requestStream } from "./api";
+import { countryFlag } from "./country-flag";
 import type { NginxMode, RealtimeMessage, RemoteServer, ServerListResponse, SharedServerToken } from "./types";
 import {
   buildTrojanInbound,
@@ -1805,6 +1810,24 @@ function ServerAddressCarousel({ server }: { server: ManagedServer }) {
   </button>;
 }
 
+function boundedUsage(value?: number, total?: number): number | undefined {
+  if (!Number.isFinite(value)) return undefined;
+  const percent = total && total > 0 ? Number(value) / total * 100 : Number(value);
+  return Number.isFinite(percent) ? Math.min(100, Math.max(0, percent)) : undefined;
+}
+
+function usageLabel(value?: number) {
+  return value === undefined ? "--" : `${value >= 10 ? value.toFixed(0) : value.toFixed(1)}%`;
+}
+
+function ServiceHostMetric({ icon, label, value, detail, tone = "blue" }: { icon: ReactNode; label: string; value?: number; detail?: string; tone?: "blue" | "green" | "amber" }) {
+  return <div className={`service-host-metric is-${tone}`} style={{ "--service-host-meter": `${value ?? 0}%` } as CSSProperties} title={detail || `${label} 暂无 Agent 上报`}>
+    <span className="service-host-metric-icon">{icon}</span>
+    <span className="service-host-metric-copy"><small>{label}</small><strong>{usageLabel(value)}</strong></span>
+    <i aria-hidden="true" />
+  </div>;
+}
+
 function ServerCard({ server, serviceStatus, agentVersion, checked, credentialsLoading, xrayWorking, agentWorking, style, onCheck, onOpen, onXrayAction, onAgentUpgrade, onEdit, onCredentials, onDelete }: {
   server: ManagedServer;
   serviceStatus?: CachedServiceStatus;
@@ -1825,12 +1848,16 @@ function ServerCard({ server, serviceStatus, agentVersion, checked, credentialsL
   const connected = isConnected(server);
   const usage = server.traffic_limit > 0 ? Math.min(100, server.traffic_used / server.traffic_limit * 100) : 0;
   const transport = connected ? activeTransport(server) : null;
+  const cpuUsage = connected ? boundedUsage(server.cpu_pct) : undefined;
+  const memoryUsage = connected ? boundedUsage(server.mem_used, server.mem_total) : undefined;
+  const diskUsage = connected ? boundedUsage(server.disk_used, server.disk_total) : undefined;
+  const flag = countryFlag(server.country_code);
   return (
     <Surface style={style} className={`service-card ${connected ? "is-online" : "is-offline"} ${checked ? "is-selected" : ""}`}>
       <div className="service-card-head">
         <label className="service-select" title="选择服务器"><input type="checkbox" checked={checked} onChange={(event) => onCheck(event.target.checked)} aria-label={`选择 ${server.name}`} /></label>
         <span className={`service-server-icon ${connected ? "is-online" : ""}`}>{connected ? <Wifi size={19} /> : <WifiOff size={19} />}</span>
-        <div className="service-card-title"><strong>{server.name}</strong>{server.domain ? <small>{server.domain}</small> : null}</div>
+        <div className="service-card-title"><strong><span className="service-country" title={server.country_code || "地区未知"}>{flag || <Globe2 size={14} />}</span><span className="service-country-name">{server.name}</span></strong>{server.domain ? <small>{server.domain}</small> : null}</div>
         <Badge tone={connected ? "good" : statusTone(server.status)}>{connected ? "在线" : "离线"}</Badge>
       </div>
       <div className="service-badges">
@@ -1848,6 +1875,11 @@ function ServerCard({ server, serviceStatus, agentVersion, checked, credentialsL
         </div>
       </div>
       <div className="service-live-panel">
+        <div className="service-host-metrics" aria-label={`${server.name} 主机资源`}>
+          <ServiceHostMetric icon={<Cpu size={13} />} label="CPU" value={cpuUsage} detail={server.loadavg ? `负载 ${server.loadavg}` : undefined} />
+          <ServiceHostMetric icon={<MemoryStick size={13} />} label="内存" value={memoryUsage} detail={server.mem_used !== undefined && server.mem_total !== undefined ? `${formatBytes(server.mem_used)} / ${formatBytes(server.mem_total)}` : undefined} tone="green" />
+          <ServiceHostMetric icon={<HardDrive size={13} />} label="磁盘" value={diskUsage} detail={server.disk_used !== undefined && server.disk_total !== undefined ? `${formatBytes(server.disk_used)} / ${formatBytes(server.disk_total)}` : undefined} tone="amber" />
+        </div>
         <div className="service-speed-row"><span><Activity size={14} />实时网速</span><strong><i className="is-up">↑ {formatBytes(server.current_upload_speed, true)}</i><i className="is-down">↓ {formatBytes(server.current_download_speed, true)}</i></strong></div>
         <div className="service-traffic">
           <div><small>流量统计</small><strong>{formatBytes(server.traffic_used)}{server.traffic_limit > 0 ? ` / ${formatBytes(server.traffic_limit)}` : " · 不限流量"}</strong></div>
@@ -1884,10 +1916,23 @@ function ServerTable({ servers, serviceStatuses, agentVersions, selected, creden
 }) {
   const allChecked = servers.length > 0 && servers.every((server) => selected.includes(server.id));
   return (
-    <Surface className="table-surface service-table-surface"><div className="table-wrap"><table><thead><tr><th><input aria-label="选择全部服务器" type="checkbox" checked={allChecked} onChange={(event) => onSelect(event.target.checked ? Array.from(new Set([...selected, ...servers.map((server) => server.id)])) : selected.filter((id) => !servers.some((server) => server.id === id)))} /></th><th>服务器</th><th>连接</th><th>实时速度</th><th>本期流量</th><th>核心 / Agent</th><th aria-label="操作" /></tr></thead><tbody>{servers.map((server) => {
+    <Surface className="table-surface service-table-surface"><div className="table-wrap"><table><thead><tr><th><input aria-label="选择全部服务器" type="checkbox" checked={allChecked} onChange={(event) => onSelect(event.target.checked ? Array.from(new Set([...selected, ...servers.map((server) => server.id)])) : selected.filter((id) => !servers.some((server) => server.id === id)))} /></th><th>服务器</th><th>连接</th><th>资源</th><th>实时速度</th><th>本期流量</th><th>核心 / Agent</th><th aria-label="操作" /></tr></thead><tbody>{servers.map((server) => {
       const connected = isConnected(server);
       const transport = activeTransport(server);
-      return <tr key={server.id}><td><input aria-label={`选择 ${server.name}`} type="checkbox" checked={selected.includes(server.id)} onChange={(event) => onSelect(event.target.checked ? [...new Set([...selected, server.id])] : selected.filter((id) => id !== server.id))} /></td><td><button className="service-name-button" onClick={() => onOpen(server)}><span className={`service-server-icon ${connected ? "is-online" : ""}`}>{connected ? <Wifi size={16} /> : <WifiOff size={16} />}</span><span><strong>{server.name}</strong><small>{server.domain || server.ip_address || "地址待上报"}</small></span></button></td><td><Badge tone={connected ? "good" : statusTone(server.status)}>{connected ? transport : server.status || "离线"}</Badge><small className="cell-note">{connectionPolicyLabel(server.connection_mode)} · {relativeTime(server.last_heartbeat)}</small></td><td><span className="speed-pair"><small><ArrowUpFromLine size={13} />{formatBytes(server.current_upload_speed, true)}</small><small><ArrowDownToLine size={13} />{formatBytes(server.current_download_speed, true)}</small></span></td><td><strong>{formatBytes(server.traffic_used)}</strong><small className="cell-note">{server.traffic_limit ? `限额 ${formatBytes(server.traffic_limit)}` : "不限额"}</small></td><td><div className="service-version-stack"><XrayQuickControl compact server={server} status={serviceStatuses[server.id]} working={quickWorking?.serverId === server.id} onAction={(action) => onXrayAction(server, action)} /><AgentVersionButton compact server={server} version={agentVersions[server.id]} working={Boolean(upgrade?.running && upgrade.serverIDs.includes(server.id))} onUpgrade={() => onAgentUpgrade(server)} /></div></td><td><div className="service-row-actions"><IconButton label={`管理 ${server.name}`} onClick={() => onOpen(server)}><Settings2 size={16} /></IconButton><IconButton label={`编辑 ${server.name}`} onClick={() => onEdit(server)}><Pencil size={16} /></IconButton>{!server.is_federated ? <IconButton label={`查看 ${server.name} 安装凭据`} onClick={() => onCredentials(server)} disabled={credentialsLoading === server.id}>{credentialsLoading === server.id ? <RefreshCw className="service-spin" size={16} /> : <KeyRound size={16} />}</IconButton> : null}<IconButton label={`删除 ${server.name}`} onClick={() => onDelete(server)}><Trash2 size={16} /></IconButton></div></td></tr>;
+      const cpuUsage = connected ? boundedUsage(server.cpu_pct) : undefined;
+      const memoryUsage = connected ? boundedUsage(server.mem_used, server.mem_total) : undefined;
+      const diskUsage = connected ? boundedUsage(server.disk_used, server.disk_total) : undefined;
+      const flag = countryFlag(server.country_code);
+      return <tr key={server.id}>
+        <td><input aria-label={`选择 ${server.name}`} type="checkbox" checked={selected.includes(server.id)} onChange={(event) => onSelect(event.target.checked ? [...new Set([...selected, server.id])] : selected.filter((id) => id !== server.id))} /></td>
+        <td><button className="service-name-button" onClick={() => onOpen(server)}><span className={`service-server-icon ${connected ? "is-online" : ""}`}>{connected ? <Wifi size={16} /> : <WifiOff size={16} />}</span><span><strong><span className="service-country" title={server.country_code || "地区未知"}>{flag || <Globe2 size={13} />}</span><span className="service-country-name">{server.name}</span></strong><small>{server.domain || server.ip_address || "地址待上报"}</small></span></button></td>
+        <td><Badge tone={connected ? "good" : statusTone(server.status)}>{connected ? transport : server.status || "离线"}</Badge><small className="cell-note">{connectionPolicyLabel(server.connection_mode)} · {relativeTime(server.last_heartbeat)}</small></td>
+        <td><div className="service-resource-compact"><span><Cpu size={12} />{usageLabel(cpuUsage)}</span><span><MemoryStick size={12} />{usageLabel(memoryUsage)}</span><span><HardDrive size={12} />{usageLabel(diskUsage)}</span></div></td>
+        <td><span className="speed-pair"><small><ArrowUpFromLine size={13} />{formatBytes(server.current_upload_speed, true)}</small><small><ArrowDownToLine size={13} />{formatBytes(server.current_download_speed, true)}</small></span></td>
+        <td><strong>{formatBytes(server.traffic_used)}</strong><small className="cell-note">{server.traffic_limit ? `限额 ${formatBytes(server.traffic_limit)}` : "不限额"}</small></td>
+        <td><div className="service-version-stack"><XrayQuickControl compact server={server} status={serviceStatuses[server.id]} working={quickWorking?.serverId === server.id} onAction={(action) => onXrayAction(server, action)} /><AgentVersionButton compact server={server} version={agentVersions[server.id]} working={Boolean(upgrade?.running && upgrade.serverIDs.includes(server.id))} onUpgrade={() => onAgentUpgrade(server)} /></div></td>
+        <td><div className="service-row-actions"><IconButton label={`管理 ${server.name}`} onClick={() => onOpen(server)}><Settings2 size={16} /></IconButton><IconButton label={`编辑 ${server.name}`} onClick={() => onEdit(server)}><Pencil size={16} /></IconButton>{!server.is_federated ? <IconButton label={`查看 ${server.name} 安装凭据`} onClick={() => onCredentials(server)} disabled={credentialsLoading === server.id}>{credentialsLoading === server.id ? <RefreshCw className="service-spin" size={16} /> : <KeyRound size={16} />}</IconButton> : null}<IconButton label={`删除 ${server.name}`} onClick={() => onDelete(server)}><Trash2 size={16} /></IconButton></div></td>
+      </tr>;
     })}</tbody></table></div></Surface>
   );
 }

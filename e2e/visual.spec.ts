@@ -691,6 +691,38 @@ test("mobile probe return uses a matched home control", async ({ page }) => {
   await expectViewportIntegrity(page, "mobile probe return control");
 });
 
+test("probe return stays in the current tab", async ({ page, context }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockAPI(page, traffic, undefined, {
+    "/api/public/probe-servers": {
+      enabled: true,
+      title: "RelayDock Status",
+      show_name: true,
+      show_cpu: true,
+      servers: [{
+        name: "Hong Kong Edge",
+        country_code: "HK",
+        online: true,
+        cpu_pct: 12.4,
+        traffic_used: 1024,
+      }],
+    },
+  });
+  await page.goto("/#/dashboard");
+
+  const probeLink = page.locator(".topbar-probe-link");
+  await expect(probeLink).toHaveAttribute("href", /[?&]probe=1/);
+  await expect(probeLink).not.toHaveAttribute("target", "_blank");
+  const pageCount = context.pages().length;
+  await Promise.all([
+    page.waitForURL(/[?&]probe=1/),
+    probeLink.click(),
+  ]);
+
+  await expect(page.locator(".public-probe")).toBeVisible();
+  expect(context.pages()).toHaveLength(pageCount);
+});
+
 test("desktop layout switch stays visible in both chrome modes and preserves navigation", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockAPI(page);

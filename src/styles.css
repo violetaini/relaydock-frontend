@@ -111,6 +111,7 @@ small { color: var(--text-soft); }
   border: 1px solid transparent;
   transition: background-color .15s ease, color .15s ease, border-color .15s ease;
 }
+.icon-button[href], .nav-item[href] { text-decoration: none; }
 .icon-button:hover { color: var(--text); background: var(--surface-muted); border-color: var(--border); }
 .text-button { padding: 3px 0; background: transparent; color: var(--accent); font-size: 13px; font-weight: 650; }
 .text-button:hover { color: var(--accent-strong); }

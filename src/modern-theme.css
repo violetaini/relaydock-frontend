@@ -1831,23 +1831,20 @@
   }
 }
 
-/* The public status page is a destination, but it should not force the
-   desktop navigation to scroll. Keep its name in side and compact layouts;
-   the wide one-row header already has a labelled tooltip on the eye icon. */
-@media (min-width: 1360px) {
-  .console-layout.layout-top .nav-probe-link {
-    width: 36px;
-    padding-inline: 0;
-    justify-content: center;
-  }
-  .console-layout.layout-top .nav-probe-link > span { display: none; }
+/* Keep the public status destination in the navigation for side and mobile
+   layouts. In the desktop top bar it belongs with the utility controls. */
+.sidebar-probe-link { display: none; }
+
+@media (min-width: 1041px) {
+  .console-layout.layout-top .nav-probe-link { display: none; }
+  .console-layout.layout-top .sidebar-probe-link { display: inline-flex; }
 }
 
 @media (min-width: 1440px) and (max-width: 1679px) {
   :root[data-style-theme="flat"] .console-layout.layout-top .sidebar-brand { min-width: 136px; }
   :root[data-style-theme="flat"] .console-layout.layout-top :is(.nav-primary, .nav-utility) .nav-item {
     padding-inline: 1px;
-    gap: 3px;
+    gap: 2px;
     font-size: 14px;
   }
 }

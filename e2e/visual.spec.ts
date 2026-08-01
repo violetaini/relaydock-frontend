@@ -422,7 +422,7 @@ test("desktop navigation follows the upstream hierarchy", async ({ page }) => {
     await expect(primaryLabels).toHaveCount(8);
     await expect(utilityItems).toHaveCount(5);
     await expect(utilityLabels).toHaveCount(5);
-    await expect(page.getByRole("link", { name: "返回探针" })).toHaveAttribute("title", "返回探针");
+    await expect(page.locator(".sidebar-nav .nav-probe-link")).toHaveAttribute("title", "返回探针");
     await expect(page.locator(".sidebar-nav .nav-secondary")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "更多功能", exact: true })).toHaveCount(0);
     await expect(page.locator(".sidebar-brand")).toContainText("RelayDock");
@@ -440,7 +440,8 @@ test("desktop navigation follows the upstream hierarchy", async ({ page }) => {
     expect(clipped, `${width}px desktop navigation labels must remain visible`).toEqual([]);
     const navOverflow = await page.locator(".sidebar-nav").evaluate((nav) => nav.scrollWidth - nav.clientWidth);
     expect(navOverflow, `${width}px desktop navigation must not require horizontal scrolling`).toBeLessThanOrEqual(1);
-    const spacing = await page.locator(".sidebar-nav .nav-primary .nav-item, .sidebar-nav .nav-utility .nav-item").evaluateAll((elements) => {
+    const desktopNavigationItems = ".sidebar-nav .nav-primary .nav-item, .sidebar-nav .nav-utility .nav-item:not(.nav-probe-link)";
+    const spacing = await page.locator(desktopNavigationItems).evaluateAll((elements) => {
       const rows = new Map<number, DOMRect[]>();
       for (const element of elements) {
         const rect = element.getBoundingClientRect();
@@ -460,13 +461,45 @@ test("desktop navigation follows the upstream hierarchy", async ({ page }) => {
     });
     expect(spacing.brandGap, `${width}px brand must remain separate from navigation`).toBeGreaterThanOrEqual(10);
     expect(spacing.minimumButtonGap, `${width}px navigation buttons must retain visible spacing`).toBeGreaterThanOrEqual(9);
-    const renderedRows = await page.locator(".sidebar-nav .nav-primary .nav-item, .sidebar-nav .nav-utility .nav-item").evaluateAll((elements) => new Set(elements.map((element) => Math.round(element.getBoundingClientRect().top / 2) * 2)).size);
+    const renderedRows = await page.locator(desktopNavigationItems).evaluateAll((elements) => new Set(elements.map((element) => Math.round(element.getBoundingClientRect().top / 2) * 2)).size);
     expect(renderedRows, `${width}px desktop navigation row count`).toBeLessThanOrEqual(width >= 1360 ? 1 : 2);
     const headerHeight = await page.locator(".sidebar").evaluate((header) => header.getBoundingClientRect().height);
     expect(headerHeight, `${width}px desktop navigation uses its stable height`).toBeLessThanOrEqual(width >= 1360 ? 65 : 104);
     await expectViewportIntegrity(page, `${width}px desktop navigation`);
   }
 
+});
+
+test("top navigation keeps probe return with the chrome controls", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockAPI(page);
+  await page.goto("/#/dashboard");
+
+  const navigationProbe = page.locator(".layout-top .sidebar-nav .nav-probe-link");
+  const toolbarProbe = page.locator(".layout-top .sidebar-footer .sidebar-probe-link");
+  const layoutControl = page.locator(".layout-top .sidebar-footer .top-layout-switch");
+  await expect(navigationProbe).toBeHidden();
+  await expect(toolbarProbe).toBeVisible();
+  await expect(toolbarProbe).toHaveAttribute("title", "返回探针");
+
+  const controls = await page.evaluate(() => {
+    const probe = document.querySelector<HTMLElement>(".layout-top .sidebar-footer .sidebar-probe-link");
+    const layout = document.querySelector<HTMLElement>(".layout-top .sidebar-footer .top-layout-switch");
+    const icon = probe?.querySelector<SVGElement>("svg");
+    if (!probe || !layout || !icon) throw new Error("top navigation probe return control is missing");
+    const probeRect = probe.getBoundingClientRect();
+    const layoutRect = layout.getBoundingClientRect();
+    return {
+      iconClass: icon.getAttribute("class") || "",
+      probe: { width: probeRect.width, height: probeRect.height },
+      layout: { width: layoutRect.width, height: layoutRect.height },
+    };
+  });
+
+  await expect(layoutControl).toBeVisible();
+  expect(controls.iconClass).toContain("lucide-house");
+  expect(controls.probe).toEqual(controls.layout);
+  await expectViewportIntegrity(page, "desktop top probe return control");
 });
 
 test("secondary workflows remain available from their owning pages", async ({ page }) => {
@@ -566,7 +599,7 @@ test("mobile probe return uses a matched home control", async ({ page }) => {
   await mockAPI(page);
   await page.goto("/#/dashboard");
 
-  await expect(page.getByRole("button", { name: "返回探针" })).toBeVisible();
+  await expect(page.locator(".topbar-probe-link")).toBeVisible();
   const controls = await page.evaluate(() => {
     const probe = document.querySelector<HTMLElement>(".topbar-probe-link");
     const reference = document.querySelector<HTMLElement>(".topbar-actions .mobile-page-shortcut");
@@ -601,7 +634,7 @@ test("desktop layout switch stays visible in both chrome modes and preserves nav
   await expect(page.locator(".sidebar-nav .nav-item > span")).toHaveCount(13);
   await expect(page.locator(".sidebar-brand .sidebar-layout-switch")).toBeVisible();
   await expect(page.locator(".topbar-actions .topbar-layout-switch")).toBeVisible();
-  await expect(page.getByRole("button", { name: "返回探针" })).toBeVisible();
+  await expect(page.locator(".topbar-probe-link")).toBeVisible();
   expect(await page.locator(".sidebar").evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(224);
   expect(await page.locator(".console-layout").evaluate((element) => getComputedStyle(element).getPropertyValue("--app-header-height").trim())).toBe("68px");
   const chrome = await page.evaluate(() => {

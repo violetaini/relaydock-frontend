@@ -267,6 +267,7 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
           </NavGroup>
         </nav>
         <div className="sidebar-footer">
+          <IconButton className="sidebar-probe-link" label="返回探针" onClick={() => window.open(publicProbeURL, "_blank", "noopener,noreferrer")}><House size={18} /></IconButton>
           <IconButton className="top-layout-switch" label="切换到侧边栏" onClick={toggleLayout}><PanelLeft size={18} /></IconButton>
           <IconButton label={themeLabel} onClick={toggleTheme}>{themeIcon}</IconButton>
           <button type="button" className={`account-block ${page === "account" ? "is-active" : ""}`} aria-label="账户中心" title="账户中心" onClick={() => navigate("account")}>

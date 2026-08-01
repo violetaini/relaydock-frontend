@@ -547,6 +547,21 @@ test("public probe keeps its operational hierarchy across desktop and mobile", a
     await expect(page.locator(".public-probe-item")).toHaveCount(2);
     await expect(page.locator(".public-probe-country").first()).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
     await expect(page.locator(".public-probe-live-state")).toContainText("LIVE");
+    const titleAlignment = await page.evaluate(() => {
+      const flag = document.querySelector<HTMLElement>(".public-probe-country");
+      const name = document.querySelector<HTMLElement>(".public-probe-status strong");
+      if (!flag || !name) throw new Error("public probe title is incomplete");
+      const flagRect = flag.getBoundingClientRect();
+      const nameRect = name.getBoundingClientRect();
+      return {
+        flagDisplay: getComputedStyle(flag).display,
+        centerOffset: Math.abs(
+          (flagRect.top + flagRect.height / 2) - (nameRect.top + nameRect.height / 2),
+        ),
+      };
+    });
+    expect(titleAlignment.flagDisplay).toBe("flex");
+    expect(titleAlignment.centerOffset, `public probe ${viewport.name}: country flag and name must share a vertical center`).toBeLessThanOrEqual(1);
     await expectViewportIntegrity(page, `public probe ${viewport.name}`);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     expect(overflow, `public probe ${viewport.name}: document must not overflow horizontally`).toBeLessThanOrEqual(1);

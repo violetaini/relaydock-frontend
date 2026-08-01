@@ -52,7 +52,21 @@
 .system-update-versions > div:last-child { border-right: 0; }
 .system-update-versions span { color: var(--text-soft); font-size: 11px; line-height: 1.35; }
 .system-update-versions strong { min-width: 0; overflow-wrap: anywhere; font-size: 14px; line-height: 1.35; }
+.system-update-versions small { color: var(--text-soft); font-size: 10px; line-height: 1.35; }
 .system-update-status .badge { width: max-content; max-width: 100%; }
+.system-update-components { border: 1px solid var(--border); background: var(--surface-muted); }
+.system-update-components-heading { min-height: 42px; padding: 9px 13px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border); }
+.system-update-components-heading strong { font-size: 12px; }
+.system-update-components-heading span { color: var(--text-soft); font-size: 11px; }
+.system-update-component { min-height: 66px; padding: 10px 13px; display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(112px, .85fr) minmax(104px, .56fr); align-items: center; gap: 13px; }
+.system-update-component + .system-update-component { border-top: 1px solid color-mix(in srgb, var(--border) 76%, transparent); }
+.system-update-component-name, .system-update-component-versions { min-width: 0; display: grid; gap: 3px; }
+.system-update-component-name strong, .system-update-component-versions strong { min-width: 0; overflow-wrap: anywhere; font-size: 12px; line-height: 1.35; }
+.system-update-component-name small, .system-update-component-versions small, .system-update-component-state > small { min-width: 0; overflow-wrap: anywhere; color: var(--text-soft); font-size: 10px; line-height: 1.35; }
+.system-update-component-versions small::before { content: "当前 "; }
+.system-update-component-versions strong::before { content: "目标 "; color: var(--text-soft); font-size: 10px; font-weight: 400; }
+.system-update-component-state { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.system-update-component-state .badge { flex: 0 0 auto; max-width: 100%; }
 .system-update-notice { padding: 11px 13px; display: flex; align-items: flex-start; gap: 9px; color: var(--text); border: 1px solid color-mix(in srgb, var(--amber) 34%, var(--border)); background: var(--amber-soft); font-size: 12px; line-height: 1.55; }
 .system-update-notice svg { flex: 0 0 auto; margin-top: 1px; color: var(--amber); }
 .system-update-command { padding: 14px; display: grid; gap: 11px; border: 1px solid var(--border); background: var(--surface-muted); }
@@ -87,6 +101,8 @@
   .system-update-versions { grid-template-columns: 1fr 1fr; }
   .system-update-versions > div:nth-child(2) { border-right: 0; }
   .system-update-versions > div:nth-child(-n + 2) { border-bottom: 1px solid var(--border); }
+  .system-update-component { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .system-update-component-state { grid-column: 1 / -1; }
   .system-update-actions { align-items: stretch; }
   .system-update-actions .button { flex: 1 1 150px; justify-content: center; }
 }
@@ -100,5 +116,7 @@
   .system-update-versions > div { min-height: 62px; border-right: 0; border-bottom: 1px solid var(--border); }
   .system-update-versions > div:nth-child(3) { border-bottom: 1px solid var(--border); }
   .system-update-versions > div:last-child { border-bottom: 0; }
+  .system-update-component { grid-template-columns: 1fr; gap: 7px; }
+  .system-update-component-state { grid-column: auto; }
   .system-update-actions .button { width: 100%; flex-basis: 100%; }
 }

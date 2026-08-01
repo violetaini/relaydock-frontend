@@ -447,6 +447,73 @@ describe("settings workbench", () => {
     expect(notify).toHaveBeenCalledWith("系统已更新到 0.6.0");
   });
 
+  it("commits an external frontend release without waiting for a backend version change", async () => {
+    let checkCount = 0;
+    const components = [
+      { name: "web", label: "外置前端", current_version: "v0.6.4", target_version: "v0.6.5", action: "update", status: "pending", required: true },
+      { name: "control_plane", label: "控制端程序", current_version: "0.6.4", target_version: "0.6.4", action: "unchanged", status: "current", required: true },
+    ];
+    const get = mockCompleteSettings({
+      "/api/admin/update/check": () => {
+        checkCount += 1;
+        return checkCount === 1 ? {
+          current_version: "0.6.4", latest_version: "0.6.4", has_update: true,
+          release_url: "https://github.com/violetaini/relaydock/releases/tag/v0.6.5",
+          download_url: "https://example.com/release", release_notes: "External frontend release",
+          deployment_mode: "standalone", update_scope: "full", external_web_root: true, can_apply: true,
+          product_release: "v0.6.4", target_release: "v0.6.5", api_contract: 2,
+          managed_external_web: true, transaction_state: "idle", components,
+        } : {
+          current_version: "0.6.4", latest_version: "0.6.4", has_update: false,
+          release_url: "https://github.com/violetaini/relaydock/releases/tag/v0.6.5",
+          download_url: "", release_notes: "External frontend release",
+          deployment_mode: "standalone", update_scope: "full", external_web_root: true, can_apply: true,
+          product_release: "v0.6.5", target_release: "v0.6.5", api_contract: 2,
+          managed_external_web: true, transaction_state: "committed", components,
+        };
+      },
+      "/api/admin/update/status": {
+        current_version: "0.6.4", product_release: "v0.6.5", target_release: "v0.6.5",
+        api_contract: 2, managed_external_web: true, transaction_state: "committed", components,
+      },
+    });
+    const encoder = new TextEncoder();
+    const reader = {
+      read: vi.fn()
+        .mockResolvedValueOnce({
+          done: false,
+          value: encoder.encode([
+            'data: {"step":"staging_web","progress":100,"message":"前端已暂存"}',
+            'data: {"step":"activating","progress":0,"message":"正在切换发布"}',
+            'data: {"step":"health_check","progress":0,"message":"正在验证服务"}',
+            'data: {"step":"done","progress":100,"message":"发布已提交"}',
+          ].join("\n\n") + "\n\n"),
+        })
+        .mockResolvedValueOnce({ done: true, value: undefined }),
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-type": "text/event-stream" }),
+      body: { getReader: () => reader },
+    } as unknown as Response);
+    vi.stubGlobal("fetch", fetchMock);
+    const notify = vi.fn();
+    render(<SettingsWorkbenchPage notify={notify} />);
+
+    expect(await screen.findByText("外置前端")).toBeInTheDocument();
+    expect(screen.getByText("保持")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "立即更新" }));
+    expect(screen.getByRole("dialog", { name: "更新到 v0.6.5" })).toBeInTheDocument();
+    expect(screen.getByText(/同一事务中更新外置前端/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认更新" }));
+
+    expect(await screen.findByText("更新完成，当前发布 v0.6.5")).toBeInTheDocument();
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/update/apply-sse?version=0.6.4&release=v0.6.5");
+    expect(get.mock.calls.some(([path]) => path === "/api/admin/update/status")).toBe(true);
+    expect(notify).toHaveBeenCalledWith("系统已更新到 v0.6.5");
+  });
+
   it("shows an SSE update failure without waiting for a restart", async () => {
     mockCompleteSettings({
       "/api/admin/update/check": {

@@ -57,8 +57,34 @@ interface UpdateInfo {
   deployment_mode?: "docker" | "standalone" | string;
   update_scope?: "none" | "backend_only" | "control_plane_only" | "full" | string;
   external_web_root?: boolean;
+  product_release?: string;
+  target_release?: string;
+  api_contract?: string | number;
+  managed_external_web?: boolean;
+  transaction_state?: string;
+  components?: UpdateComponent[];
   can_apply?: boolean;
   warning?: string;
+}
+
+interface UpdateComponent {
+  name: string;
+  label?: string;
+  current_version?: string;
+  target_version?: string;
+  action?: string;
+  status?: string;
+  required?: boolean;
+}
+
+interface UpdateStatus {
+  current_version: string;
+  product_release?: string;
+  target_release?: string;
+  api_contract?: string | number;
+  managed_external_web?: boolean;
+  transaction_state?: string;
+  components?: UpdateComponent[];
 }
 
 interface UpdateProgress {
@@ -136,21 +162,166 @@ function normalizedVersion(value: string): string {
   return value.trim().replace(/^v/i, "");
 }
 
+function normalizedRelease(value?: string): string {
+  return normalizedVersion(value ?? "");
+}
+
+function updateTargetRelease(info: UpdateInfo): string {
+  return info.target_release?.trim() || "";
+}
+
+function updateTargetLabel(info: UpdateInfo): string {
+  return updateTargetRelease(info) || info.latest_version;
+}
+
+function updateCurrentLabel(info: UpdateInfo): string {
+  return info.product_release?.trim() || info.current_version;
+}
+
+function updateComponentLabel(component: UpdateComponent): string {
+  if (component.label?.trim()) return component.label.trim();
+  const labels: Record<string, string> = {
+    web: "外置前端",
+    frontend: "外置前端",
+    control_plane: "控制端程序",
+    backend: "控制端程序",
+    guard: "守卫资产",
+    agent: "Agent 安装资产",
+    speedtester: "测速资产",
+  };
+  return labels[component.name] || component.name;
+}
+
+function updateComponentActionLabel(action?: string): string {
+  switch (action?.toLowerCase()) {
+    case "install":
+    case "update":
+    case "replace":
+    case "upgrade":
+      return "更新";
+    case "unchanged":
+    case "keep":
+      return "保持";
+    case "skip":
+    case "skipped":
+      return "跳过";
+    case "remove":
+      return "移除";
+    default:
+      return action?.trim() || "待确认";
+  }
+}
+
+function updateComponentStatusLabel(status?: string): string {
+  switch (status?.toLowerCase()) {
+    case "pending": return "待更新";
+    case "downloading": return "下载中";
+    case "verified": return "已校验";
+    case "staged": return "已暂存";
+    case "staging":
+    case "staging_web": return "暂存中";
+    case "activating": return "启用中";
+    case "active": return "已启用";
+    case "current": return "当前";
+    case "ready": return "已就绪";
+    case "completed":
+    case "complete":
+    case "committed": return "已完成";
+    case "rolling_back": return "回滚中";
+    case "rolled_back": return "已回滚";
+    case "recovery_required": return "需人工恢复";
+    case "failed":
+    case "error": return "失败";
+    default: return status?.trim() || "待检查";
+  }
+}
+
+function updateComponentStatusTone(status?: string): "good" | "warn" | "bad" | "info" | "neutral" {
+  switch (status?.toLowerCase()) {
+    case "active":
+    case "current":
+    case "ready":
+    case "completed":
+    case "complete":
+    case "committed":
+      return "good";
+    case "failed":
+    case "error":
+    case "rolled_back":
+    case "recovery_required":
+      return "bad";
+    case "pending":
+      return "warn";
+    case "downloading":
+    case "verified":
+    case "staged":
+    case "staging":
+    case "staging_web":
+    case "activating":
+    case "rolling_back":
+      return "info";
+    default:
+      return "neutral";
+  }
+}
+
+function updateChangesComponent(component: UpdateComponent): boolean {
+  return ["install", "update", "replace", "upgrade", "remove"].includes(component.action?.toLowerCase() ?? "");
+}
+
+function updateConfirmationDescription(info: UpdateInfo): string {
+  const components = info.components ?? [];
+  const changed = components.filter(updateChangesComponent).map(updateComponentLabel);
+  const unchanged = components.filter((component) => !updateChangesComponent(component)).map(updateComponentLabel);
+  const transactionPrefix = info.managed_external_web ? "本次会在同一事务中" : "本次会";
+
+  if (changed.length > 0) {
+    const unchangedText = unchanged.length > 0 ? `；${unchanged.join("、")}保持当前版本` : "";
+    return `${transactionPrefix}更新${changed.join("、")}${unchangedText}。所有发布文件下载和校验通过后才会切换，服务可能短暂重启，请确认已做好数据备份。`;
+  }
+  if (info.managed_external_web) {
+    return "本次会以一个发布事务更新控制端及外置前端。所有文件下载和校验通过后才会切换，服务可能短暂重启，请确认已做好数据备份。";
+  }
+  if (info.update_scope === "backend_only" || info.external_web_root) {
+    return "本次会更新控制端程序及已配置的守卫资源，但不会替换外置前端。更新包校验通过后服务会短暂重启，请确认已做好数据备份。";
+  }
+  return "更新包校验通过后将替换后端与内嵌面板，并短暂重启服务。数据库和现有配置会保留，建议已做好数据备份。";
+}
+
+function transactionHasFailed(state?: string): boolean {
+  return ["failed", "error", "rollback", "rolledback", "rolled_back", "rollback_failed", "recovery_required"].includes(state?.toLowerCase() ?? "");
+}
+
+function transactionHasCommitted(state?: string): boolean {
+  return ["committed", "complete", "completed", "success", "done"].includes(state?.toLowerCase() ?? "");
+}
+
+function reloadCurrentPageAfterFrontendRelease(): boolean {
+  const runtime = globalThis as typeof globalThis & { process?: { env?: { NODE_ENV?: string } } };
+  if (runtime.process?.env?.NODE_ENV === "test") return false;
+  window.setTimeout(() => window.location.reload(), 650);
+  return true;
+}
+
 function updateOverallProgress(progress: UpdateProgress): number {
   const downloadProgress = Math.min(100, Math.max(0, progress.progress || 0));
   switch (progress.step) {
     case "checking": return 5;
-    case "downloading": return 10 + Math.round(downloadProgress * 0.65);
-    case "backing_up": return 80;
-    case "replacing": return 88;
-    case "restarting": return 95;
+    case "downloading": return 10 + Math.round(downloadProgress * 0.55);
+    case "staging_web": return 68;
+    case "backing_up": return 76;
+    case "replacing": return 84;
+    case "activating": return 90;
+    case "restarting": return 92;
+    case "health_check": return 96;
+    case "rolling_back": return 94;
     case "done": return 100;
     default: return downloadProgress;
   }
 }
 
 function updateScopeLabel(info: UpdateInfo): string {
-  if (info.update_scope === "full") return "完整控制端";
+  if (info.update_scope === "full") return info.managed_external_web ? "完整发布" : "完整控制端";
   if (info.update_scope === "control_plane_only") return "控制端与内嵌面板";
   if (info.update_scope === "backend_only") return "不含外置前端";
   if (info.deployment_mode === "docker" || info.update_scope === "none") return "容器镜像";
@@ -638,40 +809,64 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
     await save("token", async () => { const response = await api.post<{ token: string }>("/api/admin/system-settings/api-token/regenerate"); setApiToken(response.token); }, "API Token 已重新生成");
   };
 
-  const waitForUpdatedVersion = async (expectedVersion: string): Promise<{ current_version: string }> => {
+  const waitForUpdatedRelease = async (expected: UpdateInfo): Promise<UpdateStatus> => {
+    const expectedVersion = expected.latest_version.trim();
+    const expectedRelease = updateTargetRelease(expected);
+    const normalizedExpectedRelease = normalizedRelease(expectedRelease);
     let lastStatus = "";
     for (let attempt = 0; attempt < 46; attempt += 1) {
       if (attempt > 0) await delay(2000);
+      let status: UpdateStatus;
       try {
-        const status = await api.get<{ current_version: string }>("/api/admin/update/status");
-        if (normalizedVersion(status.current_version) === normalizedVersion(expectedVersion)) return status;
-        lastStatus = `控制端仍在运行 ${status.current_version || "旧版本"}`;
+        status = await api.get<UpdateStatus>("/api/admin/update/status");
       } catch (reason) {
         lastStatus = messageOf(reason, "控制端暂时离线");
+        continue;
       }
+
+      if (transactionHasFailed(status.transaction_state)) {
+        throw new Error(`发布事务未完成：${status.transaction_state}`);
+      }
+      if (normalizedExpectedRelease) {
+        const productMatches = normalizedRelease(status.product_release) === normalizedExpectedRelease;
+        const targetMatches = normalizedRelease(status.target_release) === normalizedExpectedRelease;
+        const state = status.transaction_state?.trim().toLowerCase();
+        if (productMatches && (!state || state === "idle" || transactionHasCommitted(state))) return status;
+        if (targetMatches && transactionHasCommitted(state)) return status;
+        const release = status.product_release?.trim() || "旧发布";
+        lastStatus = `发布仍在 ${release}${status.transaction_state ? `（${status.transaction_state}）` : ""}`;
+        continue;
+      }
+
+      if (normalizedVersion(status.current_version) === normalizedVersion(expectedVersion)) return status;
+      lastStatus = `控制端仍在运行 ${status.current_version || "旧版本"}`;
     }
     throw new Error(`服务重启等待超时。${lastStatus ? `最后状态：${lastStatus}` : "请稍后手动刷新页面确认。"}`);
   };
 
   const applyUpdate = async () => {
-    const expectedVersion = updateInfo?.latest_version;
-    if (!updateInfo || !expectedVersion || updateInfo.can_apply !== true || !updateInfo.has_update) return;
+    const expectedVersion = updateInfo?.latest_version.trim() ?? "";
+    const expectedRelease = updateInfo ? updateTargetRelease(updateInfo) : "";
+    if (!updateInfo || (!expectedVersion && !expectedRelease) || updateInfo.can_apply !== true || !updateInfo.has_update) return;
     setConfirmUpdate(false);
     setUpdateRunState("running");
     setUpdateRunError("");
     setUpdateLog([]);
     setUpdateProgress({ step: "checking", progress: 0, message: "正在启动更新..." });
 
-    let restartExpected = false;
+    let recoveryExpected = false;
     let reportedFailure: Error | null = null;
     try {
       const headers = new Headers({ Accept: "text/event-stream" });
       const token = getToken();
       if (token) headers.set("Authorization", `Bearer ${token}`);
+      const query = new URLSearchParams();
+      if (expectedVersion) query.set("version", expectedVersion);
+      if (expectedRelease) query.set("release", expectedRelease);
 
       let response: Response;
       try {
-        response = await fetch(`/api/admin/update/apply-sse?version=${encodeURIComponent(expectedVersion)}`, {
+        response = await fetch(`/api/admin/update/apply-sse?${query.toString()}`, {
           method: "POST",
           headers,
           credentials: "same-origin",
@@ -693,12 +888,12 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
         if (!progress) return;
         setUpdateProgress(progress);
         setUpdateLog((current) => [...current, progress].slice(-8));
-        if (progress.step === "error") {
+        if (progress.step === "error" || progress.step === "failed" || progress.step === "rolled_back") {
           reportedFailure = new Error(progress.message || "更新失败");
           throw reportedFailure;
         }
-        if (progress.step === "restarting" || progress.step === "done") {
-          restartExpected = true;
+        if (["activating", "restarting", "health_check", "rolling_back", "done"].includes(progress.step)) {
+          recoveryExpected = true;
           setUpdateRunState("restarting");
         }
       };
@@ -716,17 +911,40 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
         splitSSEEvents(buffer, true).events.forEach(handleRawEvent);
       } catch (reason) {
         if (reportedFailure) throw reportedFailure;
-        if (!restartExpected) throw reason;
+        if (!recoveryExpected) throw reason;
       }
 
-      if (!restartExpected) throw new Error("更新进度连接提前结束，控制端尚未进入重启阶段");
+      if (!recoveryExpected) throw new Error(expectedRelease
+        ? "更新进度连接提前结束，发布事务尚未进入激活阶段"
+        : "更新进度连接提前结束，控制端尚未进入重启阶段");
       setUpdateRunState("restarting");
-      setUpdateProgress({ step: "restarting", progress: 0, message: "等待新版本控制端恢复..." });
-      const refreshed = await waitForUpdatedVersion(expectedVersion);
-      setUpdateInfo((current) => current ? { ...current, current_version: refreshed.current_version, has_update: false } : current);
+      setUpdateProgress({
+        step: expectedRelease ? "health_check" : "restarting",
+        progress: 0,
+        message: expectedRelease ? "等待发布事务确认..." : "等待新版本控制端恢复...",
+      });
+      const refreshed = await waitForUpdatedRelease(updateInfo);
+      const completedRelease = refreshed.product_release?.trim()
+        || (expectedRelease && transactionHasCommitted(refreshed.transaction_state) ? expectedRelease : "");
+      setUpdateInfo((current) => current ? {
+        ...current,
+        current_version: refreshed.current_version || current.current_version,
+        product_release: completedRelease || current.product_release,
+        target_release: refreshed.target_release ?? current.target_release,
+        api_contract: refreshed.api_contract ?? current.api_contract,
+        managed_external_web: refreshed.managed_external_web ?? current.managed_external_web,
+        transaction_state: refreshed.transaction_state,
+        components: refreshed.components ?? current.components,
+        has_update: false,
+      } : current);
       setUpdateRunState("success");
-      setUpdateProgress({ step: "done", progress: 100, message: `更新完成，当前版本 ${refreshed.current_version}` });
-      notify(`系统已更新到 ${refreshed.current_version}`);
+      const completion = completedRelease
+        ? `更新完成，当前发布 ${completedRelease}`
+        : `更新完成，当前版本 ${refreshed.current_version}`;
+      const shouldRefreshCurrentPage = Boolean(completedRelease && (refreshed.managed_external_web ?? updateInfo.managed_external_web));
+      const refreshingCurrentPage = shouldRefreshCurrentPage && reloadCurrentPageAfterFrontendRelease();
+      setUpdateProgress({ step: "done", progress: 100, message: refreshingCurrentPage ? `${completion}，正在刷新当前页面...` : completion });
+      notify(completedRelease ? `系统已更新到 ${completedRelease}` : `系统已更新到 ${refreshed.current_version}`);
       void checkUpdate();
     } catch (reason) {
       const message = messageOf(reason, "系统更新失败");
@@ -875,10 +1093,8 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
     </div> : null}
     {confirmTokenReset ? <ConfirmDialog title="重新生成 API Token" description="所有使用当前 Token 的脚本和集成都会立即失效，需要逐一替换。" confirmLabel="确认重新生成" working={saving === "token"} onCancel={() => setConfirmTokenReset(false)} onConfirm={() => void regenerateToken()} /> : null}
     {confirmUpdate && updateInfo ? <ConfirmDialog
-      title={`更新到 ${updateInfo.latest_version}`}
-      description={updateInfo.update_scope === "backend_only" || updateInfo.external_web_root
-        ? "本次会更新控制端程序及已配置的守卫资源，但不会替换外置前端。更新包校验通过后服务会短暂重启，请确认已做好数据备份。"
-        : "更新包校验通过后将替换后端与内嵌面板，并短暂重启服务。数据库和现有配置会保留，建议已做好数据备份。"}
+      title={`更新到 ${updateTargetLabel(updateInfo)}`}
+      description={updateConfirmationDescription(updateInfo)}
       confirmLabel="确认更新"
       tone="primary"
       onCancel={() => setConfirmUpdate(false)}
@@ -967,7 +1183,18 @@ function SystemUpdatePanel({ info, checking, checkError, runState, progress, log
   const docker = info?.deployment_mode === "docker" || info?.update_scope === "none";
   const canApply = Boolean(info?.has_update && info.can_apply === true && !docker);
   const overallProgress = progress ? updateOverallProgress(progress) : 0;
-  const warning = info?.warning || (info?.external_web_root
+  const progressHeading = progress?.step === "rolling_back"
+    ? "正在回滚发布"
+    : runState === "restarting"
+      ? "正在等待服务恢复"
+      : runState === "success"
+        ? "更新完成"
+        : runState === "error"
+          ? "更新未完成"
+          : "正在更新";
+  const releaseAware = Boolean(info?.product_release || info?.target_release);
+  const managedExternalWeb = info?.managed_external_web === true;
+  const warning = info?.warning || (info?.external_web_root && !managedExternalWeb
     ? "当前使用外置前端目录，一键更新不会替换外置页面；前端需要单独发布。"
     : info?.has_update && info.can_apply !== true
       ? "当前控制端尚未提供安全的网页更新能力，请先按 README 使用命令行更新。"
@@ -976,17 +1203,32 @@ function SystemUpdatePanel({ info, checking, checkError, runState, progress, log
 
   return <SettingSection icon={<RefreshCw size={19} />} title="系统更新" description="从 GitHub Release 检查并安装已发布的正式版本">
     <div className="system-update-versions" aria-label="系统版本状态">
-      <div><span>当前版本</span><strong>{info?.current_version || (checking ? "读取中" : "未知")}</strong></div>
-      <div><span>最新版本</span><strong>{info?.latest_version || (checking ? "检查中" : "未知")}</strong></div>
-      <div><span>更新范围</span><strong>{info ? updateScopeLabel(info) : "待检查"}</strong></div>
+      <div><span>{releaseAware ? "当前发布" : "当前版本"}</span><strong>{info ? updateCurrentLabel(info) : (checking ? "读取中" : "未知")}</strong></div>
+      <div><span>{releaseAware ? "目标发布" : "最新版本"}</span><strong>{info ? updateTargetLabel(info) : (checking ? "检查中" : "未知")}</strong></div>
+      <div><span>更新范围</span><strong>{info ? updateScopeLabel(info) : "待检查"}</strong>{info?.api_contract !== undefined ? <small>兼容协议 {String(info.api_contract)}</small> : null}</div>
       <div className="system-update-status"><span>状态</span>{checking
         ? <Badge tone="info">正在检查</Badge>
+        : transactionHasFailed(info?.transaction_state)
+          ? <Badge tone="bad">上次未完成</Badge>
         : info?.has_update
           ? <Badge tone="warn">发现新版本</Badge>
           : info
             ? <Badge tone="good">已是最新</Badge>
             : <Badge tone="neutral">检查失败</Badge>}</div>
     </div>
+
+    {info?.components?.length ? <div className="system-update-components" aria-label="发布组件">
+      <div className="system-update-components-heading"><strong>发布组件</strong><span>{managedExternalWeb ? "统一事务" : "组件状态"}</span></div>
+      {info.components.map((component, index) => {
+        const current = component.current_version?.trim() || "未安装";
+        const target = component.target_version?.trim() || current;
+        return <div className="system-update-component" key={`${component.name}-${index}`}>
+          <div className="system-update-component-name"><strong>{updateComponentLabel(component)}</strong><small>{component.required ? "必需组件" : "可选组件"}</small></div>
+          <div className="system-update-component-versions"><small>{current}</small><strong>{target}</strong></div>
+          <div className="system-update-component-state"><small>{updateComponentActionLabel(component.action)}</small><Badge tone={updateComponentStatusTone(component.status)}>{updateComponentStatusLabel(component.status)}</Badge></div>
+        </div>;
+      })}
+    </div> : null}
 
     {warning ? <div className="system-update-notice" role="note"><Shield size={17} /><span>{warning}</span></div> : null}
     {docker ? <div className="system-update-command">
@@ -1002,7 +1244,7 @@ function SystemUpdatePanel({ info, checking, checkError, runState, progress, log
     {checkError ? <div className="system-update-error" role="alert">{checkError}</div> : null}
     {runError ? <div className="system-update-error" role="alert">{runError}</div> : null}
     {progress && runState !== "idle" ? <div className={`system-update-progress is-${runState}`} role="status" aria-live="polite">
-      <div className="system-update-progress-heading"><strong>{runState === "restarting" ? "正在等待服务恢复" : runState === "success" ? "更新完成" : runState === "error" ? "更新未完成" : "正在更新"}</strong><span>{overallProgress}%</span></div>
+      <div className="system-update-progress-heading"><strong>{progressHeading}</strong><span>{overallProgress}%</span></div>
       <div className="system-update-progress-track" role="progressbar" aria-label="系统更新进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={overallProgress}><span style={{ width: `${overallProgress}%` }} /></div>
       <p>{progress.message}</p>
       {logs.length > 1 ? <ol className="system-update-log">{logs.map((entry, index) => <li key={`${entry.step}-${index}`}>{entry.message}</li>)}</ol> : null}

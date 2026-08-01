@@ -541,6 +541,7 @@ test("public probe keeps its operational hierarchy across desktop and mobile", a
     await expect(page.locator(".public-probe-statusline")).toContainText("Northstar Network Status");
     await expect(page.locator(".public-probe-summary-cell")).toHaveCount(4);
     await expect(page.locator(".public-probe-item")).toHaveCount(2);
+    await expect(page.locator(".public-probe-country").first()).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
     await expect(page.locator(".public-probe-live-state")).toContainText("LIVE");
     await expectViewportIntegrity(page, `public probe ${viewport.name}`);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

@@ -11,6 +11,10 @@ import "./modern-theme.css";
 
 type BootState = "loading" | "setup" | "login" | "ready" | "error";
 
+// Keep the unauthenticated status page as responsive as Komari's default
+// live stream without changing the dashboard or Agent reporting cadence.
+const publicProbeRefreshIntervalMs = 1_000;
+
 function publicProbeFrame(value: unknown): PublicProbeState | null {
   const direct = normalizePublicProbeState(value);
   if (direct) return direct;
@@ -125,7 +129,7 @@ export function App() {
     const startPolling = () => {
       if (pollTimer !== undefined) return;
       void poll();
-      pollTimer = window.setInterval(() => { void poll(); }, 5_000);
+      pollTimer = window.setInterval(() => { void poll(); }, publicProbeRefreshIntervalMs);
     };
     const stopPolling = () => {
       if (pollTimer === undefined) return;
@@ -170,7 +174,7 @@ export function App() {
       socket = next;
       connectionFallbackTimer = window.setTimeout(() => {
         if (!opened) startPolling();
-      }, 5_000);
+      }, publicProbeRefreshIntervalMs);
       next.onopen = () => {
         if (stopped || socket !== next) return;
         opened = true;

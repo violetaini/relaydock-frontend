@@ -1435,7 +1435,7 @@ td { min-height: 62px; }
 .public-probe-status { gap: 7px; }
 .public-probe-status i { width: 7px; height: 7px; flex-basis: 7px; box-shadow: 0 0 0 3px rgb(201 101 88 / 12%); }
 .public-probe-item.is-online .public-probe-status i { box-shadow: 0 0 0 3px rgb(111 189 139 / 12%); }
-.public-probe-country { width: 24px; height: 22px; flex: 0 0 24px; border-color: var(--probe-border-muted); border-radius: 2px; background: var(--probe-inset); }
+.public-probe-country { width: 24px; height: 22px; flex: 0 0 24px; border-color: transparent; border-radius: 2px; background: transparent; }
 .public-probe-country svg { width: 13px; height: 13px; }
 .public-probe-status strong { font-size: 13px; font-weight: 720; }
 .public-probe-item-heading > small {

@@ -175,6 +175,7 @@ const mocks = new WeakMap<Page, StrictApiMock>();
 async function createMock(page: Page) {
   const mock = new StrictApiMock(page)
     .on("GET", "/api/setup/status", () => json({ needs_setup: false }))
+    .on("GET", "/api/public/branding", () => json({ name: "RelayDock", logo: "", favicon: "" }))
     .on("GET", "/api/user/profile", () => json(profile))
     .on("GET", "/api/admin/remote/services/status", () => json({
       success: true,

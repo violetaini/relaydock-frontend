@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError, getToken, setToken } from "./api";
 import { App } from "./main";
@@ -11,6 +11,9 @@ describe("application bootstrap", () => {
   beforeEach(() => {
     localStorage.clear();
     location.hash = "";
+    document.title = "RelayDock Console";
+    const favicon = document.querySelector<HTMLLinkElement>("#app-favicon");
+    if (favicon) favicon.href = "/brand.png";
   });
 
   afterEach(() => {
@@ -97,6 +100,24 @@ describe("application bootstrap", () => {
     fireEvent.click(screen.getByRole("button", { name: "登录" }));
     expect(await screen.findByRole("heading", { name: "进入控制台" })).toBeInTheDocument();
     expect(document.querySelector(".auth-layout")).toHaveStyle({ backgroundImage: "url(https://images.example/login.jpg)" });
+  });
+
+  it("uses public branding for the browser title and favicon", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/setup/status") return { needs_setup: false } as T;
+      if (path === "/api/public/branding") return {
+        name: "Northstar", logo: "https://assets.example/northstar-logo.png", favicon: "https://assets.example/northstar.ico",
+      } as T;
+      if (path === "/api/public/login-wallpaper") return { login_wallpaper: "" } as T;
+      if (path === "/api/public/probe-servers") return { enabled: false, servers: [] } as T;
+      if (path === "/api/captcha/config") return { enabled: false, site_key: "" } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(document.title).toBe("Northstar Console"));
+    expect(document.querySelector<HTMLLinkElement>("#app-favicon")?.href).toContain("https://assets.example/northstar.ico");
   });
 
   it("keeps the management login hidden when the public probe requests it", async () => {

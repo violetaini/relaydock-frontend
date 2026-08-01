@@ -1,8 +1,8 @@
-import { StrictMode, useCallback, useEffect, useState } from "react";
+import { StrictMode, useCallback, useEffect, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { api, ApiError, getToken, setToken } from "./api";
 import { LoginScreen, PublicProbeScreen, SetupScreen, emptyPublicProbeState, normalizePublicProbeState, type PublicProbeState } from "./auth-screens";
-import { BRAND_NAME, BrandMark } from "./brand";
+import { BrandMark, BrandingProvider, DEFAULT_BRANDING, applyBrandingDocument, normalizeBranding, type Branding } from "./brand";
 import { ConsoleApp } from "./console";
 import type { Profile, Session } from "./types";
 import { Button, ErrorState, Spinner } from "./ui";
@@ -21,6 +21,13 @@ function publicProbeFrame(value: unknown): PublicProbeState | null {
     ?? normalizePublicProbeState(record.payload);
 }
 
+function publicBrandingFrame(value: unknown): Branding {
+  if (!value || typeof value !== "object") return DEFAULT_BRANDING;
+  const record = value as Record<string, unknown>;
+  const nested = [record.branding, record.data, value].find((candidate) => candidate && typeof candidate === "object");
+  return normalizeBranding(nested as Partial<Branding> | undefined);
+}
+
 export function App() {
   const [state, setState] = useState<BootState>("loading");
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -28,6 +35,7 @@ export function App() {
   const [publicReady, setPublicReady] = useState(false);
   const [wallpaper, setWallpaper] = useState("");
   const [probe, setProbe] = useState<PublicProbeState>(emptyPublicProbeState);
+  const [branding, setBranding] = useState<Branding>(DEFAULT_BRANDING);
   const [loginRequested, setLoginRequested] = useState(() => location.hash.replace(/^#\/?/, "") === "login");
   const [probePreview, setProbePreview] = useState(() => new URLSearchParams(location.search).get("probe") === "1");
 
@@ -64,6 +72,14 @@ export function App() {
   }, []);
 
   useEffect(() => { void bootstrap(); }, [bootstrap]);
+  useEffect(() => {
+    let cancelled = false;
+    api.get<unknown>("/api/public/branding")
+      .then((response) => { if (!cancelled) setBranding(publicBrandingFrame(response)); })
+      .catch(() => { if (!cancelled) setBranding(DEFAULT_BRANDING); });
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => { applyBrandingDocument(branding); }, [branding]);
   useEffect(() => {
     const onHash = () => setLoginRequested(location.hash.replace(/^#\/?/, "") === "login");
     window.addEventListener("hashchange", onHash);
@@ -220,20 +236,27 @@ export function App() {
     }
   };
 
+  let content: ReactNode = null;
   if (state === "loading") {
-    return <main className="boot-screen"><BrandMark className="brand-mark-large" size={32} /><strong>{BRAND_NAME}</strong><Spinner label="正在连接控制端" /></main>;
+    content = <main className="boot-screen"><BrandMark className="brand-mark-large" size={32} /><strong>{branding.name}</strong><Spinner label="正在连接控制端" /></main>;
+  } else if (state === "error") {
+    content = <main className="boot-screen boot-error"><BrandMark className="brand-mark-large" size={32} /><ErrorState message={error} /><Button onClick={() => void bootstrap()}>重新连接</Button></main>;
+  } else if (state === "setup") {
+    content = <SetupScreen onComplete={() => setState("login")} />;
+  } else if (state === "login" && !publicReady) {
+    content = <main className="boot-screen"><BrandMark className="brand-mark-large" size={32} /><Spinner label="正在加载入口" /></main>;
+  } else if (probePreview && !publicReady) {
+    content = <main className="boot-screen"><BrandMark className="brand-mark-large" size={32} /><Spinner label="正在加载公开探针" /></main>;
+  } else if (probePreview && probe.enabled) {
+    content = <PublicProbeScreen probe={probe} onLogin={leaveProbePreview} loginLabel="返回控制台" />;
+  } else if (state === "login" && probe.enabled && !loginRequested) {
+    content = <PublicProbeScreen probe={probe} onLogin={() => { location.hash = "/login"; setLoginRequested(true); }} />;
+  } else if (state === "login") {
+    content = <LoginScreen wallpaper={wallpaper} onLogin={onLogin} />;
+  } else if (profile) {
+    content = <ConsoleApp profile={profile} onLogout={logout} onBrandingChange={setBranding} />;
   }
-  if (state === "error") {
-    return <main className="boot-screen boot-error"><BrandMark className="brand-mark-large" size={32} /><ErrorState message={error} /><Button onClick={() => void bootstrap()}>重新连接</Button></main>;
-  }
-  if (state === "setup") return <SetupScreen onComplete={() => setState("login")} />;
-  if (state === "login" && !publicReady) return <main className="boot-screen"><BrandMark className="brand-mark-large" size={32} /><Spinner label="正在加载入口" /></main>;
-  if (probePreview && !publicReady) return <main className="boot-screen"><BrandMark className="brand-mark-large" size={32} /><Spinner label="正在加载公开探针" /></main>;
-  if (probePreview && probe.enabled) return <PublicProbeScreen probe={probe} onLogin={leaveProbePreview} loginLabel="返回控制台" />;
-  if (state === "login" && probe.enabled && !loginRequested) return <PublicProbeScreen probe={probe} onLogin={() => { location.hash = "/login"; setLoginRequested(true); }} />;
-  if (state === "login") return <LoginScreen wallpaper={wallpaper} onLogin={onLogin} />;
-  if (profile) return <ConsoleApp profile={profile} onLogout={logout} />;
-  return null;
+  return <BrandingProvider branding={branding}>{content}</BrandingProvider>;
 }
 
 const rootElement = document.getElementById("root");

@@ -1,4 +1,5 @@
 export const settingsGetResponses: Record<string, unknown> = {
+  "/api/public/branding": { name: "RelayDock", logo: "", favicon: "" },
   "/api/user/config": {
     force_sync_external: false,
     match_rule: "node_name",
@@ -19,6 +20,7 @@ export const settingsGetResponses: Record<string, unknown> = {
   "/api/admin/system-settings/master-url": { master_url: "https://arcway.example.com" },
   "/api/admin/system-settings/default-theme": { default_theme: "flat" },
   "/api/admin/system-settings/login-wallpaper": { login_wallpaper: "" },
+  "/api/admin/system-settings/branding": { name: "RelayDock", logo: "", favicon: "" },
   "/api/admin/system-settings/intervals": {
     speed_collect_interval: 3,
     traffic_collect_interval: 60,

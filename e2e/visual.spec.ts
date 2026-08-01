@@ -502,6 +502,53 @@ test("top navigation keeps probe return with the chrome controls", async ({ page
   await expectViewportIntegrity(page, "desktop top probe return control");
 });
 
+test("public probe keeps its operational hierarchy across desktop and mobile", async ({ page }, testInfo) => {
+  const probe = {
+    enabled: true,
+    title: "Northstar Network Status",
+    show_name: true,
+    show_cpu: true,
+    show_memory: true,
+    show_disk: true,
+    show_traffic: true,
+    show_speed: true,
+    servers: servers.map((server, index) => ({
+      name: server.name,
+      country_code: index === 0 ? "HK" : "US",
+      online: true,
+      upload_speed: server.current_upload_speed,
+      download_speed: server.current_download_speed,
+      traffic_used: server.traffic_used,
+      traffic_limit: server.traffic_limit,
+      cpu_pct: server.cpu_pct,
+      loadavg: server.loadavg,
+      mem_used: server.mem_used,
+      mem_total: server.mem_total,
+      disk_used: server.disk_used,
+      disk_total: server.disk_total,
+    })),
+  };
+  await mockAPI(page, traffic, undefined, {
+    "/api/public/branding": { name: "Northstar", logo: "/brand.png", favicon: "/brand.png" },
+    "/api/public/probe-servers": probe,
+  });
+
+  for (const viewport of [{ name: "desktop", width: 1440, height: 900 }, { name: "mobile", width: 390, height: 844 }]) {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/?probe=1#/dashboard");
+
+    await expect(page.getByRole("heading", { name: "Northstar Network Status" })).toBeVisible();
+    await expect(page.locator(".public-probe-statusline")).toContainText("Northstar Network Status");
+    await expect(page.locator(".public-probe-summary-cell")).toHaveCount(4);
+    await expect(page.locator(".public-probe-item")).toHaveCount(2);
+    await expect(page.locator(".public-probe-live-state")).toContainText("LIVE");
+    await expectViewportIntegrity(page, `public probe ${viewport.name}`);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(overflow, `public probe ${viewport.name}: document must not overflow horizontally`).toBeLessThanOrEqual(1);
+    await page.screenshot({ path: testInfo.outputPath(`public-probe-${viewport.name}.png`), fullPage: true });
+  }
+});
+
 test("secondary workflows remain available from their owning pages", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockAPI(page);

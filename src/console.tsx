@@ -40,7 +40,7 @@ import {
 import { AdvancedPage } from "./advanced";
 import { AccountWorkbenchPage } from "./account-workbench";
 import { api, openDashboardSocket } from "./api";
-import { BRAND_NAME, BrandMark } from "./brand";
+import { BrandMark, useBranding, type Branding } from "./brand";
 import {
   CertificatesWorkbenchPage,
   SubscribeFilesPage,
@@ -141,7 +141,8 @@ function pageAllowed(page: PageKey, isAdmin: boolean, permissions: string[] | nu
   return Boolean(key && permissions?.includes(key));
 }
 
-export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: () => void }) {
+export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: Profile; onLogout: () => void; onBrandingChange?: (branding: Branding) => void }) {
+  const branding = useBranding();
   const [page, setPage] = useState<PageKey>(() => resolvePage(profile.is_admin));
   const [usersScope, setUsersScope] = useState<"all" | "renewal">(resolveUsersScope);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -244,7 +245,7 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
     <div className={`console-layout layout-${layoutMode}`}>
       {sidebarOpen ? <button className="sidebar-scrim" aria-label="关闭导航" onClick={() => setSidebarOpen(false)} /> : null}
       <aside className={`sidebar ${sidebarOpen ? "is-open" : ""}`}>
-        <div className="sidebar-brand brand"><BrandMark size={24} /><span>{BRAND_NAME}</span><IconButton className="sidebar-layout-switch" label="切换到顶部栏" onClick={toggleLayout}><PanelTop size={19} /></IconButton><IconButton className="sidebar-close" label="关闭导航" onClick={() => setSidebarOpen(false)}><X size={19} /></IconButton></div>
+        <div className="sidebar-brand brand"><BrandMark size={24} /><span>{branding.name}</span><IconButton className="sidebar-layout-switch" label="切换到顶部栏" onClick={toggleLayout}><PanelTop size={19} /></IconButton><IconButton className="sidebar-close" label="关闭导航" onClick={() => setSidebarOpen(false)}><X size={19} /></IconButton></div>
         <nav className="sidebar-nav" aria-label="主导航">
           <NavGroup label="主导航" className="nav-primary">
             <NavItem active={page === "dashboard"} icon={<Activity size={18} />} label="流量信息" onClick={() => navigate("dashboard")} />
@@ -281,7 +282,7 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
       <div className="console-main">
         <header className="topbar">
           <div className="topbar-leading">
-            <span className="mobile-topbar-brand"><BrandMark size={22} /><strong>{BRAND_NAME}</strong></span>
+            <span className="mobile-topbar-brand"><BrandMark size={22} /><strong>{branding.name}</strong></span>
             <IconButton className="mobile-menu" label="打开导航" onClick={() => setSidebarOpen(true)}><Menu size={20} /></IconButton>
             <span className="topbar-page-title">{pageTitles[page]}</span>
           </div>
@@ -310,7 +311,7 @@ export function ConsoleApp({ profile, onLogout }: { profile: Profile; onLogout: 
           {page === "customRules" && pageAllowed(page, profile.is_admin, userPages) ? <CustomRulesWorkbenchPage notify={notify} /> : null}
           {page === "rulesConfig" && profile.is_admin ? <RulesConfigWorkbenchPage notify={notify} /> : null}
           {page === "advanced" && profile.is_admin ? <AdvancedPage notify={notify} /> : null}
-          {page === "settings" && profile.is_admin ? <SettingsWorkbenchPage notify={notify} /> : null}
+          {page === "settings" && profile.is_admin ? <SettingsWorkbenchPage notify={notify} onBrandingChange={onBrandingChange} /> : null}
           {page === "account" ? <AccountWorkbenchPage notify={notify} /> : null}
         </main>
       </div>

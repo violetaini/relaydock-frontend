@@ -12,12 +12,14 @@ import {
   ExternalLink,
   FileJson,
   Gauge,
+  ImageUp,
   KeyRound,
   Link2,
   LockKeyhole,
   Network,
   Palette,
   RefreshCw,
+  RotateCcw,
   Save,
   Search,
   Send,
@@ -26,6 +28,7 @@ import {
   Users,
 } from "lucide-react";
 import { api, getToken } from "./api";
+import { brandFaviconURL, brandLogoURL, DEFAULT_BRANDING, normalizeBranding, type Branding } from "./brand";
 import { LegacyPanelImportDialog } from "./legacy-panel-import-dialog";
 import { TwoFactorSettings } from "./two-factor";
 import type { RemoteServer, ServerListResponse } from "./types";
@@ -95,6 +98,36 @@ interface ProbeDisguiseSettings {
   metric_disk: boolean;
   metric_traffic: boolean;
   metric_speed: boolean;
+}
+
+type BrandingAsset = "logo" | "favicon";
+
+// Base64 data URLs add roughly one third to the original file size. Keep the
+// client-side cap below the server's 128 KiB serialized-value limit.
+const BRAND_ASSET_MAX_BYTES = 95 * 1024;
+const BRAND_ASSET_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/svg+xml",
+  "image/x-icon",
+  "image/vnd.microsoft.icon",
+]);
+
+function isBrandAssetFile(file: File): boolean {
+  if (BRAND_ASSET_TYPES.has(file.type)) return true;
+  return /\.(?:png|jpe?g|webp|svg|ico)$/i.test(file.name);
+}
+
+async function readBrandAsset(file: File): Promise<string> {
+  if (!isBrandAssetFile(file)) throw new Error("请上传 PNG、JPG、WEBP、SVG 或 ICO 图片");
+  if (file.size > BRAND_ASSET_MAX_BYTES) throw new Error("品牌图片不能超过 95 KB");
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("读取品牌图片失败"));
+    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("读取品牌图片失败"));
+    reader.readAsDataURL(file);
+  });
 }
 
 type UpdateRunState = "idle" | "running" | "restarting" | "success" | "error";
@@ -292,7 +325,7 @@ const defaultUserSubscription: UserSubscriptionConfig = {
 };
 
 const defaultProbeDisguise: ProbeDisguiseSettings = {
-  enabled: false,
+  enabled: true,
   title: "",
   logo: "",
   block_login: false,
@@ -338,7 +371,7 @@ function messageOf(reason: unknown, fallback: string) {
   return reason instanceof Error && reason.message ? reason.message : fallback;
 }
 
-export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
+export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: Notify; onBrandingChange?: (branding: Branding) => void }) {
   const [loading, setLoading] = useState(true);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState("");
@@ -346,6 +379,7 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
   const [masterURL, setMasterURL] = useState("");
   const [theme, setTheme] = useState("flat");
   const [wallpaper, setWallpaper] = useState("");
+  const [branding, setBranding] = useState<Branding>(DEFAULT_BRANDING);
   const [intervals, setIntervals] = useState({ speed_collect_interval: 3, traffic_collect_interval: 60, traffic_check_interval: 120, heartbeat_interval: 30, report_interval: 5 });
   const [dashboardRefreshMs, setDashboardRefreshMs] = useState(5000);
   const [probe, setProbe] = useState<ProbeDisguiseSettings>(defaultProbeDisguise);
@@ -421,10 +455,11 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
   const load = useCallback(async () => {
     setLoading(true); setLoaded(false); setError("");
     try {
-      const [master, themeData, wall, intervalData, refreshData, probeData, serverData, shortData, prefixData, overrideData, formatData, silentData, featureData, rootLinksData, logData, templateData, defaultTemplateData, redeemData, secData, encryptData, permissionData, notifyData, tokenData, userSubscriptionData] = await Promise.all([
+      const [master, themeData, wall, brandingData, intervalData, refreshData, probeData, serverData, shortData, prefixData, overrideData, formatData, silentData, featureData, rootLinksData, logData, templateData, defaultTemplateData, redeemData, secData, encryptData, permissionData, notifyData, tokenData, userSubscriptionData] = await Promise.all([
         api.get<{ master_url: string }>("/api/admin/system-settings/master-url"),
         api.get<{ default_theme: string }>("/api/admin/system-settings/default-theme"),
         api.get<{ login_wallpaper: string }>("/api/admin/system-settings/login-wallpaper"),
+        api.get<Branding>("/api/admin/system-settings/branding"),
         api.get<typeof intervals>("/api/admin/system-settings/intervals"),
         api.get<{ refetch_interval_ms: number }>("/api/system-config/refetch-interval"),
         api.get<ProbeDisguiseSettings>("/api/admin/system-settings/probe-disguise"),
@@ -450,7 +485,7 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
       const loadedServers = serverData.servers ?? [];
       const loadedProbe = normalizeProbeDisguise(probeData);
       const loadedServerIDs = new Set(loadedServers.map((server) => server.id));
-      setMasterURL(master.master_url || location.origin); setTheme(themeData.default_theme); setWallpaper(wall.login_wallpaper);
+      setMasterURL(master.master_url || location.origin); setTheme(themeData.default_theme); setWallpaper(wall.login_wallpaper); setBranding(normalizeBranding(brandingData));
       setIntervals(intervalData); setDashboardRefreshMs(refreshData.refetch_interval_ms); setProbe({
         ...loadedProbe,
         server_ids: loadedProbe.server_ids_default
@@ -535,16 +570,32 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
       } else {
         probePayload.server_ids = validProbeServerIDs(probe.server_ids);
       }
+      const savedBranding = normalizeBranding(branding);
       await Promise.all([
         api.put("/api/admin/system-settings/master-url", { master_url: masterURL.trim().replace(/\/$/, "") }),
         api.put("/api/admin/system-settings/default-theme", { default_theme: theme }),
         api.put("/api/admin/system-settings/login-wallpaper", { login_wallpaper: wallpaper.trim() }),
+        api.put("/api/admin/system-settings/branding", savedBranding),
         api.put("/api/admin/system-settings/intervals", { ...intervals, report_interval: reportInterval }),
         api.put("/api/admin/system-settings/probe-disguise", probePayload),
       ]);
       await api.put("/api/admin/system-settings/dashboard-refresh", { refetch_interval_ms: normalizedRefreshMs });
       document.documentElement.dataset.styleTheme = theme;
+      setBranding(savedBranding);
+      onBrandingChange?.(savedBranding);
     }, "基础设置已保存");
+  };
+
+  const uploadBrandAsset = async (asset: BrandingAsset, file: File | undefined) => {
+    if (!file) return;
+    try {
+      const source = await readBrandAsset(file);
+      setBranding((current) => ({ ...current, [asset]: source }));
+    } catch (reason) {
+      const message = messageOf(reason, "读取品牌图片失败");
+      setError(message);
+      notify(message, "error");
+    }
   };
 
   const saveSubscription = (event: FormEvent) => {
@@ -694,6 +745,11 @@ export function SettingsWorkbenchPage({ notify }: { notify: Notify }) {
         <SettingSection icon={<Network size={19} />} title="控制端与采集" description="Agent 回连地址及运行间隔">
           <Field label="公开 URL"><input type="url" required value={masterURL} onChange={(e) => setMasterURL(e.target.value)} /></Field>
           <div className="settings-fields-grid"><Field label="速度采集（秒）"><input type="number" min="1" value={intervals.speed_collect_interval} onChange={(e) => setIntervals({ ...intervals, speed_collect_interval: Number(e.target.value) })} /></Field><Field label="流量采集（秒）"><input type="number" min="10" value={intervals.traffic_collect_interval} onChange={(e) => setIntervals({ ...intervals, traffic_collect_interval: Number(e.target.value) })} /></Field><Field label="流量检查（秒）"><input type="number" min="10" value={intervals.traffic_check_interval} onChange={(e) => setIntervals({ ...intervals, traffic_check_interval: Number(e.target.value) })} /></Field><Field label="心跳（秒）"><input type="number" min="5" value={intervals.heartbeat_interval} onChange={(e) => setIntervals({ ...intervals, heartbeat_interval: Number(e.target.value) })} /></Field><Field label="看板刷新 / Agent 上报（秒）"><input type="number" min="1" max="60" value={dashboardRefreshMs / 1000} onChange={(e) => setDashboardRefreshMs(Number(e.target.value) * 1000)} /></Field></div>
+        </SettingSection>
+        <SettingSection icon={<ImageUp size={19} />} title="项目品牌" description="名称、Logo 与浏览器图标；未设置时沿用 RelayDock 默认标识">
+          <Field label="项目名称" hint="留空时恢复 RelayDock"><input maxLength={64} value={branding.name} onChange={(e) => setBranding({ ...branding, name: e.target.value })} /></Field>
+          <BrandAssetField label="项目 Logo" value={branding.logo} preview={brandLogoURL(branding)} onValueChange={(logo) => setBranding({ ...branding, logo })} onUpload={(file) => void uploadBrandAsset("logo", file)} onReset={() => setBranding({ ...branding, logo: "" })} />
+          <BrandAssetField label="浏览器图标" value={branding.favicon} preview={brandFaviconURL(branding)} onValueChange={(favicon) => setBranding({ ...branding, favicon })} onUpload={(file) => void uploadBrandAsset("favicon", file)} onReset={() => setBranding({ ...branding, favicon: "" })} />
         </SettingSection>
         <SettingSection icon={<Palette size={19} />} title="界面外观" description="新会话的默认主题与登录背景">
           <Field label="默认主题"><select value={theme} onChange={(e) => setTheme(e.target.value)}><option value="flat">扁平</option><option value="pixel">像素</option><option value="anime">动漫</option></select></Field>
@@ -866,6 +922,33 @@ function SettingsGroupHeading({ icon, title, description }: { icon: ReactNode; t
 
 function SettingSection({ icon, title, description, children }: { icon: ReactNode; title: string; description: string; children: ReactNode }) {
   return <Surface className="settings-workbench-section"><div className="settings-heading"><span className="settings-icon">{icon}</span><div><h2>{title}</h2><p>{description}</p></div></div><div className="settings-section-body">{children}</div></Surface>;
+}
+
+function BrandAssetField({ label, value, preview, onValueChange, onUpload, onReset }: {
+  label: string;
+  value: string;
+  preview: string;
+  onValueChange: (value: string) => void;
+  onUpload: (file: File | undefined) => void;
+  onReset: () => void;
+}) {
+  const inputLabel = `${label} URL`;
+  return <div className="field branding-asset-field">
+    <span className="field-label">{inputLabel}</span>
+    <div className="branding-asset-control">
+      <span className="branding-asset-preview" aria-hidden="true"><img src={preview} alt="" referrerPolicy="no-referrer" onError={(event) => { event.currentTarget.src = "/brand.png"; }} /></span>
+      <input aria-label={inputLabel} value={value} onChange={(event) => onValueChange(event.target.value)} placeholder="https://... 或 /assets/brand.png" />
+      <label className="branding-asset-upload" title={`上传${label}`} aria-label={`上传${label}`}>
+        <ImageUp size={17} />
+        <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,image/x-icon,image/vnd.microsoft.icon,.ico" onChange={(event) => {
+          onUpload(event.currentTarget.files?.[0]);
+          event.currentTarget.value = "";
+        }} />
+      </label>
+      <IconButton type="button" label={`恢复默认${label}`} onClick={onReset}><RotateCcw size={16} /></IconButton>
+    </div>
+    <small>支持站内路径、http(s) 地址或上传 PNG、JPG、WEBP、SVG、ICO（最大 95 KB）</small>
+  </div>;
 }
 
 function SystemUpdatePanel({ info, checking, checkError, runState, progress, logs, runError, notify, onCheck, onApply }: {

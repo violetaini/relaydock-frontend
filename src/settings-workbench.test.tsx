@@ -14,6 +14,7 @@ function mockCompleteSettings(overrides: Record<string, unknown> = {}, failingPa
     "/api/admin/system-settings/master-url": { master_url: "https://old.example.com" },
     "/api/admin/system-settings/default-theme": { default_theme: "flat" },
     "/api/admin/system-settings/login-wallpaper": { login_wallpaper: "" },
+    "/api/admin/system-settings/branding": { name: "RelayDock", logo: "", favicon: "" },
     "/api/admin/system-settings/intervals": { speed_collect_interval: 3, traffic_collect_interval: 60, traffic_check_interval: 120, heartbeat_interval: 30, report_interval: 5 },
     "/api/system-config/refetch-interval": { refetch_interval_ms: 5000 },
     "/api/admin/system-settings/probe-disguise": { enabled: false, title: "", server_ids: [], show_name: false },
@@ -150,6 +151,42 @@ describe("settings workbench", () => {
     expect(put).toHaveBeenCalledWith("/api/admin/system-settings/intervals", expect.objectContaining({ report_interval: 5 }));
     expect(put).toHaveBeenCalledWith("/api/admin/system-settings/dashboard-refresh", { refetch_interval_ms: 5000 });
     expect(notify).toHaveBeenCalledWith("基础设置已保存");
+  });
+
+  it("enables the public probe by default when no persisted toggle exists", async () => {
+    mockCompleteSettings({
+      "/api/admin/system-settings/probe-disguise": { title: "", server_ids: [], show_name: false },
+    });
+    render(<SettingsWorkbenchPage notify={vi.fn()} />);
+
+    expect(await screen.findByRole("switch", { name: "启用公开探针伪装" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("saves project branding and applies it to the active console", async () => {
+    mockCompleteSettings({
+      "/api/admin/system-settings/branding": {
+        name: "RelayDock", logo: "https://assets.example/original-logo.png", favicon: "",
+      },
+    });
+    const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
+    const onBrandingChange = vi.fn();
+    render(<SettingsWorkbenchPage notify={vi.fn()} onBrandingChange={onBrandingChange} />);
+
+    fireEvent.change(await screen.findByRole("textbox", { name: /项目名称/ }), { target: { value: "Northstar" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "项目 Logo URL" }), { target: { value: "/assets/northstar-logo.svg" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "浏览器图标 URL" }), { target: { value: "https://assets.example/northstar.ico" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存基础设置" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/system-settings/branding", {
+      name: "Northstar",
+      logo: "/assets/northstar-logo.svg",
+      favicon: "https://assets.example/northstar.ico",
+    }));
+    expect(onBrandingChange).toHaveBeenCalledWith({
+      name: "Northstar",
+      logo: "/assets/northstar-logo.svg",
+      favicon: "https://assets.example/northstar.ico",
+    });
   });
 
   it("keeps public probe server selection compact until the picker is confirmed", async () => {

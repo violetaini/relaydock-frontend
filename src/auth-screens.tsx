@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
-import { Activity, ArrowDown, ArrowRight, ArrowUp, Check, Cpu, Gauge, Globe2, Grid2X2, HardDrive, KeyRound, List, LockKeyhole, LogIn, MemoryStick, Network, Server, ShieldCheck } from "lucide-react";
+import { ArrowDown, ArrowRight, ArrowUp, Check, Cpu, Gauge, Globe2, Grid2X2, HardDrive, KeyRound, List, LockKeyhole, LogIn, MemoryStick, Network, Server, ShieldCheck } from "lucide-react";
 import { api, ApiError, setToken } from "./api";
-import { BRAND_NAME, BrandMark } from "./brand";
+import { BRAND_NAME, BrandMark, useBranding } from "./brand";
 import { countryFlag, normalizeCountryCode } from "./country-flag";
 import type { Session } from "./types";
 import { Button, ErrorState, Field, Spinner, formatBytes } from "./ui";
@@ -16,9 +16,11 @@ declare global {
 }
 
 function AuthVisual({ mode }: { mode: "setup" | "login" }) {
+  const branding = useBranding();
+  const projectName = branding.name?.trim() || BRAND_NAME;
   return (
-    <aside className="auth-visual" aria-label={`${BRAND_NAME} 控制端`}>
-      <div className="brand brand-auth"><BrandMark size={27} /><span>{BRAND_NAME}</span></div>
+    <aside className="auth-visual" aria-label={`${projectName} 控制端`}>
+      <div className="brand brand-auth"><BrandMark size={27} /><span>{projectName}</span></div>
       <div className="topology" aria-hidden="true">
         <div className="topology-line line-a" />
         <div className="topology-line line-b" />
@@ -42,6 +44,8 @@ function AuthVisual({ mode }: { mode: "setup" | "login" }) {
 }
 
 export function SetupScreen({ onComplete }: { onComplete: () => void }) {
+  const branding = useBranding();
+  const projectName = branding.name?.trim() || BRAND_NAME;
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [form, setForm] = useState({
@@ -86,7 +90,7 @@ export function SetupScreen({ onComplete }: { onComplete: () => void }) {
       <AuthVisual mode="setup" />
       <section className="auth-panel">
         <div className="auth-form-wrap">
-          <div className="mobile-brand brand"><BrandMark size={24} /><span>{BRAND_NAME}</span></div>
+          <div className="mobile-brand brand"><BrandMark size={24} /><span>{projectName}</span></div>
           <span className="auth-step">初始化</span>
           <h2>创建首位管理员</h2>
           <p className="auth-subtitle">完成后即可接入服务器和节点。</p>
@@ -249,6 +253,7 @@ function ProbeMetric({ icon, label, value, progress, detail }: { icon: ReactNode
 }
 
 export function PublicProbeScreen({ probe, onLogin, loginLabel = "登录" }: { probe: PublicProbeState; onLogin: () => void; loginLabel?: string }) {
+  const branding = useBranding();
   const servers = probe.servers ?? [];
   const [layout, setLayout] = useState<"grid" | "list">("grid");
   const showCPU = isProbeMetricEnabled(probe, "show_cpu", "metric_cpu", false);
@@ -256,8 +261,9 @@ export function PublicProbeScreen({ probe, onLogin, loginLabel = "登录" }: { p
   const showDisk = isProbeMetricEnabled(probe, "show_disk", "metric_disk", false);
   const showTraffic = isProbeMetricEnabled(probe, "show_traffic", "metric_traffic", true);
   const showSpeed = isProbeMetricEnabled(probe, "show_speed", "metric_speed", true);
-  const title = probe.title?.trim() || "服务器状态";
-  const logo = probe.logo?.trim();
+  const projectName = branding.name?.trim() || BRAND_NAME;
+  const title = probe.title?.trim() || (projectName === BRAND_NAME ? "服务器状态" : `${projectName} 状态`);
+  const logo = probe.logo?.trim() || branding.logo?.trim();
   const onlineCount = servers.filter((server) => server.online).length;
   const totalUpload = servers.reduce((total, server) => total + Math.max(0, Number(server.upload_speed) || 0), 0);
   const totalDownload = servers.reduce((total, server) => total + Math.max(0, Number(server.download_speed) || 0), 0);
@@ -267,22 +273,38 @@ export function PublicProbeScreen({ probe, onLogin, loginLabel = "登录" }: { p
       <header className="public-probe-header">
         <div className="public-probe-header-inner">
           <div className="public-probe-brand">
-            {logo ? <img src={logo} alt="" referrerPolicy="no-referrer" /> : <Activity size={18} aria-hidden="true" />}
-            <h1>{title}</h1>
+            {logo ? <img src={logo} alt="" referrerPolicy="no-referrer" /> : <BrandMark size={22} />}
+            <span className="public-probe-brand-label">{projectName}</span>
+          </div>
+          <div className="public-probe-live-state" aria-label={`实时状态：${onlineCount} 个节点在线，共 ${servers.length} 个节点`}>
+            <i aria-hidden="true" />
+            <span>LIVE</span>
+            <small>{onlineCount} / {servers.length} ONLINE</small>
           </div>
           <div className="public-probe-controls" role="group" aria-label="页面视图">
             <button type="button" className={`public-probe-view-button ${layout === "grid" ? "is-active" : ""}`} aria-label="网格视图" title="网格视图" aria-pressed={layout === "grid"} onClick={() => setLayout("grid")}><Grid2X2 size={16} /></button>
             <button type="button" className={`public-probe-view-button ${layout === "list" ? "is-active" : ""}`} aria-label="列表视图" title="列表视图" aria-pressed={layout === "list"} onClick={() => setLayout("list")}><List size={17} /></button>
-            {!probe.block_login ? <button type="button" className="public-probe-login" onClick={onLogin}><LogIn size={16} />{loginLabel}</button> : null}
+            {!probe.block_login ? <button type="button" className="public-probe-login" aria-label={loginLabel} title={loginLabel} onClick={onLogin}><LogIn size={16} /><span className="public-probe-login-label">{loginLabel}</span></button> : null}
           </div>
         </div>
       </header>
       <section className="public-probe-content">
+        <div className="public-probe-statusline">
+          <div>
+            <span>NETWORK STATUS</span>
+            <h1>{title}</h1>
+          </div>
+          <small>LIVE TELEMETRY</small>
+        </div>
         <div className="public-probe-summary" aria-label="服务器总览">
-          <span><i className="is-online" />在线 <strong>{onlineCount}</strong><small>/ {servers.length}</small></span>
-          {showSpeed ? <span><ArrowDown size={14} />下行 <strong>{formatBytes(totalDownload, true)}</strong></span> : null}
-          {showSpeed ? <span><ArrowUp size={14} />上行 <strong>{formatBytes(totalUpload, true)}</strong></span> : null}
-          {showTraffic ? <span><Gauge size={14} />累计流量 <strong>{formatBytes(totalTraffic)}</strong></span> : null}
+          <span className="public-probe-summary-cell"><i className="is-online" /><span><small>在线节点</small><strong>{onlineCount} <em>/ {servers.length}</em></strong></span></span>
+          {showSpeed ? <span className="public-probe-summary-cell"><ArrowDown size={14} /><span><small>实时下行</small><strong>{formatBytes(totalDownload, true)}</strong></span></span> : null}
+          {showSpeed ? <span className="public-probe-summary-cell"><ArrowUp size={14} /><span><small>实时上行</small><strong>{formatBytes(totalUpload, true)}</strong></span></span> : null}
+          {showTraffic ? <span className="public-probe-summary-cell"><Gauge size={14} /><span><small>累计流量</small><strong>{formatBytes(totalTraffic)}</strong></span></span> : null}
+        </div>
+        <div className="public-probe-fleet-heading">
+          <div><span>FLEET</span><h2>运行节点</h2></div>
+          <small>{servers.length} NODES</small>
         </div>
         {servers.length ? <div className={`public-probe-grid ${layout === "list" ? "is-list" : ""}`}>{servers.map((server, index) => {
           const used = Math.max(0, Number(server.traffic_used) || 0);
@@ -302,6 +324,7 @@ export function PublicProbeScreen({ probe, onLogin, loginLabel = "登录" }: { p
           ].filter(Boolean).length;
           const flag = countryFlag(server.country_code);
           return <article className={`public-probe-item ${server.online ? "is-online" : "is-offline"}`} key={`${server.name || "service"}-${index}`} style={{ "--public-probe-order": index } as CSSProperties}>
+            <span className="public-probe-card-index" aria-hidden="true">N{String(index + 1).padStart(2, "0")}</span>
             <header className="public-probe-item-heading">
               <span className="public-probe-status"><i /><span className="public-probe-country" title={server.country_code || "地区未知"}>{flag || <Globe2 size={15} />}</span><strong>{probe.show_name && server.name ? server.name : `服务器 #${index + 1}`}</strong></span>
               <small>{server.online ? "在线" : "离线"}</small>
@@ -359,6 +382,8 @@ function Turnstile({ siteKey, onToken }: { siteKey: string; onToken: (token: str
 }
 
 export function LoginScreen({ onLogin, wallpaper = "" }: { onLogin: (session: Session) => void; wallpaper?: string }) {
+  const branding = useBranding();
+  const projectName = branding.name?.trim() || BRAND_NAME;
   const [form, setForm] = useState({ username: "", password: "", remember_me: true });
   const [pending2FA, setPending2FA] = useState("");
   const [code, setCode] = useState("");
@@ -424,7 +449,7 @@ export function LoginScreen({ onLogin, wallpaper = "" }: { onLogin: (session: Se
       <AuthVisual mode="login" />
       <section className="auth-panel">
         <div className="auth-form-wrap">
-          <div className="mobile-brand brand"><BrandMark size={24} /><span>{BRAND_NAME}</span></div>
+          <div className="mobile-brand brand"><BrandMark size={24} /><span>{projectName}</span></div>
           <span className="auth-step">安全登录</span>
           <h2>{pending2FA ? "验证第二因素" : "进入控制台"}</h2>
           <p className="auth-subtitle">{pending2FA ? "输入验证器代码或恢复码。" : "使用管理端账号继续。"}</p>

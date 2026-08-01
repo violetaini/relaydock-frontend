@@ -38,6 +38,7 @@ test("public probe remains separate from the management login", async ({ page })
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
     if (request.method() === "GET" && pathname === "/api/setup/status") return fulfill(route, { needs_setup: false });
+    if (request.method() === "GET" && pathname === "/api/public/branding") return fulfill(route, { name: "RelayDock", logo: "", favicon: "" });
     if (request.method() === "GET" && pathname === "/api/public/login-wallpaper") return fulfill(route, { login_wallpaper: "" });
     if (request.method() === "GET" && pathname === "/api/public/probe-servers") return fulfill(route, {
       enabled: true,
@@ -92,6 +93,7 @@ test("initial setup validates locally and submits the complete contract", async 
     if (request.method() === "GET" && pathname === "/api/setup/status") return fulfill(route, { needs_setup: true });
     if (request.method() === "POST" && pathname === "/api/setup/init") return fulfill(route, { success: true });
     if (request.method() === "GET" && pathname === "/api/captcha/config") return fulfill(route, { enabled: false, site_key: "" });
+    if (request.method() === "GET" && pathname === "/api/public/branding") return fulfill(route, { name: "RelayDock", logo: "", favicon: "" });
     if (request.method() === "GET" && pathname === "/api/public/login-wallpaper") return fulfill(route, { login_wallpaper: "" });
     if (request.method() === "GET" && pathname === "/api/public/probe-servers") return fulfill(route, { enabled: false, servers: [] });
     return fulfill(route, { error: `unexpected ${request.method()} ${pathname}` }, 500);
@@ -132,6 +134,7 @@ for (const recoveryMode of [false, true]) {
       const key = `${request.method()} ${pathname}`;
       if (key === "GET /api/setup/status") return fulfill(route, { needs_setup: false });
       if (key === "GET /api/captcha/config") return fulfill(route, { enabled: false, site_key: "" });
+      if (key === "GET /api/public/branding") return fulfill(route, { name: "RelayDock", logo: "", favicon: "" });
       if (key === "GET /api/public/login-wallpaper") return fulfill(route, { login_wallpaper: "" });
       if (key === "GET /api/public/probe-servers") return fulfill(route, { enabled: false, servers: [] });
       if (key === "POST /api/login") {

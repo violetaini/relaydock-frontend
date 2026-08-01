@@ -533,7 +533,11 @@ test("public probe keeps its operational hierarchy across desktop and mobile", a
     "/api/public/probe-servers": probe,
   });
 
-  for (const viewport of [{ name: "desktop", width: 1440, height: 900 }, { name: "mobile", width: 390, height: 844 }]) {
+  for (const viewport of [
+    { name: "desktop", width: 1440, height: 900 },
+    { name: "wide-desktop", width: 1920, height: 1080 },
+    { name: "mobile", width: 390, height: 844 },
+  ]) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto("/?probe=1#/dashboard");
 
@@ -546,6 +550,24 @@ test("public probe keeps its operational hierarchy across desktop and mobile", a
     await expectViewportIntegrity(page, `public probe ${viewport.name}`);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     expect(overflow, `public probe ${viewport.name}: document must not overflow horizontally`).toBeLessThanOrEqual(1);
+    if (viewport.name === "wide-desktop") {
+      const geometry = await page.evaluate(() => {
+        const content = document.querySelector<HTMLElement>(".public-probe-content");
+        const card = document.querySelector<HTMLElement>(".public-probe-item");
+        const name = document.querySelector<HTMLElement>(".public-probe-status strong");
+        if (!content || !card || !name) throw new Error("public probe layout is incomplete");
+        return {
+          contentWidth: content.getBoundingClientRect().width,
+          cardWidth: card.getBoundingClientRect().width,
+          cardHeight: card.getBoundingClientRect().height,
+          nameFontSize: getComputedStyle(name).fontSize,
+        };
+      });
+      expect(geometry.contentWidth).toBeGreaterThan(1_600);
+      expect(geometry.cardWidth).toBeGreaterThan(800);
+      expect(geometry.cardHeight).toBeGreaterThanOrEqual(276);
+      expect(geometry.nameFontSize).toBe("16px");
+    }
     await page.screenshot({ path: testInfo.outputPath(`public-probe-${viewport.name}.png`), fullPage: true });
   }
 });

@@ -1464,6 +1464,40 @@ td { min-height: 62px; }
 .public-probe-speeds > span { font: 700 10px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .public-probe-speeds strong { font: inherit; }
 .public-probe-empty { min-height: 220px; border-color: var(--probe-border); border-radius: 4px; background: var(--probe-surface); box-shadow: 0 1px 0 var(--probe-edge-light) inset, 0 -1px 0 var(--probe-edge-dark) inset; }
+@media (min-width: 761px) {
+  /* Let the operational surface use a wide desktop viewport instead of
+     leaving its cards constrained to a narrow central column. */
+  .public-probe-header-inner,
+  .public-probe-content { width: min(calc(100% - 64px), 1680px); }
+  .public-probe-content { padding-top: 32px; padding-bottom: 76px; }
+  .public-probe-statusline { min-height: 64px; padding-bottom: 18px; margin-bottom: 18px; }
+  .public-probe-statusline h1 { font-size: 22px; }
+  .public-probe-summary { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .public-probe-summary > .public-probe-summary-cell { min-height: 70px; padding: 13px 16px; }
+  .public-probe-summary-cell small { font-size: 10px; }
+  .public-probe-summary-cell strong { font-size: 15px; }
+  .public-probe-fleet-heading { margin-top: 30px; margin-bottom: 14px; padding-bottom: 12px; }
+  .public-probe-fleet-heading h2 { font-size: 17px; }
+  .public-probe-grid { grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 16px; }
+  .public-probe-item { min-height: 276px; padding: 20px; }
+  .public-probe-card-index { top: 19px; right: 19px; font-size: 10px; }
+  .public-probe-item-heading { min-height: 35px; padding: 0 78px 14px 0; }
+  .public-probe-status { gap: 9px; }
+  .public-probe-status i { width: 8px; height: 8px; flex-basis: 8px; }
+  .public-probe-country { width: 28px; height: 25px; flex-basis: 28px; }
+  .public-probe-country svg { width: 16px; height: 16px; }
+  .public-probe-status strong { font-size: 16px; }
+  .public-probe-item-heading > small { top: 19px; right: 48px; padding: 4px 6px; font-size: 9px; }
+  .public-probe-metrics { margin-top: 16px; gap: 16px; }
+  .public-probe-metric-heading { grid-template-columns: 18px minmax(0, 1fr) auto; gap: 7px; }
+  .public-probe-metric-heading small { font-size: 11px; }
+  .public-probe-metric-heading strong { font-size: 13px; }
+  .public-probe-meter { height: 6px; margin-top: 8px; }
+  .public-probe-metric-detail { margin-top: 5px; font-size: 10px; }
+  .public-probe-item-footer { padding-top: 15px; }
+  .public-probe-speeds { gap: 16px; }
+  .public-probe-speeds > span { font-size: 12px; }
+}
 @media (max-width: 760px) {
   .public-probe-header-inner,
   .public-probe-content { width: min(calc(100% - 28px), 1200px); }

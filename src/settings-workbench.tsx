@@ -380,8 +380,8 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
   const [theme, setTheme] = useState("flat");
   const [wallpaper, setWallpaper] = useState("");
   const [branding, setBranding] = useState<Branding>(DEFAULT_BRANDING);
-  const [intervals, setIntervals] = useState({ speed_collect_interval: 3, traffic_collect_interval: 60, traffic_check_interval: 120, heartbeat_interval: 30, report_interval: 5 });
-  const [dashboardRefreshMs, setDashboardRefreshMs] = useState(5000);
+  const [intervals, setIntervals] = useState({ speed_collect_interval: 3, traffic_collect_interval: 60, traffic_check_interval: 120, heartbeat_interval: 30, report_interval: 1 });
+  const [dashboardRefreshMs, setDashboardRefreshMs] = useState(1000);
   const [probe, setProbe] = useState<ProbeDisguiseSettings>(defaultProbeDisguise);
   const [servers, setServers] = useState<RemoteServer[]>([]);
   const [probeServerPickerOpen, setProbeServerPickerOpen] = useState(false);
@@ -562,7 +562,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
   const saveGeneral = (event: FormEvent) => {
     event.preventDefault();
     void save("general", async () => {
-      const normalizedRefreshMs = Number.isFinite(dashboardRefreshMs) ? Math.min(60000, Math.max(1000, dashboardRefreshMs)) : 5000;
+      const normalizedRefreshMs = Number.isFinite(dashboardRefreshMs) ? Math.min(60000, Math.max(1000, dashboardRefreshMs)) : 1000;
       const reportInterval = Math.round(normalizedRefreshMs / 1000);
       const probePayload: Partial<ProbeDisguiseSettings> = { ...probe };
       if (probe.server_ids_default) {

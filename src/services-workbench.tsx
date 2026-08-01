@@ -76,6 +76,11 @@ type Notify = (message: string, tone?: "success" | "error") => void;
 type ViewMode = "cards" | "list";
 type StatusFilter = "all" | "online" | "offline";
 
+// Keep the service-management fallback responsive when the dashboard WebSocket
+// is unavailable. Individual refreshes are deduplicated below, so a slow
+// controller never turns this cadence into overlapping requests.
+const serviceManagementRefreshIntervalMs = 1_000;
+
 interface ManagedServer extends RemoteServer {
   token?: string;
   pull_token?: string;
@@ -861,21 +866,36 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
   const [quickWorking, setQuickWorking] = useState<{ serverId: number; action: XrayQuickAction } | null>(null);
   const [quickConfirm, setQuickConfirm] = useState<QuickXrayConfirmation | null>(null);
   const [quickTerminal, setQuickTerminal] = useState<ServiceTerminalState | null>(null);
+  const serverListRefresh = useRef<Promise<void> | null>(null);
   const serviceRefreshes = useRef(new Set<number>());
 
   const load = useCallback(async (quiet = false) => {
-    if (!quiet) {
-      setLoading(true);
-      setError("");
+    const inFlight = serverListRefresh.current;
+    if (inFlight) {
+      if (!quiet) await inFlight;
+      return;
     }
+
+    const refresh = (async () => {
+      if (!quiet) {
+        setLoading(true);
+        setError("");
+      }
+      try {
+        const response = assertSuccess(await api.get<ServerListResponse>("/api/admin/remote-servers"), "服务器列表加载失败");
+        setServers((response.servers ?? []) as ManagedServer[]);
+        setSelected((current) => current.filter((id) => (response.servers ?? []).some((server) => server.id === id)));
+      } catch (reason) {
+        if (!quiet) setError(messageFrom(reason, "服务器列表加载失败"));
+      } finally {
+        if (!quiet) setLoading(false);
+      }
+    })();
+    serverListRefresh.current = refresh;
     try {
-      const response = assertSuccess(await api.get<ServerListResponse>("/api/admin/remote-servers"), "服务器列表加载失败");
-      setServers((response.servers ?? []) as ManagedServer[]);
-      setSelected((current) => current.filter((id) => (response.servers ?? []).some((server) => server.id === id)));
-    } catch (reason) {
-      if (!quiet) setError(messageFrom(reason, "服务器列表加载失败"));
+      await refresh;
     } finally {
-      if (!quiet) setLoading(false);
+      if (serverListRefresh.current === refresh) serverListRefresh.current = null;
     }
   }, []);
 
@@ -970,7 +990,7 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
 
   useEffect(() => {
     if (dashboardConnected) return;
-    const timer = window.setInterval(() => { void load(true); }, 15_000);
+    const timer = window.setInterval(() => { void load(true); }, serviceManagementRefreshIntervalMs);
     return () => window.clearInterval(timer);
   }, [dashboardConnected, load]);
 
@@ -997,7 +1017,7 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
   useEffect(() => {
     const fallbackIDs = fallbackStatusKey.split(",").map(Number).filter(Boolean);
     if (!fallbackIDs.length) return;
-    const timer = window.setInterval(() => { void refreshServiceStatuses(fallbackIDs); }, 15_000);
+    const timer = window.setInterval(() => { void refreshServiceStatuses(fallbackIDs); }, serviceManagementRefreshIntervalMs);
     return () => window.clearInterval(timer);
   }, [fallbackStatusKey, refreshServiceStatuses]);
 

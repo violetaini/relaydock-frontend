@@ -193,7 +193,7 @@ describe("service management workbench", () => {
     await act(async () => { await Promise.resolve(); });
     expect(statusRequests).toBe(1);
 
-    await act(async () => { await vi.advanceTimersByTimeAsync(45_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
     expect(statusRequests).toBe(1);
     expect(serverListRequests).toBeGreaterThanOrEqual(3);
 
@@ -205,8 +205,43 @@ describe("service management workbench", () => {
       });
       await Promise.resolve();
     });
-    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
     expect(statusRequests).toBe(2);
+  });
+
+  it("does not overlap one-second fallback server-list refreshes", async () => {
+    vi.useFakeTimers();
+    let resolveFirstList!: (value: unknown) => void;
+    const firstList = new Promise((resolve) => { resolveFirstList = resolve; });
+    let listRequests = 0;
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/remote-servers") {
+        listRequests += 1;
+        if (listRequests === 1) return await firstList as T;
+        return { success: true, servers: [onlineServer] } as T;
+      }
+      if (path.includes("/api/admin/remote/services/status")) return {
+        success: true,
+        xray: { installed: true, running: true, version: "Xray 25.1" },
+        nginx: { installed: true, running: true, version: "nginx/1.26" },
+      } as T;
+      if (path.includes("/api/admin/remote/agent/version-info")) return { server_id: 11, current: "0.3.0", latest: "0.3.1", upgrade_available: true } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(listRequests).toBe(1);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(listRequests).toBe(1);
+
+    await act(async () => {
+      resolveFirstList({ success: true, servers: [onlineServer] });
+      await Promise.resolve();
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    expect(listRequests).toBe(2);
   });
 
   it("keeps advanced operations reachable from service management", async () => {

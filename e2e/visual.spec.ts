@@ -561,6 +561,33 @@ test("mobile dashboard keeps the period selector readable", async ({ page }) => 
   await expectViewportIntegrity(page, "mobile dashboard period selector");
 });
 
+test("mobile probe return uses a matched home control", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockAPI(page);
+  await page.goto("/#/dashboard");
+
+  await expect(page.getByRole("button", { name: "返回探针" })).toBeVisible();
+  const controls = await page.evaluate(() => {
+    const probe = document.querySelector<HTMLElement>(".topbar-probe-link");
+    const reference = document.querySelector<HTMLElement>(".topbar-actions .mobile-page-shortcut");
+    const icon = probe?.querySelector<SVGElement>("svg");
+    if (!probe || !reference || !icon) throw new Error("mobile probe return control is missing");
+    const probeRect = probe.getBoundingClientRect();
+    const referenceRect = reference.getBoundingClientRect();
+    return {
+      iconClass: icon.getAttribute("class") || "",
+      isIconButton: probe.classList.contains("icon-button"),
+      probe: { width: probeRect.width, height: probeRect.height },
+      reference: { width: referenceRect.width, height: referenceRect.height },
+    };
+  });
+
+  expect(controls.isIconButton).toBe(true);
+  expect(controls.iconClass).toContain("lucide-house");
+  expect(controls.probe).toEqual(controls.reference);
+  await expectViewportIntegrity(page, "mobile probe return control");
+});
+
 test("desktop layout switch stays visible in both chrome modes and preserves navigation", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockAPI(page);

@@ -9,12 +9,14 @@
 
 RelayDock 多服务器 Xray 控制面板的 React Web 控制台。
 
-[主仓库与安装](https://github.com/violetaini/relaydock) · [问题反馈](https://github.com/violetaini/relaydock-frontend/issues) · [参与贡献](#参与贡献)
+[主仓库与安装](https://github.com/violetaini/relaydock) · [项目状态与发布进展](https://github.com/violetaini/relaydock/blob/main/docs/project-status.md) · [问题反馈](https://github.com/violetaini/relaydock-frontend/issues) · [参与贡献](#参与贡献)
 </div>
 
 ## 项目简介
 
 RelayDock Console 是 [RelayDock](https://github.com/violetaini/relaydock) 主仓库的管理界面，面向多服务器节点运营、用户授权和订阅交付场景。前端通过同源 `/api` 与后端通信，正式版本由主仓库内嵌并作为一个服务发布，因此普通用户只需安装主仓库版本，无需单独部署前端。
+
+当前正式产品版本为 [`v0.6.6`](https://github.com/violetaini/relaydock/releases/tag/v0.6.6)。该版本中的控制台产物与控制面、Agent 安装资产、到期守卫和测速组件由同一个产品发布清单约束，避免前端与后端单独更新后出现不兼容状态。
 
 ## 主要功能
 
@@ -25,7 +27,18 @@ RelayDock Console 是 [RelayDock](https://github.com/violetaini/relaydock) 主�
 - TCP/UDP 多跳隧道与 Tunnel（任意门）管理
 - 节点测速，以及主控和受管服务器 Ookla Speedtest 线路测速
 - DNS 凭据、证书、模板、路由规则、订阅文件与系统设置管理
+- 项目名称、Logo、浏览器图标的后台配置；留空时使用 RelayDock 默认品牌
+- 公开探针页的 WebSocket 实时状态、流量和速率展示，以及移动端和宽屏布局
+- 服务器管理的实时状态通道与秒级轮询回退
 - 响应式桌面/移动端界面、明暗主题与双因素认证流程
+
+## 实时数据与发布兼容性
+
+公开探针默认通过 `/api/public/probe-ws` 接收实时帧；连接不可用时，前端以约 1 秒间隔请求 `/api/public/probe-servers` 保留最新有效快照。控制台服务器管理同样优先使用实时通道，并在连接中断时以 1 秒轮询维持状态、流量、吞吐、心跳和服务信息。
+
+品牌配置来自公开和管理员设置接口。项目名称、Logo 或浏览器图标未配置时，控制台使用内置 RelayDock 默认值，不会因为缺少自定义资源而影响登录页、公开探针页或浏览器标题。
+
+正式网页发布包中含有 `relaydock-release.json`，其中记录 Release ID、后端提交和 API 协议。产品更新在切换后必须验证该文件；前端不得以单独、未校验的静态目录覆盖生产实例。完整的事务模型、生产验收和运维边界见主仓库的 [项目状态与发布进展](https://github.com/violetaini/relaydock/blob/main/docs/project-status.md)。
 
 ## 快速开始
 
@@ -81,7 +94,7 @@ RelayDock Backend 使用 Go `embed` 提供前端静态文件。发布完整面�
 2. 用 `dist/` 的内容替换后端仓库的 `internal/web/dist/`。
 3. 在后端仓库执行测试并构建 Go 二进制。
 
-前后端接口应使用匹配的版本；不要将来源不明的前端构建产物直接嵌入生产二进制。
+前后端接口应使用匹配的版本；不要将来源不明的前端构建产物直接嵌入生产二进制。稳定版本发布时，后端工作流会将网页归档、版本元数据、发布清单和校验和一并生成，面板的一键更新据此原子更新整个产品包。
 
 ## 项目结构
 

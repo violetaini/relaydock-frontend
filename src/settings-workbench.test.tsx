@@ -384,8 +384,34 @@ describe("settings workbench", () => {
     });
     render(<SettingsWorkbenchPage notify={vi.fn()} />);
 
-    expect(await screen.findByText("当前控制端尚未提供安全的网页更新能力，请先按 README 使用命令行更新。")).toBeInTheDocument();
+    expect(await screen.findByText("当前后端尚未提供安全的网页更新能力，请先按 README 使用命令行更新。")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "立即更新" })).toBeDisabled();
+  });
+
+  it("groups legacy internal update assets under the backend row", async () => {
+    mockCompleteSettings({
+      "/api/admin/update/check": {
+        current_version: "0.6.7", latest_version: "0.6.8", has_update: true,
+        release_url: "https://github.com/violetaini/relaydock/releases/tag/v0.6.8",
+        download_url: "", release_notes: "Release", deployment_mode: "standalone",
+        update_scope: "full", external_web_root: false, can_apply: true,
+        components: [
+          { name: "control_plane", label: "控制端程序", current_version: "0.6.7", target_version: "0.6.8", action: "update", status: "pending", required: true },
+          { name: "guard", label: "守卫资产", current_version: "0.6.7", target_version: "0.6.8", action: "update", status: "pending", required: true },
+          { name: "speedtester", label: "测速安装资产", current_version: "0.1.0", target_version: "0.6.8", action: "update", status: "pending", required: true },
+          { name: "web", label: "外置前端", current_version: "0.6.7", target_version: "0.6.8", action: "update", status: "pending", required: true },
+        ],
+      },
+    });
+    render(<SettingsWorkbenchPage notify={vi.fn()} />);
+
+    const components = await screen.findByLabelText("发布组件");
+    expect(within(components).getByText("后端")).toBeInTheDocument();
+    expect(within(components).getByText("前端")).toBeInTheDocument();
+    expect(within(components).queryByText("控制端程序")).not.toBeInTheDocument();
+    expect(within(components).queryByText("守卫资产")).not.toBeInTheDocument();
+    expect(within(components).queryByText("测速安装资产")).not.toBeInTheDocument();
+    expect(within(components).queryByText("外置前端")).not.toBeInTheDocument();
   });
 
   it("streams an authenticated update and recovers after the restart disconnect", async () => {
@@ -450,8 +476,8 @@ describe("settings workbench", () => {
   it("commits an external frontend release without waiting for a backend version change", async () => {
     let checkCount = 0;
     const components = [
-      { name: "web", label: "外置前端", current_version: "v0.6.4", target_version: "v0.6.5", action: "update", status: "pending", required: true },
-      { name: "control_plane", label: "控制端程序", current_version: "0.6.4", target_version: "0.6.4", action: "unchanged", status: "current", required: true },
+      { name: "web", label: "前端", current_version: "v0.6.4", target_version: "v0.6.5", action: "update", status: "pending", required: true },
+      { name: "control_plane", label: "后端", current_version: "0.6.4", target_version: "0.6.4", action: "unchanged", status: "current", required: true },
     ];
     const get = mockCompleteSettings({
       "/api/admin/update/check": () => {
@@ -501,11 +527,11 @@ describe("settings workbench", () => {
     const notify = vi.fn();
     render(<SettingsWorkbenchPage notify={notify} />);
 
-    expect(await screen.findByText("外置前端")).toBeInTheDocument();
+    expect(await screen.findByText("前端")).toBeInTheDocument();
     expect(screen.getByText("保持")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "立即更新" }));
     expect(screen.getByRole("dialog", { name: "更新到 v0.6.5" })).toBeInTheDocument();
-    expect(screen.getByText(/同一事务中更新外置前端/)).toBeInTheDocument();
+    expect(screen.getByText(/同一事务中更新前端/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "确认更新" }));
 
     expect(await screen.findByText("更新完成，当前发布 v0.6.5")).toBeInTheDocument();

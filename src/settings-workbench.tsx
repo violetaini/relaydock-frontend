@@ -181,13 +181,13 @@ function updateCurrentLabel(info: UpdateInfo): string {
 function updateComponentLabel(component: UpdateComponent): string {
   if (component.label?.trim()) return component.label.trim();
   const labels: Record<string, string> = {
-    web: "外置前端",
-    frontend: "外置前端",
-    control_plane: "控制端程序",
-    backend: "控制端程序",
-    guard: "守卫资产",
-    agent: "Agent 安装资产",
-    speedtester: "测速资产",
+    web: "前端",
+    frontend: "前端",
+    control_plane: "后端",
+    backend: "后端",
+    guard: "后端",
+    agent: "后端",
+    speedtester: "后端",
   };
   return labels[component.name] || component.name;
 }
@@ -269,8 +269,32 @@ function updateChangesComponent(component: UpdateComponent): boolean {
   return ["install", "update", "replace", "upgrade", "remove"].includes(component.action?.toLowerCase() ?? "");
 }
 
+function visibleUpdateComponents(components?: UpdateComponent[]): UpdateComponent[] {
+  const source = components ?? [];
+  const frontend = source.filter((component) => ["web", "frontend"].includes(component.name));
+  const backend = source.filter((component) => !["web", "frontend"].includes(component.name));
+  const merge = (name: string, label: string, entries: UpdateComponent[]): UpdateComponent | null => {
+    if (entries.length === 0) return null;
+    const primary = entries.find((component) => component.name === name) ?? entries[0];
+    const changing = entries.find(updateChangesComponent);
+    return {
+      ...primary,
+      name,
+      label,
+      action: changing?.action ?? primary.action,
+      status: changing?.status ?? primary.status,
+      required: entries.some((component) => component.required),
+    };
+  };
+
+  return [
+    merge("control_plane", "后端", backend),
+    merge("web", "前端", frontend),
+  ].filter((component): component is UpdateComponent => component !== null);
+}
+
 function updateConfirmationDescription(info: UpdateInfo): string {
-  const components = info.components ?? [];
+  const components = visibleUpdateComponents(info.components);
   const changed = components.filter(updateChangesComponent).map(updateComponentLabel);
   const unchanged = components.filter((component) => !updateChangesComponent(component)).map(updateComponentLabel);
   const transactionPrefix = info.managed_external_web ? "本次会在同一事务中" : "本次会";
@@ -280,10 +304,10 @@ function updateConfirmationDescription(info: UpdateInfo): string {
     return `${transactionPrefix}更新${changed.join("、")}${unchangedText}。所有发布文件下载和校验通过后才会切换，服务可能短暂重启，请确认已做好数据备份。`;
   }
   if (info.managed_external_web) {
-    return "本次会以一个发布事务更新控制端及外置前端。所有文件下载和校验通过后才会切换，服务可能短暂重启，请确认已做好数据备份。";
+    return "本次会以一个发布事务更新后端及前端。所有文件下载和校验通过后才会切换，服务可能短暂重启，请确认已做好数据备份。";
   }
   if (info.update_scope === "backend_only" || info.external_web_root) {
-    return "本次会更新控制端程序及已配置的守卫资源，但不会替换外置前端。更新包校验通过后服务会短暂重启，请确认已做好数据备份。";
+    return "本次会更新后端，但不会替换前端。更新包校验通过后服务会短暂重启，请确认已做好数据备份。";
   }
   return "更新包校验通过后将替换后端与内嵌面板，并短暂重启服务。数据库和现有配置会保留，建议已做好数据备份。";
 }
@@ -321,9 +345,9 @@ function updateOverallProgress(progress: UpdateProgress): number {
 }
 
 function updateScopeLabel(info: UpdateInfo): string {
-  if (info.update_scope === "full") return info.managed_external_web ? "完整发布" : "完整控制端";
-  if (info.update_scope === "control_plane_only") return "控制端与内嵌面板";
-  if (info.update_scope === "backend_only") return "不含外置前端";
+  if (info.update_scope === "full") return "后端与前端";
+  if (info.update_scope === "control_plane_only") return "后端与内嵌前端";
+  if (info.update_scope === "backend_only") return "仅后端";
   if (info.deployment_mode === "docker" || info.update_scope === "none") return "容器镜像";
   return info.external_web_root ? "仅后端" : "后端与面板";
 }
@@ -820,7 +844,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
       try {
         status = await api.get<UpdateStatus>("/api/admin/update/status");
       } catch (reason) {
-        lastStatus = messageOf(reason, "控制端暂时离线");
+        lastStatus = messageOf(reason, "后端暂时离线");
         continue;
       }
 
@@ -839,7 +863,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
       }
 
       if (normalizedVersion(status.current_version) === normalizedVersion(expectedVersion)) return status;
-      lastStatus = `控制端仍在运行 ${status.current_version || "旧版本"}`;
+      lastStatus = `后端仍在运行 ${status.current_version || "旧版本"}`;
     }
     throw new Error(`服务重启等待超时。${lastStatus ? `最后状态：${lastStatus}` : "请稍后手动刷新页面确认。"}`);
   };
@@ -872,7 +896,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
           credentials: "same-origin",
         });
       } catch {
-        throw new Error("无法连接控制端，请检查网络或服务状态");
+        throw new Error("无法连接后端，请检查网络或服务状态");
       }
       if (!response.ok) {
         if (response.status === 401) window.dispatchEvent(new CustomEvent("arcway:unauthorized"));
@@ -916,12 +940,12 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
 
       if (!recoveryExpected) throw new Error(expectedRelease
         ? "更新进度连接提前结束，发布事务尚未进入激活阶段"
-        : "更新进度连接提前结束，控制端尚未进入重启阶段");
+        : "更新进度连接提前结束，后端尚未进入重启阶段");
       setUpdateRunState("restarting");
       setUpdateProgress({
         step: expectedRelease ? "health_check" : "restarting",
         progress: 0,
-        message: expectedRelease ? "等待发布事务确认..." : "等待新版本控制端恢复...",
+        message: expectedRelease ? "等待发布事务确认..." : "等待新版本后端恢复...",
       });
       const refreshed = await waitForUpdatedRelease(updateInfo);
       const completedRelease = refreshed.product_release?.trim()
@@ -955,12 +979,12 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
   };
 
   return <>
-    <PageHeader title="系统设置" description="控制端、订阅、安全、权限与通知策略" actions={<IconButton label="重新加载设置" onClick={() => void load()} disabled={loading}><RefreshCw size={18} /></IconButton>} />
+    <PageHeader title="系统设置" description="后端、订阅、安全、权限与通知策略" actions={<IconButton label="重新加载设置" onClick={() => void load()} disabled={loading}><RefreshCw size={18} /></IconButton>} />
     {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
     {loading ? <Surface className="center-state"><Spinner label="正在加载全部设置" /></Surface> : loaded ? <div className="settings-workbench settings-workbench-continuous">
       <form className="settings-settings-group" onSubmit={saveGeneral}>
-        <SettingsGroupHeading icon={<SlidersHorizontal size={18} />} title="基础设置" description="控制端、采集间隔与界面外观" />
-        <SettingSection icon={<Network size={19} />} title="控制端与采集" description="Agent 回连地址及运行间隔">
+        <SettingsGroupHeading icon={<SlidersHorizontal size={18} />} title="基础设置" description="后端、采集间隔与界面外观" />
+        <SettingSection icon={<Network size={19} />} title="后端与采集" description="Agent 回连地址及运行间隔">
           <Field label="公开 URL"><input type="url" required value={masterURL} onChange={(e) => setMasterURL(e.target.value)} /></Field>
           <div className="settings-fields-grid"><Field label="速度采集（秒）"><input type="number" min="1" value={intervals.speed_collect_interval} onChange={(e) => setIntervals({ ...intervals, speed_collect_interval: Number(e.target.value) })} /></Field><Field label="流量采集（秒）"><input type="number" min="10" value={intervals.traffic_collect_interval} onChange={(e) => setIntervals({ ...intervals, traffic_collect_interval: Number(e.target.value) })} /></Field><Field label="流量检查（秒）"><input type="number" min="10" value={intervals.traffic_check_interval} onChange={(e) => setIntervals({ ...intervals, traffic_check_interval: Number(e.target.value) })} /></Field><Field label="心跳（秒）"><input type="number" min="5" value={intervals.heartbeat_interval} onChange={(e) => setIntervals({ ...intervals, heartbeat_interval: Number(e.target.value) })} /></Field><Field label="看板刷新 / Agent 上报（秒）"><input type="number" min="1" max="60" value={dashboardRefreshMs / 1000} onChange={(e) => setDashboardRefreshMs(Number(e.target.value) * 1000)} /></Field></div>
         </SettingSection>
@@ -1062,7 +1086,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
       </form>
 
       <section className="settings-settings-group settings-update-group">
-        <SettingsGroupHeading icon={<Download size={18} />} title="系统维护" description="检查正式版本并安全更新控制端" />
+        <SettingsGroupHeading icon={<Download size={18} />} title="系统维护" description="检查正式版本并安全更新后端" />
         <SystemUpdatePanel
           info={updateInfo}
           checking={updateChecking}
@@ -1195,9 +1219,9 @@ function SystemUpdatePanel({ info, checking, checkError, runState, progress, log
   const releaseAware = Boolean(info?.product_release || info?.target_release);
   const managedExternalWeb = info?.managed_external_web === true;
   const warning = info?.warning || (info?.external_web_root && !managedExternalWeb
-    ? "当前使用外置前端目录，一键更新不会替换外置页面；前端需要单独发布。"
+      ? "当前前端未由受管发布目录管理，一键更新不会替换前端；前端需要单独发布。"
     : info?.has_update && info.can_apply !== true
-      ? "当前控制端尚未提供安全的网页更新能力，请先按 README 使用命令行更新。"
+      ? "当前后端尚未提供安全的网页更新能力，请先按 README 使用命令行更新。"
       : "");
   const composeCommand = "docker compose pull && docker compose up -d";
 
@@ -1217,9 +1241,9 @@ function SystemUpdatePanel({ info, checking, checkError, runState, progress, log
             : <Badge tone="neutral">检查失败</Badge>}</div>
     </div>
 
-    {info?.components?.length ? <div className="system-update-components" aria-label="发布组件">
+    {visibleUpdateComponents(info?.components).length ? <div className="system-update-components" aria-label="发布组件">
       <div className="system-update-components-heading"><strong>发布组件</strong><span>{managedExternalWeb ? "统一事务" : "组件状态"}</span></div>
-      {info.components.map((component, index) => {
+      {visibleUpdateComponents(info?.components).map((component, index) => {
         const current = component.current_version?.trim() || "未安装";
         const target = component.target_version?.trim() || current;
         return <div className="system-update-component" key={`${component.name}-${index}`}>

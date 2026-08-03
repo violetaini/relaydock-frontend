@@ -2352,11 +2352,20 @@ export function TestersDialog({ notify, onClose }: { notify: NodesWorkbenchNotif
     finally { setWorkingID(null); }
   };
   const master = typeof window === "undefined" ? "https://your-panel.example" : window.location.origin;
+  const speedtesterInstallerRevision = "5d28be86fd54a0958aee5a6ae97e348e0949312a";
+  const linuxInstaller = `https://raw.githubusercontent.com/violetaini/relaydock/${speedtesterInstallerRevision}/scripts/install-relaydock-speedtester.sh`;
+  const powershellInstaller = `https://raw.githubusercontent.com/violetaini/relaydock/${speedtesterInstallerRevision}/scripts/install-relaydock-speedtester.ps1`;
   const shellValue = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
   const powershellValue = (value: string) => `'${value.replaceAll("'", "''")}'`;
+  const linuxCommand = credential
+    ? `( installer=$(mktemp) && curl -fsSL ${linuxInstaller} -o "$installer" && sudo env RELAYDOCK_MASTER_URL=${shellValue(master)} RELAYDOCK_SPEEDTEST_TOKEN=${shellValue(credential.token)} RELAYDOCK_SPEEDTEST_NAME=${shellValue(credential.name)} sh "$installer"; status=$?; rm -f "$installer"; exit "$status" )`
+    : "";
+  const powershellCommand = credential
+    ? `$ErrorActionPreference='Stop'; $installer=Join-Path ([IO.Path]::GetTempPath()) ('relaydock-speedtester-install-' + [guid]::NewGuid().ToString('N') + '.ps1'); try { Invoke-WebRequest -UseBasicParsing -Uri ${powershellValue(powershellInstaller)} -OutFile $installer; & $installer } finally { Remove-Item -Force -ErrorAction SilentlyContinue $installer }`
+    : "";
   const commands = credential ? [
-    { label: "Linux", value: `curl -fsSL ${master}/api/public/relaydock-speedtester/install.sh | sudo env RELAYDOCK_MASTER_URL=${shellValue(master)} RELAYDOCK_SPEEDTEST_TOKEN=${shellValue(credential.token)} RELAYDOCK_SPEEDTEST_NAME=${shellValue(credential.name)} bash` },
-    { label: "Windows PowerShell", value: `$env:RELAYDOCK_MASTER_URL=${powershellValue(master)}; $env:RELAYDOCK_SPEEDTEST_TOKEN=${powershellValue(credential.token)}; $env:RELAYDOCK_SPEEDTEST_NAME=${powershellValue(credential.name)}; irm ${master}/api/public/relaydock-speedtester/install.ps1 | iex` },
+    { label: "Linux", value: linuxCommand },
+    { label: "Windows PowerShell", value: `$env:RELAYDOCK_MASTER_URL=${powershellValue(master)}; $env:RELAYDOCK_SPEEDTEST_TOKEN=${powershellValue(credential.token)}; $env:RELAYDOCK_SPEEDTEST_NAME=${powershellValue(credential.name)}; ${powershellCommand}` },
   ] : [];
   const copy = async (value: string) => {
     try { await copyText(value); notify("已复制配对信息"); }
@@ -2365,7 +2374,7 @@ export function TestersDialog({ notify, onClose }: { notify: NodesWorkbenchNotif
   return <Dialog title="测速端管理" description="配对家中或其他网络的测速端，以真实用户出口测试节点" onClose={onClose} wide><div className="form-stack">
     {error ? <ErrorState message={error} /> : null}
     <form className="nw-inline-create" onSubmit={create}><Field label="测速端名称"><input value={name} onChange={(event) => setName(event.target.value)} placeholder="home-tester" /></Field><Button type="submit" disabled={workingID !== null}>{workingID === "create" ? <Spinner label="正在创建" /> : <><Plus size={16} />创建测速端</>}</Button></form>
-    {credential ? <section className="nw-secret-panel"><div className="nw-secret-heading"><KeyRound size={18} /><span><strong>一次性配对信息</strong><small>令牌只会显示这一次；丢失后需要轮换</small></span><Button variant="ghost" onClick={() => setCredential(null)}>已保存</Button></div><Field label="配对令牌"><div className="nw-copy-field"><input readOnly value={credential.token} /><IconButton label="复制配对令牌" onClick={() => void copy(credential.token)}><Copy size={16} /></IconButton></div></Field>{commands.map((command) => <Field key={command.label} label={command.label}><div className="nw-command-copy"><code>{command.value}</code><IconButton label={`复制 ${command.label} 安装命令`} onClick={() => void copy(command.value)}><Copy size={16} /></IconButton></div></Field>)}</section> : null}
+    {credential ? <section className="nw-secret-panel nw-tester-credential-panel"><div className="nw-secret-heading"><KeyRound size={18} /><span><strong>一次性配对信息</strong><small>令牌只会显示这一次；丢失后需要轮换</small></span><Button variant="ghost" onClick={() => setCredential(null)}>已保存</Button></div><Field label="配对令牌"><div className="nw-copy-field nw-pairing-token"><code dir="ltr">{credential.token}</code><IconButton label="复制配对令牌" onClick={() => void copy(credential.token)}><Copy size={16} /></IconButton></div></Field>{commands.map((command) => <Field key={command.label} label={command.label}><div className="nw-command-copy"><code dir="ltr">{command.value}</code><IconButton label={`复制 ${command.label} 安装命令`} onClick={() => void copy(command.value)}><Copy size={16} /></IconButton></div></Field>)}</section> : null}
     <div className="nw-list-heading"><span><Wifi size={17} /><strong>已配对测速端</strong></span><IconButton label="刷新测速端" onClick={() => void load()} disabled={loading}><RefreshCw size={17} /></IconButton></div>
     {loading ? <div className="center-state"><Spinner label="正在加载测速端" /></div> : testers.length ? <div className="nw-tester-list">{testers.map((tester) => <div key={tester.id}><span className={`nw-online-dot ${tester.online ? "is-online" : ""}`} /><span className="nw-tester-info"><strong>{tester.name || `测速端 #${tester.id}`}</strong><small>#{tester.id} · {tester.online ? "当前在线" : `最后在线 ${formatDate(tester.last_seen)}`}{tester.created_by ? ` · ${tester.created_by}` : ""}</small></span><Badge tone={tester.online ? "good" : "neutral"}>{tester.online ? "在线" : "离线"}</Badge><Button variant="secondary" disabled={workingID !== null || tester.online} title={tester.online ? "在线测速端无需重新配对" : "生成新令牌，旧令牌立即失效"} onClick={() => void rotate(tester)}><RotateCcw size={15} />重新配对</Button>{confirmRevoke === tester.id ? <><Button variant="danger" disabled={workingID !== null} onClick={() => void revoke(tester)}>确认删除</Button><Button variant="ghost" onClick={() => setConfirmRevoke(null)}>取消</Button></> : <IconButton label={`删除测速端 ${tester.name}`} onClick={() => setConfirmRevoke(tester.id)}><Trash2 size={16} /></IconButton>}</div>)}</div> : <EmptyState icon={<Wifi size={22} />} title="还没有测速端" description="创建后在目标设备运行配对命令" />}
     <div className="dialog-actions"><Button variant="secondary" onClick={onClose}>关闭</Button></div>

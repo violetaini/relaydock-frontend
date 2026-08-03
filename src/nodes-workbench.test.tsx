@@ -475,7 +475,7 @@ describe("nodes speedtest workbench", () => {
     expect(screen.getByText("只允许删除面板安装的 Ookla Speedtest")).toBeInTheDocument();
   });
 
-  it("builds quote-safe RelayDock tester commands from same-origin installers", async () => {
+  it("builds quote-safe RelayDock tester commands from GitHub installers in readable copy blocks", async () => {
     vi.spyOn(api, "get").mockResolvedValue({ testers: [] });
     vi.spyOn(api, "post").mockResolvedValue({ id: 7, token: "tok'en" });
     render(<TestersDialog notify={vi.fn()} onClose={vi.fn()} />);
@@ -488,9 +488,17 @@ describe("nodes speedtest workbench", () => {
     const linux = linuxButton.closest(".field")?.querySelector("code")?.textContent;
     const powershell = powershellButton.closest(".field")?.querySelector("code")?.textContent;
     const origin = window.location.origin;
+    const installerRevision = "5d28be86fd54a0958aee5a6ae97e348e0949312a";
+    const linuxInstaller = `https://raw.githubusercontent.com/violetaini/relaydock/${installerRevision}/scripts/install-relaydock-speedtester.sh`;
+    const powershellInstaller = `https://raw.githubusercontent.com/violetaini/relaydock/${installerRevision}/scripts/install-relaydock-speedtester.ps1`;
 
-    expect(linux).toBe(`curl -fsSL ${origin}/api/public/relaydock-speedtester/install.sh | sudo env RELAYDOCK_MASTER_URL='${origin}' RELAYDOCK_SPEEDTEST_TOKEN='tok'\"'\"'en' RELAYDOCK_SPEEDTEST_NAME='Home O'\"'\"'Brien' bash`);
-    expect(powershell).toBe(`$env:RELAYDOCK_MASTER_URL='${origin}'; $env:RELAYDOCK_SPEEDTEST_TOKEN='tok''en'; $env:RELAYDOCK_SPEEDTEST_NAME='Home O''Brien'; irm ${origin}/api/public/relaydock-speedtester/install.ps1 | iex`);
+    expect(screen.getByText("tok'en", { selector: ".nw-pairing-token code" })).toBeInTheDocument();
+    expect(linuxButton.closest(".nw-command-copy")).toBeInTheDocument();
+    expect(powershellButton.closest(".nw-command-copy")).toBeInTheDocument();
+    expect(linux).toBe(`( installer=$(mktemp) && curl -fsSL ${linuxInstaller} -o "$installer" && sudo env RELAYDOCK_MASTER_URL='${origin}' RELAYDOCK_SPEEDTEST_TOKEN='tok'\"'\"'en' RELAYDOCK_SPEEDTEST_NAME='Home O'\"'\"'Brien' sh "$installer"; status=$?; rm -f "$installer"; exit "$status" )`);
+    expect(linux).not.toContain("| sudo");
+    expect(powershell).toBe(`$env:RELAYDOCK_MASTER_URL='${origin}'; $env:RELAYDOCK_SPEEDTEST_TOKEN='tok''en'; $env:RELAYDOCK_SPEEDTEST_NAME='Home O''Brien'; $ErrorActionPreference='Stop'; $installer=Join-Path ([IO.Path]::GetTempPath()) ('relaydock-speedtester-install-' + [guid]::NewGuid().ToString('N') + '.ps1'); try { Invoke-WebRequest -UseBasicParsing -Uri '${powershellInstaller}' -OutFile $installer; & $installer } finally { Remove-Item -Force -ErrorAction SilentlyContinue $installer }`);
+    expect(powershell).not.toContain("| iex");
   });
 });
 

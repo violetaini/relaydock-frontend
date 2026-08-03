@@ -1400,6 +1400,19 @@
   flex: 1;
 }
 
+.nw-tester-credential-panel .field-label {
+  font-size: 13px;
+}
+
+.nw-tester-credential-panel .nw-secret-heading strong {
+  font-size: 15px;
+}
+
+.nw-tester-credential-panel .nw-secret-heading small {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .nw-copy-field {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 42px;
@@ -1419,26 +1432,62 @@
   background: var(--surface);
 }
 
+.nw-pairing-token {
+  grid-template-columns: minmax(0, 1fr) 48px;
+}
+
+.nw-pairing-token code {
+  display: block;
+  min-width: 0;
+  min-height: 48px;
+  padding: 11px 13px;
+  border: 2px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  text-align: left;
+  user-select: text;
+}
+
+.nw-pairing-token .icon-button {
+  width: 48px;
+  height: auto;
+  min-height: 48px;
+  border-left: 0;
+}
+
 .nw-command-copy {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 42px;
-  border: 1px solid var(--border);
+  grid-template-columns: minmax(0, 1fr) 48px;
+  border: 2px solid var(--border-strong);
   background: var(--surface);
 }
 
 .nw-command-copy code {
+  display: block;
   min-width: 0;
-  overflow: auto hidden;
-  white-space: nowrap;
-  padding: 11px;
-  font-family: SFMono-Regular, Consolas, monospace;
-  font-size: 9px;
+  min-height: 48px;
+  padding: 11px 13px;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  text-align: left;
+  user-select: text;
+  white-space: pre-wrap;
 }
 
 .nw-command-copy .icon-button {
-  width: 42px;
-  height: 100%;
-  border-width: 0 0 0 1px;
+  width: 48px;
+  height: auto;
+  min-height: 48px;
+  border-width: 0 0 0 2px;
+  border-radius: 0;
 }
 
 .nw-list-heading {
@@ -1821,6 +1870,15 @@
     width: 100%;
   }
 
+  .nw-tester-credential-panel .nw-secret-heading {
+    min-height: 0;
+    align-items: flex-start;
+  }
+
+  .nw-tester-credential-panel .nw-secret-heading .button {
+    flex: 0 0 auto;
+  }
+
   .nw-list-toolbar {
     flex-wrap: wrap;
   }
@@ -1932,6 +1990,11 @@
   .nw-uri-filters > .field {
     flex: 1;
     min-width: 120px;
+  }
+
+  .nw-pairing-token code,
+  .nw-command-copy code {
+    font-size: 12px;
   }
 
   .nw-uri-filters > .button {

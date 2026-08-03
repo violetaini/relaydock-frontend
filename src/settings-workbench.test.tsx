@@ -103,7 +103,7 @@ describe("settings workbench", () => {
     expect(screen.getByRole("button", { name: "检查并更新" })).toBeInTheDocument();
   });
 
-  it("lets the administrator recheck upstream when managed Mihomo is current", async () => {
+  it("lets the administrator recheck the backend Mihomo target when managed core is current", async () => {
     mockCompleteSettings();
     const post = vi.spyOn(api, "post").mockResolvedValue({
       success: true,

@@ -1301,13 +1301,13 @@ function MihomoCorePanel({ status, loading, working, error, onRefresh, onInstall
     ? status.update_available && status.target_version
       ? `更新到 ${status.target_version}`
       : "检查并更新"
-    : `安装 ${status?.target_version || "上游最新版"}`;
+    : `安装 ${status?.target_version || "后端目标版本"}`;
   const canInstall = Boolean(status?.manageable);
 
   return <SettingSection icon={<Cpu size={19} />} title="主控 Mihomo 核心" description="仅供主控本机节点测速使用；家用测速端和远程 Agent 各自管理核心">
     <div className="system-update-versions" aria-label="Mihomo 核心状态">
       <div><span>当前版本</span><strong>{status?.current_version || (loading ? "读取中" : "未安装")}</strong></div>
-      <div><span>上游最新版</span><strong>{status?.target_version || (loading ? "读取中" : status && !status.manageable ? "不支持自动安装" : status?.latest_error ? "检查失败" : "尚未获取")}</strong></div>
+      <div><span>后端目标版本</span><strong>{status?.target_version || (loading ? "读取中" : status && !status.manageable ? "不支持自动安装" : status?.latest_error ? "检查失败" : "尚未配置")}</strong></div>
       <div><span>来源</span><strong>{sourceLabel}</strong></div>
       <div className="system-update-status"><span>状态</span>{loading
         ? <Badge tone="info">正在检查</Badge>
@@ -1320,9 +1320,9 @@ function MihomoCorePanel({ status, loading, working, error, onRefresh, onInstall
               : <Badge tone="neutral">外部管理</Badge>}</div>
     </div>
     {status?.source === "env" || status?.source === "path" ? <div className="system-update-notice" role="note"><Shield size={17} /><span>当前核心由 {sourceLabel} 提供，Arcway 不会覆盖它；请在对应位置自行更新。</span></div> : null}
-    {status?.source === "none" && status.manageable ? <div className="system-update-command"><div><strong>新装机按需安装</strong><span>可现在安装上游最新版；若暂不安装，首次从主控执行节点测速时仍会自动安装。</span></div></div> : null}
+    {status?.source === "none" && status.manageable ? <div className="system-update-command"><div><strong>新装机按需安装</strong><span>可现在安装后端指定版本；若暂不安装，首次从主控执行节点测速时仍会自动安装。</span></div></div> : null}
     {status?.source === "none" && !status.manageable ? <div className="system-update-notice" role="note"><Shield size={17} /><span>当前平台不支持自动安装 Mihomo；请通过 MIHOMO_BIN 提供兼容核心。</span></div> : null}
-    {status?.latest_error ? <div className="system-update-notice" role="note"><Shield size={17} /><span>暂时无法读取 Mihomo 上游版本；点击检查并更新时会再次尝试。{status.latest_error}</span></div> : null}
+    {status?.latest_error ? <div className="system-update-notice" role="note"><Shield size={17} /><span>暂时无法读取后端目标版本；点击检查并更新时会再次尝试。{status.latest_error}</span></div> : null}
     {status?.path ? <div className="system-update-command-line"><code>{status.path}</code></div> : null}
     {error ? <div className="system-update-error" role="alert">{error}</div> : null}
     <div className="system-update-actions">

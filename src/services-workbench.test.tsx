@@ -495,6 +495,25 @@ describe("service management workbench", () => {
     expect(notify).toHaveBeenCalledWith("Xray 安装完成");
   });
 
+  it("requires confirmation before repairing managed Reality compatibility", async () => {
+    mockServerReads([onlineServer]);
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true, updated: 2 });
+    const notify = vi.fn();
+    render(<ServicesWorkbenchPage notify={notify} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Xray 配置" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    expect(within(dialog).getByText("Reality 客户端兼容性")).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "修复兼容性" }));
+    expect(post).not.toHaveBeenCalled();
+    const confirm = screen.getByRole("dialog", { name: "修复 Reality 客户端兼容性" });
+    fireEvent.click(within(confirm).getByRole("button", { name: "确认修复" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote/xray/reality-compatibility?server_id=11"));
+    expect(notify).toHaveBeenCalledWith("已修复 2 个 Reality 入站的客户端兼容性");
+  });
+
   it("opens running Xray card controls for restart, pause and update", async () => {
     mockServerReads([onlineServer]);
     const fetchMock = vi.fn().mockResolvedValue(new Response('data: {"type":"output","data":"Updating Xray"}\n\ndata: {"type":"complete","success":true,"message":"updated"}\n\n', {

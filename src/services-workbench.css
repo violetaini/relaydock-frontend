@@ -616,6 +616,12 @@
 .service-delete-actions .button { flex: 0 0 auto; }
 
 .service-config-panel { min-height: clamp(460px, 64vh, 680px); display: flex; flex-direction: column; }
+.service-reality-compatibility { min-width: 0; margin-bottom: 10px; padding: 10px 12px; display: flex; align-items: center; gap: 9px; border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border)); border-radius: 6px; background: color-mix(in srgb, var(--accent) 7%, var(--surface)); }
+.service-reality-compatibility > svg { flex: 0 0 auto; color: var(--accent); }
+.service-reality-compatibility > span { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.service-reality-compatibility strong { font-size: 12px; }
+.service-reality-compatibility small { color: var(--text-soft); font-size: 10px; line-height: 1.5; }
+.service-reality-compatibility .button { flex: 0 0 auto; }
 .service-config-head { margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .service-config-head > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .service-config-head > span strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
@@ -822,6 +828,8 @@
   .service-delete-metrics > span:last-child { border-right: 0; }
   .service-config-head { align-items: stretch; flex-direction: column; }
   .service-config-head > div { overflow-x: auto; }
+  .service-reality-compatibility { align-items: flex-start; flex-wrap: wrap; }
+  .service-reality-compatibility .button { width: 100%; }
   .service-config-panel { min-height: 0; }
   .service-code-editor { height: clamp(320px, 52vh, 520px); min-height: clamp(320px, 52vh, 520px); }
   .xray-resource-head,

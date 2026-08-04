@@ -73,7 +73,7 @@ test("public probe remains separate from the management login", async ({ page })
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Edge Service Status" })).toBeVisible();
   await expect(page.getByText("Hong Kong Edge")).toBeVisible();
-  await expect(page.getByTitle("HK")).toContainText("\u{1F1ED}\u{1F1F0}");
+  await expect(page.getByTitle("HK").locator("img")).toBeVisible();
   await expect(page.getByRole("progressbar", { name: "CPU 13%" })).toBeVisible();
   await expect(page.getByRole("progressbar", { name: "内存 38%" })).toBeVisible();
   await expect(page.getByRole("progressbar", { name: "磁盘 36%" })).toBeVisible();

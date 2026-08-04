@@ -88,7 +88,9 @@ describe("application bootstrap", () => {
 
     expect(await screen.findByRole("heading", { name: "Edge Service Status" })).toBeInTheDocument();
     expect(screen.getByText("Hong Kong Edge")).toBeInTheDocument();
-    expect(screen.getByTitle("HK")).toHaveTextContent("\u{1F1ED}\u{1F1F0}");
+    const flag = screen.getByTitle("HK");
+    expect(flag.querySelector("img")).toHaveAttribute("src", expect.stringMatching(/(?:data:image\/svg\+xml|\.svg(?:\?|$))/));
+    expect(flag).not.toHaveTextContent("HK");
     expect(screen.getByRole("progressbar", { name: "CPU 13%" })).toBeInTheDocument();
     expect(screen.getByRole("progressbar", { name: "内存 38%" })).toBeInTheDocument();
     expect(screen.getByRole("progressbar", { name: "磁盘 36%" })).toBeInTheDocument();

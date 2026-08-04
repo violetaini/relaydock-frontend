@@ -308,7 +308,9 @@ describe("service management workbench", () => {
 
     await screen.findByText("Edge Hong Kong");
     const card = container.querySelector(".service-card") as HTMLElement;
-    expect(within(card).getByTitle("HK")).toHaveTextContent("\u{1F1ED}\u{1F1F0}");
+    const flag = within(card).getByTitle("HK");
+    expect(flag.querySelector("img")).toHaveAttribute("src", expect.stringMatching(/(?:data:image\/svg\+xml|\.svg(?:\?|$))/));
+    expect(flag).not.toHaveTextContent("HK");
     expect(within(card).getByText("CPU")).toBeInTheDocument();
     expect(within(card).getByText("12%")).toBeInTheDocument();
     expect(within(card).getByText("内存")).toBeInTheDocument();

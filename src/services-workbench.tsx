@@ -14,7 +14,6 @@ import {
   Eye,
   FileKey2,
   Gauge,
-  Globe2,
   Grid2X2,
   HardDrive,
   HardDriveDownload,
@@ -41,7 +40,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { api, openDashboardSocket, requestStream } from "./api";
-import { countryFlag } from "./country-flag";
+import { CountryFlag } from "./country-flag";
 import type { NginxMode, RealtimeMessage, RemoteServer, ServerListResponse, SharedServerToken } from "./types";
 import {
   buildTrojanInbound,
@@ -1876,13 +1875,12 @@ function ServerCard({ server, serviceStatus, agentVersion, checked, credentialsL
   const cpuUsage = connected ? boundedUsage(server.cpu_pct) : undefined;
   const memoryUsage = connected ? boundedUsage(server.mem_used, server.mem_total) : undefined;
   const diskUsage = connected ? boundedUsage(server.disk_used, server.disk_total) : undefined;
-  const flag = countryFlag(server.country_code);
   return (
     <Surface style={style} className={`service-card ${connected ? "is-online" : "is-offline"} ${checked ? "is-selected" : ""}`}>
       <div className="service-card-head">
         <label className="service-select" title="选择服务器"><input type="checkbox" checked={checked} onChange={(event) => onCheck(event.target.checked)} aria-label={`选择 ${server.name}`} /></label>
         <span className={`service-server-icon ${connected ? "is-online" : ""}`}>{connected ? <Wifi size={19} /> : <WifiOff size={19} />}</span>
-        <div className="service-card-title"><strong><span className="service-country" title={server.country_code || "地区未知"}>{flag || <Globe2 size={14} />}</span><span className="service-country-name">{server.name}</span></strong>{server.domain ? <small>{server.domain}</small> : null}</div>
+        <div className="service-card-title"><strong><span className="service-country" title={server.country_code || "地区未知"}><CountryFlag countryCode={server.country_code} /></span><span className="service-country-name">{server.name}</span></strong>{server.domain ? <small>{server.domain}</small> : null}</div>
         <Badge tone={connected ? "good" : statusTone(server.status)}>{connected ? "在线" : "离线"}</Badge>
       </div>
       <div className="service-badges">
@@ -1947,10 +1945,9 @@ function ServerTable({ servers, serviceStatuses, agentVersions, selected, creden
       const cpuUsage = connected ? boundedUsage(server.cpu_pct) : undefined;
       const memoryUsage = connected ? boundedUsage(server.mem_used, server.mem_total) : undefined;
       const diskUsage = connected ? boundedUsage(server.disk_used, server.disk_total) : undefined;
-      const flag = countryFlag(server.country_code);
       return <tr key={server.id}>
         <td><input aria-label={`选择 ${server.name}`} type="checkbox" checked={selected.includes(server.id)} onChange={(event) => onSelect(event.target.checked ? [...new Set([...selected, server.id])] : selected.filter((id) => id !== server.id))} /></td>
-        <td><button className="service-name-button" onClick={() => onOpen(server)}><span className={`service-server-icon ${connected ? "is-online" : ""}`}>{connected ? <Wifi size={16} /> : <WifiOff size={16} />}</span><span><strong><span className="service-country" title={server.country_code || "地区未知"}>{flag || <Globe2 size={13} />}</span><span className="service-country-name">{server.name}</span></strong><small>{server.domain || server.ip_address || "地址待上报"}</small></span></button></td>
+        <td><button className="service-name-button" onClick={() => onOpen(server)}><span className={`service-server-icon ${connected ? "is-online" : ""}`}>{connected ? <Wifi size={16} /> : <WifiOff size={16} />}</span><span><strong><span className="service-country" title={server.country_code || "地区未知"}><CountryFlag countryCode={server.country_code} fallbackSize={13} /></span><span className="service-country-name">{server.name}</span></strong><small>{server.domain || server.ip_address || "地址待上报"}</small></span></button></td>
         <td><Badge tone={connected ? "good" : statusTone(server.status)}>{connected ? transport : server.status || "离线"}</Badge><small className="cell-note">{connectionPolicyLabel(server.connection_mode)} · {relativeTime(server.last_heartbeat)}</small></td>
         <td><div className="service-resource-compact"><span><Cpu size={12} />{usageLabel(cpuUsage)}</span><span><MemoryStick size={12} />{usageLabel(memoryUsage)}</span><span><HardDrive size={12} />{usageLabel(diskUsage)}</span></div></td>
         <td><span className="speed-pair"><small><ArrowUpFromLine size={13} />{formatBytes(server.current_upload_speed, true)}</small><small><ArrowDownToLine size={13} />{formatBytes(server.current_download_speed, true)}</small></span></td>

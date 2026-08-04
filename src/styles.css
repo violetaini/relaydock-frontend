@@ -1449,7 +1449,8 @@ td { min-height: 62px; }
   background: transparent;
   line-height: 1;
 }
-.public-probe-country svg { width: 13px; height: 13px; }
+.public-probe-country .country-flag-svg { display: block; width: 20px; height: auto; }
+.public-probe-country .country-flag-fallback { width: 13px; height: 13px; }
 .public-probe-status strong { font-size: 13px; font-weight: 720; line-height: 1; }
 .public-probe-item-heading > small {
   position: absolute;
@@ -1498,7 +1499,8 @@ td { min-height: 62px; }
   .public-probe-status { gap: 9px; }
   .public-probe-status i { width: 8px; height: 8px; flex-basis: 8px; }
   .public-probe-country { width: 28px; height: 25px; flex-basis: 28px; }
-  .public-probe-country svg { width: 16px; height: 16px; }
+  .public-probe-country .country-flag-svg { width: 23px; }
+  .public-probe-country .country-flag-fallback { width: 16px; height: 16px; }
   .public-probe-status strong { font-size: 16px; }
   .public-probe-item-heading > small { top: 19px; right: 48px; padding: 4px 6px; font-size: 9px; }
   .public-probe-metrics { margin-top: 16px; gap: 16px; }

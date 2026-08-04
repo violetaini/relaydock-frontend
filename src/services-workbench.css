@@ -145,8 +145,9 @@
 .service-card-title small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .service-card-title strong { display: flex; align-items: center; gap: 6px; font-size: 14px; }
 .service-card-title small { font-size: 11px; }
-.service-country { width: 20px; height: 18px; flex: 0 0 20px; display: inline-flex; align-items: center; justify-content: center; color: var(--blue); border: 1px solid var(--border); background: var(--surface-muted); font-size: 13px; line-height: 1; }
-.service-country svg { width: 12px; height: 12px; }
+.service-country { width: 22px; height: 16px; flex: 0 0 22px; display: inline-flex; align-items: center; justify-content: center; overflow: hidden; color: var(--blue); border: 1px solid var(--border); border-radius: 2px; background: var(--surface-muted); line-height: 1; }
+.service-country .country-flag-svg { display: block; width: 100%; height: auto; }
+.service-country .country-flag-fallback { width: 13px; height: 13px; }
 .service-country-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .service-badges { min-height: 23px; display: flex; flex-wrap: wrap; gap: 6px; }

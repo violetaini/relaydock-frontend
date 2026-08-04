@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
-import { ArrowDown, ArrowRight, ArrowUp, Check, Cpu, Gauge, Globe2, Grid2X2, HardDrive, KeyRound, List, LockKeyhole, LogIn, MemoryStick, Network, Server, ShieldCheck } from "lucide-react";
+import { ArrowDown, ArrowRight, ArrowUp, Check, Cpu, Gauge, Grid2X2, HardDrive, KeyRound, List, LockKeyhole, LogIn, MemoryStick, Network, Server, ShieldCheck } from "lucide-react";
 import { api, ApiError, setToken } from "./api";
 import { BRAND_NAME, BrandMark, useBranding } from "./brand";
-import { countryFlag, normalizeCountryCode } from "./country-flag";
+import { CountryFlag, normalizeCountryCode } from "./country-flag";
 import type { Session } from "./types";
 import { Button, ErrorState, Field, Spinner, formatBytes } from "./ui";
 
@@ -322,11 +322,10 @@ export function PublicProbeScreen({ probe, onLogin, loginLabel = "登录" }: { p
             showDisk && diskPercent !== undefined,
             showTraffic,
           ].filter(Boolean).length;
-          const flag = countryFlag(server.country_code);
           return <article className={`public-probe-item ${server.online ? "is-online" : "is-offline"}`} key={`${server.name || "service"}-${index}`} style={{ "--public-probe-order": index } as CSSProperties}>
             <span className="public-probe-card-index" aria-hidden="true">N{String(index + 1).padStart(2, "0")}</span>
             <header className="public-probe-item-heading">
-              <span className="public-probe-status"><i /><span className="public-probe-country" title={server.country_code || "地区未知"}>{flag || <Globe2 size={15} />}</span><strong>{probe.show_name && server.name ? server.name : `服务器 #${index + 1}`}</strong></span>
+              <span className="public-probe-status"><i /><span className="public-probe-country" title={server.country_code || "地区未知"}><CountryFlag countryCode={server.country_code} fallbackSize={15} /></span><strong>{probe.show_name && server.name ? server.name : `服务器 #${index + 1}`}</strong></span>
               <small>{server.online ? "在线" : "离线"}</small>
             </header>
             <div className={`public-probe-metrics public-probe-metrics-${Math.min(4, Math.max(1, visibleMetrics))}`}>

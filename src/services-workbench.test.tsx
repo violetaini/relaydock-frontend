@@ -329,10 +329,10 @@ describe("service management workbench", () => {
 
     await screen.findByText("Edge Hong Kong");
     fireEvent.click(screen.getByRole("checkbox", { name: "选择 Edge Tokyo" }));
-    expect(screen.getByRole("button", { name: /升级选中 Agent \(0\/1\)/ })).toBeDisabled();
+    await waitFor(() => expect(screen.getByRole("button", { name: /升级选中 Agent \(0\/1\)/ })).toBeDisabled());
 
     fireEvent.click(screen.getByRole("checkbox", { name: "选择 Edge Hong Kong" }));
-    expect(screen.getByRole("button", { name: /升级选中 Agent \(1\/2\)/ })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole("button", { name: /升级选中 Agent \(1\/2\)/ })).toBeEnabled());
   });
 
   it("creates a server with connection, traffic and runtime settings", async () => {
@@ -1429,6 +1429,58 @@ describe("service management workbench", () => {
       action: "add",
       outbound: { ...original, settings: { ...original.settings, pass: "new-pass" } },
     });
+  });
+
+  it("round-trips an existing loopback inbound tag through the visual editor", async () => {
+    const original = {
+      tag: "loopback-out",
+      protocol: "loopback",
+      settings: { inboundTag: "api-in", customSetting: "preserved" },
+    };
+    mockServerReads([onlineServer], { outbounds: [original] });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const serverDialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(serverDialog).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "Xray 设置" }));
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "出站规则" }));
+    fireEvent.click(await within(serverDialog).findByRole("button", { name: "编辑出站 loopback-out" }));
+
+    const editor = await screen.findByRole("dialog", { name: "编辑出站" });
+    expect(within(editor).getByRole("textbox", { name: "Loopback 入站 Tag" })).toHaveValue("api-in");
+    fireEvent.click(within(editor).getByRole("button", { name: "保存并重建" }));
+
+    await waitFor(() => expect(post).toHaveBeenNthCalledWith(1, "/api/admin/remote/outbounds?server_id=11", { action: "remove", tag: "loopback-out" }));
+    expect(post).toHaveBeenNthCalledWith(2, "/api/admin/remote/outbounds?server_id=11", { action: "add", outbound: original });
+  });
+
+  it("preserves and exposes the network of an existing DNS outbound", async () => {
+    const original = {
+      tag: "dns-udp",
+      protocol: "dns",
+      settings: { network: "udp", address: "1.1.1.1", port: 53, nonIPQuery: "skip" },
+    };
+    mockServerReads([onlineServer], { outbounds: [original] });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const serverDialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(serverDialog).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "Xray 设置" }));
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "出站规则" }));
+    const row = (await within(serverDialog).findByText("dns-udp")).closest("tr");
+    expect(row).toHaveTextContent("UDP");
+    fireEvent.click(within(serverDialog).getByRole("button", { name: "编辑出站 dns-udp" }));
+
+    const editor = await screen.findByRole("dialog", { name: "编辑出站" });
+    expect(within(editor).getByRole("combobox", { name: "DNS 出站网络" })).toHaveValue("udp");
+    fireEvent.click(within(editor).getByRole("button", { name: "保存并重建" }));
+
+    await waitFor(() => expect(post).toHaveBeenNthCalledWith(1, "/api/admin/remote/outbounds?server_id=11", { action: "remove", tag: "dns-udp" }));
+    expect(post).toHaveBeenNthCalledWith(2, "/api/admin/remote/outbounds?server_id=11", { action: "add", outbound: original });
   });
 
   it("preserves additional legacy targets and users when editing the first VLESS target", async () => {

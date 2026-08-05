@@ -1032,7 +1032,7 @@ function outboundEditorFieldsFrom(resource: XrayResource): OutboundEditorFields 
     ...fields,
     tag: xrayResourceTag(resource),
     sendThrough: read(resource, "sendThrough"),
-    address: read(target, "address"),
+    address: protocol === "loopback" ? read(settings, "inboundTag") : read(target, "address"),
     port: read(target, "port"),
     id: read(account, "id") || read(account, "password"),
     email: read(account, "email"),
@@ -1040,7 +1040,7 @@ function outboundEditorFieldsFrom(resource: XrayResource): OutboundEditorFields 
     method: read(account, "method"),
     encryption: protocol === "vmess" ? read(account, "security") || "auto" : read(account, "encryption") || "none",
     flow: read(account, "flow"),
-    network: read(stream, "network") || "tcp",
+    network: protocol === "dns" ? read(settings, "network") || "tcp" : read(stream, "network") || "tcp",
     security: read(stream, "security") || "none",
     serverName: read(tls, "serverName") || read(reality, "serverName"),
     fingerprint: read(tls, "fingerprint") || read(reality, "fingerprint") || "chrome",
@@ -1302,9 +1302,11 @@ function outboundTargetSummary(resource: XrayResource): string {
 }
 
 function outboundTransportSummary(resource: XrayResource): { network: string; security: string } {
+  const protocol = xrayResourceProtocol(resource).toLowerCase();
+  const settings = outboundNestedObject(resource, "settings");
   const stream = outboundNestedObject(resource, "streamSettings");
   return {
-    network: String(stream.network || "tcp").toUpperCase(),
+    network: String(protocol === "dns" ? settings.network || "tcp" : stream.network || "tcp").toUpperCase(),
     security: String(stream.security || "none").toUpperCase(),
   };
 }
@@ -3419,6 +3421,11 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
     setOutboundFields((current) => ({
       ...current,
       protocol: next,
+      network: next === "dns" && current.protocol !== "dns"
+        ? "tcp"
+        : current.protocol === "dns" && next !== "dns"
+          ? "tcp"
+          : current.network,
       encryption: next === "vmess" && current.protocol !== "vmess"
         ? "auto"
         : next === "vless" && current.protocol !== "vless"
@@ -3640,7 +3647,7 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
             <div className="form-grid two"><Field label="Send through" hint="可选，本地出站地址"><input aria-label="出站 Send through" value={outboundFields.sendThrough} onChange={(event) => setOutboundField("sendThrough", event.target.value)} placeholder="local IP" /></Field>{["freedom", "blackhole", "dns", "loopback", "wireguard"].includes(protocol) ? <Field label={protocol === "loopback" ? "Inbound tag" : "说明"} hint={protocol === "loopback" ? "将流量回送到指定入站" : protocol === "wireguard" ? "连接目标请在下方 Peer endpoint 填写" : "此协议无需远端地址"}><input aria-label={protocol === "loopback" ? "Loopback 入站 Tag" : "出站说明"} value={protocol === "loopback" ? outboundFields.address : ""} onChange={(event) => protocol === "loopback" && setOutboundField("address", event.target.value)} placeholder={protocol === "loopback" ? "inbound-tag" : "由协议决定"} disabled={protocol !== "loopback"} /></Field> : <Field label="目标地址"><input required aria-label="出站目标地址" value={outboundFields.address} onChange={(event) => setOutboundField("address", event.target.value)} placeholder="server.example.com" /></Field>}</div>
             {["freedom"].includes(protocol) ? <Field label="Freedom 域名策略"><select aria-label="Freedom 域名策略（出站）" value={outboundFields.domainStrategy} onChange={(event) => setOutboundField("domainStrategy", event.target.value)}><option>AsIs</option><option>UseIP</option><option>UseIPv4</option><option>UseIPv6</option><option>ForceIPv4</option><option>ForceIPv6</option></select></Field> : null}
             {["blackhole"].includes(protocol) ? <Field label="响应类型"><select aria-label="Blackhole 响应类型" value={outboundFields.responseType} onChange={(event) => setOutboundField("responseType", event.target.value)}><option value="none">无</option><option value="http">HTTP 403</option></select></Field> : null}
-            {["dns"].includes(protocol) ? <div className="form-grid two"><Field label="DNS 地址"><input aria-label="DNS 出站地址" value={outboundFields.address} onChange={(event) => setOutboundField("address", event.target.value)} placeholder="1.1.1.1" /></Field><Field label="端口"><input type="number" min="1" max="65535" aria-label="DNS 出站端口" value={outboundFields.port} onChange={(event) => setOutboundField("port", event.target.value)} placeholder="53" /></Field></div> : null}
+            {["dns"].includes(protocol) ? <div className="form-grid three"><Field label="DNS 地址"><input aria-label="DNS 出站地址" value={outboundFields.address} onChange={(event) => setOutboundField("address", event.target.value)} placeholder="1.1.1.1" /></Field><Field label="端口"><input type="number" min="1" max="65535" aria-label="DNS 出站端口" value={outboundFields.port} onChange={(event) => setOutboundField("port", event.target.value)} placeholder="53" /></Field><Field label="网络"><select aria-label="DNS 出站网络" value={outboundFields.network} onChange={(event) => setOutboundField("network", event.target.value)}><option value="tcp">TCP</option><option value="udp">UDP</option></select></Field></div> : null}
             {["loopback"].includes(protocol) ? null : null}
             {["socks", "http", "shadowsocks", "vless", "vmess", "trojan"].includes(protocol) ? <div className="form-grid two"><Field label="端口"><input type="number" min="1" max="65535" required aria-label="出站目标端口" value={outboundFields.port} onChange={(event) => setOutboundField("port", event.target.value)} placeholder="443" /></Field>{["socks", "http"].includes(protocol) ? <Field label="用户名"><input aria-label="出站用户名" value={outboundFields.socksUser} onChange={(event) => setOutboundField("socksUser", event.target.value)} /></Field> : <Field label={protocol === "shadowsocks" ? "加密方法" : "Email / 备注"}><input aria-label={protocol === "shadowsocks" ? "Shadowsocks 加密方法" : "出站 Email"} value={protocol === "shadowsocks" ? outboundFields.method : outboundFields.email} onChange={(event) => setOutboundField(protocol === "shadowsocks" ? "method" : "email", event.target.value)} placeholder={protocol === "shadowsocks" ? "aes-128-gcm" : "optional"} /></Field>}</div> : null}
             {["socks", "http"].includes(protocol) ? <Field label="密码"><input type="password" aria-label="出站密码" value={outboundFields.socksPassword} onChange={(event) => setOutboundField("socksPassword", event.target.value)} /></Field> : null}

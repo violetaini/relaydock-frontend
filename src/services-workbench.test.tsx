@@ -1302,6 +1302,315 @@ describe("service management workbench", () => {
     });
   });
 
+  it("creates a VLESS Reality outbound entirely through the visual editor", async () => {
+    mockServerReads([onlineServer], { outbounds: [{ tag: "direct", protocol: "freedom", settings: {} }] });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const serverDialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(serverDialog).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "Xray 设置" }));
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "出站规则" }));
+    fireEvent.click(await within(serverDialog).findByRole("button", { name: "添加出站" }));
+
+    const editor = await screen.findByRole("dialog", { name: "添加出站" });
+    fireEvent.change(within(editor).getByRole("textbox", { name: "出站 Tag" }), { target: { value: "edge-reality" } });
+    fireEvent.change(within(editor).getByRole("combobox", { name: "出站协议" }), { target: { value: "vless" } });
+    fireEvent.change(within(editor).getByRole("textbox", { name: "出站目标地址" }), { target: { value: "edge.example.com" } });
+    fireEvent.change(within(editor).getByRole("spinbutton", { name: "出站目标端口" }), { target: { value: "443" } });
+    fireEvent.change(within(editor).getByRole("textbox", { name: "出站 Email" }), { target: { value: "route@example.com" } });
+    fireEvent.change(within(editor).getByRole("textbox", { name: "出站 ID" }), { target: { value: "11111111-2222-4333-8444-555555555555" } });
+    fireEvent.click(within(editor).getByRole("button", { name: "Reality" }));
+    fireEvent.change(within(editor).getByRole("textbox", { name: "出站 Server name" }), { target: { value: "cdn.example.com" } });
+    fireEvent.change(within(editor).getByRole("textbox", { name: "出站 Reality Public key" }), { target: { value: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFE" } });
+    fireEvent.change(within(editor).getByRole("textbox", { name: "出站 Reality Short ID" }), { target: { value: "a1b2c3d4" } });
+    fireEvent.click(within(editor).getByRole("button", { name: "创建出站" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote/outbounds?server_id=11", {
+      action: "add",
+      outbound: {
+        tag: "edge-reality",
+        protocol: "vless",
+        settings: {
+          vnext: [{
+            address: "edge.example.com",
+            port: 443,
+            users: [{
+              id: "11111111-2222-4333-8444-555555555555",
+              email: "route@example.com",
+              encryption: "none",
+            }],
+          }],
+        },
+        streamSettings: {
+          network: "tcp",
+          security: "reality",
+          realitySettings: {
+            serverName: "cdn.example.com",
+            password: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFE",
+            shortId: "a1b2c3d4",
+            fingerprint: "chrome",
+            spiderX: "/",
+          },
+        },
+      },
+    }));
+  });
+
+  it("preserves and updates a direct-form VLESS outbound", async () => {
+    const original = {
+      tag: "direct-vless",
+      protocol: "vless",
+      settings: {
+        address: "old.example.com",
+        port: 443,
+        id: "11111111-2222-4333-8444-555555555555",
+        email: "before@example.com",
+        encryption: "none",
+        reverse: { tag: "reverse-only" },
+      },
+      streamSettings: { network: "tcp", security: "none" },
+    };
+    mockServerReads([onlineServer], { outbounds: [original] });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const serverDialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(serverDialog).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "Xray 设置" }));
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "出站规则" }));
+    expect(await within(serverDialog).findByText("old.example.com:443")).toBeInTheDocument();
+    fireEvent.click(await within(serverDialog).findByRole("button", { name: "编辑出站 direct-vless" }));
+
+    const editor = await screen.findByRole("dialog", { name: "编辑出站" });
+    expect(within(editor).getByRole("textbox", { name: "出站目标地址" })).toHaveValue("old.example.com");
+    expect(within(editor).getByRole("textbox", { name: "出站 ID" })).toHaveValue("11111111-2222-4333-8444-555555555555");
+    fireEvent.change(within(editor).getByRole("textbox", { name: "出站目标地址" }), { target: { value: "new.example.com" } });
+    fireEvent.change(within(editor).getByRole("textbox", { name: "出站 Email" }), { target: { value: "after@example.com" } });
+    fireEvent.click(within(editor).getByRole("button", { name: "保存并重建" }));
+
+    await waitFor(() => expect(post).toHaveBeenNthCalledWith(1, "/api/admin/remote/outbounds?server_id=11", { action: "remove", tag: "direct-vless" }));
+    expect(post).toHaveBeenNthCalledWith(2, "/api/admin/remote/outbounds?server_id=11", {
+      action: "add",
+      outbound: {
+        ...original,
+        settings: { ...original.settings, address: "new.example.com", email: "after@example.com" },
+      },
+    });
+  });
+
+  it("preserves and updates a direct-form SOCKS outbound", async () => {
+    const original = {
+      tag: "direct-socks",
+      protocol: "socks",
+      settings: { address: "old.proxy.example", port: 1080, level: 2, email: "proxy@example.com", user: "alice", pass: "old-pass" },
+      streamSettings: { network: "tcp", security: "none" },
+    };
+    mockServerReads([onlineServer], { outbounds: [original] });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const serverDialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(serverDialog).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "Xray 设置" }));
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "出站规则" }));
+    fireEvent.click(await within(serverDialog).findByRole("button", { name: "编辑出站 direct-socks" }));
+
+    const editor = await screen.findByRole("dialog", { name: "编辑出站" });
+    expect(within(editor).getByRole("textbox", { name: "出站用户名" })).toHaveValue("alice");
+    fireEvent.change(within(editor).getByLabelText("出站密码"), { target: { value: "new-pass" } });
+    fireEvent.click(within(editor).getByRole("button", { name: "保存并重建" }));
+
+    await waitFor(() => expect(post).toHaveBeenNthCalledWith(1, "/api/admin/remote/outbounds?server_id=11", { action: "remove", tag: "direct-socks" }));
+    expect(post).toHaveBeenNthCalledWith(2, "/api/admin/remote/outbounds?server_id=11", {
+      action: "add",
+      outbound: { ...original, settings: { ...original.settings, pass: "new-pass" } },
+    });
+  });
+
+  it("preserves additional legacy targets and users when editing the first VLESS target", async () => {
+    const original = {
+      tag: "multi-vless",
+      protocol: "vless",
+      settings: {
+        vnext: [
+          {
+            address: "primary.example.com",
+            port: 443,
+            users: [
+              { id: "11111111-2222-4333-8444-555555555555", email: "primary@example.com", encryption: "none" },
+              { id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", email: "secondary-user@example.com", encryption: "none", level: 3 },
+            ],
+          },
+          { address: "backup.example.com", port: 8443, users: [{ id: "99999999-8888-4777-8666-555555555555", encryption: "none" }] },
+        ],
+      },
+      streamSettings: { network: "tcp", security: "none" },
+    };
+    mockServerReads([onlineServer], { outbounds: [original] });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const serverDialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(serverDialog).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "Xray 设置" }));
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "出站规则" }));
+    fireEvent.click(await within(serverDialog).findByRole("button", { name: "编辑出站 multi-vless" }));
+
+    const editor = await screen.findByRole("dialog", { name: "编辑出站" });
+    fireEvent.change(within(editor).getByRole("textbox", { name: "出站 Email" }), { target: { value: "updated@example.com" } });
+    fireEvent.click(within(editor).getByRole("button", { name: "保存并重建" }));
+
+    await waitFor(() => expect(post).toHaveBeenNthCalledWith(2, "/api/admin/remote/outbounds?server_id=11", {
+      action: "add",
+      outbound: {
+        ...original,
+        settings: {
+          vnext: [
+            { ...original.settings.vnext[0], users: [{ ...original.settings.vnext[0].users[0], email: "updated@example.com" }, original.settings.vnext[0].users[1]] },
+            original.settings.vnext[1],
+          ],
+        },
+      },
+    }));
+  });
+
+  it("clears incompatible settings and credentials when switching outbound protocol", async () => {
+    const original = {
+      tag: "switch-me",
+      protocol: "socks",
+      settings: { servers: [{ address: "secret.example.com", port: 1080, users: [{ user: "alice", pass: "secret" }] }] },
+      streamSettings: { network: "xhttp", security: "tls", xhttpSettings: { host: "old.example", path: "/old", mode: "stream-up" }, tlsSettings: { serverName: "old.example" } },
+    };
+    mockServerReads([onlineServer], { outbounds: [original] });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const serverDialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(serverDialog).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "Xray 设置" }));
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "出站规则" }));
+    fireEvent.click(await within(serverDialog).findByRole("button", { name: "编辑出站 switch-me" }));
+    const editor = await screen.findByRole("dialog", { name: "编辑出站" });
+    fireEvent.change(within(editor).getByRole("combobox", { name: "出站协议" }), { target: { value: "blackhole" } });
+    fireEvent.click(within(editor).getByRole("button", { name: "保存并重建" }));
+
+    await waitFor(() => expect(post).toHaveBeenNthCalledWith(2, "/api/admin/remote/outbounds?server_id=11", {
+      action: "add",
+      outbound: { tag: "switch-me", protocol: "blackhole", settings: {} },
+    }));
+  });
+
+  it("builds XHTTP Reality and VLESS Vision through visual controls", async () => {
+    mockServerReads([onlineServer], { outbounds: [{ tag: "direct", protocol: "freedom", settings: {} }] });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const serverDialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(serverDialog).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "Xray 设置" }));
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "出站规则" }));
+    fireEvent.click(await within(serverDialog).findByRole("button", { name: "添加出站" }));
+    const editor = await screen.findByRole("dialog", { name: "添加出站" });
+    fireEvent.change(within(editor).getByRole("textbox", { name: "出站 Tag" }), { target: { value: "xhttp-vision" } });
+    fireEvent.change(within(editor).getByRole("combobox", { name: "出站协议" }), { target: { value: "vless" } });
+    fireEvent.change(within(editor).getByRole("textbox", { name: "出站目标地址" }), { target: { value: "edge.example.com" } });
+    fireEvent.change(within(editor).getByRole("spinbutton", { name: "出站目标端口" }), { target: { value: "443" } });
+    fireEvent.change(within(editor).getByRole("textbox", { name: "出站 ID" }), { target: { value: "11111111-2222-4333-8444-555555555555" } });
+    fireEvent.change(within(editor).getByRole("combobox", { name: "出站 VLESS Flow" }), { target: { value: "xtls-rprx-vision" } });
+    fireEvent.change(within(editor).getByRole("combobox", { name: "出站传输" }), { target: { value: "xhttp" } });
+    fireEvent.change(within(editor).getByRole("textbox", { name: "出站 XHTTP 路径" }), { target: { value: "/vision" } });
+    fireEvent.change(within(editor).getByRole("textbox", { name: "出站 Host" }), { target: { value: "cdn.example.com" } });
+    fireEvent.change(within(editor).getByRole("combobox", { name: "出站 XHTTP Mode" }), { target: { value: "stream-up" } });
+    fireEvent.click(within(editor).getByRole("button", { name: "Reality" }));
+    fireEvent.change(within(editor).getByRole("textbox", { name: "出站 Reality Public key" }), { target: { value: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFE" } });
+    fireEvent.change(within(editor).getByRole("textbox", { name: "出站 Server name" }), { target: { value: "cdn.example.com" } });
+    fireEvent.click(within(editor).getByRole("button", { name: "创建出站" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote/outbounds?server_id=11", expect.objectContaining({
+      action: "add",
+      outbound: expect.objectContaining({
+        settings: { vnext: [{ address: "edge.example.com", port: 443, users: [{ id: "11111111-2222-4333-8444-555555555555", encryption: "none", flow: "xtls-rprx-vision" }] }] },
+        streamSettings: expect.objectContaining({ network: "xhttp", security: "reality", xhttpSettings: { path: "/vision", host: "cdn.example.com", mode: "stream-up" } }),
+      }),
+    })));
+  });
+
+  it("keeps WireGuard peer metadata and additional peers when editing", async () => {
+    const original = {
+      tag: "wg-out",
+      protocol: "wireguard",
+      settings: {
+        secretKey: "1".repeat(64),
+        address: ["10.0.0.2/32"],
+        mtu: 1420,
+        peers: [
+          { publicKey: "2".repeat(64), preSharedKey: "3".repeat(64), endpoint: "old.example.com:51820", allowedIPs: ["0.0.0.0/0"], keepAlive: 25 },
+          { publicKey: "4".repeat(64), endpoint: "backup.example.com:51820", allowedIPs: ["10.0.0.0/8"] },
+        ],
+      },
+    };
+    mockServerReads([onlineServer], { outbounds: [original] });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const serverDialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(serverDialog).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "Xray 设置" }));
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "出站规则" }));
+    fireEvent.click(await within(serverDialog).findByRole("button", { name: "编辑出站 wg-out" }));
+
+    const editor = await screen.findByRole("dialog", { name: "编辑出站" });
+    fireEvent.change(within(editor).getByRole("textbox", { name: "WireGuard Peer endpoint" }), { target: { value: "new.example.com:51820" } });
+    fireEvent.click(within(editor).getByRole("button", { name: "保存并重建" }));
+
+    await waitFor(() => expect(post).toHaveBeenNthCalledWith(1, "/api/admin/remote/outbounds?server_id=11", { action: "remove", tag: "wg-out" }));
+    expect(post).toHaveBeenNthCalledWith(2, "/api/admin/remote/outbounds?server_id=11", {
+      action: "add",
+      outbound: {
+        ...original,
+        settings: {
+          ...original.settings,
+          peers: [{ ...original.settings.peers[0], endpoint: "new.example.com:51820" }, original.settings.peers[1]],
+        },
+      },
+    });
+  });
+
+  it("disables Reality when the selected transport is incompatible", async () => {
+    mockServerReads([onlineServer], { outbounds: [{ tag: "direct", protocol: "freedom", settings: {} }] });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const serverDialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(serverDialog).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "Xray 设置" }));
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "出站规则" }));
+    fireEvent.click(await within(serverDialog).findByRole("button", { name: "添加出站" }));
+
+    const editor = await screen.findByRole("dialog", { name: "添加出站" });
+    fireEvent.change(within(editor).getByRole("combobox", { name: "出站协议" }), { target: { value: "vmess" } });
+    expect(within(editor).getByRole("textbox", { name: "出站 VMess Security" })).toHaveValue("auto");
+    fireEvent.change(within(editor).getByRole("combobox", { name: "出站协议" }), { target: { value: "vless" } });
+    fireEvent.change(within(editor).getByRole("combobox", { name: "出站传输" }), { target: { value: "ws" } });
+    expect(within(editor).getByRole("button", { name: "Reality" })).toBeDisabled();
+    expect(within(editor).getByRole("combobox", { name: "出站传输" })).not.toHaveTextContent("QUIC");
+    fireEvent.change(within(editor).getByRole("combobox", { name: "出站传输" }), { target: { value: "kcp" } });
+    expect(within(editor).getByRole("spinbutton", { name: "出站 mKCP MTU" })).toHaveValue(1350);
+    fireEvent.change(within(editor).getByRole("combobox", { name: "出站传输" }), { target: { value: "httpupgrade" } });
+    expect(within(editor).getByRole("textbox", { name: "出站 HTTPUpgrade 路径" })).toBeVisible();
+    fireEvent.change(within(editor).getByRole("combobox", { name: "出站传输" }), { target: { value: "xhttp" } });
+    expect(within(editor).getByRole("button", { name: "Reality" })).toBeEnabled();
+    expect(within(editor).getByRole("textbox", { name: "出站 XHTTP 路径" })).toBeVisible();
+  });
+
   it("requires confirmation before deleting an outbound from the selected server", async () => {
     mockServerReads([onlineServer], { outbounds: [{ tag: "blocked", protocol: "blackhole", settings: {} }] });
     const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
@@ -1320,7 +1629,7 @@ describe("service management workbench", () => {
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote/outbounds?server_id=11", { action: "remove", tag: "blocked" }));
   });
 
-  it("shows common routing match fields and creates a rule through add_rule", async () => {
+  it("shows common routing match fields and creates a rule through an atomic hot mutation", async () => {
     mockServerReads([onlineServer], { outbounds: [{ tag: "media-out", protocol: "freedom" }, { tag: "proxy-google", protocol: "shadowsocks" }], routing: { domainStrategy: "IPIfNonMatch", balancers: [{ tag: "fallback" }], rules: [{
       type: "field",
       domain: ["domain:google.com"],
@@ -1360,24 +1669,29 @@ describe("service management workbench", () => {
     fireEvent.change(within(dialog).getByRole("textbox", { name: "路由域名" }), { target: { value: "domain:youtube.com\ngeosite:google" } });
     fireEvent.change(within(dialog).getByRole("textbox", { name: "路由 IP" }), { target: { value: "geoip:private,10.0.0.0/8" } });
     fireEvent.change(within(dialog).getByRole("textbox", { name: "路由端口" }), { target: { value: "443,8443" } });
-    fireEvent.change(within(dialog).getByRole("textbox", { name: "路由网络" }), { target: { value: "tcp,udp" } });
+    fireEvent.change(within(dialog).getByRole("combobox", { name: "路由网络" }), { target: { value: "tcp,udp" } });
     fireEvent.change(within(dialog).getByRole("textbox", { name: "路由入站 Tag" }), { target: { value: "vless-in,trojan-in" } });
     fireEvent.change(within(dialog).getByRole("textbox", { name: "路由用户" }), { target: { value: "bob@example.com" } });
     fireEvent.change(within(dialog).getByRole("textbox", { name: "路由协议" }), { target: { value: "bittorrent" } });
-    fireEvent.change(within(dialog).getByRole("textbox", { name: "路由规则高级 JSON" }), { target: { value: JSON.stringify({ type: "field", attrs: "browser == 'chrome'", outboundTag: "ignored", balancerTag: "ignored", _runtime: true }) } });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "VLESS 路由" }), { target: { value: "53, 1000-2000" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "添加路由属性" }));
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "路由属性名称 1" }), { target: { value: "network" } });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "路由属性值 1" }), { target: { value: "tcp" } });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "路由规则高级 JSON" }), { target: { value: JSON.stringify({ type: "field", outboundTag: "ignored", balancerTag: "ignored", _runtime: true }) } });
     fireEvent.click(within(dialog).getByRole("button", { name: "创建规则" }));
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote/routing?server_id=11", {
-      action: "add_rule",
+      action: "add_rule_hot",
       rule: {
         type: "field",
-        attrs: "browser == 'chrome'",
+        attrs: { network: "tcp" },
         domain: ["domain:youtube.com", "geosite:google"],
         ip: ["geoip:private", "10.0.0.0/8"],
         inboundTag: ["vless-in", "trojan-in"],
         user: ["bob@example.com"],
         protocol: ["bittorrent"],
         port: "443,8443",
+        vlessRoute: "53,1000-2000",
         network: "tcp,udp",
         outboundTag: "media-out",
       },
@@ -1403,8 +1717,36 @@ describe("service management workbench", () => {
     expect(post).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
 
-    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote/routing?server_id=11", { action: "remove_rule", index: 1 }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote/routing?server_id=11", {
+      action: "remove_rule_hot",
+      index: 1,
+      expected_rule: { type: "field", domain: ["domain:blocked.example"], balancerTag: "fallback" },
+    }));
     expect(notify).toHaveBeenCalledWith("路由规则 #2 已删除");
+  });
+
+  it("reorders routing rules through one hot atomic replacement", async () => {
+    const first = { type: "field", domain: ["domain:first.example"], outboundTag: "direct" };
+    const second = { type: "field", domain: ["domain:second.example"], outboundTag: "proxy" };
+    mockServerReads([onlineServer], { routing: { domainStrategy: "IPIfNonMatch", rules: [first, second] } });
+    const notify = vi.fn();
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<ServicesWorkbenchPage notify={notify} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(dialog).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(dialog).getByRole("tab", { name: "Xray 设置" }));
+    fireEvent.click(within(dialog).getByRole("tab", { name: "路由规则" }));
+    fireEvent.click(await within(dialog).findByRole("button", { name: "下移路由规则 1" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote/routing?server_id=11", {
+      action: "move_rule_hot",
+      from: 0,
+      to: 1,
+      expected_rule: first,
+    }));
+    expect(notify).toHaveBeenCalledWith("路由顺序已调整");
   });
 
   it("surfaces an HTTP 200 routing response whose success flag is false", async () => {

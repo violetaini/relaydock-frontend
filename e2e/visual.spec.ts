@@ -1220,12 +1220,24 @@ for (const viewport of [
     await serverDialog.getByRole("tab", { name: "出站规则" }).click();
     await expect(serverDialog.getByText("direct", { exact: true })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} structured outbound list`);
+    await page.screenshot({ path: testInfo.outputPath(`xray-outbounds-${viewport.name}.png`), fullPage: true });
+    await serverDialog.getByRole("button", { name: "添加出站" }).click();
+    const outboundDialog = page.getByRole("dialog", { name: "添加出站" });
+    await expect(outboundDialog.getByRole("tab", { name: "基础设置" })).toHaveAttribute("aria-selected", "true");
+    await expect(outboundDialog.getByRole("combobox", { name: "出站协议" })).toBeVisible();
+    await expectViewportIntegrity(page, `${viewport.name} structured outbound editor`);
+    await page.screenshot({ path: testInfo.outputPath(`xray-outbound-editor-${viewport.name}.png`), fullPage: true });
+    await outboundDialog.getByRole("button", { name: "关闭" }).click();
     await serverDialog.getByRole("tab", { name: "路由规则" }).click();
     await expect(serverDialog.getByText("domain:google.com", { exact: true })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath(`xray-routing-${viewport.name}.png`), fullPage: true });
     await serverDialog.getByRole("button", { name: "添加规则" }).first().click();
     const routingDialog = page.getByRole("dialog", { name: "添加路由规则" });
+    await expect(routingDialog.getByText("高级 JSON（可选）", { exact: true })).toBeVisible();
+    await routingDialog.getByText("高级 JSON（可选）", { exact: true }).click();
     await expect(routingDialog.getByLabel("路由规则高级 JSON")).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} structured routing editor`);
+    await page.screenshot({ path: testInfo.outputPath(`xray-routing-editor-${viewport.name}.png`), fullPage: true });
     await routingDialog.getByRole("button", { name: "关闭" }).click();
     await closeDialog(page);
 

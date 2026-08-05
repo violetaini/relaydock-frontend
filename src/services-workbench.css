@@ -834,6 +834,53 @@
 .routing-rule-json pre { max-height: 260px; margin: 10px 0 0; padding: 11px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; color: #d9e5e0; background: #111614; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .routing-rule-editor textarea:not(.service-code-editor) { width: 100%; resize: vertical; }
 .routing-rule-editor .xray-resource-json { min-height: 220px; }
+.routing-attributes { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: color-mix(in srgb, var(--surface-muted) 74%, transparent); }
+.routing-attributes-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.routing-attributes-head > span { display: grid; gap: 2px; }
+.routing-attributes-head strong { color: var(--text); font-size: 12px; }
+.routing-attributes-head small, .routing-attributes-empty { color: var(--text-faint); font-size: 10px; }
+.routing-attribute-list { display: grid; gap: 6px; }
+.routing-attribute-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) minmax(0, 1fr) 32px; align-items: center; gap: 6px; }
+.routing-attribute-row > span { display: grid; place-items: center; height: 32px; border: 1px solid var(--border); border-radius: 4px; color: var(--text-faint); font-size: 10px; }
+.routing-attribute-row input { min-width: 0; }
+
+/* Compact, scan-first Xray tables model the 3x-ui configuration workflow. */
+.xray3-table-wrap { width: 100%; overflow-x: auto; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface-muted); }
+.xray3-table { width: 100%; min-width: 940px; border-collapse: collapse; table-layout: fixed; }
+.xray3-table th, .xray3-table td { min-width: 0; padding: 10px 11px; border-bottom: 1px solid var(--border); color: var(--text-soft); font-size: 11px; text-align: left; vertical-align: middle; }
+.xray3-table th { color: var(--text); background: color-mix(in srgb, var(--surface-raised) 76%, var(--surface-muted)); font-size: 12px; font-weight: 750; white-space: nowrap; }
+.xray3-table tr:last-child td { border-bottom: 0; }
+.xray3-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.xray3-table th:first-child, .xray3-table td:first-child { width: 58px; }
+.xray3-table th:last-child, .xray3-table td:last-child { width: 156px; }
+.xray3-table tbody tr:hover { background: color-mix(in srgb, var(--accent-soft) 28%, transparent); }
+.xray3-cell-stack { min-width: 0; display: inline-flex; flex-direction: column; gap: 2px; vertical-align: top; }
+.xray3-cell-stack > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.xray3-rule-order { display: inline-flex; align-items: center; gap: 5px; color: var(--text-soft); }
+.xray3-rule-order svg { color: var(--text-faint); }
+.xray3-row-actions { display: inline-flex; align-items: center; gap: 2px; }
+.xray3-row-actions .icon-button { width: 28px; height: 28px; }
+.xray3-primary { display: block; overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
+.xray3-outbound-table { min-width: 780px; }
+.xray3-outbound-table th:first-child, .xray3-outbound-table td:first-child { width: 52px; }
+.xray3-outbound-table th:nth-child(2), .xray3-outbound-table td:nth-child(2) { width: 18%; }
+.xray3-outbound-table th:nth-child(3), .xray3-outbound-table td:nth-child(3) { width: 13%; }
+.xray3-outbound-table th:nth-child(5), .xray3-outbound-table td:nth-child(5),
+.xray3-outbound-table th:nth-child(6), .xray3-outbound-table td:nth-child(6) { width: 12%; }
+.xray3-outbound-table th:last-child, .xray3-outbound-table td:last-child { width: 140px; }
+.xray-editor-tabs { display: flex; align-items: center; gap: 18px; border-bottom: 1px solid var(--border); }
+.xray-editor-tabs button { min-height: 36px; padding: 0 2px; border: 0; border-bottom: 2px solid transparent; color: var(--text-soft); background: transparent; font-size: 12px; font-weight: 700; cursor: pointer; }
+.xray-editor-tabs button:hover, .xray-editor-tabs button.is-active { color: var(--accent); border-bottom-color: var(--accent); }
+.xray-advanced-disclosure { border: 1px solid var(--border); border-radius: 6px; background: var(--surface-muted); }
+.xray-advanced-disclosure summary { padding: 10px 12px; color: var(--text-soft); font-size: 11px; font-weight: 700; cursor: pointer; }
+.xray-advanced-disclosure[open] summary { border-bottom: 1px solid var(--border); }
+.xray-advanced-disclosure .field { padding: 10px; }
+.xray-advanced-disclosure .service-code-editor { min-height: 210px; height: 260px; }
+.xray-security-segments { min-height: 38px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--border-strong); border-radius: 5px; overflow: hidden; }
+.xray-security-segments button { min-width: 0; padding: 7px 9px; border: 0; border-right: 1px solid var(--border-strong); color: var(--text-soft); background: var(--surface-muted); font-size: 12px; font-weight: 700; cursor: pointer; }
+.xray-security-segments button:last-child { border-right: 0; }
+.xray-security-segments button:hover { color: var(--text); background: var(--surface-raised); }
+.xray-security-segments button.is-active { color: var(--accent-contrast); background: var(--accent); }
 
 .service-sharing { display: flex; flex-direction: column; gap: 14px; }
 .service-share-create { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 10px; }
@@ -987,6 +1034,8 @@
   .wireguard-client-config { grid-template-columns: minmax(0, 1fr); }
   .wireguard-client-config .icon-button { justify-self: end; }
   .wireguard-client-config .service-code-editor { height: 230px; min-height: 230px; }
+  .xray3-table { min-width: 860px; }
+  .xray-editor-tabs { gap: 14px; }
   .upgrade-summary strong { font-size: 18px; }
 }
 

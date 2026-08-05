@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import {
   Activity,
+  ArrowDown,
   ArrowDownToLine,
+  ArrowUp,
   ArrowUpFromLine,
   Check,
   ChevronDown,
@@ -15,6 +17,7 @@ import {
   FileKey2,
   Gauge,
   Grid2X2,
+  GripVertical,
   HardDrive,
   HardDriveDownload,
   KeyRound,
@@ -796,6 +799,28 @@ function validWireGuardKey(value: string): boolean {
   return /^[A-Za-z0-9+/]{43}=$/.test(value);
 }
 
+function validXrayWireGuardKey(value: string): boolean {
+  const key = value.trim();
+  if (/^[0-9a-f]{64}$/i.test(key)) return true;
+  if (!/^[A-Za-z0-9+/_-]{43}=?$/.test(key)) return false;
+  try {
+    const decoded = atob(key.replace(/-/g, "+").replace(/_/g, "/").padEnd(44, "="));
+    return decoded.length === 32;
+  } catch {
+    return false;
+  }
+}
+
+function validWireGuardEndpoint(value: string): boolean {
+  const endpoint = value.trim();
+  const match = endpoint.startsWith("[")
+    ? endpoint.match(/^\[([^\]]+)]:(\d+)$/)
+    : endpoint.match(/^([^\s:/]+):(\d+)$/);
+  if (!match || !match[1].trim()) return false;
+  const port = Number(match[2]);
+  return Number.isInteger(port) && port >= 1 && port <= 65535;
+}
+
 function buildSecureInbound(
   preset: VlessInboundCreationPreset,
   fields: { tag: string; port: string },
@@ -873,6 +898,415 @@ function routingRuleValues(rule: XrayRoutingRule, key: string): string[] {
 
 function parseRoutingValues(value: string): string[] {
   return value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
+}
+
+function normalizeRoutingPortList(value: string, label: string): string {
+  const normalized = value.trim();
+  if (!normalized) return "";
+  for (const item of normalized.split(",").map((entry) => entry.trim())) {
+    if (/^env:[A-Za-z_][A-Za-z0-9_]*$/.test(item)) continue;
+    const match = item.match(/^(\d+)(?:-(\d+))?$/);
+    if (!match) throw new Error(`${label} 必须是端口、端口范围或 env:变量名`);
+    const from = Number(match[1]);
+    const to = Number(match[2] ?? match[1]);
+    if (from < 0 || from > 65535 || to < 0 || to > 65535 || from > to) {
+      throw new Error(`${label} 必须在 0 到 65535 之间，且范围起点不能大于终点`);
+    }
+  }
+  return normalized.split(",").map((entry) => entry.trim()).join(",");
+}
+
+type OutboundEditorTab = "basics" | "json";
+
+type OutboundEditorFields = {
+  protocol: string;
+  tag: string;
+  sendThrough: string;
+  address: string;
+  port: string;
+  id: string;
+  email: string;
+  password: string;
+  method: string;
+  encryption: string;
+  flow: string;
+  network: string;
+  security: string;
+  serverName: string;
+  fingerprint: string;
+  publicKey: string;
+  shortId: string;
+  spiderX: string;
+  path: string;
+  host: string;
+  serviceName: string;
+  responseType: string;
+  domainStrategy: string;
+  socksUser: string;
+  socksPassword: string;
+  secretKey: string;
+  tunnelAddress: string;
+  peerPublicKey: string;
+  peerEndpoint: string;
+  allowedIPs: string;
+  keepAlive: string;
+  mtu: string;
+  xhttpMode: string;
+  kcpMtu: string;
+  kcpTti: string;
+  kcpUplinkCapacity: string;
+  kcpDownlinkCapacity: string;
+  kcpCwndMultiplier: string;
+  kcpMaxSendingWindow: string;
+};
+
+const xrayOutboundProtocols = [
+  "freedom", "blackhole", "dns", "loopback", "socks", "http", "shadowsocks", "vless", "vmess", "trojan", "wireguard",
+] as const;
+
+// QUIC was removed from current Xray transport support. Reality is accepted
+// only by the TCP/RAW, gRPC, and XHTTP stream implementations.
+const xrayOutboundNetworks = ["tcp", "ws", "grpc", "httpupgrade", "xhttp", "kcp"];
+const xrayRealityOutboundNetworks = ["tcp", "grpc", "xhttp"];
+const xrayOutboundSecurities = ["none", "tls", "reality"];
+
+function outboundEditorDefaults(protocol = "freedom"): OutboundEditorFields {
+  return {
+    protocol, tag: "", sendThrough: "", address: "", port: "", id: "", email: "", password: "", method: "aes-128-gcm", encryption: "none", flow: "",
+    network: "tcp", security: "none", serverName: "", fingerprint: "chrome", publicKey: "", shortId: "", spiderX: "/", path: "/", host: "", serviceName: "grpc", responseType: "none", domainStrategy: "AsIs",
+    socksUser: "", socksPassword: "", secretKey: "", tunnelAddress: "", peerPublicKey: "", peerEndpoint: "", allowedIPs: "0.0.0.0/0, ::/0", keepAlive: "0", mtu: "1420",
+    xhttpMode: "auto", kcpMtu: "1350", kcpTti: "20", kcpUplinkCapacity: "5", kcpDownlinkCapacity: "20", kcpCwndMultiplier: "1", kcpMaxSendingWindow: "2097152",
+  };
+}
+
+function outboundNestedObject(resource: XrayResource, key: string): XrayResource {
+  const value = resource[key];
+  return value && typeof value === "object" && !Array.isArray(value) ? { ...(value as XrayResource) } : {};
+}
+
+function outboundFirstServer(resource: XrayResource): XrayResource {
+  const settings = outboundNestedObject(resource, "settings");
+  const list = Array.isArray(settings.servers) ? settings.servers : [];
+  return list[0] && typeof list[0] === "object" ? { ...(list[0] as XrayResource) } : {};
+}
+
+function outboundFirstVnext(resource: XrayResource): XrayResource {
+  const settings = outboundNestedObject(resource, "settings");
+  const list = Array.isArray(settings.vnext) ? settings.vnext : [];
+  return list[0] && typeof list[0] === "object" ? { ...(list[0] as XrayResource) } : {};
+}
+
+function outboundFirstUser(resource: XrayResource): XrayResource {
+  const target = outboundFirstVnext(resource);
+  const users = Array.isArray(target.users) ? target.users : [];
+  return users[0] && typeof users[0] === "object" ? { ...(users[0] as XrayResource) } : {};
+}
+
+function outboundEditorFieldsFrom(resource: XrayResource): OutboundEditorFields {
+  const protocol = xrayResourceProtocol(resource).toLowerCase() || "freedom";
+  const fields = outboundEditorDefaults(protocol);
+  const settings = outboundNestedObject(resource, "settings");
+  const server = outboundFirstServer(resource);
+  const vnext = outboundFirstVnext(resource);
+  const user = outboundFirstUser(resource);
+  const stream = outboundNestedObject(resource, "streamSettings");
+  const tls = outboundNestedObject(stream, "tlsSettings");
+  const reality = outboundNestedObject(stream, "realitySettings");
+  const ws = outboundNestedObject(stream, "wsSettings");
+  const httpUpgrade = outboundNestedObject(stream, "httpupgradeSettings");
+  const xhttp = outboundNestedObject(stream, "xhttpSettings");
+  const grpc = outboundNestedObject(stream, "grpcSettings");
+  const kcp = outboundNestedObject(stream, "kcpSettings");
+  const wireguardPeers = Array.isArray(settings.peers) ? settings.peers : [];
+  const peer = wireguardPeers[0] && typeof wireguardPeers[0] === "object" ? wireguardPeers[0] as XrayResource : {};
+  const serverUsers = Array.isArray(server.users) ? server.users : [];
+  const serverUser = serverUsers[0] && typeof serverUsers[0] === "object" ? serverUsers[0] as XrayResource : {};
+  const read = (obj: XrayResource, key: string) => obj[key] === undefined || obj[key] === null ? "" : String(obj[key]);
+  const arrayText = (value: unknown) => Array.isArray(value) ? value.map(String).join(", ") : value === undefined || value === null ? "" : String(value);
+  const wsHeaders = ws.headers && typeof ws.headers === "object" && !Array.isArray(ws.headers) ? ws.headers as XrayResource : {};
+  const legacyWSHost = Object.entries(wsHeaders).find(([key]) => key.toLowerCase() === "host")?.[1];
+  const direct = settings.address !== undefined && settings.address !== null;
+  const target = direct ? settings : protocol === "vless" || protocol === "vmess" ? vnext : server;
+  const account = direct ? settings : protocol === "vless" || protocol === "vmess" ? user : server;
+  return {
+    ...fields,
+    tag: xrayResourceTag(resource),
+    sendThrough: read(resource, "sendThrough"),
+    address: read(target, "address"),
+    port: read(target, "port"),
+    id: read(account, "id") || read(account, "password"),
+    email: read(account, "email"),
+    password: read(account, "password"),
+    method: read(account, "method"),
+    encryption: protocol === "vmess" ? read(account, "security") || "auto" : read(account, "encryption") || "none",
+    flow: read(account, "flow"),
+    network: read(stream, "network") || "tcp",
+    security: read(stream, "security") || "none",
+    serverName: read(tls, "serverName") || read(reality, "serverName"),
+    fingerprint: read(tls, "fingerprint") || read(reality, "fingerprint") || "chrome",
+    publicKey: read(reality, "password") || read(reality, "publicKey"),
+    shortId: read(reality, "shortId"),
+    spiderX: read(reality, "spiderX") || "/",
+    path: read(ws, "path") || read(httpUpgrade, "path") || read(xhttp, "path") || read(stream, "path") || "/",
+    host: read(ws, "host") || read(httpUpgrade, "host") || read(xhttp, "host") || arrayText(legacyWSHost),
+    serviceName: read(grpc, "serviceName") || "grpc",
+    responseType: read(outboundNestedObject(settings, "response"), "type") || "none",
+    domainStrategy: read(settings, "domainStrategy") || "AsIs",
+    socksUser: direct ? read(settings, "user") : read(serverUser, "user"),
+    socksPassword: direct ? read(settings, "pass") : read(serverUser, "pass"),
+    secretKey: read(settings, "secretKey"),
+    tunnelAddress: arrayText(settings.address),
+    peerPublicKey: read(peer, "publicKey"),
+    peerEndpoint: read(peer, "endpoint"),
+    allowedIPs: arrayText(peer.allowedIPs) || fields.allowedIPs,
+    keepAlive: read(peer, "keepAlive"),
+    mtu: read(settings, "mtu"),
+    xhttpMode: read(xhttp, "mode") || "auto",
+    kcpMtu: read(kcp, "mtu") || fields.kcpMtu,
+    kcpTti: read(kcp, "tti") || fields.kcpTti,
+    kcpUplinkCapacity: read(kcp, "uplinkCapacity") || fields.kcpUplinkCapacity,
+    kcpDownlinkCapacity: read(kcp, "downlinkCapacity") || fields.kcpDownlinkCapacity,
+    kcpCwndMultiplier: read(kcp, "cwndMultiplier") || fields.kcpCwndMultiplier,
+    kcpMaxSendingWindow: read(kcp, "maxSendingWindow") || fields.kcpMaxSendingWindow,
+  };
+}
+
+function buildOutboundFromEditor(fields: OutboundEditorFields, draft: string): XrayResource {
+  let parsed: XrayResource = {};
+  try {
+    const candidate = JSON.parse(draft) as unknown;
+    if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) parsed = cleanXrayResource(candidate as XrayResource);
+  } catch {
+    throw new Error("出站高级 JSON 必须是有效的 JSON 对象");
+  }
+  const originalProtocol = typeof parsed.protocol === "string" ? parsed.protocol.trim().toLowerCase() : "";
+  const protocol = fields.protocol.trim().toLowerCase();
+  const tag = fields.tag.trim();
+  if (!tag) throw new Error("Tag 不能为空");
+  if (!protocol) throw new Error("协议不能为空");
+  parsed.tag = tag;
+  parsed.protocol = protocol;
+  if (fields.sendThrough.trim()) parsed.sendThrough = fields.sendThrough.trim();
+  else delete parsed.sendThrough;
+
+  const protocolChanged = Boolean(originalProtocol && originalProtocol !== protocol);
+  const settings = protocolChanged ? {} : outboundNestedObject(parsed, "settings");
+  const stream = outboundNestedObject(parsed, "streamSettings");
+  if (protocol === "freedom") {
+    settings.domainStrategy = fields.domainStrategy || "AsIs";
+    parsed.settings = settings;
+    delete parsed.streamSettings;
+    return parsed;
+  }
+  if (protocol === "blackhole") {
+    if (fields.responseType && fields.responseType !== "none") settings.response = { type: fields.responseType };
+    else delete settings.response;
+    parsed.settings = settings;
+    delete parsed.streamSettings;
+    return parsed;
+  }
+  if (protocol === "dns") {
+    if (fields.address.trim()) {
+      settings.network = fields.network === "udp" ? "udp" : "tcp";
+      settings.address = fields.address.trim();
+    } else {
+      delete settings.network;
+      delete settings.address;
+    }
+    const parsedPort = Number(fields.port);
+    if (Number.isInteger(parsedPort) && parsedPort > 0) settings.port = parsedPort;
+    else delete settings.port;
+    parsed.settings = settings;
+    delete parsed.streamSettings;
+    return parsed;
+  }
+  if (protocol === "loopback") {
+    if (!fields.address.trim()) throw new Error("Loopback 需要填写入站 Tag");
+    settings.inboundTag = fields.address.trim();
+    parsed.settings = settings;
+    delete parsed.streamSettings;
+    return parsed;
+  }
+  if (protocol === "wireguard") {
+    if (!validXrayWireGuardKey(fields.secretKey)) throw new Error("WireGuard Secret key 必须是有效的 32 字节密钥");
+    if (!validXrayWireGuardKey(fields.peerPublicKey)) throw new Error("WireGuard Peer public key 必须是有效的 32 字节密钥");
+    if (!validWireGuardEndpoint(fields.peerEndpoint)) throw new Error("WireGuard Peer endpoint 必须使用 host:port；IPv6 请使用 [address]:port");
+    settings.secretKey = fields.secretKey.trim();
+    const addresses = parseRoutingValues(fields.tunnelAddress);
+    if (addresses.length) settings.address = addresses;
+    else delete settings.address;
+    const existingPeers = Array.isArray(settings.peers) ? settings.peers.filter((item): item is XrayResource => Boolean(item && typeof item === "object" && !Array.isArray(item))) : [];
+    const peer: XrayResource = { ...(existingPeers[0] ?? {}), publicKey: fields.peerPublicKey.trim(), endpoint: fields.peerEndpoint.trim() };
+    const allowedIPs = parseRoutingValues(fields.allowedIPs);
+    if (allowedIPs.length) peer.allowedIPs = allowedIPs;
+    else delete peer.allowedIPs;
+    const keepAlive = Number(fields.keepAlive);
+    if (Number.isFinite(keepAlive) && keepAlive > 0) peer.keepAlive = keepAlive;
+    else delete peer.keepAlive;
+    settings.peers = [peer, ...existingPeers.slice(1)];
+    const mtu = Number(fields.mtu);
+    if (Number.isFinite(mtu) && mtu > 0) settings.mtu = mtu;
+    else delete settings.mtu;
+    parsed.settings = settings;
+    delete parsed.streamSettings;
+    return parsed;
+  }
+
+  const remoteProtocol = ["vless", "vmess"].includes(protocol);
+  const directStyle = settings.address !== undefined && settings.address !== null;
+  const existingVnext = !protocolChanged && Array.isArray(settings.vnext)
+    ? settings.vnext.filter((item): item is XrayResource => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+    : [];
+  const existingServers = !protocolChanged && Array.isArray(settings.servers)
+    ? settings.servers.filter((item): item is XrayResource => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+    : [];
+  const target: XrayResource = remoteProtocol ? { ...(existingVnext[0] ?? {}) } : { ...(existingServers[0] ?? {}) };
+  if (!fields.address.trim()) throw new Error("目标地址不能为空");
+  const parsedPort = Number(fields.port);
+  if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535) throw new Error("目标端口必须在 1 到 65535 之间");
+  target.address = fields.address.trim();
+  target.port = parsedPort;
+  if (remoteProtocol) {
+    if (!fields.id.trim()) throw new Error(`${protocol.toUpperCase()} 需要填写 ID`);
+    if (directStyle) {
+      settings.address = fields.address.trim();
+      settings.port = parsedPort;
+      settings.id = fields.id.trim();
+      if (fields.email.trim()) settings.email = fields.email.trim(); else delete settings.email;
+      if (protocol === "vless") {
+        settings.encryption = fields.encryption || "none";
+        if (fields.flow.trim()) settings.flow = fields.flow.trim(); else delete settings.flow;
+      } else {
+        settings.security = fields.encryption || "auto";
+        delete settings.flow;
+      }
+      delete settings.vnext;
+    } else {
+      const existingUsers = Array.isArray(target.users)
+        ? target.users.filter((item): item is XrayResource => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+        : [];
+      const outboundUser = { ...(existingUsers[0] ?? {}) };
+      outboundUser.id = fields.id.trim();
+      if (fields.email.trim()) outboundUser.email = fields.email.trim(); else delete outboundUser.email;
+      if (protocol === "vless") {
+        outboundUser.encryption = fields.encryption || "none";
+        if (fields.flow.trim()) outboundUser.flow = fields.flow.trim(); else delete outboundUser.flow;
+      } else {
+        outboundUser.security = fields.encryption || "auto";
+        delete outboundUser.flow;
+      }
+      target.users = [outboundUser, ...existingUsers.slice(1)];
+      settings.vnext = [target, ...existingVnext.slice(1)];
+    }
+  } else {
+    const destination = directStyle ? settings : target;
+    destination.address = fields.address.trim();
+    destination.port = parsedPort;
+    if (protocol === "shadowsocks") {
+      destination.method = fields.method.trim() || "aes-128-gcm";
+      destination.password = fields.password.trim();
+      if (!destination.password) throw new Error("Shadowsocks 需要填写密码");
+    } else if (protocol === "trojan") {
+      destination.password = fields.password.trim();
+      if (!destination.password) throw new Error("Trojan 需要填写密码");
+      if (fields.email.trim()) destination.email = fields.email.trim(); else delete destination.email;
+      delete destination.flow;
+    } else if (protocol === "socks" || protocol === "http") {
+      if (directStyle) {
+        if (fields.socksUser.trim()) destination.user = fields.socksUser.trim(); else delete destination.user;
+        if (fields.socksPassword.trim()) destination.pass = fields.socksPassword.trim(); else delete destination.pass;
+      } else if (fields.socksUser.trim() || fields.socksPassword.trim()) {
+        const existingUsers = Array.isArray(target.users) ? target.users : [];
+        const existingUser = existingUsers[0] && typeof existingUsers[0] === "object" ? existingUsers[0] as XrayResource : {};
+        target.users = [{ ...existingUser, user: fields.socksUser.trim(), pass: fields.socksPassword.trim() }, ...existingUsers.slice(1)];
+      } else delete target.users;
+    }
+    if (directStyle) delete settings.servers;
+    else settings.servers = [target, ...existingServers.slice(1)];
+  }
+  parsed.settings = settings;
+  stream.network = fields.network || "tcp";
+  stream.security = fields.security || "none";
+  if (stream.security === "reality") {
+    if (!xrayRealityOutboundNetworks.includes(String(stream.network))) throw new Error("Reality 仅支持 TCP、gRPC 或 XHTTP 传输");
+    if (!validRealityKey(fields.publicKey.trim())) throw new Error("Reality Public key 必须是有效的 43 位 X25519 公钥");
+    if (fields.shortId.trim() && (!/^[0-9a-f]{2,16}$/i.test(fields.shortId.trim()) || fields.shortId.trim().length % 2 !== 0)) throw new Error("Reality Short ID 必须是 2 到 16 位偶数长度十六进制");
+  }
+  const writePathHostTransport = (key: "wsSettings" | "httpupgradeSettings" | "xhttpSettings") => {
+    const transport = outboundNestedObject(stream, key);
+    const headers = outboundNestedObject(transport, "headers");
+    for (const key of Object.keys(headers)) if (key.toLowerCase() === "host") delete headers[key];
+    transport.path = fields.path || "/";
+    if (fields.host.trim()) transport.host = fields.host.trim(); else delete transport.host;
+    if (Object.keys(headers).length) transport.headers = headers; else delete transport.headers;
+    if (key === "xhttpSettings") transport.mode = fields.xhttpMode || "auto";
+    stream[key] = transport;
+  };
+  if (stream.network === "ws") writePathHostTransport("wsSettings");
+  else delete stream.wsSettings;
+  if (stream.network === "httpupgrade") writePathHostTransport("httpupgradeSettings");
+  else delete stream.httpupgradeSettings;
+  if (stream.network === "xhttp") writePathHostTransport("xhttpSettings");
+  else delete stream.xhttpSettings;
+  if (stream.network === "grpc") stream.grpcSettings = { ...(outboundNestedObject(stream, "grpcSettings")), serviceName: fields.serviceName || "grpc" };
+  else delete stream.grpcSettings;
+  if (stream.network === "kcp") {
+    const kcpSettings = outboundNestedObject(stream, "kcpSettings");
+    const setKCPNumber = (key: string, value: string, minimum: number, maximum = Number.MAX_SAFE_INTEGER) => {
+      const parsedValue = Number(value);
+      if (!Number.isInteger(parsedValue) || parsedValue < minimum || parsedValue > maximum) throw new Error(`mKCP ${key} 参数无效`);
+      kcpSettings[key] = parsedValue;
+    };
+    setKCPNumber("mtu", fields.kcpMtu, 576, 1460);
+    setKCPNumber("tti", fields.kcpTti, 10, 1000);
+    setKCPNumber("uplinkCapacity", fields.kcpUplinkCapacity, 0);
+    setKCPNumber("downlinkCapacity", fields.kcpDownlinkCapacity, 0);
+    setKCPNumber("cwndMultiplier", fields.kcpCwndMultiplier, 1);
+    setKCPNumber("maxSendingWindow", fields.kcpMaxSendingWindow, 0);
+    delete kcpSettings.header;
+    delete kcpSettings.seed;
+    stream.kcpSettings = kcpSettings;
+  } else delete stream.kcpSettings;
+  if (stream.security === "tls") stream.tlsSettings = { ...(outboundNestedObject(stream, "tlsSettings")), serverName: fields.serverName || fields.address, fingerprint: fields.fingerprint || "chrome" };
+  else delete stream.tlsSettings;
+  if (stream.security === "reality") {
+    const spiderX = fields.spiderX || "/";
+    if (!spiderX.startsWith("/")) throw new Error("Reality Spider X 必须以 / 开头");
+    const realitySettings: XrayResource = { ...(outboundNestedObject(stream, "realitySettings")), serverName: fields.serverName || fields.address, password: fields.publicKey.trim(), shortId: fields.shortId.trim(), fingerprint: fields.fingerprint || "chrome", spiderX };
+    delete realitySettings.publicKey;
+    stream.realitySettings = realitySettings;
+  } else delete stream.realitySettings;
+  parsed.streamSettings = stream;
+  return parsed;
+}
+
+function outboundTargetSummary(resource: XrayResource): string {
+  const protocol = xrayResourceProtocol(resource).toLowerCase();
+  const settings = outboundNestedObject(resource, "settings");
+  if (protocol === "freedom") return String(settings.domainStrategy || "AsIs");
+  if (protocol === "blackhole") return "拒绝流量";
+  if (protocol === "dns") {
+    const address = String(settings.address || "系统 DNS");
+    return settings.port ? `${address}:${String(settings.port)}` : address;
+  }
+  if (protocol === "loopback") return String(settings.inboundTag || "未指定入站");
+  if (protocol === "wireguard") {
+    const peers = Array.isArray(settings.peers) ? settings.peers : [];
+    const peer = peers[0] && typeof peers[0] === "object" ? peers[0] as XrayResource : {};
+    return String(peer.endpoint || "WireGuard peer");
+  }
+  const direct = settings.address !== undefined && settings.address !== null;
+  const target = direct ? settings : protocol === "vless" || protocol === "vmess" ? outboundFirstVnext(resource) : outboundFirstServer(resource);
+  const address = String(target.address || "未配置地址");
+  return target.port ? `${address}:${String(target.port)}` : address;
+}
+
+function outboundTransportSummary(resource: XrayResource): { network: string; security: string } {
+  const stream = outboundNestedObject(resource, "streamSettings");
+  return {
+    network: String(stream.network || "tcp").toUpperCase(),
+    security: String(stream.security || "none").toUpperCase(),
+  };
 }
 
 type OpenAdvancedOptions = { tab?: "warp"; serverID?: number };
@@ -2684,6 +3118,8 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
   const [listen, setListen] = useState("");
   const [port, setPort] = useState("");
   const [jsonDraft, setJsonDraft] = useState("");
+  const [outboundEditorTab, setOutboundEditorTab] = useState<OutboundEditorTab>("basics");
+  const [outboundFields, setOutboundFields] = useState<OutboundEditorFields>(() => outboundEditorDefaults());
   const [creationPreset, setCreationPreset] = useState<InboundCreationPreset>("advanced");
   const [secureDraft, setSecureDraft] = useState<SecureInboundDraft>(() => newSecureInboundDraft());
   const [trojanDraft, setTrojanDraft] = useState<TrojanInboundDraft>(() => newTrojanInboundDraft());
@@ -2863,6 +3299,8 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
     setListen(secureCreate ? "0.0.0.0" : typeof value.listen === "string" ? value.listen : "");
     setPort(secureCreate ? "443" : typeof value.port === "number" || typeof value.port === "string" ? String(value.port) : "");
     setJsonDraft(JSON.stringify(value, null, 2));
+    setOutboundEditorTab("basics");
+    setOutboundFields(kind === "outbound" ? outboundEditorFieldsFrom(value) : outboundEditorDefaults());
     setEditorError("");
     setExamplesError("");
     setDomainsError("");
@@ -2973,6 +3411,21 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
   const trojanFields = useMemo<TrojanInboundFields>(() => ({ ...trojanDraft, tag, port }), [port, tag, trojanDraft]);
   const wireGuardEndpoint = serverDomain.trim() || serverIPv4.trim() || serverIPv6.trim();
   const wireGuardEndpointDisplay = wireGuardEndpoint.includes(":") && !wireGuardEndpoint.startsWith("[") ? `[${wireGuardEndpoint}]` : wireGuardEndpoint;
+  const setOutboundField = <K extends keyof OutboundEditorFields>(key: K, value: OutboundEditorFields[K]) => {
+    setOutboundFields((current) => ({ ...current, [key]: value }));
+  };
+  const selectOutboundProtocol = (next: string) => {
+    setProtocol(next);
+    setOutboundFields((current) => ({
+      ...current,
+      protocol: next,
+      encryption: next === "vmess" && current.protocol !== "vmess"
+        ? "auto"
+        : next === "vless" && current.protocol !== "vless"
+          ? "none"
+          : current.encryption,
+    }));
+  };
 
   const securePreview = useMemo(() => {
     if (kind !== "inbound" || editor?.mode !== "create" || creationPreset === "advanced") return "";
@@ -2993,6 +3446,9 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
       if (creationPreset === "wireguard") return buildWireGuardInbound(wireGuardFields);
       if (creationPreset === "trojan") return buildTrojanInbound(trojanFields);
       return buildSecureInbound(creationPreset, { tag, port }, secureDraft);
+    }
+    if (kind === "outbound" && outboundEditorTab === "basics") {
+      return buildOutboundFromEditor({ ...outboundFields, tag, protocol }, jsonDraft);
     }
     const parsed = JSON.parse(jsonDraft) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`${label}配置必须是 JSON 对象`);
@@ -3110,7 +3566,15 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
       <div><Button variant="ghost" onClick={() => void load()} disabled={loading || working}><RefreshCw size={15} />刷新</Button><Button onClick={() => openEditor("create")} disabled={working}><Plus size={16} />添加{label}</Button></div>
     </div>
     {listError ? <ErrorState message={listError} onRetry={() => void load()} /> : null}
-    {loading ? <div className="center-state"><Spinner label={`正在加载${label}`} /></div> : items.length === 0 ? <EmptyState icon={kind === "inbound" ? <ArrowDownToLine size={23} /> : <ArrowUpFromLine size={23} />} title={`暂无${label}`} description={`此列表直接读取服务器 #${serverId} 当前 Xray 配置`} action={<Button onClick={() => openEditor("create")}><Plus size={16} />添加{label}</Button>} /> : <div className="xray-resource-list" role="list" aria-label={`${label}列表`}>
+    {loading ? <div className="center-state"><Spinner label={`正在加载${label}`} /></div> : items.length === 0 ? <EmptyState icon={kind === "inbound" ? <ArrowDownToLine size={23} /> : <ArrowUpFromLine size={23} />} title={`暂无${label}`} description={`此列表直接读取服务器 #${serverId} 当前 Xray 配置`} action={<Button onClick={() => openEditor("create")}><Plus size={16} />添加{label}</Button>} /> : kind === "outbound" ? <div className="xray3-table-wrap" role="region" aria-label="出站列表"><table className="xray3-table xray3-outbound-table"><thead><tr><th>#</th><th>Tag</th><th>协议</th><th>目标</th><th>传输</th><th>安全</th><th aria-label="操作" /></tr></thead><tbody>
+      {items.map((item, index) => {
+        const itemTag = xrayResourceTag(item);
+        const itemProtocol = xrayResourceProtocol(item);
+        const generated = item._generated_tag === true;
+        const transport = outboundTransportSummary(item);
+        return <tr key={`${itemTag}-${index}`}><td><span className="xray3-rule-order"><strong>{index + 1}</strong></span></td><td><strong className="xray3-primary">{itemTag || "未命名出站"}</strong></td><td><Badge tone="info">{itemProtocol || "未知"}</Badge></td><td title={outboundTargetSummary(item)}>{outboundTargetSummary(item)}</td><td>{transport.network}</td><td><Badge tone={transport.security === "NONE" ? "neutral" : "good"}>{transport.security}</Badge></td><td><div className="xray3-row-actions"><IconButton label={`查看出站 ${itemTag || index + 1}`} onClick={() => openEditor("view", item)}><Eye size={15} /></IconButton><IconButton label={`编辑出站 ${itemTag || index + 1}`} onClick={() => openEditor("edit", item)} disabled={!itemTag || generated || working}><Pencil size={15} /></IconButton><IconButton label={`删除出站 ${itemTag || index + 1}`} onClick={() => setDeleting(item)} disabled={!itemTag || generated || working}><Trash2 size={15} /></IconButton></div></td></tr>;
+      })}
+    </tbody></table></div> : <div className="xray-resource-list" role="list" aria-label={`${label}列表`}>
       {items.map((item, index) => {
         const itemTag = xrayResourceTag(item);
         const itemProtocol = xrayResourceProtocol(item);
@@ -3169,10 +3633,33 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
             </> : <Field label="WebSocket 路径" hint="必须以 / 开头；Agent 保存时会安全随机化最终路径"><input required aria-label="WebSocket 路径" value={secureDraft.path} onChange={(event) => setSecureDraft({ ...secureDraft, path: event.target.value })} placeholder="/ws/path" /></Field>}
           </>}
           <details className="secure-inbound-preview"><summary>查看生成的 Xray JSON</summary>{securePreview ? <textarea className="service-code-editor xray-resource-json" aria-label="生成的入站 JSON" readOnly value={securePreview} /> : <small>字段与密钥完整后显示最终配置</small>}</details>
+        </> : kind === "outbound" ? <>
+          <div className="xray-editor-tabs" role="tablist" aria-label="出站编辑模式"><button type="button" role="tab" aria-selected={outboundEditorTab === "basics"} className={outboundEditorTab === "basics" ? "is-active" : ""} onClick={() => setOutboundEditorTab("basics")}>基础设置</button><button type="button" role="tab" aria-selected={outboundEditorTab === "json"} className={outboundEditorTab === "json" ? "is-active" : ""} onClick={() => setOutboundEditorTab("json")}>JSON</button></div>
+          <div className="form-grid two"><Field label="Tag"><input required aria-label="出站 Tag" value={tag} onChange={(event) => { setTag(event.target.value); setOutboundField("tag", event.target.value); }} placeholder="unique-tag" /></Field><Field label="协议"><select aria-label="出站协议" value={protocol} onChange={(event) => selectOutboundProtocol(event.target.value)}><option value="">选择协议</option>{xrayOutboundProtocols.map((value) => <option key={value} value={value}>{value}</option>)}</select></Field></div>
+          {outboundEditorTab === "basics" ? <>
+            <div className="form-grid two"><Field label="Send through" hint="可选，本地出站地址"><input aria-label="出站 Send through" value={outboundFields.sendThrough} onChange={(event) => setOutboundField("sendThrough", event.target.value)} placeholder="local IP" /></Field>{["freedom", "blackhole", "dns", "loopback", "wireguard"].includes(protocol) ? <Field label={protocol === "loopback" ? "Inbound tag" : "说明"} hint={protocol === "loopback" ? "将流量回送到指定入站" : protocol === "wireguard" ? "连接目标请在下方 Peer endpoint 填写" : "此协议无需远端地址"}><input aria-label={protocol === "loopback" ? "Loopback 入站 Tag" : "出站说明"} value={protocol === "loopback" ? outboundFields.address : ""} onChange={(event) => protocol === "loopback" && setOutboundField("address", event.target.value)} placeholder={protocol === "loopback" ? "inbound-tag" : "由协议决定"} disabled={protocol !== "loopback"} /></Field> : <Field label="目标地址"><input required aria-label="出站目标地址" value={outboundFields.address} onChange={(event) => setOutboundField("address", event.target.value)} placeholder="server.example.com" /></Field>}</div>
+            {["freedom"].includes(protocol) ? <Field label="Freedom 域名策略"><select aria-label="Freedom 域名策略（出站）" value={outboundFields.domainStrategy} onChange={(event) => setOutboundField("domainStrategy", event.target.value)}><option>AsIs</option><option>UseIP</option><option>UseIPv4</option><option>UseIPv6</option><option>ForceIPv4</option><option>ForceIPv6</option></select></Field> : null}
+            {["blackhole"].includes(protocol) ? <Field label="响应类型"><select aria-label="Blackhole 响应类型" value={outboundFields.responseType} onChange={(event) => setOutboundField("responseType", event.target.value)}><option value="none">无</option><option value="http">HTTP 403</option></select></Field> : null}
+            {["dns"].includes(protocol) ? <div className="form-grid two"><Field label="DNS 地址"><input aria-label="DNS 出站地址" value={outboundFields.address} onChange={(event) => setOutboundField("address", event.target.value)} placeholder="1.1.1.1" /></Field><Field label="端口"><input type="number" min="1" max="65535" aria-label="DNS 出站端口" value={outboundFields.port} onChange={(event) => setOutboundField("port", event.target.value)} placeholder="53" /></Field></div> : null}
+            {["loopback"].includes(protocol) ? null : null}
+            {["socks", "http", "shadowsocks", "vless", "vmess", "trojan"].includes(protocol) ? <div className="form-grid two"><Field label="端口"><input type="number" min="1" max="65535" required aria-label="出站目标端口" value={outboundFields.port} onChange={(event) => setOutboundField("port", event.target.value)} placeholder="443" /></Field>{["socks", "http"].includes(protocol) ? <Field label="用户名"><input aria-label="出站用户名" value={outboundFields.socksUser} onChange={(event) => setOutboundField("socksUser", event.target.value)} /></Field> : <Field label={protocol === "shadowsocks" ? "加密方法" : "Email / 备注"}><input aria-label={protocol === "shadowsocks" ? "Shadowsocks 加密方法" : "出站 Email"} value={protocol === "shadowsocks" ? outboundFields.method : outboundFields.email} onChange={(event) => setOutboundField(protocol === "shadowsocks" ? "method" : "email", event.target.value)} placeholder={protocol === "shadowsocks" ? "aes-128-gcm" : "optional"} /></Field>}</div> : null}
+            {["socks", "http"].includes(protocol) ? <Field label="密码"><input type="password" aria-label="出站密码" value={outboundFields.socksPassword} onChange={(event) => setOutboundField("socksPassword", event.target.value)} /></Field> : null}
+            {["shadowsocks", "trojan"].includes(protocol) ? <Field label="密码"><input type="password" aria-label={protocol === "trojan" ? "Trojan 密码" : "Shadowsocks 密码"} value={outboundFields.password} onChange={(event) => setOutboundField("password", event.target.value)} /></Field> : null}
+            {["vless", "vmess"].includes(protocol) ? <><div className="form-grid two"><Field label="ID / UUID"><input required aria-label="出站 ID" value={outboundFields.id} onChange={(event) => setOutboundField("id", event.target.value)} placeholder="UUID" /></Field><Field label={protocol === "vmess" ? "Security" : "Encryption"}><input aria-label={protocol === "vmess" ? "出站 VMess Security" : "出站 Encryption"} value={outboundFields.encryption} onChange={(event) => setOutboundField("encryption", event.target.value)} placeholder={protocol === "vmess" ? "auto" : "none"} /></Field></div>{protocol === "vless" ? <Field label="Flow" hint="Reality Vision 使用 xtls-rprx-vision"><select aria-label="出站 VLESS Flow" value={outboundFields.flow} onChange={(event) => setOutboundField("flow", event.target.value)}><option value="">无</option><option value="xtls-rprx-vision">xtls-rprx-vision</option></select></Field> : null}</> : null}
+            {["vless", "vmess", "trojan", "shadowsocks", "socks", "http"].includes(protocol) ? <div className="form-grid two"><Field label="Transmission"><select aria-label="出站传输" value={outboundFields.network} onChange={(event) => { const next = event.target.value; setOutboundFields((current) => ({ ...current, network: next, security: current.security === "reality" && !xrayRealityOutboundNetworks.includes(next) ? "none" : current.security })); }}>{xrayOutboundNetworks.map((value) => <option key={value} value={value}>{value === "tcp" ? "TCP (RAW)" : value.toUpperCase()}</option>)}</select></Field><Field label="Security"><div className="xray-security-segments" role="group" aria-label="出站安全">{xrayOutboundSecurities.map((value) => { const realityDisabled = value === "reality" && !xrayRealityOutboundNetworks.includes(outboundFields.network); return <button key={value} type="button" className={outboundFields.security === value ? "is-active" : ""} aria-pressed={outboundFields.security === value} disabled={realityDisabled} title={realityDisabled ? "Reality 仅支持 TCP、gRPC 或 XHTTP" : undefined} onClick={() => setOutboundField("security", value)}>{value === "none" ? "None" : value === "tls" ? "TLS" : "Reality"}</button>; })}</div></Field></div> : null}
+            {["ws", "httpupgrade", "xhttp"].includes(outboundFields.network) ? <div className="form-grid two"><Field label={`${outboundFields.network === "ws" ? "WebSocket" : outboundFields.network === "httpupgrade" ? "HTTPUpgrade" : "XHTTP"} 路径`}><input aria-label={`出站 ${outboundFields.network === "ws" ? "WebSocket" : outboundFields.network === "httpupgrade" ? "HTTPUpgrade" : "XHTTP"} 路径`} value={outboundFields.path} onChange={(event) => setOutboundField("path", event.target.value)} placeholder="/" /></Field><Field label="Host"><input aria-label="出站 Host" value={outboundFields.host} onChange={(event) => setOutboundField("host", event.target.value)} /></Field></div> : null}
+            {outboundFields.network === "xhttp" ? <Field label="XHTTP Mode"><select aria-label="出站 XHTTP Mode" value={outboundFields.xhttpMode} onChange={(event) => setOutboundField("xhttpMode", event.target.value)}><option value="auto">auto</option><option value="packet-up">packet-up</option><option value="stream-up">stream-up</option><option value="stream-one">stream-one</option></select></Field> : null}
+            {outboundFields.network === "grpc" ? <Field label="gRPC Service Name"><input aria-label="出站 gRPC Service Name" value={outboundFields.serviceName} onChange={(event) => setOutboundField("serviceName", event.target.value)} /></Field> : null}
+            {outboundFields.network === "kcp" ? <div className="form-grid three"><Field label="mKCP MTU"><input type="number" min="576" max="1460" aria-label="出站 mKCP MTU" value={outboundFields.kcpMtu} onChange={(event) => setOutboundField("kcpMtu", event.target.value)} /></Field><Field label="TTI (ms)"><input type="number" min="10" max="1000" aria-label="出站 mKCP TTI" value={outboundFields.kcpTti} onChange={(event) => setOutboundField("kcpTti", event.target.value)} /></Field><Field label="拥塞窗口倍数"><input type="number" min="1" aria-label="出站 mKCP 拥塞窗口倍数" value={outboundFields.kcpCwndMultiplier} onChange={(event) => setOutboundField("kcpCwndMultiplier", event.target.value)} /></Field><Field label="上行容量 (Mbps)"><input type="number" min="0" aria-label="出站 mKCP 上行容量" value={outboundFields.kcpUplinkCapacity} onChange={(event) => setOutboundField("kcpUplinkCapacity", event.target.value)} /></Field><Field label="下行容量 (Mbps)"><input type="number" min="0" aria-label="出站 mKCP 下行容量" value={outboundFields.kcpDownlinkCapacity} onChange={(event) => setOutboundField("kcpDownlinkCapacity", event.target.value)} /></Field><Field label="最大发送窗口"><input type="number" min="0" aria-label="出站 mKCP 最大发送窗口" value={outboundFields.kcpMaxSendingWindow} onChange={(event) => setOutboundField("kcpMaxSendingWindow", event.target.value)} /></Field></div> : null}
+            {outboundFields.security === "tls" || outboundFields.security === "reality" ? <div className="form-grid two"><Field label="Server name / SNI"><input aria-label="出站 Server name" value={outboundFields.serverName} onChange={(event) => setOutboundField("serverName", event.target.value)} placeholder={outboundFields.address || "example.com"} /></Field><Field label="Fingerprint"><input aria-label="出站 Fingerprint" value={outboundFields.fingerprint} onChange={(event) => setOutboundField("fingerprint", event.target.value)} /></Field></div> : null}
+            {outboundFields.security === "reality" ? <div className="form-grid three"><Field label="Public key" hint="43 位 X25519 公钥"><input required aria-label="出站 Reality Public key" value={outboundFields.publicKey} onChange={(event) => setOutboundField("publicKey", event.target.value)} /></Field><Field label="Short ID" hint="可留空；填写时为偶数长度十六进制"><input aria-label="出站 Reality Short ID" value={outboundFields.shortId} onChange={(event) => setOutboundField("shortId", event.target.value)} /></Field><Field label="Spider X"><input aria-label="出站 Reality Spider X" value={outboundFields.spiderX} onChange={(event) => setOutboundField("spiderX", event.target.value)} /></Field></div> : null}
+            {protocol === "wireguard" ? <><div className="form-grid two"><Field label="Secret key" hint="64 位十六进制或 32 字节 Base64 密钥"><input type="password" required aria-label="WireGuard Secret key" value={outboundFields.secretKey} onChange={(event) => setOutboundField("secretKey", event.target.value)} /></Field><Field label="隧道地址" hint="多个地址用逗号分隔"><input aria-label="WireGuard 隧道地址" value={outboundFields.tunnelAddress} onChange={(event) => setOutboundField("tunnelAddress", event.target.value)} placeholder="10.0.0.2/32" /></Field></div><div className="form-grid two"><Field label="Peer public key" hint="保留原有预共享密钥与其他 Peer"><input required aria-label="WireGuard Peer public key" value={outboundFields.peerPublicKey} onChange={(event) => setOutboundField("peerPublicKey", event.target.value)} /></Field><Field label="Peer endpoint" hint="IPv6 使用 [address]:port"><input required aria-label="WireGuard Peer endpoint" value={outboundFields.peerEndpoint} onChange={(event) => setOutboundField("peerEndpoint", event.target.value)} placeholder="host:51820" /></Field></div><div className="form-grid three"><Field label="Allowed IPs"><input aria-label="WireGuard Allowed IPs" value={outboundFields.allowedIPs} onChange={(event) => setOutboundField("allowedIPs", event.target.value)} /></Field><Field label="Keepalive"><input type="number" min="0" max="4294967295" aria-label="WireGuard Keepalive" value={outboundFields.keepAlive} onChange={(event) => setOutboundField("keepAlive", event.target.value)} /></Field><Field label="MTU"><input type="number" min="576" max="9000" aria-label="WireGuard 出站 MTU" value={outboundFields.mtu} onChange={(event) => setOutboundField("mtu", event.target.value)} /></Field></div></> : null}
+          </> : null}
+          <details className="xray-advanced-disclosure" open={outboundEditorTab === "json"}><summary>高级 JSON（可选）</summary><Field label="高级 JSON" hint="用于保留协议尚未覆盖的 Xray 字段；基础字段保存时会覆盖同名字段。"><textarea className="service-code-editor xray-resource-json" aria-label="出站高级 JSON" spellCheck={false} value={jsonDraft} onChange={(event) => { setJsonDraft(event.target.value); setOutboundEditorTab("json"); }} /></Field></details>
         </> : <>
-          <div className="form-grid two"><Field label="Tag"><input required aria-label={`${label} Tag`} value={tag} onChange={(event) => setTag(event.target.value)} placeholder={kind === "inbound" ? "vless-in" : "proxy-out"} /></Field><Field label="协议"><select aria-label={`${label}协议`} value={protocol} onChange={(event) => setProtocol(event.target.value)}>{protocol && !protocols.includes(protocol) ? <option value={protocol}>{protocol}</option> : null}{protocols.map((value) => <option key={value} value={value}>{value}</option>)}</select></Field></div>
-          {kind === "inbound" ? <div className="form-grid two"><Field label="监听地址"><input aria-label="入站监听地址" value={listen} onChange={(event) => setListen(event.target.value)} placeholder="0.0.0.0" /></Field><Field label="监听端口"><input type="number" min="1" max="65535" required aria-label="入站监听端口" value={port} onChange={(event) => setPort(event.target.value)} /></Field></div> : null}
-          <Field label="高级 JSON" hint="可配置 settings、streamSettings、sniffing、mux 等完整 Xray 字段；必须是单个对象。"><textarea className="service-code-editor xray-resource-json" aria-label={`${label}高级 JSON`} spellCheck={false} value={jsonDraft} onChange={(event) => setJsonDraft(event.target.value)} /></Field>
+          <div className="form-grid two"><Field label="Tag"><input required aria-label={`${label} Tag`} value={tag} onChange={(event) => setTag(event.target.value)} placeholder="vless-in" /></Field><Field label="协议"><select aria-label={`${label}协议`} value={protocol} onChange={(event) => setProtocol(event.target.value)}>{protocol && !protocols.includes(protocol) ? <option value={protocol}>{protocol}</option> : null}{protocols.map((value) => <option key={value} value={value}>{value}</option>)}</select></Field></div>
+          <div className="form-grid two"><Field label="监听地址"><input aria-label="入站监听地址" value={listen} onChange={(event) => setListen(event.target.value)} placeholder="0.0.0.0" /></Field><Field label="监听端口"><input type="number" min="1" max="65535" required aria-label="入站监听端口" value={port} onChange={(event) => setPort(event.target.value)} /></Field></div>
+          <Field label="高级 JSON" hint="可配置完整 Xray 入站字段；必须是单个对象。"><textarea className="service-code-editor xray-resource-json" aria-label={`${label}高级 JSON`} spellCheck={false} value={jsonDraft} onChange={(event) => setJsonDraft(event.target.value)} /></Field>
         </>}
         <div className="dialog-actions"><Button type="button" variant="secondary" onClick={closeEditor} disabled={working}>取消</Button><Button type="submit" disabled={working || (creationPreset === "reality" && keyWorking !== "") || (creationPreset === "wireguard" && wireGuardKeyWorking) || (creationPreset === "trojan" && trojanDraft.combination === "tcp-reality" && trojanKeyWorking)}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />{editor.mode === "edit" ? "保存并重建" : `创建${label}`}</>}</Button></div>
       </form>}
@@ -3180,18 +3667,6 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
     {deleting ? <ConfirmDialog title={`删除${label}`} description={`将从服务器 #${serverId} 的 Xray 运行时和配置文件中删除“${xrayResourceTag(deleting)}”。`} confirmLabel="确认删除" working={working} onCancel={() => !working && setDeleting(null)} onConfirm={() => void remove()} /> : null}
   </div>;
 }
-
-const routingMatchFields: Array<{ key: string; label: string }> = [
-  { key: "domain", label: "域名" },
-  { key: "ip", label: "IP" },
-  { key: "port", label: "端口" },
-  { key: "network", label: "网络" },
-  { key: "inboundTag", label: "入站" },
-  { key: "user", label: "用户" },
-  { key: "protocol", label: "协议" },
-  { key: "outboundTag", label: "出站" },
-  { key: "balancerTag", label: "负载均衡" },
-];
 
 function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: Notify }) {
   const endpoint = `/api/admin/remote/routing?server_id=${serverId}`;
@@ -3203,6 +3678,10 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
   const [domain, setDomain] = useState("");
   const [ip, setIP] = useState("");
   const [port, setPort] = useState("");
+  const [sourceIP, setSourceIP] = useState("");
+  const [sourcePort, setSourcePort] = useState("");
+  const [vlessRoute, setVlessRoute] = useState("");
+  const [attributes, setAttributes] = useState<Array<[string, string]>>([]);
   const [network, setNetwork] = useState("");
   const [inboundTag, setInboundTag] = useState("");
   const [user, setUser] = useState("");
@@ -3215,6 +3694,7 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
   const [editorError, setEditorError] = useState("");
   const [working, setWorking] = useState(false);
   const [deleting, setDeleting] = useState<{ index: number; rule: XrayRoutingRule } | null>(null);
+  const [editing, setEditing] = useState<{ index: number; rule: XrayRoutingRule } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -3252,6 +3732,10 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
     setDomain("");
     setIP("");
     setPort("");
+    setSourceIP("");
+    setSourcePort("");
+    setVlessRoute("");
+    setAttributes([]);
     setNetwork("");
     setInboundTag("");
     setUser("");
@@ -3262,14 +3746,37 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
     setEditorError("");
   };
 
-  const openEditor = () => {
+  const openEditor = (existing?: { index: number; rule: XrayRoutingRule }) => {
     resetEditor();
+    setEditing(existing ?? null);
+    if (existing) {
+      const rule = existing.rule;
+      const read = (key: string) => routingRuleValues(rule, key).join(", ");
+      setDomain(read("domain"));
+      setIP(read("ip"));
+      setPort(read("port"));
+      setSourceIP(read("source"));
+      setSourcePort(read("sourcePort"));
+      setVlessRoute(read("vlessRoute"));
+      setInboundTag(read("inboundTag"));
+      setUser(read("user"));
+      setProtocol(read("protocol"));
+      setOutboundTag(typeof rule.outboundTag === "string" ? rule.outboundTag : "");
+      setBalancerTag(typeof rule.balancerTag === "string" ? rule.balancerTag : "");
+      setNetwork(typeof rule.network === "string" ? rule.network : "");
+      const existingAttributes = rule.attrs && typeof rule.attrs === "object" && !Array.isArray(rule.attrs)
+        ? Object.entries(rule.attrs as Record<string, unknown>).map(([key, value]) => [key, String(value)] as [string, string])
+        : [];
+      setAttributes(existingAttributes);
+      setJsonDraft(JSON.stringify(rule, null, 2));
+    }
     setEditorOpen(true);
   };
 
   const closeEditor = () => {
     if (working) return;
     setEditorOpen(false);
+    setEditing(null);
     setEditorError("");
   };
 
@@ -3280,6 +3787,7 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
     rule.type = "field";
 
     const listFields: Array<[string, string]> = [
+      ["source", sourceIP],
       ["domain", domain],
       ["ip", ip],
       ["inboundTag", inboundTag],
@@ -3294,8 +3802,23 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
 
     if (port.trim()) rule.port = port.trim();
     else delete rule.port;
+    if (sourcePort.trim()) rule.sourcePort = sourcePort.trim();
+    else delete rule.sourcePort;
+    const normalizedVlessRoute = normalizeRoutingPortList(vlessRoute, "VLESS route");
+    if (normalizedVlessRoute) rule.vlessRoute = normalizedVlessRoute;
+    else delete rule.vlessRoute;
     if (network.trim()) rule.network = network.trim();
     else delete rule.network;
+    const normalizedAttributes: Record<string, string> = {};
+    for (const [rawKey, rawValue] of attributes) {
+      const key = rawKey.trim();
+      if (!key && !rawValue.trim()) continue;
+      if (!key) throw new Error("路由属性名称不能为空");
+      if (Object.prototype.hasOwnProperty.call(normalizedAttributes, key)) throw new Error(`路由属性名称重复：${key}`);
+      normalizedAttributes[key] = rawValue;
+    }
+    if (Object.keys(normalizedAttributes).length) rule.attrs = normalizedAttributes;
+    else delete rule.attrs;
 
     const normalizedOutbound = outboundTag.trim();
     const normalizedBalancer = balancerTag.trim();
@@ -3323,9 +3846,13 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
 
     setWorking(true);
     try {
-      assertSuccess(await api.post<ActionResponse>(endpoint, { action: "add_rule", rule }), "创建路由规则失败");
-      notify("路由规则已创建");
+      const request = editing
+        ? { action: "replace_rule_hot", index: editing.index, expected_rule: editing.rule, rule }
+        : { action: "add_rule_hot", rule };
+      assertSuccess(await api.post<ActionResponse>(endpoint, request), editing ? "更新路由规则失败" : "创建路由规则失败");
+      notify(editing ? "路由规则已更新" : "路由规则已创建");
       setEditorOpen(false);
+      setEditing(null);
       await load();
     } catch (reason) {
       setEditorError(messageFrom(reason, "创建路由规则失败"));
@@ -3339,7 +3866,7 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
     setWorking(true);
     setListError("");
     try {
-      assertSuccess(await api.post<ActionResponse>(endpoint, { action: "remove_rule", index: deleting.index }), "删除路由规则失败");
+      assertSuccess(await api.post<ActionResponse>(endpoint, { action: "remove_rule_hot", index: deleting.index, expected_rule: deleting.rule }), "删除路由规则失败");
       notify(`路由规则 #${deleting.index + 1} 已删除`);
       setDeleting(null);
       await load();
@@ -3351,38 +3878,53 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
     }
   };
 
+  const moveRule = async (index: number, direction: -1 | 1) => {
+    const target = index + direction;
+    if (target < 0 || target >= rules.length || working) return;
+    setWorking(true);
+    setListError("");
+    try {
+      assertSuccess(await api.post<ActionResponse>(endpoint, { action: "move_rule_hot", from: index, to: target, expected_rule: rules[index] }), "调整路由顺序失败");
+      notify("路由顺序已调整");
+      await load();
+    } catch (reason) {
+      setListError(messageFrom(reason, "调整路由顺序失败"));
+    } finally {
+      setWorking(false);
+    }
+  };
+
   return <div className="xray-resource-workbench xray-routing-workbench">
     <div className="xray-resource-head">
       <span><strong>路由规则管理</strong><small>目标服务器 #{serverId} · {rules.length} 条{domainStrategy ? ` · ${domainStrategy}` : ""}</small></span>
-      <div><Button variant="ghost" onClick={() => void load()} disabled={loading || working}><RefreshCw size={15} />刷新</Button><Button onClick={openEditor} disabled={working}><Plus size={16} />添加规则</Button></div>
+      <div><Button variant="ghost" onClick={() => void load()} disabled={loading || working}><RefreshCw size={15} />刷新</Button><Button onClick={() => openEditor()} disabled={working}><Plus size={16} />添加规则</Button></div>
     </div>
     {listError ? <ErrorState message={listError} onRetry={() => void load()} /> : null}
-    {loading ? <div className="center-state"><Spinner label="正在加载路由规则" /></div> : rules.length === 0 ? <EmptyState icon={<Network size={23} />} title="暂无路由规则" description={`此列表直接读取服务器 #${serverId} 当前 Xray 配置`} action={<Button onClick={openEditor}><Plus size={16} />添加规则</Button>} /> : <div className="routing-rule-list" role="list" aria-label="路由规则列表">
+    {loading ? <div className="center-state"><Spinner label="正在加载路由规则" /></div> : rules.length === 0 ? <EmptyState icon={<Network size={23} />} title="暂无路由规则" description={`此列表直接读取服务器 #${serverId} 当前 Xray 配置`} action={<Button onClick={() => openEditor()}><Plus size={16} />添加规则</Button>} /> : <div className="xray3-table-wrap" role="region" aria-label="路由规则列表"><table className="xray3-table"><thead><tr><th>#</th><th>来源</th><th>网络</th><th>目标</th><th>入站</th><th>出站</th><th>负载均衡</th><th aria-label="操作" /></tr></thead><tbody>
       {rules.map((rule, index) => {
-        const target = typeof rule.outboundTag === "string" ? rule.outboundTag : typeof rule.balancerTag === "string" ? rule.balancerTag : "未指定目标";
-        const usesBalancer = typeof rule.balancerTag === "string" && !rule.outboundTag;
-        return <Surface className="routing-rule-row" key={`${target}-${index}`}>
-          <div className="routing-rule-head"><span><strong>规则 #{index + 1}</strong><small>{usesBalancer ? "负载均衡" : "出站"} · {target}</small></span><div><Badge tone={rule.type === "field" ? "good" : "neutral"}>{typeof rule.type === "string" ? rule.type : "field"}</Badge><IconButton label={`删除路由规则 ${index + 1}`} onClick={() => setDeleting({ index, rule })} disabled={working}><Trash2 size={15} /></IconButton></div></div>
-          <dl className="routing-rule-fields">{routingMatchFields.map(({ key, label }) => {
-            const values = routingRuleValues(rule, key);
-            return <div key={key} className={values.length ? "" : "is-empty"}><dt>{label}</dt><dd>{values.length ? values.join(" · ") : "不限"}</dd></div>;
-          })}</dl>
-          <details className="routing-rule-json"><summary>查看完整 JSON</summary><pre>{JSON.stringify(rule, null, 2)}</pre></details>
-        </Surface>;
+        const target = typeof rule.outboundTag === "string" ? rule.outboundTag : "—";
+        const balancer = typeof rule.balancerTag === "string" ? rule.balancerTag : "—";
+        const networkValue = routingRuleValues(rule, "network").join(" · ") || "—";
+        const valuesCell = (...keys: string[]) => {
+          const entries = keys.flatMap((key) => routingRuleValues(rule, key).map((value) => ({ key, value })));
+          return entries.length ? entries.map((entry, entryIndex) => <span key={`${entry.key}-${entry.value}-${entryIndex}`}>{entry.value}</span>) : "—";
+        };
+        return <tr key={`${target}-${index}`}><td><span className="xray3-rule-order"><GripVertical size={14} /><strong>{index + 1}</strong></span></td><td><span className="xray3-cell-stack">{valuesCell("source", "sourcePort")}</span></td><td>{networkValue}</td><td><span className="xray3-cell-stack">{valuesCell("ip", "domain", "port")}</span></td><td><span className="xray3-cell-stack">{valuesCell("inboundTag", "user")}</span></td><td><Badge tone={target === "—" ? "neutral" : "good"}>{target}</Badge></td><td><Badge tone={balancer === "—" ? "neutral" : "info"}>{balancer}</Badge></td><td><div className="xray3-row-actions"><IconButton label={`上移路由规则 ${index + 1}`} onClick={() => void moveRule(index, -1)} disabled={working || index === 0}><ArrowUp size={14} /></IconButton><IconButton label={`下移路由规则 ${index + 1}`} onClick={() => void moveRule(index, 1)} disabled={working || index === rules.length - 1}><ArrowDown size={14} /></IconButton><IconButton label={`编辑路由规则 ${index + 1}`} onClick={() => openEditor({ index, rule })} disabled={working}><Pencil size={15} /></IconButton><IconButton label={`删除路由规则 ${index + 1}`} onClick={() => setDeleting({ index, rule })} disabled={working}><Trash2 size={15} /></IconButton></div></td></tr>;
       })}
-    </div>}
-    {editorOpen ? <Dialog title="添加路由规则" description="填写匹配条件和唯一目标；基础字段会覆盖高级 JSON 中的同名字段" onClose={closeEditor} dismissible={!working} wide><div className="xray-resource-dialog routing-rule-editor">
+    </tbody></table></div>}
+    {editorOpen ? <Dialog title={editing ? "编辑路由规则" : "添加路由规则"} description="按 3x-ui 的字段顺序填写匹配条件，规则顺序从上到下执行" onClose={closeEditor} dismissible={!working} wide><div className="xray-resource-dialog routing-rule-editor">
       {editorError ? <ErrorState message={editorError} /> : null}
       <form className="form-stack" onSubmit={submit}>
+        <div className="form-grid three"><Field label="Source IPs"><input aria-label="路由来源 IP" value={sourceIP} onChange={(event) => setSourceIP(event.target.value)} placeholder="0.0.0.0/8, geoip:private" /></Field><Field label="Source port"><input aria-label="路由来源端口" value={sourcePort} onChange={(event) => setSourcePort(event.target.value)} placeholder="53,443,1000-2000" /></Field><Field label="VLESS route" hint="端口或端口范围，多个值用逗号分隔"><input aria-label="VLESS 路由" value={vlessRoute} onChange={(event) => setVlessRoute(event.target.value)} placeholder="53,443,1000-2000" /></Field></div>
+        <div className="form-grid two"><Field label="Network"><select aria-label="路由网络" value={network} onChange={(event) => setNetwork(event.target.value)}><option value="">(any)</option><option value="tcp">tcp</option><option value="udp">udp</option><option value="tcp,udp">tcp,udp</option></select></Field><Field label="协议" hint="逗号或换行分隔"><input aria-label="路由协议" value={protocol} onChange={(event) => setProtocol(event.target.value)} placeholder="bittorrent" /></Field></div>
+        <div className="routing-attributes"><div className="routing-attributes-head"><span><strong>Attributes</strong><small>Xray 路由属性键值对</small></span><IconButton type="button" label="添加路由属性" onClick={() => setAttributes((current) => [...current, ["", ""]])}><Plus size={15} /></IconButton></div>{attributes.length ? <div className="routing-attribute-list">{attributes.map(([key, value], index) => <div className="routing-attribute-row" key={index}><span>{index + 1}</span><input aria-label={`路由属性名称 ${index + 1}`} value={key} onChange={(event) => setAttributes((current) => current.map((item, itemIndex) => itemIndex === index ? [event.target.value, item[1]] : item))} placeholder="名称" /><input aria-label={`路由属性值 ${index + 1}`} value={value} onChange={(event) => setAttributes((current) => current.map((item, itemIndex) => itemIndex === index ? [item[0], event.target.value] : item))} placeholder="值" /><IconButton type="button" label={`删除路由属性 ${index + 1}`} onClick={() => setAttributes((current) => current.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={14} /></IconButton></div>)}</div> : <small className="routing-attributes-empty">未设置属性条件</small>}</div>
+        <div className="form-grid two"><Field label="域名" hint="逗号或换行分隔"><textarea aria-label="路由域名" rows={3} value={domain} onChange={(event) => setDomain(event.target.value)} placeholder="domain:example.com&#10;geosite:google" /></Field><Field label="IP" hint="逗号或换行分隔"><textarea aria-label="路由 IP" rows={3} value={ip} onChange={(event) => setIP(event.target.value)} placeholder="geoip:private&#10;10.0.0.0/8" /></Field></div>
+        <div className="form-grid three"><Field label="用户" hint="逗号或换行分隔"><input aria-label="路由用户" value={user} onChange={(event) => setUser(event.target.value)} placeholder="user@example.com" /></Field><Field label="Port"><input aria-label="路由端口" value={port} onChange={(event) => setPort(event.target.value)} placeholder="80,443,1000-2000" /></Field><Field label="入站 Tag" hint="逗号或换行分隔"><input aria-label="路由入站 Tag" value={inboundTag} onChange={(event) => setInboundTag(event.target.value)} placeholder="vless-in" /></Field></div>
         <div className="form-grid two"><Field label="出站 Tag" hint="从当前出站选择，或输入自定义 Tag"><input aria-label="路由出站 Tag" list={`routing-outbound-tags-${serverId}`} value={outboundTag} onChange={(event) => { setOutboundTag(event.target.value); if (event.target.value.trim()) setBalancerTag(""); }} placeholder="选择或输入出站 Tag" /></Field><Field label="负载均衡 Tag" hint="从当前路由负载均衡器选择，或输入自定义 Tag"><input aria-label="路由负载均衡 Tag" list={`routing-balancer-tags-${serverId}`} value={balancerTag} onChange={(event) => { setBalancerTag(event.target.value); if (event.target.value.trim()) setOutboundTag(""); }} placeholder="选择或输入负载均衡 Tag" /></Field></div>
         <datalist id={`routing-outbound-tags-${serverId}`}>{outboundTags.map((tag) => <option key={tag} value={tag} />)}</datalist>
         <datalist id={`routing-balancer-tags-${serverId}`}>{balancerTags.map((tag) => <option key={tag} value={tag} />)}</datalist>
-        <div className="form-grid two"><Field label="域名" hint="逗号或换行分隔"><textarea aria-label="路由域名" rows={3} value={domain} onChange={(event) => setDomain(event.target.value)} placeholder="domain:example.com&#10;geosite:google" /></Field><Field label="IP" hint="逗号或换行分隔"><textarea aria-label="路由 IP" rows={3} value={ip} onChange={(event) => setIP(event.target.value)} placeholder="geoip:private&#10;10.0.0.0/8" /></Field></div>
-        <div className="form-grid two"><Field label="端口"><input aria-label="路由端口" value={port} onChange={(event) => setPort(event.target.value)} placeholder="80,443,1000-2000" /></Field><Field label="网络"><input aria-label="路由网络" value={network} onChange={(event) => setNetwork(event.target.value)} placeholder="tcp,udp" /></Field></div>
-        <div className="form-grid two"><Field label="入站 Tag" hint="逗号或换行分隔"><input aria-label="路由入站 Tag" value={inboundTag} onChange={(event) => setInboundTag(event.target.value)} placeholder="vless-in" /></Field><Field label="用户" hint="逗号或换行分隔"><input aria-label="路由用户" value={user} onChange={(event) => setUser(event.target.value)} placeholder="user@example.com" /></Field></div>
-        <Field label="协议" hint="逗号或换行分隔"><input aria-label="路由协议" value={protocol} onChange={(event) => setProtocol(event.target.value)} placeholder="bittorrent" /></Field>
-        <Field label="高级 JSON" hint="可配置 attrs、source、sourcePort、marktag 等完整 Xray 路由字段；必须是单个对象。"><textarea className="service-code-editor xray-resource-json" aria-label="路由规则高级 JSON" spellCheck={false} value={jsonDraft} onChange={(event) => setJsonDraft(event.target.value)} /></Field>
-        <div className="dialog-actions"><Button type="button" variant="secondary" onClick={closeEditor} disabled={working}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />创建规则</>}</Button></div>
+        <details className="xray-advanced-disclosure"><summary>高级 JSON（可选）</summary><Field label="高级 JSON" hint="可配置 marktag 等完整 Xray 路由字段；上方常用字段保存时会覆盖同名值。"><textarea className="service-code-editor xray-resource-json" aria-label="路由规则高级 JSON" spellCheck={false} value={jsonDraft} onChange={(event) => setJsonDraft(event.target.value)} /></Field></details>
+        <div className="dialog-actions"><Button type="button" variant="secondary" onClick={closeEditor} disabled={working}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />{editing ? "保存规则" : "创建规则"}</>}</Button></div>
       </form>
     </div></Dialog> : null}
     {deleting ? <ConfirmDialog title="删除路由规则" description={`将从服务器 #${serverId} 删除规则 #${deleting.index + 1}（${String(deleting.rule.outboundTag || deleting.rule.balancerTag || "未指定目标")}）。`} confirmLabel="确认删除" working={working} onCancel={() => !working && setDeleting(null)} onConfirm={() => void remove()} /> : null}

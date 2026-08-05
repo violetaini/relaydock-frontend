@@ -602,6 +602,23 @@ describe("node any-door forwarding", () => {
     expect(screen.getByRole("dialog", { name: "任意门转发 · 美国 Reality" })).toBeInTheDocument();
   });
 
+  it("keeps server-side forwarding actions off imported subscription nodes", async () => {
+    const imported = { ...node(8, "订阅导入"), original_server: "", inbound_tag: "" };
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [imported] } as T;
+      if (path === "/api/admin/speedtest/results?latest=1") return { results: [] } as T;
+      if (path === "/api/user/config") return userConfig([8]) as T;
+      if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    render(<NodesWorkbench isAdmin notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "更多 订阅导入 操作" }));
+    expect(screen.queryByRole("menuitem", { name: "任意门转发" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "设置中转" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "设置链式代理" })).not.toBeInTheDocument();
+  });
+
   it.each([
     { kind: "top-level node id", response: { success: true, node_id: 41 } },
     { kind: "nested node id", response: { success: true, node_id: 0, node: { id: 41 } } },
@@ -798,6 +815,7 @@ describe("managed server node creation", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "下一步" })).not.toBeDisabled());
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     expect(await screen.findByRole("combobox", { name: "节点协议" })).toHaveValue("vless");
+    expect(screen.getByText("已有节点统一使用“导入已有节点”，仅用于订阅、测速和用户分配。")).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "节点传输与安全预设" })).toHaveValue("vless-reality");
     expect(screen.getByRole("option", { name: "VLESS WSS" })).not.toBeDisabled();
     await waitFor(() => expect(screen.getByRole("button", { name: "下一步" })).not.toBeDisabled());
@@ -1067,6 +1085,15 @@ describe("chain proxy configuration", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存链式代理" }));
 
     await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/nodes/1", expect.objectContaining({ chain_proxy_node_id: null })));
+  });
+
+  it("does not offer imported subscription inventory as a chain target", () => {
+    const source = node(1, "入口");
+    const imported = { ...node(2, "订阅导入"), original_server: "", inbound_tag: "" };
+    render(<ChainProxyDialog node={source} nodes={[source, imported]} onClose={vi.fn()} onComplete={vi.fn()} />);
+
+    expect(screen.queryByRole("option", { name: /订阅导入/ })).not.toBeInTheDocument();
+    expect(screen.getByText("没有其他节点可作为前置代理")).toBeInTheDocument();
   });
 });
 

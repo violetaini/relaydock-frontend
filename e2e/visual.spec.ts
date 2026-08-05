@@ -1192,36 +1192,22 @@ for (const viewport of [
     await expect(serverDialog.getByText("服务器线路测速", { exact: true })).toBeVisible();
     await expect(serverDialog.getByText("Ookla Speedtest CLI", { exact: true })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} server speedtest`);
-    await serverDialog.getByRole("tab", { name: "Xray 配置" }).click();
+    await serverDialog.getByRole("tab", { name: "Xray 设置" }).click();
     await expect(serverDialog).toHaveClass(/dialog-extra-wide/);
-    await serverDialog.getByRole("button", { name: "读取配置" }).click();
+    await expect(serverDialog.getByRole("tab", { name: "基础设置" })).toHaveAttribute("aria-selected", "true");
+    await expect(serverDialog.getByRole("combobox", { name: "Xray 日志级别" })).toHaveValue("warning");
+    await expectViewportIntegrity(page, `${viewport.name} Xray basic settings`);
+    await serverDialog.getByRole("tab", { name: "DNS" }).click();
+    const dnsEditor = serverDialog.getByLabel("Xray DNS JSON");
+    await expect(dnsEditor).toHaveValue("{}");
+    await expectViewportIntegrity(page, `${viewport.name} Xray DNS settings`);
+    await serverDialog.getByRole("tab", { name: "高级配置" }).click();
     const configEditor = serverDialog.getByLabel("Xray 配置 JSON");
     await expect(configEditor).toHaveValue(/loglevel/);
     const editorHeight = await configEditor.evaluate((element) => element.getBoundingClientRect().height);
     expect(editorHeight, `${viewport.name} Xray editor should use the available dialog height`).toBeGreaterThanOrEqual(viewport.name === "desktop" ? 400 : 300);
     await expectViewportIntegrity(page, `${viewport.name} Xray config editor`);
-    await serverDialog.getByRole("tab", { name: "入站" }).click();
-    await expect(serverDialog.getByText("vless-in", { exact: true })).toBeVisible();
-    await serverDialog.getByRole("button", { name: "添加入站" }).first().click();
-    const inboundDialog = page.getByRole("dialog", { name: "添加入站" });
-    await expect(inboundDialog.getByRole("tab", { name: /VLESS \+ Reality/ })).toHaveAttribute("aria-selected", "true");
-    await expect(inboundDialog.getByRole("combobox", { name: "Reality 伪装目标 / SNI" })).toBeVisible();
-    await expect(inboundDialog.getByText("已生成", { exact: true })).toBeVisible();
-    await expectViewportIntegrity(page, `${viewport.name} secure inbound wizard`);
-    await inboundDialog.getByRole("tab", { name: /^WireGuard/ }).click();
-    await expect(inboundDialog.getByText("两组密钥已生成", { exact: true })).toBeVisible();
-    await expect(inboundDialog.getByLabel("WireGuard 服务端地址")).toHaveValue("10.66.66.1/32");
-    await expect(inboundDialog.getByLabel("WireGuard 客户端地址")).toHaveValue("10.66.66.2/32");
-    await expectViewportIntegrity(page, `${viewport.name} WireGuard inbound wizard`);
-    await inboundDialog.getByRole("tab", { name: /^Trojan/ }).click();
-    await expect(inboundDialog.getByLabel("Trojan 传输与安全")).toContainText("TCP + Reality");
-    await expect(inboundDialog.getByLabel("Trojan TLS 证书")).toBeVisible();
-    await expectViewportIntegrity(page, `${viewport.name} Trojan inbound wizard`);
-    await inboundDialog.getByRole("tab", { name: /高级 JSON/ }).click();
-    await expect(inboundDialog.getByLabel("入站高级 JSON")).toBeVisible();
-    await expectViewportIntegrity(page, `${viewport.name} advanced inbound editor`);
-    await inboundDialog.getByRole("button", { name: "关闭" }).click();
-    await serverDialog.getByRole("tab", { name: "出站" }).click();
+    await serverDialog.getByRole("tab", { name: "出站规则" }).click();
     await expect(serverDialog.getByText("direct", { exact: true })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} structured outbound list`);
     await serverDialog.getByRole("tab", { name: "路由规则" }).click();
@@ -1438,7 +1424,7 @@ for (const viewport of [
 
     await page.goto("/#/settings");
     for (const [group, marker] of [
-      ["基础设置", "控制端与采集"],
+      ["基础设置", "后端与采集"],
       ["订阅设置", "生成能力"],
       ["安全设置", "登录限流"],
       ["用户权限", "普通用户页面"],

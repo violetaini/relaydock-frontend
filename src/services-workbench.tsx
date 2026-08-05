@@ -481,6 +481,25 @@ function messageFrom(reason: unknown, fallback: string): string {
   return reason instanceof Error ? reason.message : fallback;
 }
 
+function parseXrayConfigObject(value: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+function xrayConfigSection(value: string, key: string): Record<string, unknown> {
+  const parsed = parseXrayConfigObject(value);
+  const section = parsed?.[key];
+  return section && typeof section === "object" && !Array.isArray(section) ? section as Record<string, unknown> : {};
+}
+
+function xrayConfigArrayLength(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
+}
+
 function lineSpeedtestMetric(value: number | undefined, suffix: string): string {
   const numeric = Number(value);
   return Number.isFinite(numeric) && numeric >= 0 ? `${numeric.toFixed(1)} ${suffix}` : "-";
@@ -1907,7 +1926,7 @@ function ServerCard({ server, serviceStatus, agentVersion, checked, credentialsL
         <div className="service-heartbeat"><Activity size={13} /><span>最后心跳：{relativeTime(server.last_heartbeat)}</span></div>
       </div>
       <div className="service-card-actions">
-        <div className="service-card-primary-actions"><Button variant="secondary" onClick={() => onOpen("config")} disabled={!connected}><Code2 size={16} />Xray 配置</Button><Button variant="secondary" aria-label="管理" onClick={() => onOpen("overview")}><Settings2 size={16} />Agent 管理</Button></div>
+        <div className="service-card-primary-actions"><Button variant="secondary" onClick={() => onOpen("xray")} disabled={!connected}><Settings2 size={16} />Xray 设置</Button><Button variant="secondary" aria-label="管理" onClick={() => onOpen("overview")}><Settings2 size={16} />Agent 管理</Button></div>
         <IconButton label={`编辑 ${server.name}`} onClick={onEdit}><Pencil size={16} /></IconButton>
         {!server.is_federated ? <IconButton label={`查看 ${server.name} 安装凭据`} onClick={onCredentials} disabled={credentialsLoading}>{credentialsLoading ? <RefreshCw className="service-spin" size={16} /> : <KeyRound size={16} />}</IconButton> : null}
         <IconButton label={`删除 ${server.name}`} onClick={onDelete}><Trash2 size={16} /></IconButton>
@@ -2189,10 +2208,12 @@ function DDNSOverviewPanel({ status, working, onRetry }: { status: DDNSStatusRes
   </Surface>;
 }
 
-type OperationTab = "overview" | "services" | "speedtest" | "outbounds" | "routing" | "config" | "sharing";
+type OperationTab = "overview" | "services" | "speedtest" | "xray" | "sharing";
+type XraySettingsTab = "basic" | "routing" | "outbounds" | "dns" | "advanced";
 
 function ServerOperationsDialog({ server, initialTab = "overview", notify, onClose, onChanged, onUpgrade }: { server: ManagedServer; initialTab?: OperationTab; notify: Notify; onClose: () => void; onChanged: () => Promise<void>; onUpgrade: (version: AgentVersionResponse) => void }) {
   const [tab, setTab] = useState<OperationTab>(initialTab);
+  const [xrayTab, setXrayTab] = useState<XraySettingsTab>("basic");
   const [status, setStatus] = useState<ServiceStatusResponse | null>(null);
   const [version, setVersion] = useState<AgentVersionResponse | null>(null);
   const [system, setSystem] = useState<SystemInfoResponse | null>(null);
@@ -2207,6 +2228,9 @@ function ServerOperationsDialog({ server, initialTab = "overview", notify, onClo
   const [configPath, setConfigPath] = useState("");
   const [configLoaded, setConfigLoaded] = useState(false);
   const [configDirty, setConfigDirty] = useState(false);
+  const [dnsDraft, setDNSDraft] = useState("{}");
+  const [dnsDraftError, setDNSDraftError] = useState("");
+  const configLoadAttempted = useRef(false);
   const [shares, setShares] = useState<SharedServerToken[]>([]);
   const [shareLabel, setShareLabel] = useState("");
   const [newShareToken, setNewShareToken] = useState("");
@@ -2331,19 +2355,70 @@ function ServerOperationsDialog({ server, initialTab = "overview", notify, onClo
     }
   };
 
-  const loadConfig = async () => {
+  const loadConfig = useCallback(async () => {
     setWorking("config-load");
     setError("");
     try {
       const result = assertSuccess(await api.get<XrayConfigResponse>(`/api/admin/remote/xray/config?server_id=${server.id}`), "读取 Xray 配置失败");
-      setConfig(result.config ?? "");
+      const nextConfig = result.config ?? "";
+      setConfig(nextConfig);
       setConfigPath(result.path ?? "");
       setConfigLoaded(true);
       setConfigDirty(false);
+      setDNSDraft(JSON.stringify(xrayConfigSection(nextConfig, "dns"), null, 2));
+      setDNSDraftError("");
     } catch (reason) {
       setError(messageFrom(reason, "读取 Xray 配置失败"));
     } finally {
       setWorking("");
+    }
+  }, [server.id]);
+
+  useEffect(() => {
+    if (tab !== "xray" || configLoaded || configLoadAttempted.current) return;
+    configLoadAttempted.current = true;
+    void loadConfig();
+  }, [configLoaded, loadConfig, tab]);
+
+  const updateConfigObject = (update: (draft: Record<string, unknown>) => void) => {
+    const parsed = parseXrayConfigObject(config);
+    if (!parsed) {
+      setError("当前 Xray 配置不是有效的 JSON 对象，请先在高级配置中修正");
+      return;
+    }
+    update(parsed);
+    setConfig(JSON.stringify(parsed, null, 2));
+    setConfigDirty(true);
+    setError("");
+  };
+
+  const updateLogField = (key: "loglevel" | "access" | "error", value: string) => {
+    updateConfigObject((draft) => {
+      const log = draft.log && typeof draft.log === "object" && !Array.isArray(draft.log)
+        ? { ...draft.log as Record<string, unknown> }
+        : {};
+      if (value.trim()) log[key] = value.trim();
+      else delete log[key];
+      if (Object.keys(log).length) draft.log = log;
+      else delete draft.log;
+    });
+  };
+
+  const selectXrayTab = (next: XraySettingsTab) => {
+    if (next === "dns") setDNSDraft(JSON.stringify(xrayConfigSection(config, "dns"), null, 2));
+    if (next !== "dns") setDNSDraftError("");
+    setXrayTab(next);
+  };
+
+  const updateDNS = (value: string) => {
+    setDNSDraft(value);
+    try {
+      const nextDNS = JSON.parse(value) as unknown;
+      if (!nextDNS || typeof nextDNS !== "object" || Array.isArray(nextDNS)) throw new Error("DNS 配置必须是 JSON 对象");
+      updateConfigObject((draft) => { draft.dns = nextDNS; });
+      setDNSDraftError("");
+    } catch (reason) {
+      setDNSDraftError(messageFrom(reason, "DNS 配置不是有效的 JSON 对象"));
     }
   };
 
@@ -2351,6 +2426,7 @@ function ServerOperationsDialog({ server, initialTab = "overview", notify, onClo
     setWorking("config-test");
     setError("");
     try {
+      if (dnsDraftError) throw new Error(dnsDraftError);
       JSON.parse(config);
       assertSuccess(await api.post<ActionResponse>(`/api/admin/remote/xray/test-config?server_id=${server.id}`, { config, path: configPath }), "Xray 配置预检失败");
       notify("Xray 配置预检通过");
@@ -2365,6 +2441,7 @@ function ServerOperationsDialog({ server, initialTab = "overview", notify, onClo
     setWorking("config-save");
     setError("");
     try {
+      if (dnsDraftError) throw new Error(dnsDraftError);
       JSON.parse(config);
       assertSuccess(await api.post<ActionResponse>(`/api/admin/remote/xray/test-config?server_id=${server.id}`, { config, path: configPath }), "Xray 配置预检失败");
       assertSuccess(await api.post<ActionResponse>(`/api/admin/remote/xray/config?server_id=${server.id}`, { config, path: configPath }), "保存 Xray 配置失败");
@@ -2430,11 +2507,22 @@ function ServerOperationsDialog({ server, initialTab = "overview", notify, onClo
     { key: "overview", label: "概览", icon: <Activity size={16} /> },
     { key: "services", label: "服务控制", icon: <TerminalSquare size={16} /> },
     { key: "speedtest", label: "Speedtest", icon: <Gauge size={16} /> },
-    { key: "outbounds", label: "出站", icon: <ArrowUpFromLine size={16} /> },
-    { key: "routing", label: "路由规则", icon: <Network size={16} /> },
-    { key: "config", label: "Xray 配置", icon: <Code2 size={16} /> },
+    { key: "xray", label: "Xray 设置", icon: <Settings2 size={16} /> },
     ...(!server.is_federated ? [{ key: "sharing" as const, label: "服务器分享", icon: <Network size={16} /> }] : []),
   ];
+  const xrayTabs: Array<{ key: XraySettingsTab; label: string; icon: ReactNode }> = [
+    { key: "basic", label: "基础设置", icon: <Settings2 size={15} /> },
+    { key: "routing", label: "路由规则", icon: <Network size={15} /> },
+    { key: "outbounds", label: "出站规则", icon: <ArrowUpFromLine size={15} /> },
+    { key: "dns", label: "DNS", icon: <Server size={15} /> },
+    { key: "advanced", label: "高级配置", icon: <Code2 size={15} /> },
+  ];
+  const parsedConfig = parseXrayConfigObject(config);
+  const logConfig = xrayConfigSection(config, "log");
+  const routingConfig = xrayConfigSection(config, "routing");
+  const routingRules = Array.isArray(routingConfig.rules) ? routingConfig.rules : [];
+  const dnsConfig = xrayConfigSection(config, "dns");
+  const dnsServers = Array.isArray(dnsConfig.servers) ? dnsConfig.servers : [];
   const confirmServiceLabel = confirm?.service === "xray" ? "Xray" : "Nginx";
   const confirmTitle = confirm?.action === "update" ? "更新 Xray" : confirm?.action === "remove" ? `卸载 ${confirmServiceLabel}` : `停止 ${confirmServiceLabel}`;
   const confirmDescription = confirm?.action === "update"
@@ -2442,17 +2530,30 @@ function ServerOperationsDialog({ server, initialTab = "overview", notify, onClo
     : confirm?.action === "remove"
       ? `将从 ${server.name} 卸载 ${confirmServiceLabel}，现有配置和节点可能立即不可用。`
       : `停止 ${confirmServiceLabel} 会中断由该服务承载的连接。`;
-  const needsExtraWideDialog = tab === "outbounds" || tab === "routing" || tab === "config";
+  const needsExtraWideDialog = tab === "xray";
   const agentUpgradeAvailable = Boolean(version?.upgrade_available && cleanVersion(version.latest) && !version.latest_error);
   const agentVersionCurrent = Boolean(version && !version.upgrade_available && cleanVersion(version.latest) && !version.latest_error);
 
-  return <Dialog title={server.name} description={`${server.domain || server.ip_address || "地址待上报"} · ${isConnected(server) ? "Agent 在线" : "Agent 离线"}`} onClose={() => !working && onClose()} wide extraWide={needsExtraWideDialog}><div className="service-operation-tabs" role="tablist">{tabs.map((item) => <button key={item.key} role="tab" aria-selected={tab === item.key} className={tab === item.key ? "is-active" : ""} onClick={() => setTab(item.key)}>{item.icon}{item.label}</button>)}</div>{error ? <ErrorState message={error} onRetry={() => void loadStatus()} /> : null}{loading ? <div className="center-state"><Spinner label="正在读取 Agent 状态" /></div> : null}
+  return <Dialog title={server.name} description={`${server.domain || server.ip_address || "地址待上报"} · ${isConnected(server) ? "Agent 在线" : "Agent 离线"}`} onClose={() => !working && onClose()} wide extraWide={needsExtraWideDialog}><div className="service-operation-tabs" role="tablist">{tabs.map((item) => <button key={item.key} role="tab" aria-selected={tab === item.key} className={tab === item.key ? "is-active" : ""} onClick={() => setTab(item.key)}>{item.icon}{item.label}</button>)}</div>{error ? <ErrorState message={error} onRetry={() => void (tab === "xray" ? loadConfig() : loadStatus())} /> : null}{loading ? <div className="center-state"><Spinner label="正在读取 Agent 状态" /></div> : null}
     {!loading && tab === "overview" ? <div className="service-overview"><div className="service-overview-grid"><InfoTile label="连接状态" value={isConnected(server) ? "在线" : "离线"} detail={server.encrypted ? "加密 WebSocket" : server.connection_mode} icon={<Wifi size={18} />} /><InfoTile label="Agent 版本" value={version?.current || system?.agent_version || "未知"} detail={version?.latest ? `最新 ${version.latest}` : version?.latest_error || "未读取最新版本"} icon={<UploadCloud size={18} />} /><InfoTile label="主机名" value={system?.hostname || server.name} detail={system?.uptime ? `运行 ${Math.floor(Number(system.uptime) / 3600)} 小时` : relativeTime(server.last_heartbeat)} icon={<Server size={18} />} /><InfoTile label="系统负载" value={system?.loadavg?.split(" ").slice(0, 3).join(" / ") || "暂无"} detail={system?.memory?.MemAvailable ? `可用内存 ${system.memory.MemAvailable}` : "Agent 未上报内存"} icon={<Gauge size={18} />} /></div><Surface className="service-address-panel"><h3>连接与流量</h3><dl><div><dt>IPv4</dt><dd>{server.ip_address || "未上报"}</dd></div><div><dt>IPv6</dt><dd>{server.ipv6_enabled ? server.ip_address_v6 || "未上报" : "已关闭"}</dd></div><div><dt>节点域名</dt><dd>{server.domain || "未设置"}</dd></div><div><dt>Agent 端口</dt><dd>{server.listen_port || 23889}</dd></div><div><dt>统计口径</dt><dd>{server.traffic_source === "system" ? "系统网卡" : "Xray 聚合"} / {server.traffic_stats_mode || "both"}</dd></div><div><dt>本期流量</dt><dd>{formatBytes(server.traffic_used)}{server.traffic_limit ? ` / ${formatBytes(server.traffic_limit)}` : "（不限）"}</dd></div></dl></Surface><DDNSOverviewPanel status={ddnsStatus} working={working === "ddns-test"} onRetry={() => void triggerDDNS()} /><div className="dialog-actions"><Button variant="secondary" onClick={() => void loadStatus()}><RefreshCw size={16} />刷新状态</Button><Button title={agentUpgradeAvailable ? `升级到 v${cleanVersion(version?.latest)}` : agentVersionCurrent ? "当前已是最新版" : version?.latest_error || "未读取到可用的新版本"} onClick={() => version && onUpgrade(version)} disabled={!isConnected(server) || !agentUpgradeAvailable}><UploadCloud size={16} />{agentUpgradeAvailable ? "升级 Agent" : agentVersionCurrent ? "已是最新版" : "暂不可升级"}</Button></div></div> : null}
     {!loading && tab === "services" ? <div className="service-control-stack">{reusesExistingNginx ? <div className="service-nginx-reuse-notice" role="note"><ShieldCheck size={18} /><span><strong>正在复用系统已有 Nginx</strong><small>Arcway 仅下发独立站点配置并执行预检与安全重载，不安装、不卸载、不覆盖主配置，也不接管服务启停。</small></span></div> : null}<ServiceControlCard name="Xray" state={status?.xray} fallbackVersion={server.xray_version} working={working} embeddedCore={server.xray_mode === "embedded"} allowCoreMaintenance={!server.is_federated} onAction={(action) => action === "stop" ? setConfirm({ service: "xray", action }) : void serviceAction("xray", action)} onUpdate={() => setConfirm({ service: "xray", action: "update" })} onRemove={() => setConfirm({ service: "xray", action: "remove" })} /><ServiceControlCard name="Nginx" state={status?.nginx} working={working} externallyManaged={reusesExistingNginx} onAction={(action) => action === "stop" ? setConfirm({ service: "nginx", action }) : void serviceAction("nginx", action)} onRemove={() => setConfirm({ service: "nginx", action: "remove" })} /></div> : null}
     {!loading && tab === "speedtest" ? <ServerSpeedtestPanel server={server} notify={notify} /> : null}
-    {!loading && tab === "outbounds" ? <XrayResourcesWorkbench serverId={server.id} serverDomain={server.domain} serverIPv4={server.ip_address} serverIPv6={server.ip_address_v6} kind="outbound" notify={notify} /> : null}
-    {!loading && tab === "routing" ? <XrayRoutingWorkbench serverId={server.id} notify={notify} /> : null}
-    {!loading && tab === "config" ? <div className="service-config-panel">{!configLoaded ? <EmptyState icon={<Code2 size={23} />} title="读取 Agent 上的 Xray 配置" description="编辑前会从目标服务器读取当前配置，不使用本地缓存。" action={<Button onClick={() => void loadConfig()} disabled={working === "config-load"}>{working === "config-load" ? <Spinner label="正在读取" /> : <><Clipboard size={16} />读取配置</>}</Button>} /> : <><div className="service-config-head"><span><strong>{configPath || "config.json"}</strong><small>{configDirty ? "存在未保存更改" : "已与 Agent 同步"}</small></span><div><Button variant="ghost" onClick={() => void loadConfig()} disabled={Boolean(working)}><RefreshCw size={15} />重新读取</Button><Button variant="secondary" onClick={() => void testConfig()} disabled={Boolean(working) || !config.trim()}>{working === "config-test" ? <Spinner label="预检中" /> : <><ShieldCheck size={15} />预检</>}</Button><Button onClick={() => void saveConfig()} disabled={Boolean(working) || !configDirty}>{working === "config-save" ? <Spinner label="保存中" /> : <><Check size={15} />保存配置</>}</Button></div></div><textarea className="service-code-editor" aria-label="Xray 配置 JSON" spellCheck={false} value={config} onChange={(event) => { setConfig(event.target.value); setConfigDirty(true); }} /></>}</div> : null}
+    {!loading && tab === "xray" ? <div className="xray-settings-shell">
+      <div className="xray-settings-tabs" role="tablist" aria-label="Xray 设置分类">{xrayTabs.map((item) => <button key={item.key} role="tab" aria-selected={xrayTab === item.key} className={xrayTab === item.key ? "is-active" : ""} onClick={() => selectXrayTab(item.key)}>{item.icon}{item.label}</button>)}</div>
+      {xrayTab === "routing" ? <XrayRoutingWorkbench serverId={server.id} notify={notify} /> : null}
+      {xrayTab === "outbounds" ? <XrayResourcesWorkbench serverId={server.id} serverDomain={server.domain} serverIPv4={server.ip_address} serverIPv6={server.ip_address_v6} kind="outbound" notify={notify} /> : null}
+      {xrayTab === "basic" || xrayTab === "dns" || xrayTab === "advanced" ? <div className="service-config-panel">
+        {!configLoaded ? <EmptyState icon={<Code2 size={23} />} title={working === "config-load" ? "正在读取 Xray 配置" : "暂未读取 Xray 配置"} description="配置直接来自目标服务器。" action={working === "config-load" ? <Spinner label="正在读取" /> : <Button onClick={() => void loadConfig()}><Clipboard size={16} />读取配置</Button>} /> : <>
+          <div className="service-config-head xray-settings-toolbar"><span><strong>{configPath || "config.json"}</strong><small>{configDirty ? "存在未保存更改" : "已与 Agent 同步"}</small></span><div><Button variant="ghost" onClick={() => void loadConfig()} disabled={Boolean(working)}><RefreshCw size={15} />重新读取</Button><Button variant="secondary" onClick={() => void testConfig()} disabled={Boolean(working) || !config.trim() || Boolean(dnsDraftError)}>{working === "config-test" ? <Spinner label="预检中" /> : <><ShieldCheck size={15} />预检</>}</Button><Button onClick={() => void saveConfig()} disabled={Boolean(working) || !configDirty || Boolean(dnsDraftError)}>{working === "config-save" ? <Spinner label="保存中" /> : <><Check size={15} />保存并重启</>}</Button></div></div>
+          {xrayTab === "basic" ? parsedConfig ? <div className="xray-basic-settings">
+            <details className="xray-settings-group" open><summary><span><strong>常规配置</strong><small>当前配置结构与运行状态</small></span><ChevronDown size={17} /></summary><div className="xray-settings-summary"><div><small>Xray 状态</small><strong>{status?.xray?.running ? "运行中" : "已停止"}</strong></div><div><small>入站</small><strong>{xrayConfigArrayLength(parsedConfig.inbounds)}</strong></div><div><small>出站</small><strong>{xrayConfigArrayLength(parsedConfig.outbounds)}</strong></div><div><small>路由规则</small><strong>{routingRules.length}</strong></div><div><small>DNS 服务器</small><strong>{dnsServers.length}</strong></div></div></details>
+            <details className="xray-settings-group" open><summary><span><strong>日志</strong><small>修改后保存并重启 Xray</small></span><ChevronDown size={17} /></summary><div className="xray-settings-fields"><Field label="日志级别"><select aria-label="Xray 日志级别" value={typeof logConfig.loglevel === "string" ? logConfig.loglevel : "warning"} onChange={(event) => updateLogField("loglevel", event.target.value)}><option value="debug">Debug</option><option value="info">Info</option><option value="warning">Warning</option><option value="error">Error</option><option value="none">关闭日志</option></select></Field><Field label="访问日志路径"><input aria-label="Xray 访问日志路径" value={typeof logConfig.access === "string" ? logConfig.access : ""} onChange={(event) => updateLogField("access", event.target.value)} placeholder="留空使用默认值" /></Field><Field label="错误日志路径"><input aria-label="Xray 错误日志路径" value={typeof logConfig.error === "string" ? logConfig.error : ""} onChange={(event) => updateLogField("error", event.target.value)} placeholder="留空使用默认值" /></Field></div></details>
+          </div> : <ErrorState message="当前配置不是有效的 JSON 对象，请在高级配置中修正" /> : null}
+          {xrayTab === "dns" ? <div className="xray-dns-settings">{dnsDraftError ? <ErrorState message={dnsDraftError} /> : null}<textarea className="service-code-editor xray-dns-editor" aria-label="Xray DNS JSON" spellCheck={false} value={dnsDraft} onChange={(event) => updateDNS(event.target.value)} /></div> : null}
+          {xrayTab === "advanced" ? <textarea className="service-code-editor" aria-label="Xray 配置 JSON" spellCheck={false} value={config} onChange={(event) => { setConfig(event.target.value); setConfigDirty(true); }} /> : null}
+        </>}
+      </div> : null}
+    </div> : null}
     {!loading && tab === "sharing" ? <div className="service-sharing"><form onSubmit={createShare} className="service-share-create"><Field label="令牌备注"><input required value={shareLabel} onChange={(event) => setShareLabel(event.target.value)} placeholder="提供给分控制端 A" /></Field><Button type="submit" disabled={working === "share-create"}>{working === "share-create" ? <Spinner label="生成中" /> : <><FileKey2 size={16} />生成分享令牌</>}</Button></form>{newShareToken ? <div className="credential-warning"><KeyRound size={19} /><span><strong>仅显示一次</strong><code>{newShareToken}</code></span><IconButton label="复制新分享令牌" onClick={() => navigator.clipboard.writeText(newShareToken).then(() => notify("分享令牌已复制")).catch(() => notify("复制失败", "error"))}><Copy size={17} /></IconButton></div> : null}<div className="service-share-list">{shares.length ? shares.map((share) => <div key={share.id}><span><strong>{share.label || `令牌 #${share.id}`}</strong><small>{share.revoked_at ? `已于 ${share.revoked_at} 吊销` : `创建于 ${share.created_at}`}</small></span><Badge tone={share.revoked_at ? "neutral" : "good"}>{share.revoked_at ? "已吊销" : "有效"}</Badge>{!share.revoked_at ? <IconButton label={`吊销 ${share.label || share.id}`} onClick={() => void revokeShare(share.id)} disabled={working === `share-${share.id}`}><Trash2 size={16} /></IconButton> : null}</div>) : <EmptyState icon={<FileKey2 size={22} />} title="暂无分享令牌" description="生成后可在其他 Arcway 控制端接入这台服务器" />}</div></div> : null}
     {confirm?.service === "xray" && confirm.action === "update" ? <XrayVersionDialog server={server} currentVersion={status?.xray?.version || server.xray_version} working={Boolean(working)} onCancel={() => !working && setConfirm(null)} onConfirm={(selectedVersion) => void serviceAction("xray", "update", selectedVersion)} /> : null}
     {confirm && !(confirm.service === "xray" && confirm.action === "update") ? <ConfirmDialog title={confirmTitle} description={confirmDescription} confirmLabel={confirm.action === "remove" ? "确认卸载" : "确认停止"} working={Boolean(working)} onCancel={() => !working && setConfirm(null)} onConfirm={() => void serviceAction(confirm.service, confirm.action)} /> : null}

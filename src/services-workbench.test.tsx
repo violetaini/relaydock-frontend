@@ -67,6 +67,7 @@ function mockServerReads(servers: RemoteServer[] = [onlineServer, offlineServer]
   serviceStatus?: Record<string, unknown>;
   xrayVersions?: Record<string, unknown>;
   agentVersion?: Record<string, unknown>;
+  xrayConfig?: string;
 } = {}) {
   let ddnsStatusRead = 0;
   return vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
@@ -143,6 +144,7 @@ function mockServerReads(servers: RemoteServer[] = [onlineServer, offlineServer]
     if (path === "/api/admin/remote/inbounds?server_id=11") return { success: true, inbounds: resources.inbounds ?? [] } as T;
     if (path === "/api/admin/remote/outbounds?server_id=11") return { success: true, outbounds: resources.outbounds ?? [] } as T;
     if (path === "/api/admin/remote/routing?server_id=11") return { success: true, routing: resources.routing ?? { rules: [] } } as T;
+    if (path === "/api/admin/remote/xray/config?server_id=11") return { success: true, path: "/usr/local/etc/xray/config.json", config: resources.xrayConfig ?? JSON.stringify({ log: { loglevel: "warning" }, inbounds: [], outbounds: [], routing: { rules: [] }, dns: { servers: ["1.1.1.1"] } }, null, 2) } as T;
     if (path === "/api/admin/line-speedtest/targets") return { success: true, targets: resources.lineSpeedtestTargets ?? [] } as T;
     if (path === "/api/admin/certificates/valid") return { success: true, certificates: resources.certificates ?? [] } as T;
     if (path === "/api/admin/xray-examples") return { success: true, combinations: [
@@ -703,11 +705,50 @@ describe("service management workbench", () => {
     expect(within(dialog).getByRole("tab", { name: "概览" })).toBeInTheDocument();
     expect(within(dialog).getByRole("tab", { name: "服务控制" })).toBeInTheDocument();
     expect(within(dialog).getByRole("tab", { name: "Speedtest" })).toBeInTheDocument();
-    expect(within(dialog).getByRole("tab", { name: "出站" })).toBeInTheDocument();
-    expect(within(dialog).getByRole("tab", { name: "路由规则" })).toBeInTheDocument();
-    expect(within(dialog).getByRole("tab", { name: "Xray 配置" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("tab", { name: "Xray 设置" })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("tab", { name: "出站" })).not.toBeInTheDocument();
     expect(within(dialog).getByRole("tab", { name: "服务器分享" })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("tab", { name: "Xray 设置" }));
+    expect(within(dialog).getByRole("tab", { name: "基础设置" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("tab", { name: "路由规则" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("tab", { name: "出站规则" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("tab", { name: "DNS" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("tab", { name: "高级配置" })).toBeInTheDocument();
     expect(get).not.toHaveBeenCalledWith("/api/admin/remote/inbounds?server_id=11");
+  });
+
+  it("groups Xray settings and saves structured changes through the protected full-config path", async () => {
+    const initialConfig = {
+      log: { loglevel: "warning", access: "/var/log/xray/access.log" },
+      inbounds: [{ tag: "database-owned", protocol: "vless", port: 443 }],
+      outbounds: [{ tag: "direct", protocol: "freedom" }],
+      routing: { rules: [{ type: "field", outboundTag: "direct" }] },
+      dns: { servers: ["1.1.1.1"] },
+    };
+    mockServerReads([onlineServer], { xrayConfig: JSON.stringify(initialConfig, null, 2) });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Xray 设置" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    const logLevel = await within(dialog).findByRole("combobox", { name: "Xray 日志级别" });
+    expect(within(dialog).getByText("运行中")).toBeInTheDocument();
+    fireEvent.change(logLevel, { target: { value: "info" } });
+    fireEvent.click(within(dialog).getByRole("tab", { name: "DNS" }));
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Xray DNS JSON" }), { target: { value: JSON.stringify({ servers: ["9.9.9.9", "1.1.1.1"] }, null, 2) } });
+    fireEvent.click(within(dialog).getByRole("tab", { name: "高级配置" }));
+
+    const advanced = within(dialog).getByRole("textbox", { name: "Xray 配置 JSON" });
+    const merged = JSON.parse((advanced as HTMLTextAreaElement).value);
+    expect(merged.log.loglevel).toBe("info");
+    expect(merged.dns.servers).toEqual(["9.9.9.9", "1.1.1.1"]);
+    expect(merged.inbounds).toEqual(initialConfig.inbounds);
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存并重启" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote/xray/config?server_id=11", expect.objectContaining({ path: "/usr/local/etc/xray/config.json" })));
+    const configWrite = post.mock.calls.find(([path]) => path === "/api/admin/remote/xray/config?server_id=11");
+    expect(JSON.parse((configWrite?.[1] as { config: string }).config).inbounds).toEqual(initialConfig.inbounds);
+    expect(post).toHaveBeenCalledWith("/api/admin/remote/services/control?server_id=11", { service: "xray", action: "restart" });
   });
 
   it("updates an external Xray core only after confirmation", async () => {
@@ -1160,7 +1201,8 @@ describe("service management workbench", () => {
     fireEvent.click(await screen.findByRole("button", { name: "管理" }));
     const dialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
     await waitFor(() => expect(within(dialog).getByText("0.3.0")).toBeInTheDocument());
-    fireEvent.click(within(dialog).getByRole("tab", { name: "出站" }));
+    fireEvent.click(within(dialog).getByRole("tab", { name: "Xray 设置" }));
+    fireEvent.click(within(dialog).getByRole("tab", { name: "出站规则" }));
     await within(dialog).findByText("proxy-old");
     fireEvent.click(within(dialog).getByRole("button", { name: "编辑出站 proxy-old" }));
     fireEvent.change(within(dialog).getByRole("textbox", { name: "出站 Tag" }), { target: { value: "proxy-new" } });
@@ -1182,7 +1224,8 @@ describe("service management workbench", () => {
     fireEvent.click(await screen.findByRole("button", { name: "管理" }));
     const dialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
     await waitFor(() => expect(within(dialog).getByText("0.3.0")).toBeInTheDocument());
-    fireEvent.click(within(dialog).getByRole("tab", { name: "出站" }));
+    fireEvent.click(within(dialog).getByRole("tab", { name: "Xray 设置" }));
+    fireEvent.click(within(dialog).getByRole("tab", { name: "出站规则" }));
     await within(dialog).findByText("blocked");
     fireEvent.click(within(dialog).getByRole("button", { name: "删除出站 blocked" }));
     expect(post).not.toHaveBeenCalled();
@@ -1209,6 +1252,7 @@ describe("service management workbench", () => {
     fireEvent.click(await screen.findByRole("button", { name: "管理" }));
     const dialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
     await waitFor(() => expect(within(dialog).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(dialog).getByRole("tab", { name: "Xray 设置" }));
     fireEvent.click(within(dialog).getByRole("tab", { name: "路由规则" }));
     expect(await within(dialog).findByRole("button", { name: "删除路由规则 1" })).toBeInTheDocument();
     expect(within(dialog).getByText("domain:google.com")).toBeInTheDocument();
@@ -1266,6 +1310,7 @@ describe("service management workbench", () => {
     fireEvent.click(await screen.findByRole("button", { name: "管理" }));
     const dialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
     await waitFor(() => expect(within(dialog).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(dialog).getByRole("tab", { name: "Xray 设置" }));
     fireEvent.click(within(dialog).getByRole("tab", { name: "路由规则" }));
     await within(dialog).findByRole("button", { name: "删除路由规则 2" });
     fireEvent.click(within(dialog).getByRole("button", { name: "删除路由规则 2" }));
@@ -1285,6 +1330,7 @@ describe("service management workbench", () => {
     fireEvent.click(await screen.findByRole("button", { name: "管理" }));
     const dialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
     await waitFor(() => expect(within(dialog).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(dialog).getByRole("tab", { name: "Xray 设置" }));
     fireEvent.click(within(dialog).getByRole("tab", { name: "路由规则" }));
     await within(dialog).findByRole("button", { name: "删除路由规则 1" });
     fireEvent.click(within(dialog).getByRole("button", { name: "添加规则" }));

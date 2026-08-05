@@ -916,6 +916,91 @@ function normalizeRoutingPortList(value: string, label: string): string {
   return normalized.split(",").map((entry) => entry.trim()).join(",");
 }
 
+const xrayRoutingProtocols = ["http", "tls", "bittorrent", "quic"];
+
+function RoutingFormRow({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  return <div className="routing-compact-row">
+    <span className="routing-compact-label">{label}{hint ? <span className="routing-field-help" title={hint} aria-label={`${label}说明`}>?</span> : null}</span>
+    <div className="routing-compact-control">{children}</div>
+  </div>;
+}
+
+function RoutingMultiSelect({ ariaLabel, values, options, onChange, placeholder }: {
+  ariaLabel: string;
+  values: string[];
+  options: string[];
+  onChange: (values: string[]) => void;
+  placeholder: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [openAbove, setOpenAbove] = useState(false);
+  const [optionsMaxHeight, setOptionsMaxHeight] = useState(220);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeOnEscape, true);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeOnEscape, true);
+    };
+  }, [open]);
+
+  const toggle = (option: string, checked: boolean) => {
+    onChange(checked ? [...values, option] : values.filter((value) => value !== option));
+  };
+
+  const toggleOpen = () => {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    const root = rootRef.current?.getBoundingClientRect();
+    const dialogBody = rootRef.current?.closest(".dialog-body")?.getBoundingClientRect();
+    if (root && dialogBody) {
+      const estimatedHeight = Math.min(220, Math.max(44, options.length * 34 + 12));
+      const spaceBelow = Math.max(0, dialogBody.bottom - root.bottom - 6);
+      const spaceAbove = Math.max(0, root.top - dialogBody.top - 6);
+      const shouldOpenAbove = spaceBelow < estimatedHeight && spaceAbove > spaceBelow;
+      setOpenAbove(shouldOpenAbove);
+      setOptionsMaxHeight(Math.max(44, Math.min(220, shouldOpenAbove ? spaceAbove : spaceBelow)));
+    } else {
+      setOpenAbove(false);
+      setOptionsMaxHeight(220);
+    }
+    setOpen(true);
+  };
+
+  return <div
+    className={`routing-multi-select ${open ? "is-open" : ""} ${openAbove ? "opens-up" : ""}`}
+    ref={rootRef}
+    style={{ "--routing-options-max-height": `${optionsMaxHeight}px` } as CSSProperties}
+  >
+    <button ref={triggerRef} type="button" aria-label={ariaLabel} aria-haspopup="listbox" aria-expanded={open} onClick={toggleOpen}>
+      <span className={values.length ? "" : "is-placeholder"}>{values.length ? values.join(", ") : placeholder}</span>
+      <ChevronDown size={15} />
+    </button>
+    {open ? <div className="routing-multi-options" role="listbox" aria-label={`${ariaLabel}选项`} aria-multiselectable="true">
+      {options.length ? options.map((option) => <button key={option} type="button" role="option" aria-selected={values.includes(option)} onClick={() => toggle(option, !values.includes(option))}>
+        <span className="routing-option-check" aria-hidden="true">{values.includes(option) ? <Check size={12} /> : null}</span>
+        <span>{option}</span>
+      </button>) : <small>暂无可选项</small>}
+    </div> : null}
+  </div>;
+}
+
 type OutboundEditorTab = "basics" | "json";
 
 type OutboundEditorFields = {
@@ -3695,8 +3780,10 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
   const [protocol, setProtocol] = useState("");
   const [outboundTag, setOutboundTag] = useState("");
   const [balancerTag, setBalancerTag] = useState("");
+  const [inboundTags, setInboundTags] = useState<string[]>([]);
   const [outboundTags, setOutboundTags] = useState<string[]>([]);
   const [balancerTags, setBalancerTags] = useState<string[]>([]);
+  const [editorOptionSeeds, setEditorOptionSeeds] = useState({ protocols: [] as string[], inboundTags: [] as string[], outboundTags: [] as string[], balancerTags: [] as string[] });
   const [jsonDraft, setJsonDraft] = useState("{\n  \"type\": \"field\"\n}");
   const [editorError, setEditorError] = useState("");
   const [working, setWorking] = useState(false);
@@ -3707,24 +3794,21 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
     setLoading(true);
     setListError("");
     try {
-      const [routingResponse, outboundResponse] = await Promise.all([
+      const [routingResponse, outboundResponse, inboundResponse] = await Promise.all([
         api.get<XrayRoutingResponse>(endpoint),
         api.get<XrayResourceListResponse>(`/api/admin/remote/outbounds?server_id=${serverId}`),
+        api.get<XrayResourceListResponse>(`/api/admin/remote/inbounds?server_id=${serverId}`).catch(() => null),
       ]);
       const result = assertSuccess(routingResponse, "路由规则加载失败");
       const outbounds = assertSuccess(outboundResponse, "出站 Tag 加载失败").outbounds ?? [];
+      const inbounds = inboundResponse?.success === false ? [] : inboundResponse?.inbounds ?? [];
       const nextRules = Array.isArray(result.routing?.rules) ? result.routing.rules : [];
       const nextBalancers = Array.isArray(result.routing?.balancers) ? result.routing.balancers : [];
       const tags = (values: Array<string | undefined>) => [...new Set(values.map((value) => value?.trim() || "").filter(Boolean))].sort((left, right) => left.localeCompare(right, "zh-CN"));
       setRules(nextRules);
-      setOutboundTags(tags([
-        ...outbounds.map(xrayResourceTag),
-        ...nextRules.map((rule) => typeof rule.outboundTag === "string" ? rule.outboundTag : ""),
-      ]));
-      setBalancerTags(tags([
-        ...nextBalancers.map(xrayResourceTag),
-        ...nextRules.map((rule) => typeof rule.balancerTag === "string" ? rule.balancerTag : ""),
-      ]));
+      setInboundTags(tags(inbounds.map(xrayResourceTag)));
+      setOutboundTags(tags(outbounds.map(xrayResourceTag)));
+      setBalancerTags(tags(nextBalancers.map(xrayResourceTag)));
       setDomainStrategy(typeof result.routing?.domainStrategy === "string" ? result.routing.domainStrategy : "");
     } catch (reason) {
       setListError(messageFrom(reason, "路由规则加载失败"));
@@ -3749,6 +3833,7 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
     setProtocol("");
     setOutboundTag("");
     setBalancerTag("");
+    setEditorOptionSeeds({ protocols: [], inboundTags: [], outboundTags: [], balancerTags: [] });
     setJsonDraft("{\n  \"type\": \"field\"\n}");
     setEditorError("");
   };
@@ -3762,7 +3847,8 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
       setDomain(read("domain"));
       setIP(read("ip"));
       setPort(read("port"));
-      setSourceIP(read("source"));
+      const usesSourceIP = rule.sourceIP !== undefined && rule.sourceIP !== null;
+      setSourceIP(read(usesSourceIP ? "sourceIP" : "source"));
       setSourcePort(read("sourcePort"));
       setVlessRoute(read("vlessRoute"));
       setInboundTag(read("inboundTag"));
@@ -3770,7 +3856,13 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
       setProtocol(read("protocol"));
       setOutboundTag(typeof rule.outboundTag === "string" ? rule.outboundTag : "");
       setBalancerTag(typeof rule.balancerTag === "string" ? rule.balancerTag : "");
-      setNetwork(typeof rule.network === "string" ? rule.network : "");
+      setEditorOptionSeeds({
+        protocols: parseRoutingValues(read("protocol")),
+        inboundTags: parseRoutingValues(read("inboundTag")),
+        outboundTags: typeof rule.outboundTag === "string" && rule.outboundTag ? [rule.outboundTag] : [],
+        balancerTags: typeof rule.balancerTag === "string" && rule.balancerTag ? [rule.balancerTag] : [],
+      });
+      setNetwork(routingRuleValues(rule, "network").join(","));
       const existingAttributes = rule.attrs && typeof rule.attrs === "object" && !Array.isArray(rule.attrs)
         ? Object.entries(rule.attrs as Record<string, unknown>).map(([key, value]) => [key, String(value)] as [string, string])
         : [];
@@ -3794,7 +3886,6 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
     rule.type = "field";
 
     const listFields: Array<[string, string]> = [
-      ["source", sourceIP],
       ["domain", domain],
       ["ip", ip],
       ["inboundTag", inboundTag],
@@ -3806,6 +3897,11 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
       if (normalized.length) rule[key] = normalized;
       else delete rule[key];
     }
+
+    const normalizedSourceIPs = parseRoutingValues(sourceIP);
+    if (normalizedSourceIPs.length) rule.sourceIP = normalizedSourceIPs;
+    else delete rule.sourceIP;
+    delete rule.source;
 
     if (port.trim()) rule.port = port.trim();
     else delete rule.port;
@@ -3901,6 +3997,13 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
     }
   };
 
+  const selectedProtocols = parseRoutingValues(protocol);
+  const protocolOptions = [...new Set([...xrayRoutingProtocols, ...editorOptionSeeds.protocols, ...selectedProtocols])];
+  const selectedInboundTags = parseRoutingValues(inboundTag);
+  const selectableInboundTags = [...new Set([...inboundTags, ...editorOptionSeeds.inboundTags, ...selectedInboundTags])];
+  const selectableOutboundTags = [...new Set([...outboundTags, ...editorOptionSeeds.outboundTags, ...(outboundTag ? [outboundTag] : [])])];
+  const selectableBalancerTags = [...new Set([...balancerTags, ...editorOptionSeeds.balancerTags, ...(balancerTag ? [balancerTag] : [])])];
+
   return <div className="xray-resource-workbench xray-routing-workbench">
     <div className="xray-resource-head">
       <span><strong>路由规则管理</strong><small>目标服务器 #{serverId} · {rules.length} 条{domainStrategy ? ` · ${domainStrategy}` : ""}</small></span>
@@ -3916,21 +4019,30 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
           const entries = keys.flatMap((key) => routingRuleValues(rule, key).map((value) => ({ key, value })));
           return entries.length ? entries.map((entry, entryIndex) => <span key={`${entry.key}-${entry.value}-${entryIndex}`}>{entry.value}</span>) : "—";
         };
-        return <tr key={`${target}-${index}`}><td><span className="xray3-rule-order"><GripVertical size={14} /><strong>{index + 1}</strong></span></td><td><span className="xray3-cell-stack">{valuesCell("source", "sourcePort")}</span></td><td>{networkValue}</td><td><span className="xray3-cell-stack">{valuesCell("ip", "domain", "port")}</span></td><td><span className="xray3-cell-stack">{valuesCell("inboundTag", "user")}</span></td><td><Badge tone={target === "—" ? "neutral" : "good"}>{target}</Badge></td><td><Badge tone={balancer === "—" ? "neutral" : "info"}>{balancer}</Badge></td><td><div className="xray3-row-actions"><IconButton label={`上移路由规则 ${index + 1}`} onClick={() => void moveRule(index, -1)} disabled={working || index === 0}><ArrowUp size={14} /></IconButton><IconButton label={`下移路由规则 ${index + 1}`} onClick={() => void moveRule(index, 1)} disabled={working || index === rules.length - 1}><ArrowDown size={14} /></IconButton><IconButton label={`编辑路由规则 ${index + 1}`} onClick={() => openEditor({ index, rule })} disabled={working}><Pencil size={15} /></IconButton><IconButton label={`删除路由规则 ${index + 1}`} onClick={() => setDeleting({ index, rule })} disabled={working}><Trash2 size={15} /></IconButton></div></td></tr>;
+        const sourceKey = rule.sourceIP !== undefined && rule.sourceIP !== null ? "sourceIP" : "source";
+        return <tr key={`${target}-${index}`}><td><span className="xray3-rule-order"><GripVertical size={14} /><strong>{index + 1}</strong></span></td><td><span className="xray3-cell-stack">{valuesCell(sourceKey, "sourcePort")}</span></td><td>{networkValue}</td><td><span className="xray3-cell-stack">{valuesCell("ip", "domain", "port")}</span></td><td><span className="xray3-cell-stack">{valuesCell("inboundTag", "user")}</span></td><td><Badge tone={target === "—" ? "neutral" : "good"}>{target}</Badge></td><td><Badge tone={balancer === "—" ? "neutral" : "info"}>{balancer}</Badge></td><td><div className="xray3-row-actions"><IconButton label={`上移路由规则 ${index + 1}`} onClick={() => void moveRule(index, -1)} disabled={working || index === 0}><ArrowUp size={14} /></IconButton><IconButton label={`下移路由规则 ${index + 1}`} onClick={() => void moveRule(index, 1)} disabled={working || index === rules.length - 1}><ArrowDown size={14} /></IconButton><IconButton label={`编辑路由规则 ${index + 1}`} onClick={() => openEditor({ index, rule })} disabled={working}><Pencil size={15} /></IconButton><IconButton label={`删除路由规则 ${index + 1}`} onClick={() => setDeleting({ index, rule })} disabled={working}><Trash2 size={15} /></IconButton></div></td></tr>;
       })}
     </tbody></table></div>}
-    {editorOpen ? <Dialog title={editing ? "编辑路由规则" : "添加路由规则"} description="按 3x-ui 的字段顺序填写匹配条件，规则顺序从上到下执行" onClose={closeEditor} dismissible={!working} wide><div className="xray-resource-dialog routing-rule-editor">
+    {editorOpen ? <Dialog title={editing ? "编辑路由规则" : "添加路由规则"} onClose={closeEditor} dismissible={!working} medium><div className="xray-resource-dialog routing-rule-editor">
       {editorError ? <ErrorState message={editorError} /> : null}
-      <form className="form-stack" onSubmit={submit}>
-        <div className="form-grid three"><Field label="Source IPs"><input aria-label="路由来源 IP" value={sourceIP} onChange={(event) => setSourceIP(event.target.value)} placeholder="0.0.0.0/8, geoip:private" /></Field><Field label="Source port"><input aria-label="路由来源端口" value={sourcePort} onChange={(event) => setSourcePort(event.target.value)} placeholder="53,443,1000-2000" /></Field><Field label="VLESS route" hint="端口或端口范围，多个值用逗号分隔"><input aria-label="VLESS 路由" value={vlessRoute} onChange={(event) => setVlessRoute(event.target.value)} placeholder="53,443,1000-2000" /></Field></div>
-        <div className="form-grid two"><Field label="Network"><select aria-label="路由网络" value={network} onChange={(event) => setNetwork(event.target.value)}><option value="">(any)</option><option value="tcp">tcp</option><option value="udp">udp</option><option value="tcp,udp">tcp,udp</option></select></Field><Field label="协议" hint="逗号或换行分隔"><input aria-label="路由协议" value={protocol} onChange={(event) => setProtocol(event.target.value)} placeholder="bittorrent" /></Field></div>
-        <div className="routing-attributes"><div className="routing-attributes-head"><span><strong>Attributes</strong><small>Xray 路由属性键值对</small></span><IconButton type="button" label="添加路由属性" onClick={() => setAttributes((current) => [...current, ["", ""]])}><Plus size={15} /></IconButton></div>{attributes.length ? <div className="routing-attribute-list">{attributes.map(([key, value], index) => <div className="routing-attribute-row" key={index}><span>{index + 1}</span><input aria-label={`路由属性名称 ${index + 1}`} value={key} onChange={(event) => setAttributes((current) => current.map((item, itemIndex) => itemIndex === index ? [event.target.value, item[1]] : item))} placeholder="名称" /><input aria-label={`路由属性值 ${index + 1}`} value={value} onChange={(event) => setAttributes((current) => current.map((item, itemIndex) => itemIndex === index ? [item[0], event.target.value] : item))} placeholder="值" /><IconButton type="button" label={`删除路由属性 ${index + 1}`} onClick={() => setAttributes((current) => current.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={14} /></IconButton></div>)}</div> : <small className="routing-attributes-empty">未设置属性条件</small>}</div>
-        <div className="form-grid two"><Field label="域名" hint="逗号或换行分隔"><textarea aria-label="路由域名" rows={3} value={domain} onChange={(event) => setDomain(event.target.value)} placeholder="domain:example.com&#10;geosite:google" /></Field><Field label="IP" hint="逗号或换行分隔"><textarea aria-label="路由 IP" rows={3} value={ip} onChange={(event) => setIP(event.target.value)} placeholder="geoip:private&#10;10.0.0.0/8" /></Field></div>
-        <div className="form-grid three"><Field label="用户" hint="逗号或换行分隔"><input aria-label="路由用户" value={user} onChange={(event) => setUser(event.target.value)} placeholder="user@example.com" /></Field><Field label="Port"><input aria-label="路由端口" value={port} onChange={(event) => setPort(event.target.value)} placeholder="80,443,1000-2000" /></Field><Field label="入站 Tag" hint="逗号或换行分隔"><input aria-label="路由入站 Tag" value={inboundTag} onChange={(event) => setInboundTag(event.target.value)} placeholder="vless-in" /></Field></div>
-        <div className="form-grid two"><Field label="出站 Tag" hint="从当前出站选择，或输入自定义 Tag"><input aria-label="路由出站 Tag" list={`routing-outbound-tags-${serverId}`} value={outboundTag} onChange={(event) => { setOutboundTag(event.target.value); if (event.target.value.trim()) setBalancerTag(""); }} placeholder="选择或输入出站 Tag" /></Field><Field label="负载均衡 Tag" hint="从当前路由负载均衡器选择，或输入自定义 Tag"><input aria-label="路由负载均衡 Tag" list={`routing-balancer-tags-${serverId}`} value={balancerTag} onChange={(event) => { setBalancerTag(event.target.value); if (event.target.value.trim()) setOutboundTag(""); }} placeholder="选择或输入负载均衡 Tag" /></Field></div>
-        <datalist id={`routing-outbound-tags-${serverId}`}>{outboundTags.map((tag) => <option key={tag} value={tag} />)}</datalist>
-        <datalist id={`routing-balancer-tags-${serverId}`}>{balancerTags.map((tag) => <option key={tag} value={tag} />)}</datalist>
-        <details className="xray-advanced-disclosure"><summary>高级 JSON（可选）</summary><Field label="高级 JSON" hint="可配置 marktag 等完整 Xray 路由字段；上方常用字段保存时会覆盖同名值。"><textarea className="service-code-editor xray-resource-json" aria-label="路由规则高级 JSON" spellCheck={false} value={jsonDraft} onChange={(event) => setJsonDraft(event.target.value)} /></Field></details>
+      <form className="form-stack routing-compact-form" onSubmit={submit}>
+        <RoutingFormRow label="Source IPs" hint="多个值使用逗号分隔"><input aria-label="路由来源 IP" value={sourceIP} onChange={(event) => setSourceIP(event.target.value)} placeholder="0.0.0.0/8, geoip:private" /></RoutingFormRow>
+        <RoutingFormRow label="Source Port" hint="支持端口及端口范围"><input aria-label="路由来源端口" value={sourcePort} onChange={(event) => setSourcePort(event.target.value)} placeholder="53,443,1000-2000" /></RoutingFormRow>
+        <RoutingFormRow label="Network"><select aria-label="路由网络" value={network} onChange={(event) => setNetwork(event.target.value)}><option value="">(any)</option><option value="tcp">tcp</option><option value="udp">udp</option><option value="tcp,udp">tcp,udp</option></select></RoutingFormRow>
+        <RoutingFormRow label="Protocol"><RoutingMultiSelect ariaLabel="路由协议" values={selectedProtocols} options={protocolOptions} onChange={(values) => setProtocol(values.join(","))} placeholder="请选择协议" /></RoutingFormRow>
+        <RoutingFormRow label="Attributes"><IconButton type="button" label="添加路由属性" onClick={() => setAttributes((current) => [...current, ["", ""]])}><Plus size={15} /></IconButton></RoutingFormRow>
+        {attributes.length ? <div className="routing-attribute-list routing-compact-attributes">{attributes.map(([key, value], index) => <div className="routing-attribute-row" key={index}><span>{index + 1}</span><input aria-label={`路由属性名称 ${index + 1}`} value={key} onChange={(event) => setAttributes((current) => current.map((item, itemIndex) => itemIndex === index ? [event.target.value, item[1]] : item))} placeholder="名称" /><input aria-label={`路由属性值 ${index + 1}`} value={value} onChange={(event) => setAttributes((current) => current.map((item, itemIndex) => itemIndex === index ? [item[0], event.target.value] : item))} placeholder="值" /><IconButton type="button" label={`删除路由属性 ${index + 1}`} onClick={() => setAttributes((current) => current.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={14} /></IconButton></div>)}</div> : null}
+        <RoutingFormRow label="IP" hint="多个值使用逗号分隔"><input aria-label="路由 IP" value={ip} onChange={(event) => setIP(event.target.value)} placeholder="geoip:private, 10.0.0.0/8" /></RoutingFormRow>
+        <RoutingFormRow label="Domain" hint="多个值使用逗号分隔"><input aria-label="路由域名" value={domain} onChange={(event) => setDomain(event.target.value)} placeholder="domain:example.com, geosite:google" /></RoutingFormRow>
+        <RoutingFormRow label="User" hint="多个值使用逗号分隔"><input aria-label="路由用户" value={user} onChange={(event) => setUser(event.target.value)} placeholder="user@example.com" /></RoutingFormRow>
+        <RoutingFormRow label="Port" hint="支持端口及端口范围"><input aria-label="路由端口" value={port} onChange={(event) => setPort(event.target.value)} placeholder="80,443,1000-2000" /></RoutingFormRow>
+        <RoutingFormRow label="Inbound Tags"><RoutingMultiSelect ariaLabel="路由入站 Tag" values={selectedInboundTags} options={selectableInboundTags} onChange={(values) => setInboundTag(values.join(","))} placeholder="请选择入站 Tag" /></RoutingFormRow>
+        <RoutingFormRow label="Outbound Tag"><select aria-label="路由出站 Tag" value={outboundTag} onChange={(event) => { setOutboundTag(event.target.value); if (event.target.value) setBalancerTag(""); }}><option value="">(不使用)</option>{selectableOutboundTags.map((tag) => <option key={tag} value={tag}>{tag}{!outboundTags.includes(tag) ? "（已不存在）" : ""}</option>)}</select></RoutingFormRow>
+        <RoutingFormRow label="Balancer Tag" hint="与 Outbound Tag 二选一"><select aria-label="路由负载均衡 Tag" value={balancerTag} onChange={(event) => { setBalancerTag(event.target.value); if (event.target.value) setOutboundTag(""); }}><option value="">(不使用)</option>{selectableBalancerTags.map((tag) => <option key={tag} value={tag}>{tag}{!balancerTags.includes(tag) ? "（已不存在）" : ""}</option>)}</select></RoutingFormRow>
+        <details className="routing-advanced-disclosure"><summary>高级条件</summary><div className="routing-advanced-content">
+          <RoutingFormRow label="VLESS Route" hint="端口或端口范围，多个值使用逗号分隔"><input aria-label="VLESS 路由" value={vlessRoute} onChange={(event) => setVlessRoute(event.target.value)} placeholder="53,443,1000-2000" /></RoutingFormRow>
+          <RoutingFormRow label="高级 JSON"><textarea className="service-code-editor xray-resource-json" aria-label="路由规则高级 JSON" spellCheck={false} value={jsonDraft} onChange={(event) => setJsonDraft(event.target.value)} /></RoutingFormRow>
+        </div></details>
         <div className="dialog-actions"><Button type="button" variant="secondary" onClick={closeEditor} disabled={working}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />{editing ? "保存规则" : "创建规则"}</>}</Button></div>
       </form>
     </div></Dialog> : null}

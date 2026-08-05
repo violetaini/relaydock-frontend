@@ -65,6 +65,7 @@ function mockServerReads(servers: RemoteServer[] = [onlineServer, offlineServer]
   certificates?: Record<string, unknown>[];
   deleteImpact?: Record<string, unknown>;
   serviceStatus?: Record<string, unknown>;
+  inboundError?: string;
   xrayVersions?: Record<string, unknown>;
   agentVersion?: Record<string, unknown>;
   xrayConfig?: string;
@@ -141,7 +142,10 @@ function mockServerReads(servers: RemoteServer[] = [onlineServer, offlineServer]
     if (path.includes("/api/admin/remote/agent/version-info")) return (resources.agentVersion ?? { server_id: 11, current: "0.3.0", latest: "0.3.1", upgrade_available: true }) as T;
     if (path.includes("/api/admin/remote/system/info")) return { success: true, hostname: "edge-hk", uptime: "3600", loadavg: "0.10 0.20 0.30 1/100 1", memory: { MemAvailable: "1024 MB" } } as T;
     if (path.includes("/api/admin/remote-servers/reveal-token")) return { success: true, token: "revealed-server-token", pull_token: "existing-agent-token", agent_token: "existing-agent-token", install_command: "authoritative-install-command" } as T;
-    if (path === "/api/admin/remote/inbounds?server_id=11") return { success: true, inbounds: resources.inbounds ?? [] } as T;
+    if (path === "/api/admin/remote/inbounds?server_id=11") {
+      if (resources.inboundError) throw new Error(resources.inboundError);
+      return { success: true, inbounds: resources.inbounds ?? [] } as T;
+    }
     if (path === "/api/admin/remote/outbounds?server_id=11") return { success: true, outbounds: resources.outbounds ?? [] } as T;
     if (path === "/api/admin/remote/routing?server_id=11") return { success: true, routing: resources.routing ?? { rules: [] } } as T;
     if (path === "/api/admin/remote/xray/config?server_id=11") return { success: true, path: "/usr/local/etc/xray/config.json", config: resources.xrayConfig ?? JSON.stringify({ log: { loglevel: "warning" }, inbounds: [], outbounds: [], routing: { rules: [] }, dns: { servers: ["1.1.1.1"] } }, null, 2) } as T;
@@ -1682,7 +1686,7 @@ describe("service management workbench", () => {
   });
 
   it("shows common routing match fields and creates a rule through an atomic hot mutation", async () => {
-    mockServerReads([onlineServer], { outbounds: [{ tag: "media-out", protocol: "freedom" }, { tag: "proxy-google", protocol: "shadowsocks" }], routing: { domainStrategy: "IPIfNonMatch", balancers: [{ tag: "fallback" }], rules: [{
+    mockServerReads([onlineServer], { inbounds: [{ tag: "vless-in", protocol: "vless" }, { tag: "trojan-in", protocol: "trojan" }], outbounds: [{ tag: "media-out", protocol: "freedom" }, { tag: "proxy-google", protocol: "shadowsocks" }], routing: { domainStrategy: "IPIfNonMatch", balancers: [{ tag: "fallback" }], rules: [{
       type: "field",
       domain: ["domain:google.com"],
       ip: ["8.8.8.8"],
@@ -1691,7 +1695,7 @@ describe("service management workbench", () => {
       inboundTag: ["vless-in"],
       user: ["alice@example.com"],
       protocol: ["bittorrent"],
-      outboundTag: "proxy-google",
+      outboundTag: "ghost-out",
     }] } });
     const post = vi.spyOn(api, "post").mockResolvedValue({ success: true, message: "updated" });
     render(<ServicesWorkbenchPage notify={vi.fn()} />);
@@ -1709,22 +1713,39 @@ describe("service management workbench", () => {
 
     fireEvent.click(within(dialog).getByRole("button", { name: "添加规则" }));
     expect(await screen.findByRole("dialog", { name: "添加路由规则" })).toBeInTheDocument();
-    const outboundInput = within(dialog).getByLabelText("路由出站 Tag");
-    const balancerInput = within(dialog).getByLabelText("路由负载均衡 Tag");
-    const outboundOptions = document.getElementById(outboundInput.getAttribute("list") || "");
-    const balancerOptions = document.getElementById(balancerInput.getAttribute("list") || "");
-    expect(outboundOptions).not.toBeNull();
-    expect(balancerOptions).not.toBeNull();
-    expect([...outboundOptions!.querySelectorAll("option")].map((option) => option.value)).toEqual(expect.arrayContaining(["media-out", "proxy-google"]));
-    expect([...balancerOptions!.querySelectorAll("option")].map((option) => option.value)).toContain("fallback");
-    fireEvent.change(outboundInput, { target: { value: "media-out" } });
-    fireEvent.change(within(dialog).getByRole("textbox", { name: "路由域名" }), { target: { value: "domain:youtube.com\ngeosite:google" } });
+    const outboundSelect = within(dialog).getByRole("combobox", { name: "路由出站 Tag" });
+    const balancerSelect = within(dialog).getByRole("combobox", { name: "路由负载均衡 Tag" });
+    expect(outboundSelect.tagName).toBe("SELECT");
+    expect(balancerSelect.tagName).toBe("SELECT");
+    expect([...outboundSelect.querySelectorAll("option")].map((option) => option.value)).toEqual(["", "media-out", "proxy-google"]);
+    expect([...outboundSelect.querySelectorAll("option")].map((option) => option.value)).not.toContain("ghost-out");
+    expect([...balancerSelect.querySelectorAll("option")].map((option) => option.value)).toEqual(["", "fallback"]);
+    fireEvent.change(outboundSelect, { target: { value: "media-out" } });
+    fireEvent.change(balancerSelect, { target: { value: "fallback" } });
+    expect(outboundSelect).toHaveValue("");
+    fireEvent.change(outboundSelect, { target: { value: "media-out" } });
+    expect(balancerSelect).toHaveValue("");
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "路由来源 IP" }), { target: { value: "192.0.2.0/24" } });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "路由域名" }), { target: { value: "domain:youtube.com,geosite:google" } });
     fireEvent.change(within(dialog).getByRole("textbox", { name: "路由 IP" }), { target: { value: "geoip:private,10.0.0.0/8" } });
     fireEvent.change(within(dialog).getByRole("textbox", { name: "路由端口" }), { target: { value: "443,8443" } });
     fireEvent.change(within(dialog).getByRole("combobox", { name: "路由网络" }), { target: { value: "tcp,udp" } });
-    fireEvent.change(within(dialog).getByRole("textbox", { name: "路由入站 Tag" }), { target: { value: "vless-in,trojan-in" } });
     fireEvent.change(within(dialog).getByRole("textbox", { name: "路由用户" }), { target: { value: "bob@example.com" } });
-    fireEvent.change(within(dialog).getByRole("textbox", { name: "路由协议" }), { target: { value: "bittorrent" } });
+    const protocolSelect = within(dialog).getByRole("button", { name: "路由协议" });
+    fireEvent.click(protocolSelect);
+    expect(protocolSelect).toHaveAttribute("aria-expanded", "true");
+    const focusedProtocolOption = within(dialog).getByRole("option", { name: "http" });
+    focusedProtocolOption.focus();
+    fireEvent.keyDown(focusedProtocolOption, { key: "Escape" });
+    expect(within(dialog).getByRole("dialog", { name: "添加路由规则" })).toBeInTheDocument();
+    expect(protocolSelect).toHaveAttribute("aria-expanded", "false");
+    expect(protocolSelect).toHaveFocus();
+    fireEvent.click(protocolSelect);
+    fireEvent.click(within(dialog).getByRole("option", { name: "bittorrent" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "路由入站 Tag" }));
+    fireEvent.click(within(dialog).getByRole("option", { name: "vless-in" }));
+    fireEvent.click(within(dialog).getByRole("option", { name: "trojan-in" }));
+    fireEvent.click(within(dialog).getByText("高级条件"));
     fireEvent.change(within(dialog).getByRole("textbox", { name: "VLESS 路由" }), { target: { value: "53, 1000-2000" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "添加路由属性" }));
     fireEvent.change(within(dialog).getByRole("textbox", { name: "路由属性名称 1" }), { target: { value: "network" } });
@@ -1737,6 +1758,7 @@ describe("service management workbench", () => {
       rule: {
         type: "field",
         attrs: { network: "tcp" },
+        sourceIP: ["192.0.2.0/24"],
         domain: ["domain:youtube.com", "geosite:google"],
         ip: ["geoip:private", "10.0.0.0/8"],
         inboundTag: ["vless-in", "trojan-in"],
@@ -1748,6 +1770,121 @@ describe("service management workbench", () => {
         outboundTag: "media-out",
       },
     }));
+  });
+
+  it("round trips 3x-ui sourceIP rules and preserves unavailable targets and unknown fields", async () => {
+    const originalRule = {
+      type: "field",
+      sourceIP: ["10.10.0.0/16"],
+      source: ["192.0.2.0/24"],
+      network: ["tcp", "udp"],
+      inboundTag: ["removed-in"],
+      protocol: ["tls", "custom-proto"],
+      outboundTag: "removed-out",
+      ruleTag: "legacy-rule",
+      process: ["legacy-process"],
+    };
+    mockServerReads([onlineServer], {
+      inbounds: [{ tag: "active-in", protocol: "vless" }],
+      outbounds: [{ tag: "direct", protocol: "freedom" }],
+      routing: { balancers: [{ tag: "active-balancer" }], rules: [originalRule] },
+    });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(dialog).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(dialog).getByRole("tab", { name: "Xray 设置" }));
+    fireEvent.click(within(dialog).getByRole("tab", { name: "路由规则" }));
+    fireEvent.click(await within(dialog).findByRole("button", { name: "编辑路由规则 1" }));
+
+    const editor = await screen.findByRole("dialog", { name: "编辑路由规则" });
+    expect(within(editor).getByRole("textbox", { name: "路由来源 IP" })).toHaveValue("10.10.0.0/16");
+    expect(within(editor).getByRole("combobox", { name: "路由网络" })).toHaveValue("tcp,udp");
+    const outboundSelect = within(editor).getByRole("combobox", { name: "路由出站 Tag" });
+    expect(outboundSelect).toHaveValue("removed-out");
+    expect(within(outboundSelect).getByRole("option", { name: "removed-out（已不存在）" })).toBeInTheDocument();
+    fireEvent.click(within(editor).getByRole("button", { name: "路由协议" }));
+    const customProtocol = within(editor).getByRole("option", { name: "custom-proto" });
+    expect(customProtocol).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(customProtocol);
+    expect(within(editor).getByRole("option", { name: "custom-proto" })).toHaveAttribute("aria-selected", "false");
+    fireEvent.click(within(editor).getByRole("option", { name: "custom-proto" }));
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.click(within(editor).getByRole("button", { name: "路由入站 Tag" }));
+    const removedInbound = within(editor).getByRole("option", { name: "removed-in" });
+    expect(removedInbound).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(removedInbound);
+    expect(within(editor).getByRole("option", { name: "removed-in" })).toHaveAttribute("aria-selected", "false");
+    fireEvent.click(within(editor).getByRole("option", { name: "removed-in" }));
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.change(within(editor).getByRole("combobox", { name: "路由负载均衡 Tag" }), { target: { value: "active-balancer" } });
+    expect(within(outboundSelect).getByRole("option", { name: "removed-out（已不存在）" })).toBeInTheDocument();
+    fireEvent.change(outboundSelect, { target: { value: "removed-out" } });
+    fireEvent.click(within(editor).getByRole("button", { name: "保存规则" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote/routing?server_id=11", {
+      action: "replace_rule_hot",
+      index: 0,
+      expected_rule: originalRule,
+      rule: {
+        type: "field",
+        sourceIP: ["10.10.0.0/16"],
+        network: "tcp,udp",
+        inboundTag: ["removed-in"],
+        protocol: ["tls", "custom-proto"],
+        outboundTag: "removed-out",
+        ruleTag: "legacy-rule",
+        process: ["legacy-process"],
+      },
+    }));
+  });
+
+  it("does not activate legacy source when an explicit empty sourceIP is saved", async () => {
+    const originalRule = { type: "field", sourceIP: [], source: ["10.0.0.0/8"], outboundTag: "direct" };
+    mockServerReads([onlineServer], {
+      outbounds: [{ tag: "direct", protocol: "freedom" }],
+      routing: { rules: [originalRule] },
+    });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(dialog).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(dialog).getByRole("tab", { name: "Xray 设置" }));
+    fireEvent.click(within(dialog).getByRole("tab", { name: "路由规则" }));
+    fireEvent.click(await within(dialog).findByRole("button", { name: "编辑路由规则 1" }));
+
+    const editor = await screen.findByRole("dialog", { name: "编辑路由规则" });
+    expect(within(editor).getByRole("textbox", { name: "路由来源 IP" })).toHaveValue("");
+    fireEvent.click(within(editor).getByRole("button", { name: "保存规则" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote/routing?server_id=11", {
+      action: "replace_rule_hot",
+      index: 0,
+      expected_rule: originalRule,
+      rule: { type: "field", outboundTag: "direct" },
+    }));
+  });
+
+  it("keeps routing management available when inbound tag suggestions fail to load", async () => {
+    mockServerReads([onlineServer], {
+      inboundError: "older agent does not expose inbound suggestions",
+      outbounds: [{ tag: "direct", protocol: "freedom" }],
+      routing: { rules: [{ type: "field", domain: ["domain:example.com"], outboundTag: "direct" }] },
+    });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(dialog).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(dialog).getByRole("tab", { name: "Xray 设置" }));
+    fireEvent.click(within(dialog).getByRole("tab", { name: "路由规则" }));
+
+    expect(await within(dialog).findByText("domain:example.com", { exact: true })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "编辑路由规则 1" })).toBeEnabled();
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("deletes the selected routing rule by its current array index", async () => {
@@ -1802,7 +1939,7 @@ describe("service management workbench", () => {
   });
 
   it("surfaces an HTTP 200 routing response whose success flag is false", async () => {
-    mockServerReads([onlineServer], { routing: { rules: [{ type: "field", outboundTag: "direct" }] } });
+    mockServerReads([onlineServer], { outbounds: [{ tag: "direct", protocol: "freedom" }], routing: { rules: [{ type: "field", outboundTag: "direct" }] } });
     const notify = vi.fn();
     vi.spyOn(api, "post").mockResolvedValue({ success: false, error: "规则语义无效" });
     render(<ServicesWorkbenchPage notify={notify} />);
@@ -1814,11 +1951,11 @@ describe("service management workbench", () => {
     fireEvent.click(within(dialog).getByRole("tab", { name: "路由规则" }));
     await within(dialog).findByRole("button", { name: "删除路由规则 1" });
     fireEvent.click(within(dialog).getByRole("button", { name: "添加规则" }));
-    fireEvent.change(within(dialog).getByLabelText("路由出站 Tag"), { target: { value: "broken-out" } });
+    fireEvent.change(within(dialog).getByLabelText("路由出站 Tag"), { target: { value: "direct" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "创建规则" }));
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("规则语义无效");
-    expect(within(dialog).getByLabelText("路由出站 Tag")).toHaveValue("broken-out");
+    expect(within(dialog).getByLabelText("路由出站 Tag")).toHaveValue("direct");
     expect(notify).not.toHaveBeenCalled();
   });
 });

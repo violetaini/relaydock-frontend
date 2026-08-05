@@ -832,8 +832,49 @@
 .routing-rule-json { border-top: 1px solid var(--border); }
 .routing-rule-json summary { padding-top: 10px; color: var(--text-soft); font-size: 12px; font-weight: 650; cursor: pointer; }
 .routing-rule-json pre { max-height: 260px; margin: 10px 0 0; padding: 11px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; color: #d9e5e0; background: #111614; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-.routing-rule-editor textarea:not(.service-code-editor) { width: 100%; resize: vertical; }
-.routing-rule-editor .xray-resource-json { min-height: 220px; }
+.routing-rule-editor .xray-resource-json { min-height: 180px; }
+.routing-compact-form { gap: 10px; }
+.routing-compact-row { min-width: 0; display: grid; grid-template-columns: 142px minmax(0, 1fr); align-items: center; gap: 14px; }
+.routing-compact-label { display: flex; align-items: center; justify-content: flex-end; gap: 5px; color: var(--text-soft); font-size: 12px; font-weight: 650; text-align: right; }
+.routing-field-help { width: 16px; height: 16px; flex: 0 0 16px; display: inline-grid; place-items: center; border: 1px solid var(--border-strong); border-radius: 50%; color: var(--text-faint); font-size: 10px; cursor: help; }
+.routing-compact-control { min-width: 0; }
+.routing-compact-control > input,
+.routing-compact-control > select,
+.routing-compact-control > textarea,
+.routing-attribute-row input {
+  width: 100%;
+  min-height: 39px;
+  padding: 8px 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--surface);
+  font-size: 13px;
+}
+.routing-compact-control > input:focus,
+.routing-compact-control > select:focus,
+.routing-compact-control > textarea:focus,
+.routing-attribute-row input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); outline: 0; }
+.routing-multi-select { position: relative; min-width: 0; }
+.routing-multi-select > button { width: 100%; min-height: 39px; padding: 8px 10px 8px 11px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); background: var(--surface); font-size: 13px; text-align: left; }
+.routing-multi-select > button:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); outline: 0; }
+.routing-multi-select > button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.routing-multi-select > button > span.is-placeholder { color: var(--text-faint); }
+.routing-multi-select > button > svg { flex: 0 0 auto; color: var(--text-faint); transition: transform .15s ease; }
+.routing-multi-select.is-open > button > svg { transform: rotate(180deg); }
+.routing-multi-options { position: absolute; z-index: 8; top: calc(100% + 4px); right: 0; left: 0; max-height: var(--routing-options-max-height, 220px); padding: 5px; overflow-y: auto; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface-raised); box-shadow: var(--shadow-high); }
+.routing-multi-select.opens-up .routing-multi-options { top: auto; bottom: calc(100% + 4px); }
+.routing-multi-options > button { width: 100%; min-height: 34px; padding: 6px 8px; display: flex; align-items: center; gap: 8px; border: 0; border-radius: 4px; color: var(--text-soft); background: transparent; font-size: 12px; text-align: left; cursor: pointer; }
+.routing-multi-options > button:hover,
+.routing-multi-options > button:focus-visible { color: var(--text); background: var(--surface-hover); outline: 0; }
+.routing-option-check { width: 15px; height: 15px; flex: 0 0 15px; display: grid; place-items: center; border: 1px solid var(--border-strong); border-radius: 3px; color: var(--accent-contrast); background: var(--surface); }
+.routing-multi-options > button[aria-selected="true"] .routing-option-check { border-color: var(--accent); background: var(--accent); }
+.routing-multi-options > small { padding: 8px; display: block; color: var(--text-faint); font-size: 11px; }
+.routing-compact-attributes { margin-left: 156px; }
+.routing-advanced-disclosure { margin-top: 2px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-muted); }
+.routing-advanced-disclosure summary { padding: 10px 12px; color: var(--text-soft); font-size: 11px; font-weight: 700; cursor: pointer; }
+.routing-advanced-disclosure[open] summary { border-bottom: 1px solid var(--border); }
+.routing-advanced-content { padding: 12px; display: grid; gap: 10px; }
 .routing-attributes { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: color-mix(in srgb, var(--surface-muted) 74%, transparent); }
 .routing-attributes-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .routing-attributes-head > span { display: grid; gap: 2px; }
@@ -946,6 +987,9 @@
 
 @media (max-width: 560px) {
   .services-filters { width: 100%; }
+  .routing-compact-row { grid-template-columns: 1fr; gap: 6px; }
+  .routing-compact-label { justify-content: flex-start; text-align: left; }
+  .routing-compact-attributes { margin-left: 0; }
   .services-search { min-width: 0; flex: 1; }
   .services-live-state { margin-left: 0; }
   .service-card { padding: 14px; gap: 11px; }

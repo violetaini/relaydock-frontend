@@ -382,6 +382,7 @@ td > strong { font-size: 11px; }
 
 .dialog-backdrop { position: fixed; inset: 0; z-index: 80; padding: 24px; display: flex; align-items: center; justify-content: center; background: rgb(10 16 14 / 58%); backdrop-filter: blur(3px); }
 .dialog { width: min(100%, 520px); max-height: min(90vh, 760px); overflow: hidden; display: flex; flex-direction: column; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface-raised); box-shadow: var(--shadow); }
+.dialog-medium { width: min(96vw, 640px); }
 .dialog-wide { width: min(100%, 720px); }
 .dialog-header { min-height: 69px; padding: 15px 17px 14px 20px; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--border); }
 .dialog-header h2 { font-size: 16px; }

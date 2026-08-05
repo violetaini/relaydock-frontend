@@ -1129,7 +1129,19 @@ for (const viewport of [
     const unknownPaths: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.setViewportSize(viewport);
-    await mockAPI(page, traffic, unknownPaths);
+    await mockAPI(page, traffic, unknownPaths, {
+      "/api/admin/remote/inbounds": {
+        success: true,
+        inbounds: ["vless-in", "trojan-in", "ws-in", "grpc-in", "wireguard-in", "shadowsocks-in"].map((tag, index) => ({
+          tag,
+          listen: "0.0.0.0",
+          port: 443 + index,
+          protocol: tag.split("-")[0],
+          settings: { clients: [] },
+          _runtime_status: "running",
+        })),
+      },
+    });
 
     await page.goto("/#/subscriptions");
     await expect(page.getByRole("link", { name: "导入 Clash" }).first()).toHaveAttribute("href", /^clash:\/\/install-config\?/);
@@ -1233,11 +1245,41 @@ for (const viewport of [
     await page.screenshot({ path: testInfo.outputPath(`xray-routing-${viewport.name}.png`), fullPage: true });
     await serverDialog.getByRole("button", { name: "添加规则" }).first().click();
     const routingDialog = page.getByRole("dialog", { name: "添加路由规则" });
-    await expect(routingDialog.getByText("高级 JSON（可选）", { exact: true })).toBeVisible();
-    await routingDialog.getByText("高级 JSON（可选）", { exact: true }).click();
-    await expect(routingDialog.getByLabel("路由规则高级 JSON")).toBeVisible();
+    await expect(routingDialog).toHaveClass(/dialog-medium/);
+    await expect(routingDialog.getByRole("combobox", { name: "路由网络" })).toHaveValue("");
+    const protocolSelect = routingDialog.getByRole("button", { name: "路由协议" });
+    await expect(protocolSelect).toBeVisible();
+    await expect(routingDialog.getByRole("button", { name: "路由入站 Tag" })).toBeVisible();
+    await expect(routingDialog.getByRole("combobox", { name: "路由出站 Tag" }).locator("option")).toHaveText(["(不使用)", "direct"]);
+    await protocolSelect.click();
+    await expect(routingDialog.getByRole("listbox", { name: "路由协议选项" })).toBeVisible();
+    await expectViewportIntegrity(page, `${viewport.name} routing protocol selector`);
+    await page.screenshot({ path: testInfo.outputPath(`xray-routing-protocol-${viewport.name}.png`), fullPage: true });
+    await page.keyboard.press("Escape");
+    await expect(routingDialog).toBeVisible();
+    await expect(protocolSelect).toHaveAttribute("aria-expanded", "false");
+    const inboundSelect = routingDialog.getByRole("button", { name: "路由入站 Tag" });
+    await inboundSelect.scrollIntoViewIfNeeded();
+    await inboundSelect.click();
+    const inboundOptions = routingDialog.getByRole("listbox", { name: "路由入站 Tag选项" });
+    await expect(inboundOptions).toBeVisible();
+    const inboundMenuBounds = await inboundOptions.evaluate((element) => {
+      const menu = element.getBoundingClientRect();
+      const body = element.closest(".dialog-body")?.getBoundingClientRect();
+      return body ? { menuTop: menu.top, menuBottom: menu.bottom, bodyTop: body.top, bodyBottom: body.bottom } : null;
+    });
+    expect(inboundMenuBounds).not.toBeNull();
+    expect(inboundMenuBounds!.menuTop).toBeGreaterThanOrEqual(inboundMenuBounds!.bodyTop - 1);
+    expect(inboundMenuBounds!.menuBottom).toBeLessThanOrEqual(inboundMenuBounds!.bodyBottom + 1);
+    await page.keyboard.press("Escape");
+    await expect(routingDialog).toBeVisible();
+    await expect(inboundSelect).toHaveAttribute("aria-expanded", "false");
+    await expect(routingDialog.getByText("高级条件", { exact: true })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} structured routing editor`);
     await page.screenshot({ path: testInfo.outputPath(`xray-routing-editor-${viewport.name}.png`), fullPage: true });
+    await routingDialog.getByText("高级条件", { exact: true }).click();
+    await expect(routingDialog.getByLabel("路由规则高级 JSON")).toBeVisible();
+    await expectViewportIntegrity(page, `${viewport.name} advanced routing editor`);
     await routingDialog.getByRole("button", { name: "关闭" }).click();
     await closeDialog(page);
 

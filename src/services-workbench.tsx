@@ -108,11 +108,6 @@ interface ActionResponse {
   output?: string;
 }
 
-interface RealityCompatibilityResponse extends ActionResponse {
-  updated?: number;
-  skipped?: number;
-}
-
 interface WireGuardCreateResponse extends ActionResponse {
   node_id?: number;
   node?: { id?: number };
@@ -2212,7 +2207,6 @@ function ServerOperationsDialog({ server, initialTab = "overview", notify, onClo
   const [configPath, setConfigPath] = useState("");
   const [configLoaded, setConfigLoaded] = useState(false);
   const [configDirty, setConfigDirty] = useState(false);
-  const [realityCompatibilityConfirm, setRealityCompatibilityConfirm] = useState(false);
   const [shares, setShares] = useState<SharedServerToken[]>([]);
   const [shareLabel, setShareLabel] = useState("");
   const [newShareToken, setNewShareToken] = useState("");
@@ -2390,22 +2384,6 @@ function ServerOperationsDialog({ server, initialTab = "overview", notify, onClo
     }
   };
 
-  const repairRealityCompatibility = async () => {
-    setWorking("reality-compatibility");
-    setError("");
-    try {
-      const result = assertSuccess(await api.post<RealityCompatibilityResponse>(`/api/admin/remote/xray/reality-compatibility?server_id=${server.id}`), "修复 Reality 客户端兼容性失败");
-      setRealityCompatibilityConfirm(false);
-      const updated = Number(result.updated ?? 0);
-      notify(updated > 0 ? `已修复 ${updated} 个 Reality 入站的客户端兼容性` : "所有受管 Reality 入站已符合客户端兼容性要求");
-      await onChanged();
-    } catch (reason) {
-      setError(messageFrom(reason, "修复 Reality 客户端兼容性失败"));
-    } finally {
-      setWorking("");
-    }
-  };
-
   const loadShares = useCallback(async () => {
     if (server.is_federated) return;
     try {
@@ -2474,11 +2452,10 @@ function ServerOperationsDialog({ server, initialTab = "overview", notify, onClo
     {!loading && tab === "speedtest" ? <ServerSpeedtestPanel server={server} notify={notify} /> : null}
     {!loading && tab === "outbounds" ? <XrayResourcesWorkbench serverId={server.id} serverDomain={server.domain} serverIPv4={server.ip_address} serverIPv6={server.ip_address_v6} kind="outbound" notify={notify} /> : null}
     {!loading && tab === "routing" ? <XrayRoutingWorkbench serverId={server.id} notify={notify} /> : null}
-    {!loading && tab === "config" ? <div className="service-config-panel"><div className="service-reality-compatibility" role="note"><ShieldCheck size={17} /><span><strong>Reality 客户端兼容性</strong><small>仅修复面板接管且缺少最低客户端版本的 Reality 入站；受影响入站会短暂重连，Xray 不会重启。</small></span><Button variant="secondary" onClick={() => setRealityCompatibilityConfirm(true)} disabled={Boolean(working) || !isConnected(server)}><Wrench size={15} />修复兼容性</Button></div>{!configLoaded ? <EmptyState icon={<Code2 size={23} />} title="读取 Agent 上的 Xray 配置" description="编辑前会从目标服务器读取当前配置，不使用本地缓存。" action={<Button onClick={() => void loadConfig()} disabled={working === "config-load"}>{working === "config-load" ? <Spinner label="正在读取" /> : <><Clipboard size={16} />读取配置</>}</Button>} /> : <><div className="service-config-head"><span><strong>{configPath || "config.json"}</strong><small>{configDirty ? "存在未保存更改" : "已与 Agent 同步"}</small></span><div><Button variant="ghost" onClick={() => void loadConfig()} disabled={Boolean(working)}><RefreshCw size={15} />重新读取</Button><Button variant="secondary" onClick={() => void testConfig()} disabled={Boolean(working) || !config.trim()}>{working === "config-test" ? <Spinner label="预检中" /> : <><ShieldCheck size={15} />预检</>}</Button><Button onClick={() => void saveConfig()} disabled={Boolean(working) || !configDirty}>{working === "config-save" ? <Spinner label="保存中" /> : <><Check size={15} />保存配置</>}</Button></div></div><textarea className="service-code-editor" aria-label="Xray 配置 JSON" spellCheck={false} value={config} onChange={(event) => { setConfig(event.target.value); setConfigDirty(true); }} /></>}</div> : null}
+    {!loading && tab === "config" ? <div className="service-config-panel">{!configLoaded ? <EmptyState icon={<Code2 size={23} />} title="读取 Agent 上的 Xray 配置" description="编辑前会从目标服务器读取当前配置，不使用本地缓存。" action={<Button onClick={() => void loadConfig()} disabled={working === "config-load"}>{working === "config-load" ? <Spinner label="正在读取" /> : <><Clipboard size={16} />读取配置</>}</Button>} /> : <><div className="service-config-head"><span><strong>{configPath || "config.json"}</strong><small>{configDirty ? "存在未保存更改" : "已与 Agent 同步"}</small></span><div><Button variant="ghost" onClick={() => void loadConfig()} disabled={Boolean(working)}><RefreshCw size={15} />重新读取</Button><Button variant="secondary" onClick={() => void testConfig()} disabled={Boolean(working) || !config.trim()}>{working === "config-test" ? <Spinner label="预检中" /> : <><ShieldCheck size={15} />预检</>}</Button><Button onClick={() => void saveConfig()} disabled={Boolean(working) || !configDirty}>{working === "config-save" ? <Spinner label="保存中" /> : <><Check size={15} />保存配置</>}</Button></div></div><textarea className="service-code-editor" aria-label="Xray 配置 JSON" spellCheck={false} value={config} onChange={(event) => { setConfig(event.target.value); setConfigDirty(true); }} /></>}</div> : null}
     {!loading && tab === "sharing" ? <div className="service-sharing"><form onSubmit={createShare} className="service-share-create"><Field label="令牌备注"><input required value={shareLabel} onChange={(event) => setShareLabel(event.target.value)} placeholder="提供给分控制端 A" /></Field><Button type="submit" disabled={working === "share-create"}>{working === "share-create" ? <Spinner label="生成中" /> : <><FileKey2 size={16} />生成分享令牌</>}</Button></form>{newShareToken ? <div className="credential-warning"><KeyRound size={19} /><span><strong>仅显示一次</strong><code>{newShareToken}</code></span><IconButton label="复制新分享令牌" onClick={() => navigator.clipboard.writeText(newShareToken).then(() => notify("分享令牌已复制")).catch(() => notify("复制失败", "error"))}><Copy size={17} /></IconButton></div> : null}<div className="service-share-list">{shares.length ? shares.map((share) => <div key={share.id}><span><strong>{share.label || `令牌 #${share.id}`}</strong><small>{share.revoked_at ? `已于 ${share.revoked_at} 吊销` : `创建于 ${share.created_at}`}</small></span><Badge tone={share.revoked_at ? "neutral" : "good"}>{share.revoked_at ? "已吊销" : "有效"}</Badge>{!share.revoked_at ? <IconButton label={`吊销 ${share.label || share.id}`} onClick={() => void revokeShare(share.id)} disabled={working === `share-${share.id}`}><Trash2 size={16} /></IconButton> : null}</div>) : <EmptyState icon={<FileKey2 size={22} />} title="暂无分享令牌" description="生成后可在其他 Arcway 控制端接入这台服务器" />}</div></div> : null}
     {confirm?.service === "xray" && confirm.action === "update" ? <XrayVersionDialog server={server} currentVersion={status?.xray?.version || server.xray_version} working={Boolean(working)} onCancel={() => !working && setConfirm(null)} onConfirm={(selectedVersion) => void serviceAction("xray", "update", selectedVersion)} /> : null}
     {confirm && !(confirm.service === "xray" && confirm.action === "update") ? <ConfirmDialog title={confirmTitle} description={confirmDescription} confirmLabel={confirm.action === "remove" ? "确认卸载" : "确认停止"} working={Boolean(working)} onCancel={() => !working && setConfirm(null)} onConfirm={() => void serviceAction(confirm.service, confirm.action)} /> : null}
-    {realityCompatibilityConfirm ? <ConfirmDialog title="修复 Reality 客户端兼容性" description={`将只热替换 ${server.name} 上由面板接管、且未设置最低客户端版本的 Reality 入站。每个受影响入站会短暂断连后恢复，整套 Xray 不会重启。`} confirmLabel="确认修复" working={working === "reality-compatibility"} onCancel={() => !working && setRealityCompatibilityConfirm(false)} onConfirm={() => void repairRealityCompatibility()} /> : null}
     {terminal ? <RemoteServiceTerminalDialog terminal={terminal} onClose={() => !terminal.running && setTerminal(null)} /> : null}
   </Dialog>;
 }

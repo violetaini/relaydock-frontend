@@ -87,8 +87,19 @@ function readString(value: Record<string, unknown> | null, keys: string[]): stri
   return "";
 }
 
+function advancedLocation(): { tab: AdvancedTab; serverID: number } {
+  const query = new URLSearchParams(location.hash.split("?")[1] ?? "");
+  const candidate = query.get("tab") as AdvancedTab | null;
+  const serverID = Number(query.get("server"));
+  return {
+    tab: candidate && advancedTabs.some((item) => item.key === candidate) ? candidate : "tunnels",
+    serverID: Number.isInteger(serverID) && serverID > 0 ? serverID : 0,
+  };
+}
+
 export function AdvancedPage({ notify }: { notify: Notify }) {
-  const [tab, setTab] = useState<AdvancedTab>("tunnels");
+  const initial = advancedLocation();
+  const [tab, setTab] = useState<AdvancedTab>(initial.tab);
   return (
     <>
       <PageHeader title="高级管理" description="跨服务器网络、共享与系统运维能力" />
@@ -101,7 +112,7 @@ export function AdvancedPage({ notify }: { notify: Notify }) {
         ))}
       </div>
       {tab === "tunnels" ? <TunnelsPanel notify={notify} /> : null}
-      {tab === "warp" ? <WarpPanel notify={notify} /> : null}
+      {tab === "warp" ? <WarpPanel notify={notify} initialServerID={initial.serverID} /> : null}
       {tab === "federation" ? <FederationPanel notify={notify} /> : null}
       {tab === "backup" ? <BackupPanel notify={notify} /> : null}
       {tab === "debug" ? <DebugLogsPanel notify={notify} /> : null}
@@ -305,9 +316,9 @@ function CreateTunnelDialog({ servers, onClose, onCreated }: { servers: RemoteSe
   );
 }
 
-export function WarpPanel({ notify }: { notify?: Notify } = {}) {
+export function WarpPanel({ notify, initialServerID = 0 }: { notify?: Notify; initialServerID?: number } = {}) {
   const [servers, setServers] = useState<RemoteServer[]>([]);
-  const [serverID, setServerID] = useState(0);
+  const [serverID, setServerID] = useState(initialServerID);
   const [status, setStatus] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(true);
   const [statusLoading, setStatusLoading] = useState(false);

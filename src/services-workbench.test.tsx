@@ -743,12 +743,98 @@ describe("service management workbench", () => {
     expect(merged.log.loglevel).toBe("info");
     expect(merged.dns.servers).toEqual(["9.9.9.9", "1.1.1.1"]);
     expect(merged.inbounds).toEqual(initialConfig.inbounds);
-    fireEvent.click(within(dialog).getByRole("button", { name: "保存并重启" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存并应用" }));
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote/xray/config?server_id=11", expect.objectContaining({ path: "/usr/local/etc/xray/config.json" })));
     const configWrite = post.mock.calls.find(([path]) => path === "/api/admin/remote/xray/config?server_id=11");
     expect(JSON.parse((configWrite?.[1] as { config: string }).config).inbounds).toEqual(initialConfig.inbounds);
     expect(post).toHaveBeenCalledWith("/api/admin/remote/services/control?server_id=11", { service: "xray", action: "restart" });
+  });
+
+  it("applies basic Xray presets without changing database-owned or conditional configuration", async () => {
+    const initialConfig = {
+      log: { loglevel: "warning" },
+      inbounds: [{ tag: "database-owned", protocol: "vless", port: 443 }],
+      outbounds: [
+        { tag: "direct", protocol: "freedom", settings: {} },
+        { tag: "custom-proxy", protocol: "socks", settings: { servers: [] } },
+      ],
+      routing: {
+        domainStrategy: "AsIs",
+        rules: [
+          { type: "field", inboundTag: ["special-in"], outboundTag: "custom-proxy", domain: ["domain:conditional.example"] },
+        ],
+      },
+      dns: { servers: ["1.1.1.1"] },
+    };
+    mockServerReads([onlineServer], { xrayConfig: JSON.stringify(initialConfig, null, 2) });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Xray 设置" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    fireEvent.change(await within(dialog).findByRole("combobox", { name: "Freedom 域名策略" }), { target: { value: "UseIPv4" } });
+    fireEvent.click(within(dialog).getByText("基础路由", { exact: true }));
+    fireEvent.click(within(dialog).getByRole("switch", { name: "屏蔽 BitTorrent" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "全部广告" }));
+    fireEvent.click(within(dialog).getByRole("tab", { name: "高级配置" }));
+
+    const merged = JSON.parse((within(dialog).getByRole("textbox", { name: "Xray 配置 JSON" }) as HTMLTextAreaElement).value);
+    expect(merged.inbounds).toEqual(initialConfig.inbounds);
+    expect(merged.dns).toEqual(initialConfig.dns);
+    expect(merged.outbounds).toContainEqual(expect.objectContaining({ tag: "custom-proxy", protocol: "socks" }));
+    expect(merged.outbounds).toContainEqual(expect.objectContaining({ tag: "blocked", protocol: "blackhole" }));
+    expect(merged.outbounds.find((item: { tag?: string }) => item.tag === "direct").settings.domainStrategy).toBe("UseIPv4");
+    expect(merged.routing.rules).toContainEqual(expect.objectContaining({ inboundTag: ["special-in"], domain: ["domain:conditional.example"] }));
+    expect(merged.routing.rules).toContainEqual(expect.objectContaining({ outboundTag: "blocked", protocol: ["bittorrent"] }));
+    expect(merged.routing.rules).toContainEqual(expect.objectContaining({ outboundTag: "blocked", domain: ["geosite:category-ads-all"] }));
+  });
+
+  it("opens WARP management for the current server when no WARP outbound exists", async () => {
+    const onOpenAdvanced = vi.fn();
+    mockServerReads([onlineServer]);
+    render(<ServicesWorkbenchPage notify={vi.fn()} onOpenAdvanced={onOpenAdvanced} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Xray 设置" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    fireEvent.click(within(dialog).getByText("基础路由", { exact: true }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "管理 WARP" }));
+
+    expect(onOpenAdvanced).toHaveBeenCalledWith({ tab: "warp", serverID: 11 });
+    expect(screen.queryByRole("dialog", { name: "Edge Hong Kong" })).not.toBeInTheDocument();
+  });
+
+  it("restores the previous Xray config when the new config cannot restart", async () => {
+    const initialConfig = {
+      log: { loglevel: "warning" },
+      inbounds: [{ tag: "database-owned", protocol: "vless", port: 443 }],
+      outbounds: [{ tag: "direct", protocol: "freedom", settings: {} }],
+      routing: { rules: [] },
+      dns: { servers: ["1.1.1.1"] },
+    };
+    const initialJSON = JSON.stringify(initialConfig, null, 2);
+    mockServerReads([onlineServer], { xrayConfig: initialJSON });
+    let restartAttempts = 0;
+    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/remote/services/control?server_id=11") {
+        restartAttempts += 1;
+        if (restartAttempts === 1) throw new Error("new process exited");
+      }
+      return { success: true } as T;
+    });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Xray 设置" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    fireEvent.change(await within(dialog).findByRole("combobox", { name: "Freedom 域名策略" }), { target: { value: "UseIPv4" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存并应用" }));
+
+    expect(await within(dialog).findByText(/新配置未能启动，已自动恢复旧配置/)).toBeInTheDocument();
+    expect(restartAttempts).toBe(2);
+    const writes = post.mock.calls.filter(([path]) => path === "/api/admin/remote/xray/config?server_id=11");
+    expect(writes).toHaveLength(2);
+    expect((writes[1][1] as { config: string }).config).toBe(initialJSON);
+    fireEvent.click(within(dialog).getByRole("tab", { name: "高级配置" }));
+    expect(within(dialog).getByRole("textbox", { name: "Xray 配置 JSON" })).toHaveValue(initialJSON);
   });
 
   it("updates an external Xray core only after confirmation", async () => {

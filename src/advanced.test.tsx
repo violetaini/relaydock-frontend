@@ -56,6 +56,7 @@ afterEach(() => {
   cleanup();
   requestMock.mockReset();
   window.localStorage.clear();
+  window.location.hash = "";
   vi.restoreAllMocks();
 });
 
@@ -71,6 +72,21 @@ describe("advanced navigation", () => {
 
     expect(screen.queryByRole("tab", { name: "节点测速" })).not.toBeInTheDocument();
     expect(await screen.findByRole("tab", { name: "隧道" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("opens WARP management on the server selected by the Xray settings shortcut", async () => {
+    window.location.hash = "/advanced?tab=warp&server=2";
+    const get = vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/remote-servers") return { servers: [server(1, "东京"), server(2, "香港")] } as T;
+      if (path === "/api/admin/remote/warp/status?server_id=2") return { installed: true, addr_v4: "2.2.2.2" } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    render(<AdvancedPage notify={vi.fn()} />);
+
+    expect(await screen.findByRole("tab", { name: "WARP" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("combobox", { name: "服务器" })).toHaveValue("2");
+    await waitFor(() => expect(get).toHaveBeenCalledWith("/api/admin/remote/warp/status?server_id=2"));
   });
 });
 

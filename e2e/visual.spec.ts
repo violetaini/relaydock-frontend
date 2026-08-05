@@ -1075,7 +1075,7 @@ for (const viewport of [
       { route: "customRules", heading: "覆写管理", marker: "私有 DNS 覆写" },
       { route: "rulesConfig", heading: "规则配置", marker: "balanced_v3.yaml" },
       { route: "advanced", heading: "高级管理", marker: "hk-us-media" },
-      { route: "settings", heading: "系统设置", marker: "控制端与采集" },
+      { route: "settings", heading: "系统设置", marker: "后端与采集" },
       { route: "account", heading: "账户中心", marker: "个人资料" },
     ];
 
@@ -1121,7 +1121,7 @@ for (const viewport of [
   { name: "desktop", width: 1440, height: 900 },
   { name: "mobile", width: 390, height: 844 },
 ]) {
-  test(`primary workbench entry points open cleanly on ${viewport.name}`, async ({ page }) => {
+  test(`primary workbench entry points open cleanly on ${viewport.name}`, async ({ page }, testInfo) => {
     // This scenario deliberately walks every primary workbench and opens its
     // modal surface. Cold Chromium/CI runs regularly need more than one minute.
     test.setTimeout(120_000);
@@ -1195,8 +1195,18 @@ for (const viewport of [
     await serverDialog.getByRole("tab", { name: "Xray 设置" }).click();
     await expect(serverDialog).toHaveClass(/dialog-extra-wide/);
     await expect(serverDialog.getByRole("tab", { name: "基础设置" })).toHaveAttribute("aria-selected", "true");
+    await page.screenshot({ path: testInfo.outputPath(`xray-basic-top-${viewport.name}.png`), fullPage: true });
+    await serverDialog.getByText("日志", { exact: true }).click();
     await expect(serverDialog.getByRole("combobox", { name: "Xray 日志级别" })).toHaveValue("warning");
     await expectViewportIntegrity(page, `${viewport.name} Xray basic settings`);
+    await serverDialog.getByText("日志", { exact: true }).click();
+    await serverDialog.getByText("基础路由", { exact: true }).click();
+    await expect(serverDialog.getByRole("switch", { name: "屏蔽 BitTorrent" })).toBeVisible();
+    const adsPreset = serverDialog.getByRole("button", { name: "全部广告" });
+    await expect(adsPreset).toBeVisible();
+    await adsPreset.scrollIntoViewIfNeeded();
+    await expectViewportIntegrity(page, `${viewport.name} expanded Xray basic routing`);
+    await page.screenshot({ path: testInfo.outputPath(`xray-basic-${viewport.name}.png`), fullPage: true });
     await serverDialog.getByRole("tab", { name: "DNS" }).click();
     const dnsEditor = serverDialog.getByLabel("Xray DNS JSON");
     await expect(dnsEditor).toHaveValue("{}");

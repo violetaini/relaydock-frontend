@@ -299,7 +299,12 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: P
           {page === "dashboard" ? <DashboardPage profile={profile} navigate={navigate} /> : null}
           {page === "subscriptions" && pageAllowed(page, profile.is_admin, userPages) ? <SubscriptionLinksPage notify={notify} /> : null}
           {page === "generator" && pageAllowed(page, profile.is_admin, userPages) ? <SubscriptionGeneratorPage notify={notify} /> : null}
-          {page === "servers" && profile.is_admin ? <ServicesWorkbenchPage notify={notify} onOpenAdvanced={() => navigate("advanced")} /> : null}
+          {page === "servers" && profile.is_admin ? <ServicesWorkbenchPage notify={notify} onOpenAdvanced={(options) => {
+            const query = options?.tab ? `?tab=${options.tab}${options.serverID ? `&server=${options.serverID}` : ""}` : "";
+            location.hash = `/advanced${query}`;
+            setPage("advanced");
+            setSidebarOpen(false);
+          }} /> : null}
           {page === "nodes" && pageAllowed(page, profile.is_admin, userPages) ? <NodesWorkbench isAdmin={profile.is_admin} notify={notify} /> : null}
           {page === "forwarding" ? <ForwardingManagement isAdmin={profile.is_admin} notify={notify} /> : null}
           {page === "traffic" ? <TrafficWorkbenchPage profile={profile} /> : null}

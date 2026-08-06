@@ -900,22 +900,6 @@ function parseRoutingValues(value: string): string[] {
   return value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
 }
 
-function normalizeRoutingPortList(value: string, label: string): string {
-  const normalized = value.trim();
-  if (!normalized) return "";
-  for (const item of normalized.split(",").map((entry) => entry.trim())) {
-    if (/^env:[A-Za-z_][A-Za-z0-9_]*$/.test(item)) continue;
-    const match = item.match(/^(\d+)(?:-(\d+))?$/);
-    if (!match) throw new Error(`${label} 必须是端口、端口范围或 env:变量名`);
-    const from = Number(match[1]);
-    const to = Number(match[2] ?? match[1]);
-    if (from < 0 || from > 65535 || to < 0 || to > 65535 || from > to) {
-      throw new Error(`${label} 必须在 0 到 65535 之间，且范围起点不能大于终点`);
-    }
-  }
-  return normalized.split(",").map((entry) => entry.trim()).join(",");
-}
-
 const xrayRoutingProtocols = ["http", "tls", "bittorrent", "quic"];
 
 function RoutingFormRow({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
@@ -3772,7 +3756,6 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
   const [port, setPort] = useState("");
   const [sourceIP, setSourceIP] = useState("");
   const [sourcePort, setSourcePort] = useState("");
-  const [vlessRoute, setVlessRoute] = useState("");
   const [attributes, setAttributes] = useState<Array<[string, string]>>([]);
   const [network, setNetwork] = useState("");
   const [inboundTag, setInboundTag] = useState("");
@@ -3825,7 +3808,6 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
     setPort("");
     setSourceIP("");
     setSourcePort("");
-    setVlessRoute("");
     setAttributes([]);
     setNetwork("");
     setInboundTag("");
@@ -3850,7 +3832,6 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
       const usesSourceIP = rule.sourceIP !== undefined && rule.sourceIP !== null;
       setSourceIP(read(usesSourceIP ? "sourceIP" : "source"));
       setSourcePort(read("sourcePort"));
-      setVlessRoute(read("vlessRoute"));
       setInboundTag(read("inboundTag"));
       setUser(read("user"));
       setProtocol(read("protocol"));
@@ -3907,9 +3888,6 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
     else delete rule.port;
     if (sourcePort.trim()) rule.sourcePort = sourcePort.trim();
     else delete rule.sourcePort;
-    const normalizedVlessRoute = normalizeRoutingPortList(vlessRoute, "VLESS route");
-    if (normalizedVlessRoute) rule.vlessRoute = normalizedVlessRoute;
-    else delete rule.vlessRoute;
     if (network.trim()) rule.network = network.trim();
     else delete rule.network;
     const normalizedAttributes: Record<string, string> = {};
@@ -4040,7 +4018,6 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
         <RoutingFormRow label="Outbound Tag"><select aria-label="路由出站 Tag" value={outboundTag} onChange={(event) => { setOutboundTag(event.target.value); if (event.target.value) setBalancerTag(""); }}><option value="">(不使用)</option>{selectableOutboundTags.map((tag) => <option key={tag} value={tag}>{tag}{!outboundTags.includes(tag) ? "（已不存在）" : ""}</option>)}</select></RoutingFormRow>
         <RoutingFormRow label="Balancer Tag" hint="与 Outbound Tag 二选一"><select aria-label="路由负载均衡 Tag" value={balancerTag} onChange={(event) => { setBalancerTag(event.target.value); if (event.target.value) setOutboundTag(""); }}><option value="">(不使用)</option>{selectableBalancerTags.map((tag) => <option key={tag} value={tag}>{tag}{!balancerTags.includes(tag) ? "（已不存在）" : ""}</option>)}</select></RoutingFormRow>
         <details className="routing-advanced-disclosure"><summary>高级条件</summary><div className="routing-advanced-content">
-          <RoutingFormRow label="VLESS Route" hint="端口或端口范围，多个值使用逗号分隔"><input aria-label="VLESS 路由" value={vlessRoute} onChange={(event) => setVlessRoute(event.target.value)} placeholder="53,443,1000-2000" /></RoutingFormRow>
           <RoutingFormRow label="高级 JSON"><textarea className="service-code-editor xray-resource-json" aria-label="路由规则高级 JSON" spellCheck={false} value={jsonDraft} onChange={(event) => setJsonDraft(event.target.value)} /></RoutingFormRow>
         </div></details>
         <div className="dialog-actions"><Button type="button" variant="secondary" onClick={closeEditor} disabled={working}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />{editing ? "保存规则" : "创建规则"}</>}</Button></div>

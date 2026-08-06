@@ -1746,7 +1746,7 @@ describe("service management workbench", () => {
     fireEvent.click(within(dialog).getByRole("option", { name: "vless-in" }));
     fireEvent.click(within(dialog).getByRole("option", { name: "trojan-in" }));
     fireEvent.click(within(dialog).getByText("高级条件"));
-    fireEvent.change(within(dialog).getByRole("textbox", { name: "VLESS 路由" }), { target: { value: "53, 1000-2000" } });
+    expect(within(dialog).queryByRole("textbox", { name: "VLESS 路由" })).not.toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "添加路由属性" }));
     fireEvent.change(within(dialog).getByRole("textbox", { name: "路由属性名称 1" }), { target: { value: "network" } });
     fireEvent.change(within(dialog).getByRole("textbox", { name: "路由属性值 1" }), { target: { value: "tcp" } });
@@ -1765,7 +1765,6 @@ describe("service management workbench", () => {
         user: ["bob@example.com"],
         protocol: ["bittorrent"],
         port: "443,8443",
-        vlessRoute: "53,1000-2000",
         network: "tcp,udp",
         outboundTag: "media-out",
       },
@@ -1781,6 +1780,7 @@ describe("service management workbench", () => {
       inboundTag: ["removed-in"],
       protocol: ["tls", "custom-proto"],
       outboundTag: "removed-out",
+      vlessRoute: "443",
       ruleTag: "legacy-rule",
       process: ["legacy-process"],
     };
@@ -1835,6 +1835,7 @@ describe("service management workbench", () => {
         inboundTag: ["removed-in"],
         protocol: ["tls", "custom-proto"],
         outboundTag: "removed-out",
+        vlessRoute: "443",
         ruleTag: "legacy-rule",
         process: ["legacy-process"],
       },

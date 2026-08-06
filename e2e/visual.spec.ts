@@ -1275,11 +1275,13 @@ for (const viewport of [
     await expect(routingDialog).toBeVisible();
     await expect(inboundSelect).toHaveAttribute("aria-expanded", "false");
     await expect(routingDialog.getByText("高级条件", { exact: true })).toBeVisible();
+    await expect(routingDialog.getByLabel("VLESS 路由")).toHaveCount(0);
     await expectViewportIntegrity(page, `${viewport.name} structured routing editor`);
     await page.screenshot({ path: testInfo.outputPath(`xray-routing-editor-${viewport.name}.png`), fullPage: true });
     await routingDialog.getByText("高级条件", { exact: true }).click();
     await expect(routingDialog.getByLabel("路由规则高级 JSON")).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} advanced routing editor`);
+    await page.screenshot({ path: testInfo.outputPath(`xray-routing-advanced-${viewport.name}.png`), fullPage: true });
     await routingDialog.getByRole("button", { name: "关闭" }).click();
     await closeDialog(page);
 

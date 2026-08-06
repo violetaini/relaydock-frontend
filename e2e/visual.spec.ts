@@ -835,8 +835,16 @@ for (const viewport of [
     await expectViewportIntegrity(page, `${viewport.name} TG invite ownership`);
     await page.screenshot({ path: testInfo.outputPath(`user-invites-${viewport.name}.png`), fullPage: true });
     await page.getByRole("button", { name: "创建邀请码" }).first().click();
-    await expect(page.getByRole("dialog", { name: "创建 TG Bot 邀请码" })).toBeVisible();
+    const inviteDialog = page.getByRole("dialog", { name: "创建 TG Bot 邀请码" });
+    await expect(inviteDialog).toBeVisible();
+    await expect(inviteDialog.getByText("Arcway 主控本身不提供兑换入口", { exact: false })).toBeVisible();
+    await inviteDialog.getByRole("combobox", { name: "用途" }).selectOption("bind");
+    const bindAccount = inviteDialog.getByRole("combobox", { name: "Arcway 账号" });
+    await expect(bindAccount.getByRole("option", { name: "Alice（alice）" })).toHaveCount(1);
+    await bindAccount.selectOption("alice");
+    await expect(bindAccount).toHaveValue("alice");
     await expectViewportIntegrity(page, `${viewport.name} TG invite creation`);
+    await inviteDialog.screenshot({ path: testInfo.outputPath(`tg-invite-bind-${viewport.name}.png`) });
     await closeDialog(page);
 
     expect(errors).toEqual([]);

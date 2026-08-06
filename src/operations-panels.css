@@ -105,6 +105,39 @@
   gap: 8px;
 }
 
+.ops-bot-context {
+  padding: 12px 18px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--blue-soft);
+}
+
+.ops-bot-context > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+.ops-bot-context > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ops-bot-context strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.ops-bot-context small {
+  color: var(--text-soft);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
 .ops-debug-meta {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

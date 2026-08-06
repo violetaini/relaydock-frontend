@@ -76,6 +76,7 @@ describe("TG Bot invite operations", () => {
     const notify = vi.fn();
     render(<TGBotInvitesPanel notify={notify} />);
 
+    expect(await screen.findByText("邀请码由独立 Telegram Bot 使用")).toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "创建邀请码" }));
     expect(await screen.findByText("标准月付", { selector: ".cell-note" })).toBeInTheDocument();
     fireEvent.change(screen.getByRole("combobox", { name: /^注册套餐/ }), { target: { value: "7" } });
@@ -105,11 +106,10 @@ describe("TG Bot invite operations", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "创建邀请码" }));
     fireEvent.change(screen.getByRole("combobox", { name: "用途" }), { target: { value: "bind" } });
-    const account = screen.getByRole("combobox", { name: "绑定账号" });
-    expect(account).toHaveAttribute("list", "tg-bot-bind-users");
-    const options = [...document.querySelectorAll<HTMLOptionElement>("#tg-bot-bind-users option")];
-    expect(options.map((option) => [option.value, option.textContent])).toContainEqual(["alice", "Alice（alice）"]);
-    expect(options.map((option) => option.value)).not.toEqual(expect.arrayContaining(["disabled", "admin"]));
+    const account = screen.getByRole("combobox", { name: "Arcway 账号" });
+    expect(within(account).getByRole("option", { name: "Alice（alice）" })).toBeInTheDocument();
+    expect(within(account).queryByRole("option", { name: /disabled|停用账号/ })).not.toBeInTheDocument();
+    expect(within(account).queryByRole("option", { name: /admin|管理员/ })).not.toBeInTheDocument();
     fireEvent.change(account, { target: { value: "alice" } });
     fireEvent.click(within(screen.getByRole("dialog", { name: "创建 TG Bot 邀请码" })).getByRole("button", { name: "创建邀请码" }));
 
@@ -121,22 +121,17 @@ describe("TG Bot invite operations", () => {
     })));
   });
 
-  it("accepts an account outside the capped user suggestions", async () => {
+  it("requires an account returned by the active user list", async () => {
     mockLists([invite()], [standardPackage], []);
     const post = vi.spyOn(api, "post").mockResolvedValue({ success: true, code: "LATEUSER1234" });
     render(<TGBotInvitesPanel notify={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "创建邀请码" }));
     fireEvent.change(screen.getByRole("combobox", { name: "用途" }), { target: { value: "bind" } });
-    const account = screen.getByRole("combobox", { name: "绑定账号" });
-    expect(account).not.toBeDisabled();
-    fireEvent.change(account, { target: { value: "late-user" } });
-    fireEvent.click(within(screen.getByRole("dialog", { name: "创建 TG Bot 邀请码" })).getByRole("button", { name: "创建邀请码" }));
-
-    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/tgbot/invites", expect.objectContaining({
-      kind: "bind",
-      bind_username: "late-user",
-    })));
+    const account = screen.getByRole("combobox", { name: "Arcway 账号" });
+    expect(account).toBeDisabled();
+    expect(within(account).getByRole("option", { name: "没有可绑定的有效普通用户" })).toBeInTheDocument();
+    expect(post).not.toHaveBeenCalled();
   });
 
   it("revokes usable invites and deletes unavailable invites", async () => {

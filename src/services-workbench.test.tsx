@@ -1329,6 +1329,9 @@ describe("service management workbench", () => {
     fireEvent.change(within(editor).getByRole("textbox", { name: "出站 ID" }), { target: { value: "11111111-2222-4333-8444-555555555555" } });
     fireEvent.click(within(editor).getByRole("button", { name: "Reality" }));
     fireEvent.change(within(editor).getByRole("textbox", { name: "出站 Server name" }), { target: { value: "cdn.example.com" } });
+    const fingerprint = within(editor).getByRole("combobox", { name: "出站 Fingerprint" });
+    expect(fingerprint).toHaveAttribute("list", "xray-fingerprints-11");
+    expect([...editor.querySelectorAll<HTMLOptionElement>("#xray-fingerprints-11 option")].map((option) => option.value)).toEqual(expect.arrayContaining(["chrome", "firefox", "randomized", "unsafe"]));
     fireEvent.change(within(editor).getByRole("textbox", { name: "出站 Reality Public key" }), { target: { value: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFE" } });
     fireEvent.change(within(editor).getByRole("textbox", { name: "出站 Reality Short ID" }), { target: { value: "a1b2c3d4" } });
     fireEvent.click(within(editor).getByRole("button", { name: "创建出站" }));
@@ -1460,6 +1463,42 @@ describe("service management workbench", () => {
 
     await waitFor(() => expect(post).toHaveBeenNthCalledWith(1, "/api/admin/remote/outbounds?server_id=11", { action: "remove", tag: "loopback-out" }));
     expect(post).toHaveBeenNthCalledWith(2, "/api/admin/remote/outbounds?server_id=11", { action: "add", outbound: original });
+  });
+
+  it("selects a known Shadowsocks method and preserves imported methods", async () => {
+    const original = {
+      tag: "legacy-ss",
+      protocol: "shadowsocks",
+      settings: { servers: [{ address: "ss.example.com", port: 8388, method: "legacy-custom-method", password: "secret" }] },
+      streamSettings: { network: "tcp", security: "none" },
+    };
+    mockServerReads([onlineServer], { outbounds: [original] });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+    const serverDialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await waitFor(() => expect(within(serverDialog).getByText("0.3.0")).toBeInTheDocument());
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "Xray 设置" }));
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "出站规则" }));
+    fireEvent.click(await within(serverDialog).findByRole("button", { name: "编辑出站 legacy-ss" }));
+
+    const editor = await screen.findByRole("dialog", { name: "编辑出站" });
+    const method = within(editor).getByRole("combobox", { name: "Shadowsocks 加密方法" });
+    expect(method).toHaveValue("legacy-custom-method");
+    expect(within(method).getByRole("option", { name: "legacy-custom-method（当前配置）" })).toBeInTheDocument();
+    expect(within(method).getByRole("option", { name: "2022-blake3-aes-256-gcm" })).toBeInTheDocument();
+    fireEvent.change(method, { target: { value: "aes-256-gcm" } });
+    fireEvent.click(within(editor).getByRole("button", { name: "保存并重建" }));
+
+    await waitFor(() => expect(post).toHaveBeenNthCalledWith(1, "/api/admin/remote/outbounds?server_id=11", { action: "remove", tag: "legacy-ss" }));
+    expect(post).toHaveBeenNthCalledWith(2, "/api/admin/remote/outbounds?server_id=11", {
+      action: "add",
+      outbound: {
+        ...original,
+        settings: { servers: [{ ...original.settings.servers[0], method: "aes-256-gcm" }] },
+      },
+    });
   });
 
   it("preserves and exposes the network of an existing DNS outbound", async () => {
@@ -1655,8 +1694,12 @@ describe("service management workbench", () => {
 
     const editor = await screen.findByRole("dialog", { name: "添加出站" });
     fireEvent.change(within(editor).getByRole("combobox", { name: "出站协议" }), { target: { value: "vmess" } });
-    expect(within(editor).getByRole("textbox", { name: "出站 VMess Security" })).toHaveValue("auto");
+    const vmessSecurity = within(editor).getByRole("combobox", { name: "出站 VMess Security" });
+    expect(vmessSecurity).toHaveValue("auto");
+    expect([...vmessSecurity.querySelectorAll("option")].map((option) => option.value)).toEqual(["auto", "aes-128-gcm", "chacha20-poly1305"]);
     fireEvent.change(within(editor).getByRole("combobox", { name: "出站协议" }), { target: { value: "vless" } });
+    expect(within(editor).getByRole("combobox", { name: "出站 Encryption" })).toHaveAttribute("list", "xray-vless-encryption-11");
+    expect(within(editor).getByRole("combobox", { name: "出站 VLESS Flow" })).toHaveTextContent("xtls-rprx-vision-udp443");
     fireEvent.change(within(editor).getByRole("combobox", { name: "出站传输" }), { target: { value: "ws" } });
     expect(within(editor).getByRole("button", { name: "Reality" })).toBeDisabled();
     expect(within(editor).getByRole("combobox", { name: "出站传输" })).not.toHaveTextContent("QUIC");
@@ -1688,7 +1731,7 @@ describe("service management workbench", () => {
   });
 
   it("shows common routing match fields and creates a rule through an atomic hot mutation", async () => {
-    mockServerReads([onlineServer], { inbounds: [{ tag: "vless-in", protocol: "vless" }, { tag: "trojan-in", protocol: "trojan" }], outbounds: [{ tag: "media-out", protocol: "freedom" }, { tag: "proxy-google", protocol: "shadowsocks" }], routing: { domainStrategy: "IPIfNonMatch", balancers: [{ tag: "fallback" }], rules: [{
+    mockServerReads([onlineServer], { inbounds: [{ tag: "vless-in", protocol: "vless", settings: { clients: [{ email: "alice@example.com" }, { email: "carol@example.com" }] } }, { tag: "trojan-in", protocol: "trojan" }], outbounds: [{ tag: "media-out", protocol: "freedom" }, { tag: "proxy-google", protocol: "shadowsocks" }], routing: { domainStrategy: "IPIfNonMatch", balancers: [{ tag: "fallback" }], rules: [{
       type: "field",
       domain: ["domain:google.com"],
       ip: ["8.8.8.8"],
@@ -1732,7 +1775,10 @@ describe("service management workbench", () => {
     fireEvent.change(within(dialog).getByRole("textbox", { name: "路由 IP" }), { target: { value: "geoip:private,10.0.0.0/8" } });
     fireEvent.change(within(dialog).getByRole("textbox", { name: "路由端口" }), { target: { value: "443,8443" } });
     fireEvent.change(within(dialog).getByRole("combobox", { name: "路由网络" }), { target: { value: "tcp,udp" } });
-    fireEvent.change(within(dialog).getByRole("textbox", { name: "路由用户" }), { target: { value: "bob@example.com" } });
+    const routingUser = within(dialog).getByRole("combobox", { name: "路由用户" });
+    expect(routingUser).toHaveAttribute("list", "xray-routing-users-11");
+    expect([...dialog.querySelectorAll<HTMLOptionElement>("#xray-routing-users-11 option")].map((option) => option.value)).toEqual(["alice@example.com", "carol@example.com"]);
+    fireEvent.change(routingUser, { target: { value: "bob@example.com" } });
     const protocolSelect = within(dialog).getByRole("button", { name: "路由协议" });
     fireEvent.click(protocolSelect);
     expect(protocolSelect).toHaveAttribute("aria-expanded", "true");

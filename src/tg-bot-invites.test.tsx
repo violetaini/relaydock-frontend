@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
 import { normalizeInviteList, TGBotInvitesPanel, type TGBotInvite } from "./tg-bot-invites";
+import type { PackageItem, UserItem } from "./types";
 
 vi.hoisted(() => {
   (globalThis as unknown as { process: { env: { NODE_ENV?: string } } }).process.env.NODE_ENV = "test";
@@ -23,6 +24,44 @@ function invite(overrides: Partial<TGBotInvite> = {}): TGBotInvite {
   };
 }
 
+const standardPackage: PackageItem = {
+  id: 7,
+  name: "标准月付",
+  description: "",
+  traffic_limit_gb: 200,
+  cycle_days: 30,
+  is_reset: false,
+  reset_day: 1,
+  nodes: [],
+  speed_limit_mbps: 0,
+  device_limit: 0,
+  short_code: "standard",
+  traffic_mode: "sum",
+};
+
+const bindUser: UserItem = {
+  username: "alice",
+  email: "alice@example.com",
+  nickname: "Alice",
+  role: "user",
+  is_active: true,
+  remark: "",
+  traffic_used: 0,
+  traffic_limit: 0,
+  is_over_limit: false,
+  speed_limit_mbps: 0,
+  device_limit: 0,
+};
+
+function mockLists(invites: TGBotInvite[], packages: PackageItem[] = [standardPackage], users: UserItem[] = [bindUser]) {
+  return vi.spyOn(api, "get").mockImplementation(async <T,>(path: string) => {
+    if (path === "/api/admin/tgbot/invites") return { success: true, items: invites } as T;
+    if (path === "/api/admin/packages") return { packages } as T;
+    if (path === "/api/admin/users") return { users } as T;
+    throw new Error(`unexpected GET ${path}`);
+  });
+}
+
 describe("TG Bot invite operations", () => {
   it("accepts current and legacy list envelopes", () => {
     const item = invite();
@@ -32,13 +71,14 @@ describe("TG Bot invite operations", () => {
   });
 
   it("creates an invite with the API payload", async () => {
-    vi.spyOn(api, "get").mockResolvedValue({ success: true, items: [invite()] });
+    mockLists([invite({ package_id: standardPackage.id })]);
     const post = vi.spyOn(api, "post").mockResolvedValue({ success: true, code: "NEWCODE12345" });
     const notify = vi.fn();
     render(<TGBotInvitesPanel notify={notify} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "创建邀请码" }));
-    fireEvent.change(screen.getByRole("spinbutton", { name: /^套餐 ID/ }), { target: { value: "7" } });
+    expect(await screen.findByText("标准月付", { selector: ".cell-note" })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: /^注册套餐/ }), { target: { value: "7" } });
     fireEvent.change(screen.getByRole("spinbutton", { name: /^账号有效月数/ }), { target: { value: "3" } });
     fireEvent.change(screen.getByRole("spinbutton", { name: "最大使用次数" }), { target: { value: "5" } });
     fireEvent.change(screen.getByRole("textbox", { name: "备注" }), { target: { value: " 首发用户 " } });
@@ -56,10 +96,34 @@ describe("TG Bot invite operations", () => {
     expect(notify).toHaveBeenCalledWith("邀请码已创建：NEWCODE12345");
   });
 
+  it("selects an active existing user for bind invites", async () => {
+    const disabled = { ...bindUser, username: "disabled", nickname: "停用账号", is_active: false };
+    const admin = { ...bindUser, username: "admin", nickname: "管理员", role: "admin" };
+    mockLists([invite()], [standardPackage], [bindUser, disabled, admin]);
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true, code: "BINDCODE1234" });
+    render(<TGBotInvitesPanel notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "创建邀请码" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "用途" }), { target: { value: "bind" } });
+    const account = screen.getByRole("combobox", { name: "绑定账号" });
+    expect(within(account).getByRole("option", { name: "Alice（alice）" })).toBeInTheDocument();
+    expect(within(account).queryByRole("option", { name: /disabled|停用账号/ })).not.toBeInTheDocument();
+    expect(within(account).queryByRole("option", { name: /admin|管理员/ })).not.toBeInTheDocument();
+    fireEvent.change(account, { target: { value: "alice" } });
+    fireEvent.click(within(screen.getByRole("dialog", { name: "创建 TG Bot 邀请码" })).getByRole("button", { name: "创建邀请码" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/tgbot/invites", expect.objectContaining({
+      kind: "bind",
+      bind_username: "alice",
+      package_id: null,
+      duration_months: 0,
+    })));
+  });
+
   it("revokes usable invites and deletes unavailable invites", async () => {
     const active = invite();
     const revoked = invite({ code: "REVOKED12345", revoked: true, usable: false });
-    vi.spyOn(api, "get").mockResolvedValue({ success: true, items: [active, revoked] });
+    mockLists([active, revoked]);
     const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
     render(<TGBotInvitesPanel notify={vi.fn()} />);
 

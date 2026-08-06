@@ -24,6 +24,7 @@ describe("users workbench", () => {
   it("keeps the selected user view in the URL", async () => {
     vi.spyOn(api, "get").mockImplementation(async (path) => {
       if (path === "/api/admin/users") return { users: [alice] };
+      if (path === "/api/admin/packages") return { packages: [] };
       if (path === "/api/admin/tgbot/invites") return { success: true, items: [] };
       throw new Error(`unexpected GET ${path}`);
     });
@@ -34,12 +35,14 @@ describe("users workbench", () => {
     expect(window.location.hash).toBe("#/users?view=invites");
   });
 
-  it("shows TG invites as a dedicated view without loading the user table", async () => {
+  it("shows TG invites as a dedicated view without rendering the user table", async () => {
     const get = vi.spyOn(api, "get").mockImplementation(async (path) => {
       if (path === "/api/admin/tgbot/invites") return {
         success: true,
         items: [{ code: "INVITE123456", kind: "new", max_uses: 1, used_count: 0, revoked: false, usable: true }],
       };
+      if (path === "/api/admin/users") return { users: [alice] };
+      if (path === "/api/admin/packages") return { packages: [] };
       throw new Error(`unexpected GET ${path}`);
     });
 
@@ -50,7 +53,7 @@ describe("users workbench", () => {
     expect(screen.queryByRole("button", { name: "新建用户" })).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "搜索用户" })).not.toBeInTheDocument();
     expect(screen.queryByRole("table", { name: /用户/ })).not.toBeInTheDocument();
-    expect(get).not.toHaveBeenCalledWith("/api/admin/users");
+    expect(get).toHaveBeenCalledWith("/api/admin/users");
   });
 
   it("shows quota progress and keeps common row actions directly available", async () => {

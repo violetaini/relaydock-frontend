@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { Copy, Plus, RefreshCw, Search, TicketCheck, Trash2, X } from "lucide-react";
 import { api } from "./api";
+import type { PackageItem, UserItem } from "./types";
 import {
   Badge,
   Button,
@@ -81,10 +82,23 @@ function inviteState(invite: TGBotInvite): { label: string; tone: "good" | "warn
 
 type InvitePendingAction = { kind: "revoke" | "delete"; invite: TGBotInvite };
 
+function packageOptionLabel(item: PackageItem): string {
+  return `${item.name} · ${item.traffic_limit_gb} GB / ${item.cycle_days} 天`;
+}
+
+function userOptionLabel(item: UserItem): string {
+  const nickname = item.nickname?.trim();
+  return nickname && nickname !== item.username ? `${nickname}（${item.username}）` : item.username;
+}
+
 export function TGBotInvitesPanel({ notify }: { notify: Notify }) {
   const [invites, setInvites] = useState<TGBotInvite[]>([]);
+  const [packages, setPackages] = useState<PackageItem[]>([]);
+  const [users, setUsers] = useState<UserItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [referencesLoading, setReferencesLoading] = useState(true);
+  const [referencesError, setReferencesError] = useState("");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "usable" | "unavailable">("all");
   const [showCreate, setShowCreate] = useState(false);
@@ -106,7 +120,31 @@ export function TGBotInvitesPanel({ notify }: { notify: Notify }) {
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  const loadReferences = useCallback(async () => {
+    setReferencesLoading(true);
+    setReferencesError("");
+    const [packageResult, userResult] = await Promise.allSettled([
+      api.get<{ packages?: PackageItem[] }>("/api/admin/packages"),
+      api.get<{ users?: UserItem[] }>("/api/admin/users"),
+    ]);
+    const failures: string[] = [];
+    if (packageResult.status === "fulfilled") {
+      setPackages([...(packageResult.value.packages ?? [])].sort((left, right) => left.name.localeCompare(right.name, "zh-CN")));
+    } else {
+      failures.push(operationError(packageResult.reason, "套餐选项加载失败"));
+    }
+    if (userResult.status === "fulfilled") {
+      setUsers([...(userResult.value.users ?? [])].sort((left, right) => left.username.localeCompare(right.username, "zh-CN")));
+    } else {
+      failures.push(operationError(userResult.reason, "用户选项加载失败"));
+    }
+    setReferencesError(failures.join("；"));
+    setReferencesLoading(false);
+  }, []);
+
+  useEffect(() => { void load(); void loadReferences(); }, [load, loadReferences]);
+
+  const packagesByID = useMemo(() => new Map(packages.map((item) => [item.id, item])), [packages]);
 
   const visible = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -114,10 +152,10 @@ export function TGBotInvitesPanel({ notify }: { notify: Notify }) {
       const state = inviteState(invite);
       if (filter === "usable" && !state.usable) return false;
       if (filter === "unavailable" && state.usable) return false;
-      return !query || [invite.code, invite.bind_username, invite.remark, invite.created_by]
+      return !query || [invite.code, invite.bind_username, invite.remark, invite.created_by, invite.package_id ? packagesByID.get(invite.package_id)?.name : undefined]
         .some((value) => value?.toLowerCase().includes(query));
     });
-  }, [filter, invites, search]);
+  }, [filter, invites, packagesByID, search]);
 
   const runPending = async () => {
     if (!pending) return;
@@ -161,7 +199,7 @@ export function TGBotInvitesPanel({ notify }: { notify: Notify }) {
           <div className="table-wrap"><table className="invite-table"><thead><tr><th>邀请码</th><th>用途</th><th>使用次数</th><th>有效期</th><th>状态</th><th>备注</th><th aria-label="操作" /></tr></thead><tbody>{visible.map((invite) => { const state = inviteState(invite); return (
             <tr key={invite.code}>
               <td data-label="邀请码"><div className="ops-code-cell"><code className="inline-code">{invite.code}</code><IconButton label={`复制邀请码 ${invite.code}`} onClick={() => void copyCode(invite.code)}><Copy size={15} /></IconButton></div><small className="cell-note">{formatDate(invite.created_at)}</small></td>
-              <td data-label="用途"><strong>{invite.kind === "bind" ? "绑定已有账号" : "注册新账号"}</strong>{invite.kind === "bind" ? <small className="cell-note">{invite.bind_username || "未指定账号"}</small> : invite.package_id ? <small className="cell-note">套餐 #{invite.package_id}{invite.duration_months ? ` · ${invite.duration_months} 个月` : ""}</small> : null}</td>
+              <td data-label="用途"><strong>{invite.kind === "bind" ? "绑定已有账号" : "注册新账号"}</strong>{invite.kind === "bind" ? <small className="cell-note">{invite.bind_username || "未指定账号"}</small> : invite.package_id ? <small className="cell-note">{packagesByID.get(invite.package_id)?.name || `套餐 #${invite.package_id}`}{invite.duration_months ? ` · ${invite.duration_months} 个月` : ""}</small> : null}</td>
               <td data-label="使用次数">{invite.used_count} / {invite.max_uses || "不限"}</td>
               <td data-label="有效期">{invite.expires_at ? formatDate(invite.expires_at) : "长期有效"}</td>
               <td data-label="状态"><Badge tone={state.tone}>{state.label}</Badge></td>
@@ -171,16 +209,25 @@ export function TGBotInvitesPanel({ notify }: { notify: Notify }) {
           ); })}</tbody></table></div>
         )}
       </Surface>
-      {showCreate ? <CreateInviteDialog onClose={() => setShowCreate(false)} onCreated={async (code) => { setShowCreate(false); notify(`邀请码已创建：${code}`); await load(); }} /> : null}
+      {showCreate ? <CreateInviteDialog packages={packages} users={users} referencesLoading={referencesLoading} referencesError={referencesError} onReloadReferences={() => void loadReferences()} onClose={() => setShowCreate(false)} onCreated={async (code) => { setShowCreate(false); notify(`邀请码已创建：${code}`); await load(); }} /> : null}
       {pending ? <ConfirmDialog title={pending.kind === "revoke" ? "撤销邀请码" : "删除邀请码"} description={pending.kind === "revoke" ? `撤销“${pending.invite.code}”后将无法继续使用，但会保留历史记录。` : `将永久删除“${pending.invite.code}”及其使用记录，此操作不可恢复。`} confirmLabel={pending.kind === "revoke" ? "确认撤销" : "确认删除"} working={working} onCancel={() => setPending(null)} onConfirm={() => void runPending()} /> : null}
     </div>
   );
 }
 
-function CreateInviteDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (code: string) => void }) {
+function CreateInviteDialog({ packages, users, referencesLoading, referencesError, onReloadReferences, onClose, onCreated }: {
+  packages: PackageItem[];
+  users: UserItem[];
+  referencesLoading: boolean;
+  referencesError: string;
+  onReloadReferences: () => void;
+  onClose: () => void;
+  onCreated: (code: string) => void;
+}) {
   const [form, setForm] = useState({ kind: "new", bind_username: "", package_id: "", max_uses: "1", expires_at: "", remark: "", duration_months: "0" });
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
+  const bindUsers = useMemo(() => users.filter((item) => item.role !== "admin" && item.is_active), [users]);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setError("");
@@ -210,11 +257,12 @@ function CreateInviteDialog({ onClose, onCreated }: { onClose: () => void; onCre
     <Dialog title="创建 TG Bot 邀请码" description="邀请码可用于新账号注册或绑定现有账号" onClose={onClose}>
       <form className="form-stack" onSubmit={submit}>
         {error ? <ErrorState message={error} /> : null}
+        {referencesError ? <ErrorState message={referencesError} onRetry={onReloadReferences} /> : null}
         <Field label="用途"><select value={form.kind} onChange={(event) => setForm({ ...form, kind: event.target.value, bind_username: "", package_id: "" })}><option value="new">注册新账号</option><option value="bind">绑定已有账号</option></select></Field>
-        {form.kind === "bind" ? <Field label="绑定用户名"><input autoFocus required value={form.bind_username} onChange={(event) => setForm({ ...form, bind_username: event.target.value })} /></Field> : <div className="form-grid"><Field label="套餐 ID" hint="可选；注册成功后自动分配"><input type="number" min="1" value={form.package_id} onChange={(event) => setForm({ ...form, package_id: event.target.value })} /></Field><Field label="账号有效月数" hint="0 表示沿用套餐周期"><input type="number" min="0" max="120" value={form.duration_months} onChange={(event) => setForm({ ...form, duration_months: event.target.value })} /></Field></div>}
+        {form.kind === "bind" ? <Field label="绑定账号"><select autoFocus required disabled={referencesLoading || bindUsers.length === 0} value={form.bind_username} onChange={(event) => setForm({ ...form, bind_username: event.target.value })}><option value="">{referencesLoading ? "正在加载用户..." : bindUsers.length ? "请选择现有账号" : "暂无可绑定账号"}</option>{bindUsers.map((item) => <option key={item.username} value={item.username}>{userOptionLabel(item)}</option>)}</select></Field> : <div className="form-grid"><Field label="注册套餐" hint="可选；注册成功后自动分配"><select disabled={referencesLoading} value={form.package_id} onChange={(event) => setForm({ ...form, package_id: event.target.value })}><option value="">{referencesLoading ? "正在加载套餐..." : "不分配套餐"}</option>{packages.map((item) => <option key={item.id} value={item.id}>{packageOptionLabel(item)}</option>)}</select></Field><Field label="账号有效月数" hint="0 表示沿用套餐周期"><input type="number" min="0" max="120" value={form.duration_months} onChange={(event) => setForm({ ...form, duration_months: event.target.value })} /></Field></div>}
         <div className="form-grid"><Field label="最大使用次数"><input required type="number" min="1" max="10000" value={form.max_uses} onChange={(event) => setForm({ ...form, max_uses: event.target.value })} /></Field><Field label="过期时间" hint="留空表示长期有效"><input type="datetime-local" value={form.expires_at} onChange={(event) => setForm({ ...form, expires_at: event.target.value })} /></Field></div>
         <Field label="备注"><input value={form.remark} onChange={(event) => setForm({ ...form, remark: event.target.value })} placeholder="用途或发放对象" /></Field>
-        <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose} disabled={working}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在创建" /> : <><Plus size={16} />创建邀请码</>}</Button></div>
+        <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose} disabled={working}>取消</Button><Button type="submit" disabled={working || (form.kind === "bind" && (referencesLoading || bindUsers.length === 0))}>{working ? <Spinner label="正在创建" /> : <><Plus size={16} />创建邀请码</>}</Button></div>
       </form>
     </Dialog>
   );

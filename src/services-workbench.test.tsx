@@ -1327,11 +1327,15 @@ describe("service management workbench", () => {
     fireEvent.change(within(editor).getByRole("spinbutton", { name: "出站目标端口" }), { target: { value: "443" } });
     fireEvent.change(within(editor).getByRole("textbox", { name: "出站 Email" }), { target: { value: "route@example.com" } });
     fireEvent.change(within(editor).getByRole("textbox", { name: "出站 ID" }), { target: { value: "11111111-2222-4333-8444-555555555555" } });
+    fireEvent.click(within(editor).getByRole("button", { name: "TLS" }));
+    expect([...editor.querySelectorAll<HTMLOptionElement>("#xray-fingerprints-11 option")].map((option) => option.value)).toContain("unsafe");
     fireEvent.click(within(editor).getByRole("button", { name: "Reality" }));
     fireEvent.change(within(editor).getByRole("textbox", { name: "出站 Server name" }), { target: { value: "cdn.example.com" } });
     const fingerprint = within(editor).getByRole("combobox", { name: "出站 Fingerprint" });
     expect(fingerprint).toHaveAttribute("list", "xray-fingerprints-11");
-    expect([...editor.querySelectorAll<HTMLOptionElement>("#xray-fingerprints-11 option")].map((option) => option.value)).toEqual(expect.arrayContaining(["chrome", "firefox", "randomized", "unsafe"]));
+    const fingerprintOptions = [...editor.querySelectorAll<HTMLOptionElement>("#xray-fingerprints-11 option")].map((option) => option.value);
+    expect(fingerprintOptions).toEqual(expect.arrayContaining(["chrome", "firefox", "randomized"]));
+    expect(fingerprintOptions).not.toContain("unsafe");
     fireEvent.change(within(editor).getByRole("textbox", { name: "出站 Reality Public key" }), { target: { value: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFE" } });
     fireEvent.change(within(editor).getByRole("textbox", { name: "出站 Reality Short ID" }), { target: { value: "a1b2c3d4" } });
     fireEvent.click(within(editor).getByRole("button", { name: "创建出站" }));
@@ -1488,6 +1492,8 @@ describe("service management workbench", () => {
     expect(method).toHaveValue("legacy-custom-method");
     expect(within(method).getByRole("option", { name: "legacy-custom-method（当前配置）" })).toBeInTheDocument();
     expect(within(method).getByRole("option", { name: "2022-blake3-aes-256-gcm" })).toBeInTheDocument();
+    expect(within(method).getByRole("option", { name: "none" })).toBeInTheDocument();
+    expect(within(method).getByRole("option", { name: "plain" })).toBeInTheDocument();
     fireEvent.change(method, { target: { value: "aes-256-gcm" } });
     fireEvent.click(within(editor).getByRole("button", { name: "保存并重建" }));
 
@@ -1696,7 +1702,7 @@ describe("service management workbench", () => {
     fireEvent.change(within(editor).getByRole("combobox", { name: "出站协议" }), { target: { value: "vmess" } });
     const vmessSecurity = within(editor).getByRole("combobox", { name: "出站 VMess Security" });
     expect(vmessSecurity).toHaveValue("auto");
-    expect([...vmessSecurity.querySelectorAll("option")].map((option) => option.value)).toEqual(["auto", "aes-128-gcm", "chacha20-poly1305"]);
+    expect([...vmessSecurity.querySelectorAll("option")].map((option) => option.value)).toEqual(["auto", "aes-128-gcm", "chacha20-poly1305", "none", "zero"]);
     fireEvent.change(within(editor).getByRole("combobox", { name: "出站协议" }), { target: { value: "vless" } });
     expect(within(editor).getByRole("combobox", { name: "出站 Encryption" })).toHaveAttribute("list", "xray-vless-encryption-11");
     expect(within(editor).getByRole("combobox", { name: "出站 VLESS Flow" })).toHaveTextContent("xtls-rprx-vision-udp443");

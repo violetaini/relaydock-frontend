@@ -106,9 +106,10 @@ describe("TG Bot invite operations", () => {
     fireEvent.click(await screen.findByRole("button", { name: "创建邀请码" }));
     fireEvent.change(screen.getByRole("combobox", { name: "用途" }), { target: { value: "bind" } });
     const account = screen.getByRole("combobox", { name: "绑定账号" });
-    expect(within(account).getByRole("option", { name: "Alice（alice）" })).toBeInTheDocument();
-    expect(within(account).queryByRole("option", { name: /disabled|停用账号/ })).not.toBeInTheDocument();
-    expect(within(account).queryByRole("option", { name: /admin|管理员/ })).not.toBeInTheDocument();
+    expect(account).toHaveAttribute("list", "tg-bot-bind-users");
+    const options = [...document.querySelectorAll<HTMLOptionElement>("#tg-bot-bind-users option")];
+    expect(options.map((option) => [option.value, option.textContent])).toContainEqual(["alice", "Alice（alice）"]);
+    expect(options.map((option) => option.value)).not.toEqual(expect.arrayContaining(["disabled", "admin"]));
     fireEvent.change(account, { target: { value: "alice" } });
     fireEvent.click(within(screen.getByRole("dialog", { name: "创建 TG Bot 邀请码" })).getByRole("button", { name: "创建邀请码" }));
 
@@ -117,6 +118,24 @@ describe("TG Bot invite operations", () => {
       bind_username: "alice",
       package_id: null,
       duration_months: 0,
+    })));
+  });
+
+  it("accepts an account outside the capped user suggestions", async () => {
+    mockLists([invite()], [standardPackage], []);
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true, code: "LATEUSER1234" });
+    render(<TGBotInvitesPanel notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "创建邀请码" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "用途" }), { target: { value: "bind" } });
+    const account = screen.getByRole("combobox", { name: "绑定账号" });
+    expect(account).not.toBeDisabled();
+    fireEvent.change(account, { target: { value: "late-user" } });
+    fireEvent.click(within(screen.getByRole("dialog", { name: "创建 TG Bot 邀请码" })).getByRole("button", { name: "创建邀请码" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/tgbot/invites", expect.objectContaining({
+      kind: "bind",
+      bind_username: "late-user",
     })));
   });
 

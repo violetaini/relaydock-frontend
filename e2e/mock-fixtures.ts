@@ -117,4 +117,5 @@ export const settingsGetResponses: Record<string, unknown> = {
     external_web_root: false,
     can_apply: true,
   },
+  "/api/user/debug/status": { enabled: false },
 };

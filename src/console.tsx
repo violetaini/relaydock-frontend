@@ -37,7 +37,6 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import { AdvancedPage } from "./advanced";
 import { AccountWorkbenchPage } from "./account-workbench";
 import { api, openDashboardSocket } from "./api";
 import { BrandMark, useBranding, type Branding } from "./brand";
@@ -88,7 +87,8 @@ import {
   statusTone,
 } from "./ui";
 
-type PageKey = "dashboard" | "subscriptions" | "generator" | "servers" | "nodes" | "forwarding" | "traffic" | "users" | "packages" | "certificates" | "templates" | "subscribeFiles" | "customRules" | "rulesConfig" | "advanced" | "settings" | "account";
+type PageKey = "dashboard" | "subscriptions" | "generator" | "servers" | "nodes" | "forwarding" | "traffic" | "users" | "packages" | "certificates" | "templates" | "subscribeFiles" | "customRules" | "rulesConfig" | "settings" | "account";
+type UsersScope = "all" | "renewal" | "invites";
 
 interface ToastState { message: string; tone: "success" | "error" }
 type LayoutMode = "top" | "side";
@@ -108,22 +108,22 @@ const pageTitles: Record<PageKey, string> = {
   subscribeFiles: "订阅管理",
   customRules: "覆写管理",
   rulesConfig: "规则配置",
-  advanced: "高级管理",
   settings: "系统设置",
   account: "账户中心",
 };
 
 function resolvePage(isAdmin: boolean): PageKey {
   const candidate = location.hash.replace(/^#\/?/, "").split("?")[0] as PageKey;
-  const known: PageKey[] = ["dashboard", "subscriptions", "generator", "servers", "nodes", "forwarding", "traffic", "users", "packages", "certificates", "templates", "subscribeFiles", "customRules", "rulesConfig", "advanced", "settings", "account"];
+  const known: PageKey[] = ["dashboard", "subscriptions", "generator", "servers", "nodes", "forwarding", "traffic", "users", "packages", "certificates", "templates", "subscribeFiles", "customRules", "rulesConfig", "settings", "account"];
   if (!known.includes(candidate)) return "dashboard";
-  if (!isAdmin && ["servers", "users", "packages", "certificates", "rulesConfig", "advanced", "settings"].includes(candidate)) return "dashboard";
+  if (!isAdmin && ["servers", "users", "packages", "certificates", "rulesConfig", "settings"].includes(candidate)) return "dashboard";
   return candidate;
 }
 
-function resolveUsersScope(): "all" | "renewal" {
+function resolveUsersScope(): UsersScope {
   const query = location.hash.split("?")[1] ?? "";
-  return new URLSearchParams(query).get("view") === "renewal" ? "renewal" : "all";
+  const view = new URLSearchParams(query).get("view");
+  return view === "renewal" || view === "invites" ? view : "all";
 }
 
 const permissionKey: Partial<Record<PageKey, string>> = {
@@ -144,7 +144,7 @@ function pageAllowed(page: PageKey, isAdmin: boolean, permissions: string[] | nu
 export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: Profile; onLogout: () => void; onBrandingChange?: (branding: Branding) => void }) {
   const branding = useBranding();
   const [page, setPage] = useState<PageKey>(() => resolvePage(profile.is_admin));
-  const [usersScope, setUsersScope] = useState<"all" | "renewal">(resolveUsersScope);
+  const [usersScope, setUsersScope] = useState<UsersScope>(resolveUsersScope);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => normalizeThemeMode(localStorage.getItem("arcway-theme")));
   const [theme, setTheme] = useState<Theme>(() => document.documentElement.dataset.theme === "dark" ? "dark" : "light");
@@ -199,9 +199,9 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: P
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  const navigate = (next: PageKey, options?: { usersScope?: "all" | "renewal" }) => {
+  const navigate = (next: PageKey, options?: { usersScope?: UsersScope }) => {
     const usersView = next === "users" ? options?.usersScope ?? "all" : "all";
-    location.hash = `/${next}${usersView === "renewal" ? "?view=renewal" : ""}`;
+    location.hash = `/${next}${usersView === "all" ? "" : `?view=${usersView}`}`;
     setPage(next);
     setUsersScope(usersView);
     setSidebarOpen(false);
@@ -299,12 +299,7 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: P
           {page === "dashboard" ? <DashboardPage profile={profile} navigate={navigate} /> : null}
           {page === "subscriptions" && pageAllowed(page, profile.is_admin, userPages) ? <SubscriptionLinksPage notify={notify} /> : null}
           {page === "generator" && pageAllowed(page, profile.is_admin, userPages) ? <SubscriptionGeneratorPage notify={notify} /> : null}
-          {page === "servers" && profile.is_admin ? <ServicesWorkbenchPage notify={notify} onOpenAdvanced={(options) => {
-            const query = options?.tab ? `?tab=${options.tab}${options.serverID ? `&server=${options.serverID}` : ""}` : "";
-            location.hash = `/advanced${query}`;
-            setPage("advanced");
-            setSidebarOpen(false);
-          }} /> : null}
+          {page === "servers" && profile.is_admin ? <ServicesWorkbenchPage notify={notify} /> : null}
           {page === "nodes" && pageAllowed(page, profile.is_admin, userPages) ? <NodesWorkbench isAdmin={profile.is_admin} notify={notify} /> : null}
           {page === "forwarding" ? <ForwardingManagement isAdmin={profile.is_admin} notify={notify} /> : null}
           {page === "traffic" ? <TrafficWorkbenchPage profile={profile} /> : null}
@@ -315,7 +310,6 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: P
           {page === "subscribeFiles" && pageAllowed(page, profile.is_admin, userPages) ? <SubscribeFilesPage notify={notify} onOpenCustomRules={pageAllowed("customRules", profile.is_admin, userPages) ? () => navigate("customRules") : undefined} onOpenRulesConfig={profile.is_admin ? () => navigate("rulesConfig") : undefined} /> : null}
           {page === "customRules" && pageAllowed(page, profile.is_admin, userPages) ? <CustomRulesWorkbenchPage notify={notify} /> : null}
           {page === "rulesConfig" && profile.is_admin ? <RulesConfigWorkbenchPage notify={notify} /> : null}
-          {page === "advanced" && profile.is_admin ? <AdvancedPage notify={notify} /> : null}
           {page === "settings" && profile.is_admin ? <SettingsWorkbenchPage notify={notify} onBrandingChange={onBrandingChange} /> : null}
           {page === "account" ? <AccountWorkbenchPage notify={notify} /> : null}
         </main>
@@ -336,7 +330,7 @@ function NavItem({ icon, label, active, onClick }: { icon: ReactNode; label: str
   return <button className={`nav-item ${active ? "is-active" : ""}`} aria-label={label} title={label} onClick={onClick}>{icon}<span>{label}</span><ChevronRight size={15} /></button>;
 }
 
-function DashboardPage({ profile, navigate }: { profile: Profile; navigate: (page: PageKey, options?: { usersScope?: "all" | "renewal" }) => void }) {
+function DashboardPage({ profile, navigate }: { profile: Profile; navigate: (page: PageKey, options?: { usersScope?: UsersScope }) => void }) {
   const [servers, setServers] = useState<RemoteServer[]>([]);
   const [nodes, setNodes] = useState<NodeItem[]>([]);
   const [users, setUsers] = useState<UserItem[]>([]);

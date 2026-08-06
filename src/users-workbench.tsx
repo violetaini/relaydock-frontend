@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { api } from "./api";
 import { ServerGrantsPanel } from "./server-grants";
+import { TGBotInvitesPanel } from "./tg-bot-invites";
 import { TrafficProgress } from "./traffic-progress";
 import type { NodeItem, NodeListResponse, PackageItem, UserItem } from "./types";
 import {
@@ -46,6 +47,7 @@ import {
 import "./users-workbench.css";
 
 type Notify = (message: string, tone?: "success" | "error") => void;
+export type UsersScope = "all" | "renewal" | "invites";
 
 interface ManagedUser extends UserItem {
   avatar_url?: string;
@@ -117,12 +119,12 @@ function normalizeResetDay(value?: number) {
   return Math.min(31, Math.max(1, day));
 }
 
-export function UsersWorkbenchPage({ notify, initialScope = "all" }: { notify: Notify; initialScope?: "all" | "renewal" }) {
+export function UsersWorkbenchPage({ notify, initialScope = "all" }: { notify: Notify; initialScope?: UsersScope }) {
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
-  const [scope, setScope] = useState<"all" | "renewal">(initialScope);
+  const [scope, setScope] = useState<UsersScope>(initialScope);
   const [status, setStatus] = useState<"all" | "active" | "disabled">("all");
   const [editor, setEditor] = useState<Editor | null>(null);
   const [pendingDelete, setPendingDelete] = useState<ManagedUser | null>(null);
@@ -144,8 +146,13 @@ export function UsersWorkbenchPage({ notify, initialScope = "all" }: { notify: N
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { if (scope !== "invites") void load(); }, [load, scope]);
   useEffect(() => { setScope(initialScope); }, [initialScope]);
+
+  const changeScope = (next: UsersScope) => {
+    setScope(next);
+    location.hash = `/users${next === "all" ? "" : `?view=${next}`}`;
+  };
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -235,21 +242,22 @@ export function UsersWorkbenchPage({ notify, initialScope = "all" }: { notify: N
     <>
       <PageHeader
         title="用户管理"
-        description={`${regularUsers.length} 位普通用户 · ${activeCount} 位启用 · ${overLimit} 位超出流量`}
-        actions={<><IconButton label="刷新用户" onClick={() => void load()} disabled={loading}><RefreshCw size={18} /></IconButton><Button onClick={() => setEditor({ kind: "create" })}><Plus size={17} />新建用户</Button></>}
+        description={scope === "invites" ? "管理 Telegram Bot 注册与账号绑定邀请码" : `${regularUsers.length} 位普通用户 · ${activeCount} 位启用 · ${overLimit} 位超出流量`}
+        actions={scope === "invites" ? undefined : <><IconButton label="刷新用户" onClick={() => void load()} disabled={loading}><RefreshCw size={18} /></IconButton><Button onClick={() => setEditor({ kind: "create" })}><Plus size={17} />新建用户</Button></>}
       />
-      {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
+      {scope !== "invites" && error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
       <div className="users-toolbar">
         <div className="segmented-control" aria-label="用户视图">
-          <button className={scope === "all" ? "is-active" : ""} onClick={() => setScope("all")}>完整视图</button>
-          <button className={scope === "renewal" ? "is-active" : ""} onClick={() => setScope("renewal")}>续期工作台</button>
+          <button className={scope === "all" ? "is-active" : ""} onClick={() => changeScope("all")}>完整视图</button>
+          <button className={scope === "renewal" ? "is-active" : ""} onClick={() => changeScope("renewal")}>续期工作台</button>
+          <button className={scope === "invites" ? "is-active" : ""} onClick={() => changeScope("invites")}>TG 邀请码</button>
         </div>
-        <div className="users-toolbar-right">
+        {scope !== "invites" ? <div className="users-toolbar-right">
           <Field label="状态" className="compact-field"><select value={status} onChange={(event) => setStatus(event.target.value as typeof status)}><option value="all">全部状态</option><option value="active">已启用</option><option value="disabled">已停用</option></select></Field>
           <div className="search-box users-search"><Search size={17} /><input aria-label="搜索用户" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="用户名、邮箱、套餐或短码" /></div>
-        </div>
+        </div> : null}
       </div>
-      <Surface className="table-surface users-table-surface">
+      {scope === "invites" ? <TGBotInvitesPanel notify={notify} /> : <Surface className="table-surface users-table-surface">
         {loading ? <div className="center-state"><Spinner label="正在加载用户" /></div> : filtered.length === 0 ? <EmptyState icon={<Users size={24} />} title={users.length ? "没有匹配的用户" : "暂无用户"} /> : (
           <div className="table-wrap">
             <table>
@@ -296,7 +304,7 @@ export function UsersWorkbenchPage({ notify, initialScope = "all" }: { notify: N
             </table>
           </div>
         )}
-      </Surface>
+      </Surface>}
 
       {editor?.kind === "create" ? <CreateUserDialog notify={notify} onClose={() => setEditor(null)} onComplete={completed} /> : null}
       {editor?.kind === "manage" ? <UserSettingsDialog user={editor.user} notify={notify} working={workingUser === editor.user.username} onClose={() => setEditor(null)} onComplete={(message, tone) => completedInSettings(editor.user.username, message, tone)} onToggleStatus={async () => { await toggleStatus(editor.user); setEditor(null); }} onDelete={() => { setEditor(null); setPendingDelete(editor.user); }} /> : null}

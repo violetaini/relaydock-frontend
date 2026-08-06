@@ -40,7 +40,6 @@ import {
   UploadCloud,
   Wifi,
   WifiOff,
-  Wrench,
   X,
 } from "lucide-react";
 import { api, openDashboardSocket, requestStream } from "./api";
@@ -72,6 +71,7 @@ import {
   xrayServicePresets,
   type XrayPresetOption,
 } from "./xray-basic-config";
+import { WarpManagement } from "./warp-management";
 import {
   Badge,
   Button,
@@ -1380,9 +1380,7 @@ function outboundTransportSummary(resource: XrayResource): { network: string; se
   };
 }
 
-type OpenAdvancedOptions = { tab?: "warp"; serverID?: number };
-
-export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Notify; onOpenAdvanced?: (options?: OpenAdvancedOptions) => void }) {
+export function ServicesWorkbenchPage({ notify }: { notify: Notify }) {
   const [servers, setServers] = useState<ManagedServer[]>([]);
   const [serviceStatuses, setServiceStatuses] = useState<Record<number, CachedServiceStatus>>({});
   const [agentVersions, setAgentVersions] = useState<Record<number, CachedAgentVersion>>({});
@@ -1789,7 +1787,6 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
         description={`${servers.length} 台服务器 · ${online.length} 台在线 · ${servers.length - online.length} 台离线`}
         actions={<>
           <IconButton label="刷新服务器" onClick={() => void load()} disabled={loading}><RefreshCw size={18} /></IconButton>
-          {onOpenAdvanced ? <Button variant="secondary" onClick={() => onOpenAdvanced()}><Wrench size={17} />高级运维</Button> : null}
           <Button variant="secondary" title={upgradeTargets.length ? `检测到 ${upgradeTargets.length} 台 Agent 可升级` : allTargetVersionsCurrent ? "目标 Agent 均已是最新版" : "未检测到可用的新版本"} onClick={() => requestAgentUpgrade(upgradeTargets)} disabled={!upgradeTargets.length || Boolean(upgrade?.running)}><UploadCloud size={17} />{upgradeLabel}</Button>
           <Button variant="secondary" onClick={() => setSharedOpen(true)}><Cloud size={17} />添加共享服务器</Button>
           <Button onClick={() => setCreateOpen(true)}><Plus size={17} />添加服务器</Button>
@@ -1844,7 +1841,7 @@ export function ServicesWorkbenchPage({ notify, onOpenAdvanced }: { notify: Noti
       {createOpen ? <CreateServerDialog onClose={() => setCreateOpen(false)} onCreated={async (result) => { setCreateOpen(false); await load(); if (result.server && result.install_command) setCredentials({ server: result.server, token: result.server.token ?? "", pullToken: result.server.pull_token ?? "", agentToken: result.server.agent_token ?? "", command: result.install_command }); notify("服务器已创建"); }} /> : null}
       {sharedOpen ? <AddSharedServerDialog onClose={() => setSharedOpen(false)} onCreated={async () => { setSharedOpen(false); notify("共享服务器已接入"); await load(); }} /> : null}
       {editing ? <EditServerDialog server={editing} onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); notify("服务器设置已保存"); await load(); }} /> : null}
-      {details && detailsServer ? <ServerOperationsDialog key={`${details.server.id}-${details.initialTab}`} server={detailsServer} initialTab={details.initialTab} notify={notify} onClose={() => setDetails(null)} onChanged={() => load(true)} onUpgrade={(version) => requestAgentUpgrade([detailsServer], version)} onOpenAdvanced={onOpenAdvanced} /> : null}
+      {details && detailsServer ? <ServerOperationsDialog key={`${details.server.id}-${details.initialTab}`} server={detailsServer} initialTab={details.initialTab} notify={notify} onClose={() => setDetails(null)} onChanged={() => load(true)} onUpgrade={(version) => requestAgentUpgrade([detailsServer], version)} /> : null}
       {credentials ? <CredentialsDialog value={credentials} notify={notify} onClose={() => setCredentials(null)} /> : null}
       {deleting ? <DeleteServerDialog server={deleting} working={deleteWorking} error={deleteError} refreshVersion={deleteRefreshVersion} onCancel={closeDeleteServer} onConfirm={(shared) => void deleteServer(shared)} /> : null}
       {upgradeConfirm ? <ConfirmDialog title="升级 Agent" description={upgradeConfirm.length === 1 ? `${upgradeConfirm[0].server.name} 将从 ${upgradeConfirm[0].current === "未知" ? "未知版本" : `v${upgradeConfirm[0].current}`} 升级到 v${upgradeConfirm[0].latest}。升级期间 Agent 会短暂重启。` : `将把 ${upgradeConfirm.length} 台 Agent 升级到 ${[...new Set(upgradeConfirm.map((candidate) => `v${candidate.latest}`))].join("、")}。升级期间 Agent 会依次短暂重启。`} confirmLabel="确认升级" tone="primary" onCancel={() => setUpgradeConfirm(null)} onConfirm={() => { const targets = upgradeConfirm.map((candidate) => candidate.server); setUpgradeConfirm(null); void runUpgrade(targets); }} /> : null}
@@ -2761,9 +2758,9 @@ function XrayTagPicker({ label, description, ariaLabel, values, options, onChang
 }
 
 type OperationTab = "overview" | "services" | "speedtest" | "xray" | "sharing";
-type XraySettingsTab = "basic" | "routing" | "outbounds" | "dns" | "advanced";
+type XraySettingsTab = "basic" | "routing" | "outbounds" | "dns" | "warp" | "advanced";
 
-function ServerOperationsDialog({ server, initialTab = "overview", notify, onClose, onChanged, onUpgrade, onOpenAdvanced }: { server: ManagedServer; initialTab?: OperationTab; notify: Notify; onClose: () => void; onChanged: () => Promise<void>; onUpgrade: (version: AgentVersionResponse) => void; onOpenAdvanced?: (options?: OpenAdvancedOptions) => void }) {
+function ServerOperationsDialog({ server, initialTab = "overview", notify, onClose, onChanged, onUpgrade }: { server: ManagedServer; initialTab?: OperationTab; notify: Notify; onClose: () => void; onChanged: () => Promise<void>; onUpgrade: (version: AgentVersionResponse) => void }) {
   const [tab, setTab] = useState<OperationTab>(initialTab);
   const [xrayTab, setXrayTab] = useState<XraySettingsTab>("basic");
   const [status, setStatus] = useState<ServiceStatusResponse | null>(null);
@@ -3089,6 +3086,7 @@ function ServerOperationsDialog({ server, initialTab = "overview", notify, onClo
     { key: "routing", label: "路由规则", icon: <Network size={15} /> },
     { key: "outbounds", label: "出站规则", icon: <ArrowUpFromLine size={15} /> },
     { key: "dns", label: "DNS", icon: <Server size={15} /> },
+    ...(!server.is_federated ? [{ key: "warp" as const, label: "WARP", icon: <Cloud size={15} /> }] : []),
     { key: "advanced", label: "高级配置", icon: <Code2 size={15} /> },
   ];
   const parsedConfig = parseXrayConfigObject(config);
@@ -3118,6 +3116,7 @@ function ServerOperationsDialog({ server, initialTab = "overview", notify, onClo
       <div className="xray-settings-tabs" role="tablist" aria-label="Xray 设置分类">{xrayTabs.map((item) => <button key={item.key} role="tab" aria-selected={xrayTab === item.key} className={xrayTab === item.key ? "is-active" : ""} onClick={() => selectXrayTab(item.key)}>{item.icon}{item.label}</button>)}</div>
       {xrayTab === "routing" ? <XrayRoutingWorkbench serverId={server.id} notify={notify} /> : null}
       {xrayTab === "outbounds" ? <XrayResourcesWorkbench serverId={server.id} serverDomain={server.domain} serverIPv4={server.ip_address} serverIPv6={server.ip_address_v6} kind="outbound" notify={notify} /> : null}
+      {xrayTab === "warp" && !server.is_federated ? <WarpManagement server={server} notify={notify} configDirty={configDirty} onChanged={async () => { await loadConfig(); await onChanged(); }} /> : null}
       {xrayTab === "basic" || xrayTab === "dns" || xrayTab === "advanced" ? <div className="service-config-panel">
         {!configLoaded ? <EmptyState icon={<Code2 size={23} />} title={working === "config-load" ? "正在读取 Xray 配置" : "暂未读取 Xray 配置"} description="配置直接来自目标服务器。" action={working === "config-load" ? <Spinner label="正在读取" /> : <Button onClick={() => void loadConfig()}><Clipboard size={16} />读取配置</Button>} /> : <>
           <div className="service-config-head xray-settings-toolbar"><span><strong>{configPath || "config.json"}</strong><small className={configDirty ? "is-dirty" : ""}>{configDirty ? "存在未保存更改" : "已与 Agent 同步"}</small></span><div><Button variant="ghost" onClick={() => void loadConfig()} disabled={Boolean(working)}><RefreshCw size={15} />重新读取</Button><Button variant="secondary" onClick={() => void testConfig()} disabled={Boolean(working) || !config.trim() || Boolean(dnsDraftError)}>{working === "config-test" ? <Spinner label="预检中" /> : <><ShieldCheck size={15} />预检</>}</Button><Button onClick={() => void saveConfig()} disabled={Boolean(working) || !configDirty || Boolean(dnsDraftError)}>{working === "config-save" ? <Spinner label="应用中" /> : <><Check size={15} />保存并应用</>}</Button><Button variant="secondary" title={configDirty ? "请先保存配置" : "重启当前 Xray 服务"} onClick={() => void restartXray()} disabled={Boolean(working) || configDirty}>{working === "config-restart" ? <Spinner label="重启中" /> : <><RotateCw size={15} />重启 Xray</>}</Button></div></div>
@@ -3150,7 +3149,7 @@ function ServerOperationsDialog({ server, initialTab = "overview", notify, onClo
               {basicSettings.warpAvailable ? <XrayTagPicker label="WARP 路由" description="匹配后使用 warp 出站" ariaLabel="添加 WARP 域名规则" values={basicSettings.warpDomains} options={xrayServicePresets} onChange={(values) => updateConfigObject((draft) => setXrayBasicRule(draft, "warpDomains", values))} /> : null}
               {basicSettings.warpIPv4Available ? <XrayTagPicker label="WARP IPv4 路由" description="匹配后使用 warp-v4 出站" ariaLabel="添加 WARP IPv4 域名规则" values={basicSettings.warpIPv4Domains} options={xrayServicePresets} onChange={(values) => updateConfigObject((draft) => setXrayBasicRule(draft, "warpIPv4Domains", values))} /> : null}
               {basicSettings.warpIPv6Available ? <XrayTagPicker label="WARP IPv6 路由" description="匹配后使用 warp-v6 出站" ariaLabel="添加 WARP IPv6 域名规则" values={basicSettings.warpIPv6Domains} options={xrayServicePresets} onChange={(values) => updateConfigObject((draft) => setXrayBasicRule(draft, "warpIPv6Domains", values))} /> : null}
-              {!basicSettings.warpAvailable && !basicSettings.warpIPv4Available && !basicSettings.warpIPv6Available ? <XraySettingRow title="WARP 路由" description="当前服务器尚未安装 WARP 出站"><Button variant="secondary" onClick={() => { onClose(); onOpenAdvanced?.({ tab: "warp", serverID: server.id }); }} disabled={!onOpenAdvanced}><Cloud size={15} />管理 WARP</Button></XraySettingRow> : null}
+              {!server.is_federated && !basicSettings.warpAvailable && !basicSettings.warpIPv4Available && !basicSettings.warpIPv6Available ? <XraySettingRow title="WARP 路由" description="当前服务器尚未安装 WARP 出站"><Button variant="secondary" onClick={() => selectXrayTab("warp")}><Cloud size={15} />管理 WARP</Button></XraySettingRow> : null}
             </div></details>
             <details className="xray-settings-group"><summary><span><strong>恢复默认</strong><small>仅恢复本页基础项</small></span><ChevronDown size={17} /></summary><div className="xray-reset-panel"><TriangleAlert size={18} /><span><strong>恢复 Arcway 基础默认值</strong><small>数据库入站、DNS、自定义复杂路由和其他出站保持不变。</small></span><Button variant="secondary" onClick={() => setResetBasicConfirm(true)}>恢复基础默认值</Button></div></details>
           </div> : <ErrorState message="当前配置不是有效的 JSON 对象，请在高级配置中修正" /> : null}

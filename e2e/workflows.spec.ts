@@ -91,12 +91,6 @@ function json(body: unknown, status = 200): ApiReply {
   return { body, status };
 }
 
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((done) => { resolve = done; });
-  return { promise, resolve };
-}
-
 class StrictApiMock {
   private readonly handlers = new Map<string, ApiHandler>();
   readonly calls: ApiCall[] = [];
@@ -191,12 +185,6 @@ async function createMock(page: Page) {
   await mock.install();
   mocks.set(page, mock);
   return mock;
-}
-
-function registerAdvancedShell(mock: StrictApiMock, servers: JsonObject[]) {
-  mock
-    .on("GET", "/api/admin/tunnels", () => json({ success: true, tunnels: [], chains: [] }))
-    .on("GET", "/api/admin/remote-servers", () => json({ success: true, servers }));
 }
 
 test.afterEach(async ({ page }) => {
@@ -622,99 +610,7 @@ test("creates a user, preserves the one-time password, and disables it", async (
   ]);
 });
 
-test("submits tunnel server_ids in the order shown after reordering", async ({ page }) => {
-  const mock = await createMock(page);
-  const servers = [
-    server(1, "Hong Kong Edge", "198.51.100.11"),
-    server(2, "Tokyo Edge", "198.51.100.12"),
-    server(3, "US West Edge", "198.51.100.13"),
-  ];
-  const chains: JsonObject[] = [];
-  mock
-    .on("GET", "/api/admin/remote-servers", () => json({ success: true, servers }))
-    .on("GET", "/api/admin/tunnels", () => json({ success: true, tunnels: [], chains }))
-    .on("POST", "/api/admin/tunnel-chains", (call) => {
-      const body = call.body as { label: string; server_ids: number[]; entry_port: number; target_address: string; target_port: number };
-      chains.push({
-        label: body.label,
-        entry_server: body.server_ids[0],
-        entry_port: body.entry_port,
-        final_target: `${body.target_address}:${body.target_port}`,
-        hops: body.server_ids.map((id, index) => ({
-          server_id: id,
-          server_name: String(servers.find((item) => item.id === id)?.name),
-          tag: `tunnel-${body.label}-h${index}`,
-          listen_port: body.entry_port,
-          target_address: body.target_address,
-          target_port: body.target_port,
-        })),
-      });
-      return json({ success: true });
-    });
-
-  await page.goto("/#/advanced");
-  await page.getByRole("button", { name: "创建链路" }).click();
-  const dialog = page.getByRole("dialog", { name: "创建链式端口转发" });
-  await dialog.getByLabel("链路名称").fill("hk-us-media");
-  await dialog.getByLabel(/全链路端口/).fill("24433");
-  await dialog.getByLabel("最终目标地址").fill("media.example.com");
-  await dialog.getByLabel("最终目标端口").fill("443");
-
-  const chooser = dialog.getByLabel("添加服务器");
-  for (const id of [2, 1, 3]) {
-    await chooser.selectOption(String(id));
-    await dialog.getByRole("button", { name: "加入" }).click();
-  }
-  const routeOrder = dialog.locator(".route-order");
-  await routeOrder.locator(":scope > div").filter({ hasText: "US West Edge" }).getByRole("button", { name: "上移" }).click();
-  await expect(routeOrder.locator("strong")).toHaveText(["Tokyo Edge", "US West Edge", "Hong Kong Edge"]);
-  await dialog.getByRole("button", { name: "创建链路" }).click();
-
-  await expect(page.getByText("hk-us-media", { exact: true })).toBeVisible();
-  expect(mock.callsFor("POST", "/api/admin/tunnel-chains").map((call) => call.body)).toEqual([{
-    label: "hk-us-media",
-    server_ids: [2, 3, 1],
-    entry_port: 24433,
-    target_address: "media.example.com",
-    target_port: 443,
-  }]);
-});
-
-test("does not report routed deletion success when routing returns success false", async ({ page }) => {
-  const mock = await createMock(page);
-  const servers = [server(1, "Hong Kong Edge", "198.51.100.11"), server(2, "Tokyo Edge", "198.51.100.12")];
-  const routed = {
-    kind: "routed",
-    server_id: 1,
-    server_name: "Hong Kong Edge",
-    is_federated: false,
-    tag: "route-media",
-    listen_port: 0,
-    target_address: "media.example.com",
-    target_port: 443,
-    network: "tcp",
-  };
-  mock
-    .on("GET", "/api/admin/remote-servers", () => json({ success: true, servers }))
-    .on("GET", "/api/admin/tunnels", () => json({ success: true, tunnels: [routed], chains: [] }))
-    .on("GET", "/api/admin/remote/routing", () => json({ success: true, routing: { rules: [{ outboundTag: "route-media" }] } }))
-    .on("POST", "/api/admin/remote/routing", () => json({ success: false, error: "规则仍在使用" }))
-    .on("POST", "/api/admin/remote/outbounds", () => json({ success: true }));
-
-  await page.goto("/#/advanced");
-  await page.getByRole("button", { name: "删除隧道 route-media" }).click();
-  await page.getByRole("dialog", { name: "删除隧道" }).getByRole("button", { name: "确认删除" }).click();
-
-  await expect(page.getByRole("alert").filter({ hasText: "规则仍在使用" })).toBeVisible();
-  await expect(page.getByRole("status").filter({ hasText: "隧道已删除" })).toHaveCount(0);
-  await expect(page.getByText("route-media", { exact: true })).toBeVisible();
-  expect(mock.callsFor("POST", "/api/admin/remote/routing").map((call) => call.body)).toEqual([
-    { action: "remove_rule", index: 0 },
-  ]);
-  expect(mock.callsFor("POST", "/api/admin/remote/outbounds")).toHaveLength(0);
-});
-
-test("keeps a one-time share visible after clipboard failure until manual confirmation", async ({ page }) => {
+test("keeps a one-time server share visible after clipboard failure", async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -725,8 +621,10 @@ test("keeps a one-time share visible after clipboard failure until manual confir
   const servers = [server(1, "Hong Kong Edge", "198.51.100.11"), server(2, "Tokyo Edge", "198.51.100.12")];
   const shares: JsonObject[] = [];
   const secret = "arcway-share-once-4f83d";
-  registerAdvancedShell(mock, servers);
   mock
+    .on("GET", "/api/admin/remote-servers", () => json({ success: true, servers }))
+    .on("GET", "/api/admin/remote/system/info", () => json({ success: true, hostname: "edge-hk-01", uptime: 86400 }))
+    .on("GET", "/api/admin/servers/1/ddns-status", () => json({ success: true, ddns_enabled: false }))
     .on("GET", "/api/admin/server-share/list", (call) => {
       const selected = Number(call.query.server_id);
       return json({ shares: shares.filter((share) => share.server_id === selected) });
@@ -737,22 +635,17 @@ test("keeps a one-time share visible after clipboard failure until manual confir
       return json({ share_token: secret });
     });
 
-  await page.goto("/#/advanced");
-  await page.getByRole("tab", { name: "联邦分享" }).click();
-  await page.getByRole("button", { name: "创建分享" }).click();
-  const createDialog = page.getByRole("dialog", { name: "创建服务器分享" });
-  await createDialog.getByLabel("分享标签").fill("Tokyo partner");
-  await createDialog.getByRole("button", { name: "创建分享" }).click();
+  await page.goto("/#/servers");
+  await page.getByRole("button", { name: "管理", exact: true }).first().click();
+  const serverDialog = page.getByRole("dialog", { name: "Hong Kong Edge" });
+  await serverDialog.getByRole("tab", { name: "服务器分享" }).click();
+  await serverDialog.getByLabel("令牌备注").fill("Tokyo partner");
+  await serverDialog.getByRole("button", { name: "生成分享令牌" }).click();
 
-  const secretDialog = page.getByRole("dialog", { name: "分享令牌" });
-  await expect(secretDialog.getByText(secret, { exact: true })).toBeVisible();
-  await secretDialog.getByRole("button", { name: "复制令牌", exact: true }).click();
-  await expect(secretDialog.getByText("无法访问剪贴板，请手动选择并保存上方令牌。")).toBeVisible();
-  await expect(secretDialog.getByRole("button", { name: "重试复制" })).toBeVisible();
-  const manual = secretDialog.getByRole("button", { name: "已手动保存" });
-  await expect(manual).toBeEnabled();
-  await manual.click();
-  await expect(secretDialog).toHaveCount(0);
+  await expect(serverDialog.getByText(secret, { exact: true })).toBeVisible();
+  await serverDialog.getByRole("button", { name: "复制新分享令牌" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "复制失败" })).toBeVisible();
+  await expect(serverDialog.getByText(secret, { exact: true })).toBeVisible();
 
   expect(mock.callsFor("POST", "/api/admin/server-share/create").map((call) => call.body)).toEqual([
     { server_id: 1, label: "Tokyo partner" },
@@ -762,34 +655,27 @@ test("keeps a one-time share visible after clipboard failure until manual confir
   }
 });
 
-test("ignores a late WARP response after switching servers", async ({ page }) => {
+test("opens WARP management from the selected server Xray settings", async ({ page }) => {
   const mock = await createMock(page);
-  const servers = [server(1, "Hong Kong Edge", "198.51.100.11"), server(2, "Tokyo Edge", "198.51.100.12")];
-  const oldResponse = deferred<void>();
-  registerAdvancedShell(mock, servers);
-  mock.on("GET", "/api/admin/remote/warp/status", async (call) => {
-    if (call.query.server_id === "1") {
-      await oldResponse.promise;
-      return json({ installed: true, license_active: false, addr_v4: "172.16.1.1", addr_v6: "2606:4700::1" });
-    }
-    return json({ installed: true, license_active: true, addr_v4: "172.16.2.2", addr_v6: "2606:4700::2" });
-  });
+  const servers = [server(1, "Hong Kong Edge", "198.51.100.11")];
+  mock
+    .on("GET", "/api/admin/remote-servers", () => json({ success: true, servers }))
+    .on("GET", "/api/admin/remote/system/info", () => json({ success: true, hostname: "edge-hk-01", uptime: 86400 }))
+    .on("GET", "/api/admin/servers/1/ddns-status", () => json({ success: true, ddns_enabled: false }))
+    .on("GET", "/api/admin/remote/xray/config", () => json({ success: true, path: "/usr/local/etc/xray/config.json", config: "{\"outbounds\":[]}" }))
+    .on("GET", "/api/admin/remote/warp/status", (call) => {
+      expect(call.query).toEqual({ server_id: "1" });
+      return json({ installed: true, license_active: true, addr_v4: "172.16.1.1", addr_v6: "2606:4700::1" });
+    });
 
-  await page.goto("/#/advanced");
-  await page.getByRole("tab", { name: "WARP" }).click();
-  const select = page.getByLabel("服务器");
-  await expect(select).toBeVisible();
-  await expect.poll(() => mock.callsFor("GET", "/api/admin/remote/warp/status").some((call) => call.query.server_id === "1")).toBe(true);
-  await select.selectOption("2");
-  await expect(page.getByText("172.16.2.2", { exact: true })).toBeVisible();
+  await page.goto("/#/servers");
+  await page.getByRole("button", { name: "Xray 设置", exact: true }).first().click();
+  const serverDialog = page.getByRole("dialog", { name: "Hong Kong Edge" });
+  await serverDialog.getByRole("tab", { name: "WARP" }).click();
+  await expect(serverDialog.getByRole("heading", { name: "WARP 出站" })).toBeVisible();
+  await expect(serverDialog.getByText("172.16.1.1", { exact: true })).toBeVisible();
   await expect(page.getByText("License 已配置", { exact: true })).toBeVisible();
-
-  oldResponse.resolve();
-  await expect.poll(() => mock.callsFor("GET", "/api/admin/remote/warp/status").filter((call) => call.query.server_id === "1").length).toBeGreaterThan(0);
-  await page.waitForTimeout(100);
-  await expect(select).toHaveValue("2");
-  await expect(page.getByText("172.16.2.2", { exact: true })).toBeVisible();
-  await expect(page.getByText("172.16.1.1", { exact: true })).toHaveCount(0);
+  expect(mock.callsFor("GET", "/api/admin/remote/warp/status").length).toBeGreaterThanOrEqual(1);
 });
 
 test("submits node speed parameters and polls a running result to completion", async ({ page }) => {

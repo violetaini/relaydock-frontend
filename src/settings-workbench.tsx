@@ -30,6 +30,7 @@ import {
 import { api, getToken } from "./api";
 import { brandFaviconURL, brandLogoURL, DEFAULT_BRANDING, normalizeBranding, type Branding } from "./brand";
 import { LegacyPanelImportDialog } from "./legacy-panel-import-dialog";
+import { BackupPanel, DebugLogsPanel } from "./system-maintenance-panels";
 import { TwoFactorSettings } from "./two-factor";
 import type { RemoteServer, ServerListResponse } from "./types";
 import { Badge, Button, ConfirmDialog, Dialog, ErrorState, Field, IconButton, PageHeader, Spinner, Surface, Toggle } from "./ui";
@@ -1107,6 +1108,8 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
           onRefresh={() => void loadMihomoStatus()}
           onInstall={() => void installMihomo()}
         />
+        <BackupPanel notify={notify} />
+        <DebugLogsPanel notify={notify} />
       </section>
 
       <section className="settings-settings-group settings-account-group">

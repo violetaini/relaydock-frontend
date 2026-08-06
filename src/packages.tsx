@@ -210,7 +210,7 @@ export function PackagesPage({ notify }: PackagesPageProps) {
       {loading ? (
         <Surface className="center-state"><Spinner label="正在加载套餐和节点" /></Surface>
       ) : (
-        <div className="advanced-stack">
+        <div className="package-stack">
           {packages.length === 0 ? <div className="package-grid">
               <Surface>
                 <EmptyState

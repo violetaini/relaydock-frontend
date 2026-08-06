@@ -51,7 +51,6 @@ import {
   Zap,
 } from "lucide-react";
 import { api } from "./api";
-import { TunnelsPanel } from "./advanced";
 import {
   buildManagedInboundRequest,
   buildManagedWireGuardClientProfile,
@@ -264,7 +263,6 @@ type WorkbenchDialog =
   | { kind: "uris" }
   | { kind: "subscriptions" }
   | { kind: "testers" }
-  | { kind: "tunnels" }
   | { kind: "route"; node: WorkbenchNode }
   | { kind: "qr"; node: WorkbenchNode }
   | { kind: "temp-sub"; nodes: WorkbenchNode[] }
@@ -884,7 +882,6 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
               {isAdmin ? <button role="menuitem" onClick={() => chooseTool({ kind: "testers" })}><Wifi size={16} />测速端管理</button> : null}
               {isAdmin ? <button role="menuitem" onClick={() => chooseTool({ kind: "uris" })}><Link2 size={16} />URI 管理器</button> : null}
               <button role="menuitem" onClick={() => chooseTool({ kind: "subscriptions" })}><Globe2 size={16} />外部订阅</button>
-              {isAdmin ? <button role="menuitem" onClick={() => chooseTool({ kind: "tunnels" })}><Cable size={16} />Tunnel 管理</button> : null}
               {isAdmin ? <button role="menuitem" onClick={() => { toolButtonRef.current?.focus(); setShowTools(false); deleteDuplicates(); }}><ListFilter size={16} />删除重复</button> : null}
               {!isAdmin && userRouted ? <span className="nw-tool-status"><Route size={15} />私有出站 {userRouted.quota.used}/{userRouted.quota.max} · 今日 {userRouted.daily.used}/{userRouted.daily.max}</span> : null}
             </div> : null}
@@ -892,7 +889,6 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
         </div>
         {isAdmin ? <div className="nw-parity-actions" role="toolbar" aria-label="节点快捷操作">
           <Button aria-label="切换节点自定义排序" variant={sort === "custom" ? "primary" : "secondary"} onClick={() => setSort(sort === "custom" ? "recent" : "custom")}><ListFilter size={16} />排序模式</Button>
-          <Button aria-label="打开 Tunnel 工作台" variant="secondary" onClick={() => setDialog({ kind: "tunnels" })}><Cable size={16} />Tunnel 管理</Button>
           <Button aria-label="创建节点路由出站" variant="secondary" onClick={() => selectedNodes.length === 1 ? setDialog({ kind: "route", node: selectedNodes[0] }) : notify("请先选择一个基础节点创建路由出站", "error")}><Route size={16} />路由出站</Button>
           <Button aria-label="打开测速工作台" variant="secondary" onClick={() => setDialog({ kind: "speed", nodeIDs: selectedNodes.map((node) => node.id) })}><Gauge size={16} />节点测速</Button>
           <Button aria-label="打开分享 URI 工具" variant="secondary" onClick={() => setDialog({ kind: "uris" })}><Link2 size={16} />URI 管理</Button>
@@ -963,7 +959,6 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       {dialog?.kind === "testers" ? <TestersDialog notify={notify} onClose={closeDialog} /> : null}
       {dialog?.kind === "uris" ? <URIManagerDialog notify={notify} onClose={closeDialog} /> : null}
       {dialog?.kind === "subscriptions" ? <ExternalSubscriptionsDialog notify={notify} onClose={closeDialog} onNodesChanged={() => load(true)} /> : null}
-      {dialog?.kind === "tunnels" ? <Dialog title="Tunnel 管理" description="跨节点服务器管理端口转发与链式隧道" onClose={closeDialog} wide><TunnelsPanel notify={notify} /></Dialog> : null}
       {dialog?.kind === "route" ? <RoutedOutboundDialog node={dialog.node} nodes={nodes} isAdmin={isAdmin} userStatus={userRouted} onClose={closeDialog} onComplete={async () => { closeDialog(); notify(isAdmin ? "路由出站已创建" : "私有路由出站已创建"); await load(true); }} /> : null}
       {dialog?.kind === "qr" ? <NodeShareQRCodeDialog node={dialog.node} notify={notify} onClose={closeDialog} /> : null}
       {dialog?.kind === "temp-sub" ? <TempSubscriptionDialog nodes={dialog.nodes} notify={notify} onClose={closeDialog} /> : null}

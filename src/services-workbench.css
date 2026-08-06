@@ -1097,3 +1097,42 @@
   .service-xray-state,
   .service-agent-version { transition: none; }
 }
+.warp-management-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.warp-management-surface {
+  min-height: 360px;
+  overflow: hidden;
+}
+
+.warp-draft-warning {
+  min-height: 62px;
+  padding: 11px 13px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--amber);
+  border: 1px solid color-mix(in srgb, var(--amber) 35%, var(--border));
+  background: var(--amber-soft);
+}
+
+.warp-draft-warning > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.warp-draft-warning strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.warp-draft-warning small {
+  color: var(--text-soft);
+  font-size: 10px;
+  line-height: 1.5;
+}

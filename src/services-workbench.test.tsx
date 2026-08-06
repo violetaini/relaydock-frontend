@@ -69,6 +69,7 @@ function mockServerReads(servers: RemoteServer[] = [onlineServer, offlineServer]
   xrayVersions?: Record<string, unknown>;
   agentVersion?: Record<string, unknown>;
   xrayConfig?: string;
+  warpStatus?: Record<string, unknown>;
 } = {}) {
   let ddnsStatusRead = 0;
   return vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
@@ -149,6 +150,7 @@ function mockServerReads(servers: RemoteServer[] = [onlineServer, offlineServer]
     if (path === "/api/admin/remote/outbounds?server_id=11") return { success: true, outbounds: resources.outbounds ?? [] } as T;
     if (path === "/api/admin/remote/routing?server_id=11") return { success: true, routing: resources.routing ?? { rules: [] } } as T;
     if (path === "/api/admin/remote/xray/config?server_id=11") return { success: true, path: "/usr/local/etc/xray/config.json", config: resources.xrayConfig ?? JSON.stringify({ log: { loglevel: "warning" }, inbounds: [], outbounds: [], routing: { rules: [] }, dns: { servers: ["1.1.1.1"] } }, null, 2) } as T;
+    if (path === "/api/admin/remote/warp/status?server_id=11") return (resources.warpStatus ?? { success: true, installed: false }) as T;
     if (path === "/api/admin/line-speedtest/targets") return { success: true, targets: resources.lineSpeedtestTargets ?? [] } as T;
     if (path === "/api/admin/certificates/valid") return { success: true, certificates: resources.certificates ?? [] } as T;
     if (path === "/api/admin/xray-examples") return { success: true, combinations: [
@@ -250,14 +252,13 @@ describe("service management workbench", () => {
     expect(listRequests).toBe(2);
   });
 
-  it("keeps advanced operations reachable from service management", async () => {
-    const onOpenAdvanced = vi.fn();
+  it("does not expose the retired advanced management entry", async () => {
     mockServerReads();
-    render(<ServicesWorkbenchPage notify={vi.fn()} onOpenAdvanced={onOpenAdvanced} />);
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "高级运维" }));
+    await screen.findByText("Edge Hong Kong");
 
-    expect(onOpenAdvanced).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "高级运维" })).not.toBeInTheDocument();
   });
 
   it("filters servers and switches between card and table views", async () => {
@@ -793,18 +794,19 @@ describe("service management workbench", () => {
     expect(merged.routing.rules).toContainEqual(expect.objectContaining({ outboundTag: "blocked", domain: ["geosite:category-ads-all"] }));
   });
 
-  it("opens WARP management for the current server when no WARP outbound exists", async () => {
-    const onOpenAdvanced = vi.fn();
-    mockServerReads([onlineServer]);
-    render(<ServicesWorkbenchPage notify={vi.fn()} onOpenAdvanced={onOpenAdvanced} />);
+  it("opens WARP management inside the current server Xray settings", async () => {
+    const get = mockServerReads([onlineServer], { warpStatus: { success: true, installed: false } });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Xray 设置" }));
     const dialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
     fireEvent.click(within(dialog).getByText("基础路由", { exact: true }));
     fireEvent.click(within(dialog).getByRole("button", { name: "管理 WARP" }));
 
-    expect(onOpenAdvanced).toHaveBeenCalledWith({ tab: "warp", serverID: 11 });
-    expect(screen.queryByRole("dialog", { name: "Edge Hong Kong" })).not.toBeInTheDocument();
+    expect(await within(dialog).findByRole("heading", { name: "WARP 出站" })).toBeInTheDocument();
+    expect(within(dialog).getByText("未注册", { exact: true })).toBeInTheDocument();
+    expect(get).toHaveBeenCalledWith("/api/admin/remote/warp/status?server_id=11");
+    expect(screen.getByRole("dialog", { name: "Edge Hong Kong" })).toBeInTheDocument();
   });
 
   it("restores the previous Xray config when the new config cannot restart", async () => {

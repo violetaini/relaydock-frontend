@@ -102,31 +102,6 @@ const traffic = {
   })),
 };
 
-const tunnels = {
-  success: true,
-  chains: [{
-    label: "hk-us-media",
-    entry_server: 1,
-    entry_port: 24433,
-    final_target: "media.example.com:443",
-    hops: [
-      { server_id: 1, server_name: "Hong Kong Edge", tag: "tunnel-hk-us-media-h0", listen_port: 24433, target_address: "203.0.113.17", target_port: 24433 },
-      { server_id: 2, server_name: "US West Edge", tag: "tunnel-hk-us-media-h1", listen_port: 24433, target_address: "media.example.com", target_port: 443 },
-    ],
-  }],
-  tunnels: [{
-    kind: "inbound",
-    server_id: 1,
-    server_name: "Hong Kong Edge",
-    is_federated: false,
-    tag: "tunnel-webhook",
-    listen_port: 31080,
-    target_address: "hooks.example.com",
-    target_port: 443,
-    network: "tcp,udp",
-  }],
-};
-
 const speedResults = [{
   id: 9,
   node_id: 1,
@@ -316,7 +291,6 @@ async function mockAPI(
         client_config: "[Interface]\nPrivateKey = visual-client-private-key\nAddress = 10.66.66.2/32\nDNS = 1.1.1.1, 1.0.0.1\nMTU = 1420\n\n[Peer]\nPublicKey = visual-server-public-key\nAllowedIPs = 0.0.0.0/0\nEndpoint = edge.example.com:51820\nPersistentKeepalive = 25\n",
       },
       "/api/traffic/summary": trafficResponse,
-      "/api/admin/tunnels": tunnels,
       "/api/admin/remote/warp/status": { installed: true, license_active: true, addr_v4: "172.16.0.2", addr_v6: "2606:4700:110:8765::2" },
       "/api/admin/server-share/list": { shares: [{ id: 4, server_id: 1, label: "东京控制端", created_at: new Date().toISOString() }] },
       "/api/admin/speedtest/mihomo-status": { success: true, ready: true, path: "/opt/arcway/data/bin/mihomo" },
@@ -601,11 +575,6 @@ test("secondary workflows remain available from their owning pages", async ({ pa
   await expect(page).toHaveURL(/#\/users\?view=renewal$/);
   await expect(page.getByRole("button", { name: "续期工作台" })).toHaveClass(/is-active/);
 
-  await page.goto("/#/servers");
-  await page.getByRole("button", { name: "高级运维" }).click();
-  await expect(page).toHaveURL(/#\/advanced$/);
-  await expect(page.getByRole("heading", { name: "高级管理" })).toBeVisible();
-
   await page.goto("/#/subscribeFiles");
   await page.getByRole("button", { name: "覆写规则" }).click();
   await expect(page).toHaveURL(/#\/customRules$/);
@@ -825,75 +794,52 @@ test("desktop side navigation keeps a return control in alternate themes", async
   await expect(page.locator(".console-layout")).toHaveClass(/layout-top/);
 });
 
-test("advanced workflows render without runtime errors", async ({ page }) => {
-  const errors: Error[] = [];
-  page.on("pageerror", (error) => errors.push(error));
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await mockAPI(page);
-  await page.goto("/#/advanced");
-  await expect(page.getByRole("heading", { name: "高级管理" })).toBeVisible();
-  await expect(page.getByText("hk-us-media")).toBeVisible();
-
-  await page.getByRole("tab", { name: "WARP" }).click();
-  await expect(page.getByRole("heading", { name: "WARP 出站" })).toBeVisible();
-  await expect(page.getByText("License 已配置", { exact: true })).toBeVisible();
-
-  await page.getByRole("tab", { name: "联邦分享" }).click();
-  await expect(page.getByRole("heading", { name: "我分享的服务器" })).toBeVisible();
-  await expect(page.getByText("东京控制端")).toBeVisible();
-
-  await page.getByRole("tab", { name: "备份恢复" }).click();
-  await expect(page.getByRole("heading", { name: "数据备份" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "恢复备份" })).toBeVisible();
-
-  await page.getByRole("tab", { name: "Debug 日志" }).click();
-  await expect(page.getByRole("heading", { name: "Debug / Agent 日志" })).toBeVisible();
-  await expect(page.getByLabel("Debug 日志内容")).toContainText("agent connected");
-
-  await page.getByRole("tab", { name: "TG 邀请码" }).click();
-  await expect(page.getByRole("heading", { name: "TG Bot 邀请码" })).toBeVisible();
-  await expect(page.getByText("ARCWAY-DEMO", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "创建邀请码" }).first().click();
-  await expect(page.getByRole("dialog", { name: "创建 TG Bot 邀请码" })).toBeVisible();
-  await closeDialog(page);
-  expect(errors).toEqual([]);
-});
-
-test("advanced mobile panels remain within the viewport", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await mockAPI(page);
-  await page.goto("/#/advanced");
-  const panels = [
-    { tab: "WARP", heading: "WARP 出站", file: "warp" },
-    { tab: "联邦分享", heading: "我分享的服务器", file: "federation" },
-    { tab: "备份恢复", heading: "数据备份", file: "backup" },
-    { tab: "Debug 日志", heading: "Debug / Agent 日志", file: "debug" },
-    { tab: "TG 邀请码", heading: "TG Bot 邀请码", file: "invites" },
-  ];
-  for (const panel of panels) {
-    await page.getByRole("tab", { name: panel.tab }).click();
-    await expect(page.getByRole("heading", { name: panel.heading })).toBeVisible();
-    const hasViewportOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
-    expect(hasViewportOverflow).toBe(false);
-    const screenshot = path.resolve("../docs/change-records/assets/MMX-050", `advanced-${panel.file}-mobile.png`);
-    await page.screenshot({ path: screenshot, fullPage: true });
-  }
-});
-
 for (const viewport of [
   { name: "desktop", width: 1440, height: 900 },
   { name: "mobile", width: 390, height: 844 },
 ]) {
-  test(`advanced ${viewport.name} visual`, async ({ page }) => {
+  test(`migrated operations render from their owning pages on ${viewport.name}`, async ({ page }, testInfo) => {
+    const errors: Error[] = [];
+    page.on("pageerror", (error) => errors.push(error));
     await page.setViewportSize(viewport);
     await mockAPI(page);
-    await page.goto("/#/advanced");
-    await expect(page.getByRole("heading", { name: "高级管理" })).toBeVisible();
-    await expect(page.getByText("hk-us-media")).toBeVisible();
-    const hasViewportOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
-    expect(hasViewportOverflow).toBe(false);
-    const screenshot = path.resolve("../docs/change-records/assets/MMX-050", `advanced-${viewport.name}.png`);
-    await page.screenshot({ path: screenshot, fullPage: true });
+
+    await page.goto("/#/servers");
+    await page.getByRole("button", { name: "Xray 设置", exact: true }).first().click();
+    const serverDialog = page.getByRole("dialog", { name: "Hong Kong Edge" });
+    await serverDialog.getByRole("tab", { name: "WARP" }).click();
+    await expect(serverDialog.getByRole("heading", { name: "WARP 出站" })).toBeVisible();
+    await expect(serverDialog.getByText("License 已配置", { exact: true })).toBeVisible();
+    await expectViewportIntegrity(page, `${viewport.name} server WARP ownership`);
+    await serverDialog.screenshot({ path: testInfo.outputPath(`server-warp-${viewport.name}.png`) });
+
+    await serverDialog.getByRole("tab", { name: "服务器分享" }).click();
+    await expect(serverDialog.getByText("东京控制端", { exact: true })).toBeVisible();
+    await expectViewportIntegrity(page, `${viewport.name} server sharing ownership`);
+    await serverDialog.screenshot({ path: testInfo.outputPath(`server-sharing-${viewport.name}.png`) });
+    await closeDialog(page);
+
+    await page.goto("/#/settings");
+    const maintenance = page.locator(".settings-update-group");
+    await expect(page.getByRole("heading", { name: "数据备份" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "恢复备份" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "主控 Debug 日志" })).toBeVisible();
+    await expect(page.getByLabel("主控 Debug 日志内容")).toContainText("agent connected");
+    await expectViewportIntegrity(page, `${viewport.name} settings maintenance ownership`);
+    await maintenance.screenshot({ path: testInfo.outputPath(`settings-maintenance-${viewport.name}.png`) });
+
+    await page.goto("/#/users?view=invites");
+    await expect(page.getByRole("heading", { name: "TG Bot 邀请码" })).toBeVisible();
+    await expect(page.getByText("ARCWAY-DEMO", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "TG 邀请码" })).toHaveClass(/is-active/);
+    await expectViewportIntegrity(page, `${viewport.name} TG invite ownership`);
+    await page.screenshot({ path: testInfo.outputPath(`user-invites-${viewport.name}.png`), fullPage: true });
+    await page.getByRole("button", { name: "创建邀请码" }).first().click();
+    await expect(page.getByRole("dialog", { name: "创建 TG Bot 邀请码" })).toBeVisible();
+    await expectViewportIntegrity(page, `${viewport.name} TG invite creation`);
+    await closeDialog(page);
+
+    expect(errors).toEqual([]);
   });
 }
 
@@ -1074,7 +1020,6 @@ for (const viewport of [
       { route: "subscribeFiles", heading: "订阅管理", marker: "日常订阅" },
       { route: "customRules", heading: "覆写管理", marker: "私有 DNS 覆写" },
       { route: "rulesConfig", heading: "规则配置", marker: "balanced_v3.yaml" },
-      { route: "advanced", heading: "高级管理", marker: "hk-us-media" },
       { route: "settings", heading: "系统设置", marker: "后端与采集" },
       { route: "account", heading: "账户中心", marker: "个人资料" },
     ];

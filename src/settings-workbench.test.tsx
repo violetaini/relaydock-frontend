@@ -54,6 +54,7 @@ function mockCompleteSettings(overrides: Record<string, unknown> = {}, failingPa
         manageable: true, update_available: false,
       },
     },
+    "/api/user/debug/status": { enabled: false },
     "/api/user/config": {
       force_sync_external: true, match_rule: "server_port", sync_scope: "saved_only",
       keep_node_name: true, cache_expire_minutes: 30, sync_traffic: true,

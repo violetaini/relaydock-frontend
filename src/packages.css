@@ -31,10 +31,16 @@
   min-width: 930px;
 }
 
-.page-packages .advanced-stack,
+.page-packages .package-stack,
 .page-packages .package-grid,
 .page-packages .packages-list-surface {
   width: 100%;
+}
+
+.package-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
 }
 
 .page-packages .package-grid {

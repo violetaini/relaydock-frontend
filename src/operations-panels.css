@@ -1,3 +1,9 @@
+.ops-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
 .ops-two-column {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -81,6 +87,10 @@
 .ops-debug-surface {
   min-height: 560px;
   overflow: hidden;
+}
+
+.ops-invite-surface {
+  min-height: 260px;
 }
 
 .ops-debug-heading,
@@ -340,6 +350,7 @@
   }
 
   .invite-table {
+    display: block;
     min-width: 0;
   }
 
@@ -363,22 +374,24 @@
   }
 
   .invite-table td {
-    min-height: 42px;
-    padding: 9px 0 9px 42%;
-    position: relative;
+    height: auto;
+    min-height: 0;
+    padding: 9px 0;
     border-bottom: 1px solid var(--border);
     text-align: left;
   }
 
   .invite-table td::before {
     content: attr(data-label);
-    width: 38%;
-    position: absolute;
-    left: 0;
-    top: 11px;
+    display: block;
+    margin-bottom: 5px;
     color: var(--text-faint);
     font-size: 10px;
     font-weight: 700;
+  }
+
+  :root[data-style-theme="flat"] .invite-table td {
+    height: auto;
   }
 
   .invite-table td:last-child {
@@ -386,7 +399,7 @@
   }
 
   .invite-table .actions-cell {
-    padding-left: 42%;
+    padding-left: 0;
   }
 
   .ops-row-actions {
@@ -409,14 +422,4 @@
     border-bottom: 0;
   }
 
-  .invite-table td,
-  .invite-table .actions-cell {
-    padding-left: 0;
-    padding-top: 30px;
-  }
-
-  .invite-table td::before {
-    width: 100%;
-    top: 9px;
-  }
 }

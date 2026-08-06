@@ -171,46 +171,6 @@ export interface RealtimeMessage {
   trafficSummary?: TrafficSummary;
 }
 
-export interface TunnelInfo {
-  kind: "inbound" | "routed";
-  server_id: number;
-  server_name: string;
-  is_federated: boolean;
-  tag: string;
-  listen_port: number;
-  target_address: string;
-  target_port: number;
-  network: string;
-  inbound_tag?: string;
-  match_domain?: string[];
-  match_ip?: string[];
-  rule_index?: number;
-}
-
-export interface TunnelHop {
-  server_id: number;
-  server_name: string;
-  tag: string;
-  listen_port: number;
-  target_address: string;
-  target_port: number;
-}
-
-export interface TunnelChain {
-  id?: string;
-  label: string;
-  hops: TunnelHop[];
-  entry_server: number;
-  entry_port: number;
-  final_target: string;
-}
-
-export interface TunnelsResponse {
-  success: boolean;
-  tunnels: TunnelInfo[] | null;
-  chains: TunnelChain[] | null;
-}
-
 export interface SharedServerToken {
   id: number;
   server_id: number;

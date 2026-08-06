@@ -549,14 +549,14 @@
   box-shadow: var(--shadow-low);
 }
 
-:root[data-style-theme="flat"] :is(.advanced-tabs, .cw-tabs, .nw-tabs, .rw-filter) {
+:root[data-style-theme="flat"] :is(.cw-tabs, .nw-tabs, .rw-filter) {
   padding: 4px;
   background: var(--surface-muted);
   border-color: var(--border);
   box-shadow: inset 0 1px 1px color-mix(in srgb, var(--text) 4%, transparent);
 }
 
-:root[data-style-theme="flat"] :is(.advanced-tabs, .cw-tabs, .nw-tabs, .rw-filter) button:is(.is-active, [aria-selected="true"]) {
+:root[data-style-theme="flat"] :is(.cw-tabs, .nw-tabs, .rw-filter) button:is(.is-active, [aria-selected="true"]) {
   color: var(--accent-strong);
   background: var(--surface);
   border-color: var(--border);
@@ -1332,7 +1332,7 @@
 
 :root[data-style-theme="flat"] .button,
 :root[data-style-theme="flat"] .icon-button,
-:root[data-style-theme="flat"] :is(.advanced-tabs, .cw-tabs, .nw-tabs, .rw-filter),
+:root[data-style-theme="flat"] :is(.cw-tabs, .nw-tabs, .rw-filter),
 :root[data-style-theme="flat"] :is(.segmented-control, .services-filters, .packages-view-switch, .sg-choice),
 :root[data-style-theme="flat"] :is(input, select, textarea, .search-box input) {
   border-radius: 2px;

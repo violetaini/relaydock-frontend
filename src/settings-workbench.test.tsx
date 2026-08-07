@@ -39,6 +39,7 @@ function mockCompleteSettings(overrides: Record<string, unknown> = {}, failingPa
     "/api/admin/system-settings/require-encryption": { require_encryption: false },
     "/api/admin/system-settings/user-permissions": { config: { pages: [], quota_template: 0, quota_override: 0, quota_subscribe: 0, routed_outbound_enabled: false, quota_routed_outbound: 2, daily_limit_routed_outbound: 5 } },
     "/api/admin/notify-config": { notify_enabled: false },
+    "/api/admin/system-settings/tgbot": { enabled: false, bot_token: "", admin_tg_ids: [], webapp_dev_preview: false, running: false, bot_url: "" },
     "/api/admin/system-settings/api-token": { token: "" },
     "/api/admin/update/check": {
       current_version: "0.5.0", latest_version: "0.5.0", has_update: false,
@@ -152,6 +153,62 @@ describe("settings workbench", () => {
     expect(put).toHaveBeenCalledWith("/api/admin/system-settings/intervals", expect.objectContaining({ report_interval: 5 }));
     expect(put).toHaveBeenCalledWith("/api/admin/system-settings/dashboard-refresh", { refetch_interval_ms: 5000 });
     expect(notify).toHaveBeenCalledWith("基础设置已保存");
+  });
+
+  it("configures the embedded Telegram bot and normalizes administrator IDs", async () => {
+    mockCompleteSettings({
+      "/api/admin/system-settings/tgbot": {
+        enabled: true,
+        bot_token: "1234****WXYZ",
+        admin_tg_ids: [123456789],
+        webapp_dev_preview: false,
+        running: true,
+        bot_url: "https://t.me/example_bot",
+      },
+    });
+    const put = vi.spyOn(api, "put").mockImplementation(async <T,>(path: string, payload?: unknown): Promise<T> => {
+      if (path !== "/api/admin/system-settings/tgbot") return { success: true } as T;
+      return {
+        ...(payload as object),
+        bot_token: "1234****WXYZ",
+        running: true,
+        bot_url: "https://t.me/example_bot",
+      } as T;
+    });
+    render(<SettingsWorkbenchPage notify={vi.fn()} />);
+
+    expect(await screen.findByText("运行中")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /打开 Telegram Bot/ })).toHaveAttribute("href", "https://t.me/example_bot");
+    expect(screen.queryByRole("link", { name: /Mini App/ })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: /^管理员 Telegram ID/ }), { target: { value: "123456789, 987654321, 123456789" } });
+    fireEvent.click(screen.getByRole("switch", { name: "允许本机浏览器预览 Mini App" }));
+    const previewLink = screen.queryByRole("link", { name: /本机预览 Mini App/ });
+    if (["localhost", "127.0.0.1", "::1"].includes(location.hostname)) {
+      expect(previewLink).toHaveAttribute("href", new URL("/tg-app", location.origin).toString());
+    } else {
+      expect(previewLink).not.toBeInTheDocument();
+    }
+    fireEvent.click(screen.getByRole("button", { name: "保存 Bot 设置" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/system-settings/tgbot", {
+      enabled: true,
+      bot_token: "1234****WXYZ",
+      admin_tg_ids: [123456789, 987654321],
+      webapp_dev_preview: true,
+    }));
+  });
+
+  it("rejects invalid Telegram administrator IDs before saving", async () => {
+    mockCompleteSettings();
+    const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
+    const notify = vi.fn();
+    render(<SettingsWorkbenchPage notify={notify} />);
+
+    fireEvent.change(await screen.findByRole("textbox", { name: /^管理员 Telegram ID/ }), { target: { value: "123456789, invalid" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存 Bot 设置" }));
+
+    expect(put).not.toHaveBeenCalledWith("/api/admin/system-settings/tgbot", expect.anything());
+    expect(notify).toHaveBeenCalledWith("管理员 Telegram ID 必须是正整数，多个 ID 请用逗号分隔", "error");
   });
 
   it("enables the public probe by default when no persisted toggle exists", async () => {

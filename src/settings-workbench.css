@@ -47,6 +47,20 @@
 .settings-save-row .button { box-shadow: 3px 3px 0 color-mix(in srgb, var(--border-strong) 76%, transparent); }
 .api-token-row { min-height: 54px; padding: 9px 9px 9px 12px; display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); background: var(--surface-muted); }
 .api-token-row code { min-width: 0; flex: 1; overflow-wrap: anywhere; font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; line-height: 1.5; }
+.tgbot-status-row { min-height: 46px; padding: 9px 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--border); background: var(--surface-muted); }
+.tgbot-status-row > div { display: flex; align-items: center; gap: 9px; }
+.tgbot-status-row > div > span { color: var(--text-soft); font-size: 11px; }
+.tgbot-status-row > a { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); font-size: 12px; font-weight: 700; text-decoration: none; }
+.tgbot-status-row > a:hover { text-decoration: underline; }
+.tgbot-preview-note { margin: -6px 0 0; color: var(--text-soft); font-size: 11px; line-height: 1.5; }
+.tgbot-links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.tgbot-links > a { min-width: 0; min-height: 58px; padding: 10px 12px; display: flex; align-items: center; gap: 9px; color: var(--text); border: 1px solid var(--border); background: var(--surface-muted); text-decoration: none; }
+.tgbot-links > a:hover { border-color: var(--accent); background: var(--accent-soft); }
+.tgbot-links > a > svg { flex: 0 0 auto; color: var(--accent); }
+.tgbot-links > a > span { min-width: 0; flex: 1; display: grid; gap: 3px; }
+.tgbot-links strong, .tgbot-links small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tgbot-links strong { font-size: 12px; }
+.tgbot-links small { color: var(--text-soft); font-size: 10px; }
 .system-update-versions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--border); background: var(--surface-muted); }
 .system-update-versions > div { min-width: 0; min-height: 72px; padding: 13px 14px; display: flex; flex-direction: column; justify-content: center; gap: 7px; border-right: 1px solid var(--border); }
 .system-update-versions > div:last-child { border-right: 0; }
@@ -105,6 +119,7 @@
   .system-update-component-state { grid-column: 1 / -1; }
   .system-update-actions { align-items: stretch; }
   .system-update-actions .button { flex: 1 1 150px; justify-content: center; }
+  .tgbot-links { grid-template-columns: 1fr; }
 }
 @media (max-width: 420px) {
   .settings-fields-grid, .permission-pages, .event-grid, .system-update-versions { grid-template-columns: 1fr; }
@@ -119,4 +134,5 @@
   .system-update-component { grid-template-columns: 1fr; gap: 7px; }
   .system-update-component-state { grid-column: auto; }
   .system-update-actions .button { width: 100%; flex-basis: 100%; }
+  .tgbot-status-row { align-items: flex-start; flex-direction: column; }
 }

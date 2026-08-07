@@ -191,7 +191,7 @@ export function TGBotInvitesPanel({ notify }: { notify: Notify }) {
           <div><h2><TicketCheck size={17} />TG Bot 邀请码</h2><small>{invites.filter((invite) => inviteState(invite).usable).length} 个当前可用</small></div>
           <div className="ops-inline-actions"><IconButton label="刷新邀请码" onClick={() => void load()}><RefreshCw size={17} /></IconButton><Button onClick={() => setShowCreate(true)}><Plus size={16} />创建邀请码</Button></div>
         </div>
-        <div className="ops-bot-context" role="note"><Bot size={18} /><span><strong>邀请码由独立 Telegram Bot 使用</strong><small>Arcway 主控只负责生成和校验代码；需要另行部署 Bot，用户才能在 Telegram 中注册或绑定账号。</small></span></div>
+        <div className="ops-bot-context" role="note"><Bot size={18} /><span><strong>邀请码由 Arcway 内嵌 Telegram Bot 使用</strong><small>用户向已启用的 Bot 发送 /start &lt;邀请码&gt;，即可注册新账号或把 Telegram 绑定到指定的现有账号。</small></span></div>
         <div className="ops-list-filters">
           <label className="search-box"><Search size={16} /><input aria-label="搜索邀请码" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="代码、账号或备注" /></label>
           <Field label="邀请码状态"><select value={filter} onChange={(event) => setFilter(event.target.value as typeof filter)}><option value="all">全部状态</option><option value="usable">仅可用</option><option value="unavailable">仅不可用</option></select></Field>
@@ -255,7 +255,7 @@ function CreateInviteDialog({ packages, users, referencesLoading, referencesErro
     }
   };
   return (
-    <Dialog title="创建 TG Bot 邀请码" description="仅供另行部署的 Telegram Bot 消费；Arcway 主控本身不提供兑换入口" onClose={onClose}>
+    <Dialog title="创建 TG Bot 邀请码" description="创建后让用户向 Arcway Telegram Bot 发送 /start <邀请码> 完成注册或绑定" onClose={onClose}>
       <form className="form-stack" onSubmit={submit}>
         {error ? <ErrorState message={error} /> : null}
         {referencesError ? <ErrorState message={referencesError} onRetry={onReloadReferences} /> : null}

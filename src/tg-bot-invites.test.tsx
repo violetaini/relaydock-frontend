@@ -76,7 +76,7 @@ describe("TG Bot invite operations", () => {
     const notify = vi.fn();
     render(<TGBotInvitesPanel notify={notify} />);
 
-    expect(await screen.findByText("邀请码由独立 Telegram Bot 使用")).toBeInTheDocument();
+    expect(await screen.findByText("邀请码由 Arcway 内嵌 Telegram Bot 使用")).toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "创建邀请码" }));
     expect(await screen.findByText("标准月付", { selector: ".cell-note" })).toBeInTheDocument();
     fireEvent.change(screen.getByRole("combobox", { name: /^注册套餐/ }), { target: { value: "7" } });

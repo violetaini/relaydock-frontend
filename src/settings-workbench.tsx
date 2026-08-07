@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import {
   Bell,
+  Bot,
   Check,
   Clipboard,
   Code2,
@@ -453,6 +454,15 @@ interface NotificationSettings {
   notify_server_tolerance_seconds: number;
 }
 
+interface TGBotSettings {
+  enabled: boolean;
+  bot_token: string;
+  admin_tg_ids: number[];
+  webapp_dev_preview: boolean;
+  running: boolean;
+  bot_url?: string;
+}
+
 interface UserSubscriptionConfig {
   force_sync_external: boolean;
   match_rule: "node_name" | "server_port" | "type_server_port";
@@ -502,6 +512,35 @@ const defaultNotify: NotificationSettings = {
   notify_agent_long_offline: true, notify_agent_long_offline_minutes: 10,
   notify_device_limit_exceeded: true, notify_server_tolerance_seconds: 60,
 };
+
+const defaultTGBot: TGBotSettings = {
+  enabled: false,
+  bot_token: "",
+  admin_tg_ids: [],
+  webapp_dev_preview: false,
+  running: false,
+  bot_url: "",
+};
+
+function parseTelegramAdminIDs(value: string): number[] {
+  const entries = value.trim() ? value.trim().split(/[\s,]+/) : [];
+  const ids = entries.map((entry) => Number(entry));
+  if (ids.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
+    throw new Error("管理员 Telegram ID 必须是正整数，多个 ID 请用逗号分隔");
+  }
+  return Array.from(new Set(ids));
+}
+
+function localMiniAppPreviewURL(): string {
+  try {
+    const current = new URL(location.href);
+    const hostname = current.hostname.toLowerCase();
+    if (hostname !== "localhost" && hostname !== "127.0.0.1" && hostname !== "::1") return "";
+    return new URL("/tg-app", current.origin).toString();
+  } catch {
+    return "";
+  }
+}
 
 const defaultUserSubscription: UserSubscriptionConfig = {
   force_sync_external: false,
@@ -598,6 +637,9 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
   const [requireEncryption, setRequireEncryption] = useState(false);
   const [permissions, setPermissions] = useState<PermissionSettings>(defaultPermissions);
   const [notifications, setNotifications] = useState<NotificationSettings>(defaultNotify);
+  const [tgBot, setTGBot] = useState<TGBotSettings>(defaultTGBot);
+  const [tgBotAdminIDs, setTGBotAdminIDs] = useState("");
+  const tgBotPreviewURL = localMiniAppPreviewURL();
   const [userSubscription, setUserSubscription] = useState<UserSubscriptionConfig>(defaultUserSubscription);
   const [apiToken, setApiToken] = useState("");
   const [confirmTokenReset, setConfirmTokenReset] = useState(false);
@@ -651,7 +693,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
   const load = useCallback(async () => {
     setLoading(true); setLoaded(false); setError("");
     try {
-      const [master, themeData, wall, brandingData, intervalData, refreshData, probeData, serverData, shortData, prefixData, overrideData, formatData, silentData, featureData, rootLinksData, logData, templateData, defaultTemplateData, redeemData, secData, encryptData, permissionData, notifyData, tokenData, userSubscriptionData] = await Promise.all([
+      const [master, themeData, wall, brandingData, intervalData, refreshData, probeData, serverData, shortData, prefixData, overrideData, formatData, silentData, featureData, rootLinksData, logData, templateData, defaultTemplateData, redeemData, secData, encryptData, permissionData, notifyData, tgBotData, tokenData, userSubscriptionData] = await Promise.all([
         api.get<{ master_url: string }>("/api/admin/system-settings/master-url"),
         api.get<{ default_theme: string }>("/api/admin/system-settings/default-theme"),
         api.get<{ login_wallpaper: string }>("/api/admin/system-settings/login-wallpaper"),
@@ -675,6 +717,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
         api.get<{ require_encryption: boolean }>("/api/admin/system-settings/require-encryption"),
         api.get<{ config: PermissionSettings }>("/api/admin/system-settings/user-permissions"),
         api.get<NotificationSettings>("/api/admin/notify-config"),
+        api.get<TGBotSettings>("/api/admin/system-settings/tgbot"),
         api.get<{ token: string }>("/api/admin/system-settings/api-token"),
         api.get<UserSubscriptionConfig>("/api/user/config"),
       ]);
@@ -691,7 +734,9 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
       setPrefix(prefixData); setOverrideScripts(overrideData.enable_override_scripts); setOutputFormat(formatData.subscription_output_format === "json" ? "json" : "yaml");
       setSilent(silentData); setFeatures(featureData.enable_management_features); setRootShortLinks(rootLinksData.enable_root_short_links); setAgentLog(logData.agent_log_enabled);
       setTemplates(templateData.templates ?? []); setDefaultTemplate(defaultTemplateData.default_template_filename); setRedeemTemplate(redeemData.redeem_template);
-      setSecurity(secData); setRequireEncryption(encryptData.require_encryption); setPermissions(permissionData.config); setNotifications(notifyData); setApiToken(tokenData.token); setUserSubscription(userSubscriptionData);
+      setSecurity(secData); setRequireEncryption(encryptData.require_encryption); setPermissions(permissionData.config); setNotifications(notifyData);
+      setTGBot({ ...defaultTGBot, ...tgBotData, admin_tg_ids: tgBotData.admin_tg_ids ?? [] }); setTGBotAdminIDs((tgBotData.admin_tg_ids ?? []).join(", "));
+      setApiToken(tokenData.token); setUserSubscription(userSubscriptionData);
       setLoaded(true);
     } catch (reason) { setError(messageOf(reason, "设置加载失败")); } finally { setLoading(false); }
   }, []);
@@ -822,6 +867,30 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
   const savePermissions = (event: FormEvent) => {
     event.preventDefault();
     void save("permissions", () => api.put("/api/admin/system-settings/user-permissions", permissions), "普通用户权限已更新");
+  };
+
+  const saveTGBot = (event: FormEvent) => {
+    event.preventDefault();
+    let adminTGIDs: number[];
+    try {
+      adminTGIDs = parseTelegramAdminIDs(tgBotAdminIDs);
+    } catch (reason) {
+      const message = messageOf(reason, "管理员 Telegram ID 格式无效");
+      setError(message);
+      notify(message, "error");
+      return;
+    }
+    void save("tgbot", async () => {
+      const saved = await api.put<TGBotSettings>("/api/admin/system-settings/tgbot", {
+        enabled: tgBot.enabled,
+        bot_token: tgBot.bot_token.trim(),
+        admin_tg_ids: adminTGIDs,
+        webapp_dev_preview: tgBot.webapp_dev_preview,
+      });
+      const normalized = { ...defaultTGBot, ...saved, admin_tg_ids: saved.admin_tg_ids ?? adminTGIDs };
+      setTGBot(normalized);
+      setTGBotAdminIDs(normalized.admin_tg_ids.join(", "));
+    }, "Telegram 用户 Bot 设置已保存");
   };
 
   const saveNotifications = (event: FormEvent) => {
@@ -1078,9 +1147,29 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
         <SaveRow label="保存用户权限" saving={saving === "permissions"} />
       </form>
 
+      <form className="settings-settings-group" onSubmit={saveTGBot}>
+        <SettingsGroupHeading icon={<Bot size={18} />} title="Telegram 用户 Bot" description="内嵌用户自助 Bot 与 Mini App" />
+        <SettingSection icon={<Bot size={19} />} title="Bot 与 Mini App" description="保存后主控会按新配置启动或重启 Bot">
+          <div className="tgbot-status-row">
+            <div><span>运行状态</span><Badge tone={tgBot.running ? "good" : tgBot.enabled ? "warn" : "neutral"}>{tgBot.running ? "运行中" : tgBot.enabled ? "未运行" : "未启用"}</Badge></div>
+            {tgBot.bot_url ? <a href={tgBot.bot_url} target="_blank" rel="noreferrer">打开 Telegram Bot<ExternalLink size={15} /></a> : null}
+          </div>
+          <Toggle checked={tgBot.enabled} onChange={(enabled) => setTGBot({ ...tgBot, enabled })} label="启用 Telegram 用户 Bot" />
+          <Field label="Bot Token" hint="从 BotFather 获取；已保存的 Token 会以掩码显示，可原样保存"><input type="password" autoComplete="new-password" value={tgBot.bot_token} onChange={(event) => setTGBot({ ...tgBot, bot_token: event.target.value })} placeholder="123456789:AA..." /></Field>
+          <Field label="管理员 Telegram ID" hint="多个 ID 用逗号分隔；这些账号可使用 Bot 和 Mini App 的管理功能"><input inputMode="numeric" value={tgBotAdminIDs} onChange={(event) => setTGBotAdminIDs(event.target.value)} placeholder="123456789, 987654321" /></Field>
+          <Toggle checked={tgBot.webapp_dev_preview} onChange={(webapp_dev_preview) => setTGBot({ ...tgBot, webapp_dev_preview })} label="允许本机浏览器预览 Mini App" />
+          <p className="tgbot-preview-note">仅从主控本机的 localhost 或 127.0.0.1 访问时生效，并使用首个管理员 Telegram ID 模拟登录；公网访问始终要求 Telegram 签名。</p>
+          {tgBot.running && (tgBot.bot_url || (tgBot.webapp_dev_preview && tgBotPreviewURL)) ? <div className="tgbot-links">
+            {tgBot.bot_url ? <a href={tgBot.bot_url} target="_blank" rel="noreferrer"><Bot size={16} /><span><strong>Telegram Bot</strong><small>{tgBot.bot_url}</small></span><ExternalLink size={15} /></a> : null}
+            {tgBot.webapp_dev_preview && tgBotPreviewURL ? <a href={tgBotPreviewURL} target="_blank" rel="noreferrer"><ExternalLink size={16} /><span><strong>本机预览 Mini App</strong><small>{tgBotPreviewURL}</small></span><ExternalLink size={15} /></a> : null}
+          </div> : null}
+        </SettingSection>
+        <SaveRow label="保存 Bot 设置" saving={saving === "tgbot"} />
+      </form>
+
       <form className="settings-settings-group" onSubmit={saveNotifications}>
-        <SettingsGroupHeading icon={<Bell size={18} />} title="通知设置" description="Telegram 渠道、事件与阈值策略" />
-        <SettingSection icon={<Send size={19} />} title="Telegram" description="Bot Token 只写入，重新加载后以掩码显示"><Toggle checked={notifications.notify_enabled} onChange={(notify_enabled) => setNotifications({ ...notifications, notify_enabled })} label="启用 Telegram 通知" /><Field label="Bot Token"><input type="password" autoComplete="new-password" value={notifications.telegram_bot_token} onChange={(e) => setNotifications({ ...notifications, telegram_bot_token: e.target.value })} /></Field><Field label="Chat ID"><input value={notifications.telegram_chat_id} onChange={(e) => setNotifications({ ...notifications, telegram_chat_id: e.target.value })} /></Field><Button type="button" variant="secondary" onClick={() => void save("notify-test", () => api.post("/api/admin/notify-config/test"), "测试通知已发送")} disabled={saving === "notify-test"}>{saving === "notify-test" ? <Spinner label="正在发送" /> : <><Send size={16} />发送测试</>}</Button></SettingSection>
+        <SettingsGroupHeading icon={<Bell size={18} />} title="通知设置" description="管理事件通知与阈值策略" />
+        <SettingSection icon={<Send size={19} />} title="Telegram 管理通知" description="向固定 Chat ID 推送系统事件，与用户自助 Bot 相互独立"><Toggle checked={notifications.notify_enabled} onChange={(notify_enabled) => setNotifications({ ...notifications, notify_enabled })} label="启用 Telegram 管理通知" /><Field label="通知 Bot Token"><input type="password" autoComplete="new-password" value={notifications.telegram_bot_token} onChange={(e) => setNotifications({ ...notifications, telegram_bot_token: e.target.value })} /></Field><Field label="接收 Chat ID"><input value={notifications.telegram_chat_id} onChange={(e) => setNotifications({ ...notifications, telegram_chat_id: e.target.value })} /></Field><Button type="button" variant="secondary" onClick={() => void save("notify-test", () => api.post("/api/admin/notify-config/test"), "测试通知已发送")} disabled={saving === "notify-test"}>{saving === "notify-test" ? <Spinner label="正在发送" /> : <><Send size={16} />发送测试</>}</Button></SettingSection>
         <SettingSection icon={<Bell size={19} />} title="事件通知" description="选择需要推送的管理事件"><div className="settings-check-list event-grid">{[["notify_login", "用户登录"], ["notify_subscribe_fetch", "订阅拉取"], ["notify_server_offline", "服务器离线"], ["notify_server_online", "服务器恢复"], ["notify_over_limit", "流量超限"], ["notify_package_expiring", "套餐即将到期"], ["notify_package_expired", "套餐已到期"], ["notify_user_registered", "用户注册"], ["notify_telegram_bound", "Telegram 绑定"], ["notify_cert_result", "证书操作"], ["notify_agent_long_offline", "Agent 长时离线"], ["notify_device_limit_exceeded", "设备数超限"]].map(([key, label]) => <label className="checkbox-row" key={key}><input type="checkbox" checked={Boolean(notifications[key as keyof NotificationSettings])} onChange={(e) => setNotifications({ ...notifications, [key]: e.target.checked })} /><span>{label}</span></label>)}</div></SettingSection>
         <SettingSection icon={<Gauge size={19} />} title="阈值与日报" description="通知触发条件"><Toggle checked={notifications.notify_daily_traffic} onChange={(notify_daily_traffic) => setNotifications({ ...notifications, notify_daily_traffic })} label="发送每日流量摘要" /><Toggle checked={notifications.notify_traffic_threshold} onChange={(notify_traffic_threshold) => setNotifications({ ...notifications, notify_traffic_threshold })} label="启用自定义流量阈值" /><div className="settings-fields-grid"><Field label="日报时间"><input type="time" value={notifications.notify_daily_traffic_time} onChange={(e) => setNotifications({ ...notifications, notify_daily_traffic_time: e.target.value })} /></Field><NumberField label="流量阈值（%）" min={1} max={100} value={notifications.notify_traffic_threshold_percent} onChange={(value) => setNotifications({ ...notifications, notify_traffic_threshold_percent: value })} /><NumberField label="到期提前（天）" min={1} max={365} value={notifications.notify_package_expiring_days} onChange={(value) => setNotifications({ ...notifications, notify_package_expiring_days: value })} /><NumberField label="Agent 离线（分钟）" min={1} max={1440} value={notifications.notify_agent_long_offline_minutes} onChange={(value) => setNotifications({ ...notifications, notify_agent_long_offline_minutes: value })} /><NumberField label="上下线容忍（秒）" min={0} value={notifications.notify_server_tolerance_seconds} onChange={(value) => setNotifications({ ...notifications, notify_server_tolerance_seconds: value })} /></div></SettingSection>
         <SaveRow label="保存通知设置" saving={saving === "notifications"} />

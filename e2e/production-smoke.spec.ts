@@ -3,7 +3,7 @@ import path from "node:path";
 
 const productionURL = process.env.PRODUCTION_BASE_URL;
 
-test.describe("production login shell", () => {
+test.describe("production shell", () => {
   test.skip(!productionURL, "Set PRODUCTION_BASE_URL to run deployment smoke checks");
 
   for (const viewport of [
@@ -22,7 +22,14 @@ test.describe("production login shell", () => {
 
       await page.setViewportSize(viewport);
       await page.goto(productionURL!, { waitUntil: "networkidle" });
-      await expect(page.getByRole("heading", { name: "进入控制台" })).toBeVisible();
+      await expect(page.locator("main")).toBeVisible();
+      await expect
+        .poll(async () => {
+          const loginVisible = await page.getByRole("heading", { name: "进入控制台" }).isVisible();
+          const publicStatusVisible = await page.getByRole("heading", { name: "服务器状态" }).isVisible();
+          return loginVisible || publicStatusVisible;
+        })
+        .toBe(true);
       await expect(page.locator('script[src*="/assets/index-"][src$=".js"]')).toHaveCount(1);
       await expect(page.locator('link[rel="stylesheet"][href*="/assets/index-"][href$=".css"]')).toHaveCount(1);
       expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);

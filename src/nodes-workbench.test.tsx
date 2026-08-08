@@ -4,6 +4,7 @@ import QRCode from "qrcode";
 import { api } from "./api";
 import {
   AnyDoorForwardDialog,
+  BatchRenameDialog,
   ChainProxyDialog,
   ExternalSubscriptionsDialog,
   NodeEditor,
@@ -13,6 +14,7 @@ import {
   ResolveIPDialog,
   RoutedOutboundDialog,
   SpeedDialog,
+  SpeedHistoryDialog,
   TempSubscriptionDialog,
   TestersDialog,
   URIManagerDialog,
@@ -109,6 +111,18 @@ describe("managed certificate hostname coverage", () => {
     expect(managedTLSHostnameForCertificate(wildcard, server, "")).toBe("edge.example.com");
     expect(managedCertificateMatchesServer({ ...valid, remote_server_id: 8, dns_names: ["edge.example.com"] }, server)).toBe(false);
     expect(managedCertificateMatchesServer({ ...valid, dns_names: ["other.example.com", "edge.example.com"] }, server)).toBe(true);
+  });
+});
+
+describe("batch rename reconciliation", () => {
+  it("reloads the owning workbench after a partial server-side success", async () => {
+    const onComplete = vi.fn().mockResolvedValue(undefined);
+    vi.spyOn(api, "post").mockResolvedValue({ success: 1, failed: 1 });
+    render(<BatchRenameDialog nodes={[node(1, "Hong Kong"), node(2, "Tokyo")]} onClose={vi.fn()} onComplete={onComplete} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "确认修改" }));
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledWith(1, 1));
   });
 });
 
@@ -285,6 +299,58 @@ describe("nodes speedtest workbench", () => {
     }));
     expect(refresh).toHaveBeenCalledOnce();
     expect(notify).toHaveBeenCalledWith("节点测速已开始");
+  });
+
+  it("reports partial speedtest submission and refreshes after every request settles", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/speedtest/testers") return { testers: [] } as T;
+      if (path === "/api/admin/speedtest/mihomo-status") return { ready: true } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string, body?: unknown): Promise<T> => {
+      if (path !== "/api/admin/speedtest/run") throw new Error(`unexpected POST ${path}`);
+      if ((body as { node_id: number }).node_id === 2) throw new Error("queue unavailable");
+      return { success: true } as T;
+    });
+    const refresh = vi.fn().mockResolvedValue(undefined);
+    const notify = vi.fn();
+    render(<SpeedDialog nodes={[node(1, "香港 A"), node(2, "东京 B")]} initialNodeIDs={[1, 2]} latest={{}} notify={notify} onClose={vi.fn()} onRefresh={refresh} onOpenHistory={vi.fn()} onManageTesters={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "开始测速" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("alert")).toHaveTextContent("节点测速提交完成：成功 1，失败 1");
+    expect(notify).toHaveBeenCalledWith("节点测速提交完成：成功 1，失败 1", "error");
+    expect(refresh).toHaveBeenCalledOnce();
+  });
+
+  it("does not overlap slow interval refreshes for running speedtests", async () => {
+    vi.useFakeTimers();
+    const slowRefresh = deferred<{ results: Record<string, unknown>[] }>();
+    let requestCount = 0;
+    const get = vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path !== "/api/admin/speedtest/results?limit=200") throw new Error(`unexpected GET ${path}`);
+      requestCount += 1;
+      if (requestCount === 1) return { results: [{ id: 1, node_id: 1, node_name: "香港 A", source: "master_local", down_mbps: 0, latency_ms: 0, test_bytes: 0, status: "running", created_at: "2026-08-08T00:00:00Z" }] } as T;
+      return slowRefresh.promise as Promise<T>;
+    });
+    const rendered = render(<SpeedHistoryDialog onClose={vi.fn()} />);
+
+    try {
+      await act(async () => { await Promise.resolve(); });
+      expect(screen.getByText("进行中")).toBeInTheDocument();
+
+      await act(async () => { vi.advanceTimersByTime(3000); await Promise.resolve(); });
+      expect(get).toHaveBeenCalledTimes(2);
+      await act(async () => { vi.advanceTimersByTime(9000); await Promise.resolve(); });
+      expect(get).toHaveBeenCalledTimes(2);
+
+      await act(async () => { slowRefresh.resolve({ results: [] }); await Promise.resolve(); });
+      expect(screen.getByText("暂无测速记录")).toBeInTheDocument();
+    } finally {
+      rendered.unmount();
+      vi.useRealTimers();
+    }
   });
 
   it("loads line targets lazily and exposes explicit managed installation states", async () => {
@@ -499,6 +565,90 @@ describe("nodes speedtest workbench", () => {
     expect(linux).not.toContain("| sudo");
     expect(powershell).toBe(`$env:RELAYDOCK_MASTER_URL='${origin}'; $env:RELAYDOCK_SPEEDTEST_TOKEN='tok''en'; $env:RELAYDOCK_SPEEDTEST_NAME='Home O''Brien'; $ErrorActionPreference='Stop'; $installer=Join-Path ([IO.Path]::GetTempPath()) ('relaydock-speedtester-install-' + [guid]::NewGuid().ToString('N') + '.ps1'); try { Invoke-WebRequest -UseBasicParsing -Uri '${powershellInstaller}' -OutFile $installer; & $installer } finally { Remove-Item -Force -ErrorAction SilentlyContinue $installer }`);
     expect(powershell).not.toContain("| iex");
+  });
+});
+
+describe("node batch reconciliation", () => {
+  const mockWorkbenchLoads = (items: WorkbenchNode[]) => vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+    if (path === "/api/admin/nodes") return { nodes: items } as T;
+    if (path === "/api/admin/speedtest/results?latest=1") return { results: [] } as T;
+    if (path === "/api/user/config") return userConfig(items.map((item) => item.id)) as T;
+    if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
+    throw new Error(`unexpected GET ${path}`);
+  });
+
+  it("reconciles and reports partial batch status updates", async () => {
+    const items = [node(1, "香港 A"), node(2, "东京 B")];
+    const get = mockWorkbenchLoads(items);
+    const put = vi.spyOn(api, "put").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes/2") throw new Error("update rejected");
+      return { success: true } as T;
+    });
+    const notify = vi.fn();
+    render(<NodesWorkbench isAdmin notify={notify} />);
+
+    fireEvent.click(await screen.findByRole("checkbox", { name: "选择当前结果" }));
+    fireEvent.click(screen.getByRole("button", { name: "停用" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认停用" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(2));
+    expect(notify).toHaveBeenCalledWith("批量停用完成：成功 1，失败 1", "error");
+    await waitFor(() => expect(get.mock.calls.filter(([path]) => path === "/api/admin/nodes")).toHaveLength(2));
+    expect(screen.queryByRole("dialog", { name: "批量停用节点" })).not.toBeInTheDocument();
+  });
+
+  it("reconciles and reports partial batch tag updates", async () => {
+    const items = [node(1, "香港 A"), node(2, "东京 B")];
+    const get = mockWorkbenchLoads(items);
+    const put = vi.spyOn(api, "put").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes/2") throw new Error("update rejected");
+      return { success: true } as T;
+    });
+    const notify = vi.fn();
+    render(<NodesWorkbench isAdmin notify={notify} />);
+
+    fireEvent.click(await screen.findByRole("checkbox", { name: "选择当前结果" }));
+    fireEvent.click(screen.getByRole("button", { name: "标签" }));
+    const dialog = screen.getByRole("dialog", { name: "批量修改标签" });
+    const input = within(dialog).getByPlaceholderText("输入标签后按回车");
+    fireEvent.change(input, { target: { value: "重点线路" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存标签" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(2));
+    expect(put).toHaveBeenCalledWith("/api/admin/nodes/1", expect.objectContaining({ tag: "重点线路", tags: ["重点线路"] }));
+    expect(notify).toHaveBeenCalledWith("批量标签更新完成：成功 1，失败 1", "error");
+    await waitFor(() => expect(get.mock.calls.filter(([path]) => path === "/api/admin/nodes")).toHaveLength(2));
+    expect(screen.queryByRole("dialog", { name: "批量修改标签" })).not.toBeInTheDocument();
+  });
+
+  it("reloads and clears selection after a partially successful batch delete", async () => {
+    const items = [node(1, "香港 A"), node(2, "东京 B")];
+    let nodeLoads = 0;
+    const get = vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") {
+        nodeLoads += 1;
+        return { nodes: nodeLoads === 1 ? items : [items[1]] } as T;
+      }
+      if (path === "/api/admin/speedtest/results?latest=1") return { results: [] } as T;
+      if (path === "/api/user/config") return userConfig([1, 2]) as T;
+      if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    vi.spyOn(api, "post").mockRejectedValue(new Error("已删除 1 个节点，另 1 个删除失败"));
+    const notify = vi.fn();
+    render(<NodesWorkbench isAdmin notify={notify} />);
+
+    fireEvent.click(await screen.findByRole("checkbox", { name: "选择当前结果" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除 2 个节点" }));
+
+    await waitFor(() => expect(get.mock.calls.filter(([path]) => path === "/api/admin/nodes")).toHaveLength(2));
+    expect(screen.queryByText("香港 A")).not.toBeInTheDocument();
+    expect(screen.getByText("东京 B")).toBeInTheDocument();
+    expect(screen.queryByRole("toolbar", { name: "批量操作" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "批量删除节点" })).not.toBeInTheDocument();
+    expect(notify).toHaveBeenCalledWith("已删除 1 个节点，另 1 个删除失败", "error");
   });
 });
 

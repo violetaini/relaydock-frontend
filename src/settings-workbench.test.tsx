@@ -180,7 +180,11 @@ describe("settings workbench", () => {
     expect(await screen.findByText("运行中")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /打开 Telegram Bot/ })).toHaveAttribute("href", "https://t.me/example_bot");
     expect(screen.queryByRole("link", { name: /Mini App/ })).not.toBeInTheDocument();
-    fireEvent.change(screen.getByRole("textbox", { name: /^管理员 Telegram ID/ }), { target: { value: "123456789, 987654321, 123456789" } });
+    const adminIDInput = screen.getByRole("textbox", { name: /^管理员 Telegram ID/ });
+    expect(screen.getByText("123456789", { exact: true })).toBeInTheDocument();
+    fireEvent.change(adminIDInput, { target: { value: "987654321, 123456789" } });
+    fireEvent.keyDown(adminIDInput, { key: "Enter" });
+    expect(screen.getByText("987654321", { exact: true })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("switch", { name: "允许本机浏览器预览 Mini App" }));
     const previewLink = screen.queryByRole("link", { name: /本机预览 Mini App/ });
     if (["localhost", "127.0.0.1", "::1"].includes(location.hostname)) {
@@ -208,7 +212,30 @@ describe("settings workbench", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存 Bot 设置" }));
 
     expect(put).not.toHaveBeenCalledWith("/api/admin/system-settings/tgbot", expect.anything());
-    expect(notify).toHaveBeenCalledWith("管理员 Telegram ID 必须是正整数，多个 ID 请用逗号分隔", "error");
+    expect(notify).toHaveBeenCalledWith("管理员 Telegram ID 必须是正整数", "error");
+  });
+
+  it("removes a Telegram administrator ID without editing a delimiter string", async () => {
+    mockCompleteSettings({
+      "/api/admin/system-settings/tgbot": {
+        enabled: true,
+        bot_token: "1234****WXYZ",
+        admin_tg_ids: [123456789, 987654321],
+        webapp_dev_preview: false,
+        running: true,
+        bot_url: "https://t.me/example_bot",
+      },
+    });
+    const put = vi.spyOn(api, "put").mockImplementation(async <T,>(_path: string, payload?: unknown): Promise<T> => payload as T);
+    render(<SettingsWorkbenchPage notify={vi.fn()} />);
+
+    await screen.findByRole("button", { name: "移除管理员 Telegram ID 123456789" });
+    fireEvent.click(screen.getByRole("button", { name: "移除管理员 Telegram ID 123456789" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存 Bot 设置" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/system-settings/tgbot", expect.objectContaining({
+      admin_tg_ids: [987654321],
+    })));
   });
 
   it("enables the public probe by default when no persisted toggle exists", async () => {
@@ -245,6 +272,32 @@ describe("settings workbench", () => {
       logo: "/assets/northstar-logo.svg",
       favicon: "https://assets.example/northstar.ico",
     });
+  });
+
+  it("reconciles the live theme and branding after a partially successful general save", async () => {
+    let branding = { name: "RelayDock", logo: "", favicon: "" };
+    let theme = "flat";
+    mockCompleteSettings({
+      "/api/admin/system-settings/branding": () => branding,
+      "/api/admin/system-settings/default-theme": () => ({ default_theme: theme }),
+    });
+    vi.spyOn(api, "put").mockImplementation(async <T,>(path: string, payload?: unknown): Promise<T> => {
+      if (path === "/api/admin/system-settings/branding") branding = payload as typeof branding;
+      if (path === "/api/admin/system-settings/default-theme") theme = (payload as { default_theme: string }).default_theme;
+      if (path === "/api/admin/system-settings/intervals") throw new Error("interval write failed");
+      return { success: true } as T;
+    });
+    const onBrandingChange = vi.fn();
+    render(<SettingsWorkbenchPage notify={vi.fn()} onBrandingChange={onBrandingChange} />);
+
+    fireEvent.change(await screen.findByRole("textbox", { name: /项目名称/ }), { target: { value: "Northstar" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "默认主题" }), { target: { value: "pixel" } });
+    onBrandingChange.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "保存基础设置" }));
+
+    await waitFor(() => expect(screen.getByText(/采集间隔保存失败/)).toBeInTheDocument());
+    expect(onBrandingChange).toHaveBeenCalledWith({ name: "Northstar", logo: "", favicon: "" });
+    expect(document.documentElement.dataset.styleTheme).toBe("pixel");
   });
 
   it("keeps public probe server selection compact until the picker is confirmed", async () => {
@@ -404,15 +457,33 @@ describe("settings workbench", () => {
     })));
   });
 
-  it("blocks editing when any persisted setting could not be loaded", async () => {
+  it("keeps loaded settings visible but blocks saving when one persisted setting failed", async () => {
     mockCompleteSettings({}, "/api/admin/system-settings/short-link");
     const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
     render(<SettingsWorkbenchPage notify={vi.fn()} />);
 
-    expect(await screen.findByText("setting unavailable")).toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: "公开 URL" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "保存基础设置" })).not.toBeInTheDocument();
+    expect(await screen.findByText(/部分设置未能加载：订阅短链/)).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "公开 URL" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存基础设置" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "保存订阅设置" })).toBeDisabled();
+    expect(screen.getByRole("navigation", { name: "设置分组" })).toBeInTheDocument();
     expect(put).not.toHaveBeenCalled();
+  });
+
+  it("scrolls between setting groups without changing the console route hash", async () => {
+    mockCompleteSettings();
+    location.hash = "#/settings";
+    render(<SettingsWorkbenchPage notify={vi.fn()} />);
+
+    await screen.findByRole("heading", { name: "安全设置" });
+    const target = document.getElementById("settings-security") as HTMLElement;
+    const scrollIntoView = vi.fn();
+    target.scrollIntoView = scrollIntoView;
+    fireEvent.click(screen.getByRole("button", { name: "安全" }));
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+    expect(location.hash).toBe("#/settings");
+    location.hash = "";
   });
 
   it("shows the host update command and blocks in-container updates for Docker", async () => {

@@ -380,7 +380,7 @@ function Turnstile({ siteKey, onToken }: { siteKey: string; onToken: (token: str
   return <div className="turnstile-slot" ref={ref} />;
 }
 
-export function LoginScreen({ onLogin, wallpaper = "" }: { onLogin: (session: Session) => void; wallpaper?: string }) {
+export function LoginScreen({ onLogin, wallpaper = "", notice = "" }: { onLogin: (session: Session) => void; wallpaper?: string; notice?: string }) {
   const branding = useBranding();
   const projectName = branding.name?.trim() || BRAND_NAME;
   const [form, setForm] = useState({ username: "", password: "", remember_me: true });
@@ -397,7 +397,7 @@ export function LoginScreen({ onLogin, wallpaper = "" }: { onLogin: (session: Se
   }, []);
 
   const finish = (session: Session) => {
-    setToken(session.token);
+    setToken(session.token, form.remember_me);
     onLogin(session);
   };
 
@@ -452,6 +452,7 @@ export function LoginScreen({ onLogin, wallpaper = "" }: { onLogin: (session: Se
           <span className="auth-step">安全登录</span>
           <h2>{pending2FA ? "验证第二因素" : "进入控制台"}</h2>
           <p className="auth-subtitle">{pending2FA ? "输入验证器代码或恢复码。" : "使用管理端账号继续。"}</p>
+          {notice ? <ErrorState message={notice} /> : null}
           {error ? <ErrorState message={error} /> : null}
           {pending2FA ? (
             <form onSubmit={verify2FA} className="form-stack">

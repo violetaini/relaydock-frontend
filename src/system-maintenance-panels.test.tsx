@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const requestMock = vi.hoisted(() => vi.fn());
@@ -22,9 +22,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function encryptedBackup(name = "arcway.zip.enc") {
+function encryptedBackup(name = "arcway.zip.enc", magic = "RLDKBKP1") {
   const bytes = new Uint8Array(64);
-  bytes.set(new TextEncoder().encode("RLDKBKP1"));
+  bytes.set(new TextEncoder().encode(magic));
   return new File([bytes], name, { type: "application/octet-stream" });
 }
 
@@ -59,7 +59,7 @@ describe("backup operations", () => {
     const [path, init] = fetchMock.mock.calls[0];
     const headers = new Headers(init?.headers);
     expect(path).toBe("/api/admin/backup/download");
-    expect(init?.method).toBe("GET");
+    expect(init?.method).toBe("POST");
     expect(headers.get("X-Backup-Passphrase")).toBe("strong-passphrase");
     expect(headers.get("Authorization")).toBe("Bearer admin-token");
     expect(click).toHaveBeenCalledOnce();
@@ -75,11 +75,11 @@ describe("backup operations", () => {
     fireEvent.change(screen.getByLabelText(/^备份文件/), { target: { files: [file] } });
     expect(await screen.findByText("Arcway 加密备份", { exact: false })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(/^原备份口令/), { target: { value: "strong-passphrase" } });
-    fireEvent.click(screen.getByRole("button", { name: "校验并恢复" }));
+    fireEvent.click(screen.getByRole("button", { name: "校验并暂存" }));
 
-    expect(await screen.findByRole("dialog", { name: "恢复数据备份" })).toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", { name: "暂存数据备份" });
     expect(requestMock).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "确认恢复" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "校验并暂存" }));
 
     await waitFor(() => expect(requestMock).toHaveBeenCalledOnce());
     const [path, init] = requestMock.mock.calls[0];
@@ -93,6 +93,23 @@ describe("backup operations", () => {
 
   it("rejects a misleading backup extension with an invalid header", async () => {
     await expect(validateBackupFile(new File(["not a backup"], "fake.zip.enc"))).rejects.toThrow("文件头与 Arcway 备份格式不匹配");
+  });
+
+  it("accepts the current chunked encrypted backup format", async () => {
+    await expect(validateBackupFile(encryptedBackup("current.zip.enc", "RLDKBKP2"))).resolves.toEqual({
+      encrypted: true,
+      description: "Arcway 分块加密备份",
+    });
+  });
+
+  it("rejects legacy encrypted backups above the backend's 64 MB compatibility limit", async () => {
+    const file = {
+      name: "legacy.zip.enc",
+      size: 64 * 1024 * 1024 + 1,
+      slice: () => new Blob(["RLDKBKP1"]),
+    } as File;
+
+    await expect(validateBackupFile(file)).rejects.toThrow("旧版加密备份不能超过 64 MB");
   });
 });
 

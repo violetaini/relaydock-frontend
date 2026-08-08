@@ -1587,9 +1587,25 @@ function CreateTemplateDialog({ onClose, onComplete }: { onClose: () => void; on
   const [file, setFile] = useState<File | null>(null);
   const [subscriptions, setSubscriptions] = useState<SubscribeFile[]>([]);
   const [subscription, setSubscription] = useState("");
+  const [subscriptionsLoading, setSubscriptionsLoading] = useState(true);
+  const [subscriptionsError, setSubscriptionsError] = useState("");
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
-  useEffect(() => { void api.get<{ files?: SubscribeFile[] }>("/api/admin/subscribe-files").then((payload) => { const files = payload.files ?? []; setSubscriptions(files); setSubscription(files[0]?.filename || ""); }).catch(() => undefined); }, []);
+  const loadSubscriptions = useCallback(async () => {
+    setSubscriptionsLoading(true);
+    setSubscriptionsError("");
+    try {
+      const payload = await api.get<{ files?: SubscribeFile[] }>("/api/admin/subscribe-files");
+      const files = payload.files ?? [];
+      setSubscriptions(files);
+      setSubscription((current) => files.some((item) => item.filename === current) ? current : files[0]?.filename || "");
+    } catch (reason) {
+      setSubscriptionsError(fail(reason, "读取订阅列表失败"));
+    } finally {
+      setSubscriptionsLoading(false);
+    }
+  }, []);
+  useEffect(() => { void loadSubscriptions(); }, [loadSubscriptions]);
   useEffect(() => { if (mode === "blank") setContent(blankTemplate); }, [mode]);
   const modes: { value: TemplateCreateMode; label: string; icon: ReactNode }[] = [
     { value: "upload", label: "上传文件", icon: <Upload size={18} /> },
@@ -1625,7 +1641,8 @@ function CreateTemplateDialog({ onClose, onComplete }: { onClose: () => void; on
     } catch (reason) { setError(fail(reason, "创建模板失败")); }
     finally { setWorking(false); }
   };
-  return <Dialog title="新建模板" description="选择模板来源并保存为 V3 YAML 文件" onClose={onClose} wide><form className="cw-form" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}<div className="cw-create-modes">{modes.map((item) => <button type="button" key={item.value} className={`cw-create-mode ${mode === item.value ? "is-active" : ""}`} onClick={() => setMode(item.value)}>{item.icon}<span>{item.label}</span></button>)}</div>{mode === "upload" ? <><Field key="template-upload-file" label="YAML 文件"><input required type="file" accept=".yaml,.yml,application/yaml,text/yaml" onChange={(event) => { const next = event.target.files?.[0] ?? null; setFile(next); if (next && !filename) setFilename(next.name); }} /></Field><Field label="保存文件名" hint="默认使用上传文件名"><input value={filename} onChange={(event) => setFilename(event.target.value)} placeholder="custom.yaml" /></Field></> : <><Field key="template-output-filename" label="模板文件名"><input required value={filename} onChange={(event) => setFilename(event.target.value)} placeholder="custom_v3.yaml" /></Field>{mode === "url" ? <><Field label="模板 URL"><input required type="url" value={url} onChange={(event) => setURL(event.target.value)} placeholder="https://example.com/template.yaml" /></Field><Toggle checked={useProxy} onChange={setUseProxy} label="通过远程获取代理拉取" /></> : mode === "subscription" ? <Field label="订阅文件"><select required value={subscription} onChange={(event) => setSubscription(event.target.value)}><option value="">请选择订阅</option>{subscriptions.map((item) => <option key={item.id} value={item.filename}>{item.name} · {item.filename}</option>)}</select></Field> : <Field label={mode === "v2" ? "V2 / ACL4SSR 内容" : "YAML 内容"}><textarea required className="cw-dialog-code" value={content} onChange={(event) => setContent(event.target.value)} spellCheck={false} placeholder={mode === "paste" ? "粘贴 V3 YAML 模板" : undefined} /></Field>}</>}<div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在创建" /> : <><FilePlus2 size={16} />创建模板</>}</Button></div></form></Dialog>;
+  const subscriptionUnavailable = mode === "subscription" && (subscriptionsLoading || Boolean(subscriptionsError) || !subscription);
+  return <Dialog title="新建模板" description="选择模板来源并保存为 V3 YAML 文件" onClose={onClose} wide><form className="cw-form" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}<div className="cw-create-modes">{modes.map((item) => <button type="button" key={item.value} className={`cw-create-mode ${mode === item.value ? "is-active" : ""}`} onClick={() => setMode(item.value)}>{item.icon}<span>{item.label}</span></button>)}</div>{mode === "upload" ? <><Field key="template-upload-file" label="YAML 文件"><input required type="file" accept=".yaml,.yml,application/yaml,text/yaml" onChange={(event) => { const next = event.target.files?.[0] ?? null; setFile(next); if (next && !filename) setFilename(next.name); }} /></Field><Field label="保存文件名" hint="默认使用上传文件名"><input value={filename} onChange={(event) => setFilename(event.target.value)} placeholder="custom.yaml" /></Field></> : <><Field key="template-output-filename" label="模板文件名"><input required value={filename} onChange={(event) => setFilename(event.target.value)} placeholder="custom_v3.yaml" /></Field>{mode === "url" ? <><Field label="模板 URL"><input required type="url" value={url} onChange={(event) => setURL(event.target.value)} placeholder="https://example.com/template.yaml" /></Field><Toggle checked={useProxy} onChange={setUseProxy} label="通过远程获取代理拉取" /></> : mode === "subscription" ? <>{subscriptionsError ? <ErrorState message={subscriptionsError} onRetry={() => void loadSubscriptions()} /> : null}<Field label="订阅文件"><select required disabled={subscriptionsLoading || Boolean(subscriptionsError)} value={subscription} onChange={(event) => setSubscription(event.target.value)}><option value="">{subscriptionsLoading ? "正在读取订阅..." : subscriptions.length ? "请选择订阅" : "暂无可用订阅"}</option>{subscriptions.map((item) => <option key={item.id} value={item.filename}>{item.name} · {item.filename}</option>)}</select></Field></> : <Field label={mode === "v2" ? "V2 / ACL4SSR 内容" : "YAML 内容"}><textarea required className="cw-dialog-code" value={content} onChange={(event) => setContent(event.target.value)} spellCheck={false} placeholder={mode === "paste" ? "粘贴 V3 YAML 模板" : undefined} /></Field>}</>}<div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose}>取消</Button><Button type="submit" disabled={working || subscriptionUnavailable}>{working ? <Spinner label="正在创建" /> : <><FilePlus2 size={16} />创建模板</>}</Button></div></form></Dialog>;
 }
 
 type CertificatePending = { kind: "certificate"; item: CertificateItem } | { kind: "provider"; item: DNSProviderItem };

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import {
   Activity,
   ArrowDownToLine,
@@ -112,23 +112,51 @@ const rangeOptions: Array<{ key: TrafficRange; label: string }> = [
   { key: "month", label: "近 30 日" },
 ];
 
-function dateDaysAgo(days: number): string {
-  const date = new Date();
-  date.setUTCDate(date.getUTCDate() - days);
-  return date.toISOString().slice(0, 10);
+const adminViewOptions: Array<{ key: AdminView; label: string; icon: React.ReactNode }> = [
+  { key: "users", label: "用户汇总", icon: <Users size={16} /> },
+  { key: "nodes", label: "节点汇总", icon: <Network size={16} /> },
+];
+
+function selectTabByKey<T extends string>(
+  event: KeyboardEvent<HTMLButtonElement>,
+  options: ReadonlyArray<{ key: T }>,
+  index: number,
+  onSelect: (key: T) => void,
+) {
+  let nextIndex = index;
+  if (event.key === "ArrowRight" || event.key === "ArrowDown") nextIndex = (index + 1) % options.length;
+  else if (event.key === "ArrowLeft" || event.key === "ArrowUp") nextIndex = (index - 1 + options.length) % options.length;
+  else if (event.key === "Home") nextIndex = 0;
+  else if (event.key === "End") nextIndex = options.length - 1;
+  else return;
+
+  event.preventDefault();
+  onSelect(options[nextIndex].key);
+  event.currentTarget.closest('[role="tablist"]')
+    ?.querySelectorAll<HTMLElement>('[role="tab"]')[nextIndex]
+    ?.focus();
 }
 
-function rangeDate(range: TrafficRange): string {
-  if (range === "today") return dateDaysAgo(0);
-  if (range === "week") return dateDaysAgo(6);
-  if (range === "month") return dateDaysAgo(29);
+export function localDateDaysAgo(days: number, now = new Date()): string {
+  const date = new Date(now);
+  date.setDate(date.getDate() - days);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function rangeDate(range: TrafficRange, now = new Date()): string {
+  if (range === "today") return localDateDaysAgo(0, now);
+  if (range === "week") return localDateDaysAgo(6, now);
+  if (range === "month") return localDateDaysAgo(29, now);
   return "";
 }
 
-function rangeDays(range: TrafficRange): number {
-  if (range === "today") return 1;
-  if (range === "week") return 7;
-  return 30;
+export function filterTrafficHistoryByRange(history: NonNullable<TrafficSummary["history"]>, range: TrafficRange, now = new Date()): NonNullable<TrafficSummary["history"]> {
+  const start = localDateDaysAgo(range === "today" ? 0 : range === "week" ? 6 : 29, now);
+  const end = localDateDaysAgo(0, now);
+  return history.filter((item) => item.date >= start && item.date <= end);
 }
 
 function trafficURL(path: string, date: string, key?: string, value?: string | number): string {
@@ -291,7 +319,8 @@ export function TrafficWorkbenchPage({ profile }: { profile: Profile }) {
   const filteredNodes = useMemo(() => nodes
     .filter((item) => `${item.node_name} ${item.server_name} ${item.node_type}`.toLocaleLowerCase().includes(normalizedSearch))
     .sort((left, right) => (right.uplink + right.downlink) - (left.uplink + left.downlink)), [nodes, normalizedSearch]);
-  const history = useMemo(() => (summary?.history ?? []).slice(-rangeDays(range)), [range, summary?.history]);
+  const history = useMemo(() => filterTrafficHistoryByRange(summary?.history ?? [], range), [range, summary?.history]);
+  const historyDescription = history.map((item) => `${item.date} ${item.used_gb} GB`).join("；");
   const maxHistory = Math.max(1, ...history.map((item) => Number(item.used_gb) || 0));
   const activeConnections = Object.values(connections).reduce((total, value) => total + Math.max(0, Number(value) || 0), 0);
   const activeUsers = Object.values(connections).filter((value) => Number(value) > 0).length;
@@ -323,54 +352,60 @@ export function TrafficWorkbenchPage({ profile }: { profile: Profile }) {
           <Badge tone="neutral">{rangeOptions.find((item) => item.key === range)?.label}</Badge>
         </div>
         <div className="traffic-range" role="tablist" aria-label="流量统计周期">
-          {rangeOptions.map((item) => <Button key={item.key} role="tab" aria-selected={range === item.key} variant={range === item.key ? "primary" : "secondary"} onClick={() => setRange(item.key)}>{item.label}</Button>)}
+          {rangeOptions.map((item, index) => <Button key={item.key} id={`traffic-range-tab-${item.key}`} role="tab" aria-controls="traffic-history-panel" aria-selected={range === item.key} tabIndex={range === item.key ? 0 : -1} variant={range === item.key ? "primary" : "secondary"} onKeyDown={(event) => selectTabByKey(event, rangeOptions, index, setRange)} onClick={() => setRange(item.key)}>{item.label}</Button>)}
         </div>
-        {loading ? <div className="center-state"><Spinner /></div> : history.length === 0 ? <EmptyState icon={<Activity size={23} />} title="暂无历史记录" description="采集到每日快照后会在这里形成趋势" /> : (
-          <div className="traffic-history-chart" aria-label="每日流量趋势图">
-            {history.map((item) => {
-              const height = Math.max(3, (Number(item.used_gb) || 0) / maxHistory * 100);
-              return <div className="traffic-history-column" key={item.date} title={`${item.date}: ${item.used_gb} GB`}><span>{item.used_gb > 0 ? `${item.used_gb}` : ""}</span><i style={{ height: `${height}%` }} /><small>{item.date.slice(5)}</small></div>;
-            })}
-          </div>
-        )}
+        <div id="traffic-history-panel" role="tabpanel" aria-labelledby={`traffic-range-tab-${range}`}>
+          {loading ? <div className="center-state"><Spinner /></div> : history.length === 0 ? <EmptyState icon={<Activity size={23} />} title="暂无历史记录" description="采集到每日快照后会在这里形成趋势" /> : (
+            <>
+              <span id="traffic-history-description" className="sr-only">每日流量趋势图。{historyDescription}</span>
+              <div className="traffic-history-chart" role="img" aria-labelledby="traffic-history-description">
+              {history.map((item) => {
+                const height = Math.max(3, (Number(item.used_gb) || 0) / maxHistory * 100);
+                return <div className="traffic-history-column" key={item.date} title={`${item.date}: ${item.used_gb} GB`}><span>{item.used_gb > 0 ? `${item.used_gb}` : ""}</span><i style={{ height: `${height}%` }} /><small>{item.date.slice(5)}</small></div>;
+              })}
+              </div>
+            </>
+          )}
+        </div>
       </Surface>
 
       {profile.is_admin ? (
         <Surface className="table-surface traffic-admin-surface">
           <div className="traffic-admin-heading">
             <div className="traffic-admin-tabs" role="tablist" aria-label="流量汇总维度">
-              <button type="button" role="tab" aria-selected={view === "users"} className={view === "users" ? "is-active" : ""} onClick={() => setView("users")}><Users size={16} />用户汇总</button>
-              <button type="button" role="tab" aria-selected={view === "nodes"} className={view === "nodes" ? "is-active" : ""} onClick={() => setView("nodes")}><Network size={16} />节点汇总</button>
+              {adminViewOptions.map((item, index) => <button key={item.key} id={`traffic-admin-tab-${item.key}`} type="button" role="tab" aria-controls="traffic-admin-panel" aria-selected={view === item.key} tabIndex={view === item.key ? 0 : -1} className={view === item.key ? "is-active" : ""} onKeyDown={(event) => selectTabByKey(event, adminViewOptions, index, setView)} onClick={() => setView(item.key)}>{item.icon}{item.label}</button>)}
             </div>
             <label className="traffic-search"><Search size={16} /><input aria-label={view === "users" ? "搜索用户流量" : "搜索节点流量"} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={view === "users" ? "搜索用户" : "搜索节点或服务器"} /></label>
           </div>
-          {loading ? <div className="center-state"><Spinner /></div> : view === "users" ? (
-            filteredUsers.length === 0 ? <EmptyState icon={<Users size={23} />} title={search ? "没有匹配的用户" : "暂无用户流量"} /> : (
-              <div className="table-wrap"><table><thead><tr><th>用户</th><th>当前连接</th><th>周期上行</th><th>周期下行</th><th>周期合计</th><th>历史总量</th><th aria-label="操作" /></tr></thead><tbody>{filteredUsers.map((item) => (
-                <tr key={item.username}>
-                  <td><div className="primary-cell"><span className="user-avatar">{item.username.slice(0, 1).toUpperCase()}</span><span><strong>{item.username}</strong><small>{connections[item.username] > 0 ? "正在使用" : "当前无连接"}</small></span></div></td>
-                  <td><Badge tone={connections[item.username] > 0 ? "good" : "neutral"}>{connections[item.username] ?? 0}</Badge></td>
-                  <td>{formatBytes(item.cycle_uplink)}</td>
-                  <td>{formatBytes(item.cycle_downlink)}</td>
-                  <td><strong>{formatBytes(item.cycle_uplink + item.cycle_downlink)}</strong></td>
-                  <td>{formatBytes(item.total_uplink + item.total_downlink)}</td>
-                  <td className="actions-cell"><IconButton label={`查看 ${item.username} 节点流量`} onClick={() => setDrilldown({ kind: "user", id: item.username, title: item.username })}><ChevronRight size={17} /></IconButton></td>
+          <div id="traffic-admin-panel" role="tabpanel" aria-labelledby={`traffic-admin-tab-${view}`}>
+            {loading ? <div className="center-state"><Spinner /></div> : view === "users" ? (
+              filteredUsers.length === 0 ? <EmptyState icon={<Users size={23} />} title={search ? "没有匹配的用户" : "暂无用户流量"} /> : (
+                <div className="table-wrap"><table><thead><tr><th>用户</th><th>当前连接</th><th>周期上行</th><th>周期下行</th><th>周期合计</th><th>历史总量</th><th aria-label="操作" /></tr></thead><tbody>{filteredUsers.map((item) => (
+                  <tr key={item.username}>
+                    <td><div className="primary-cell"><span className="user-avatar">{item.username.slice(0, 1).toUpperCase()}</span><span><strong>{item.username}</strong><small>{connections[item.username] > 0 ? "正在使用" : "当前无连接"}</small></span></div></td>
+                    <td><Badge tone={connections[item.username] > 0 ? "good" : "neutral"}>{connections[item.username] ?? 0}</Badge></td>
+                    <td>{formatBytes(item.cycle_uplink)}</td>
+                    <td>{formatBytes(item.cycle_downlink)}</td>
+                    <td><strong>{formatBytes(item.cycle_uplink + item.cycle_downlink)}</strong></td>
+                    <td>{formatBytes(item.total_uplink + item.total_downlink)}</td>
+                    <td className="actions-cell"><IconButton label={`查看 ${item.username} 节点流量`} onClick={() => setDrilldown({ kind: "user", id: item.username, title: item.username })}><ChevronRight size={17} /></IconButton></td>
+                  </tr>
+                ))}</tbody></table></div>
+              )
+            ) : filteredNodes.length === 0 ? <EmptyState icon={<Server size={23} />} title={search ? "没有匹配的节点" : "暂无节点流量"} /> : (
+              <div className="table-wrap"><table><thead><tr><th>节点</th><th>服务器</th><th>类型</th><th>上行</th><th>下行</th><th>合计</th><th aria-label="操作" /></tr></thead><tbody>{filteredNodes.map((item) => (
+                <tr key={item.node_id}>
+                  <td><strong>{item.node_name}</strong></td>
+                  <td>{item.server_name || "-"}</td>
+                  <td><Badge tone={item.node_type === "routed" ? "info" : "neutral"}>{item.node_type === "routed" ? "路由节点" : "入站节点"}</Badge></td>
+                  <td>{formatBytes(item.uplink)}</td>
+                  <td>{formatBytes(item.downlink)}</td>
+                  <td><strong>{formatBytes(item.uplink + item.downlink)}</strong></td>
+                  <td className="actions-cell"><IconButton label={`查看 ${item.node_name} 用户流量`} onClick={() => setDrilldown({ kind: "node", id: String(item.node_id), title: item.node_name })}><ChevronRight size={17} /></IconButton></td>
                 </tr>
               ))}</tbody></table></div>
-            )
-          ) : filteredNodes.length === 0 ? <EmptyState icon={<Server size={23} />} title={search ? "没有匹配的节点" : "暂无节点流量"} /> : (
-            <div className="table-wrap"><table><thead><tr><th>节点</th><th>服务器</th><th>类型</th><th>上行</th><th>下行</th><th>合计</th><th aria-label="操作" /></tr></thead><tbody>{filteredNodes.map((item) => (
-              <tr key={item.node_id}>
-                <td><strong>{item.node_name}</strong></td>
-                <td>{item.server_name || "-"}</td>
-                <td><Badge tone={item.node_type === "routed" ? "info" : "neutral"}>{item.node_type === "routed" ? "路由节点" : "入站节点"}</Badge></td>
-                <td>{formatBytes(item.uplink)}</td>
-                <td>{formatBytes(item.downlink)}</td>
-                <td><strong>{formatBytes(item.uplink + item.downlink)}</strong></td>
-                <td className="actions-cell"><IconButton label={`查看 ${item.node_name} 用户流量`} onClick={() => setDrilldown({ kind: "node", id: String(item.node_id), title: item.node_name })}><ChevronRight size={17} /></IconButton></td>
-              </tr>
-            ))}</tbody></table></div>
-          )}
+            )}
+          </div>
         </Surface>
       ) : null}
 

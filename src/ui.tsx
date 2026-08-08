@@ -4,12 +4,12 @@ import { AlertCircle, CheckCircle2, LoaderCircle, TriangleAlert, X } from "lucid
 let dialogScrollLocks = 0;
 let bodyOverflowBeforeDialogs = "";
 
-export function Button({ className = "", variant = "primary", ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "danger" | "ghost" }) {
-  return <button className={`button button-${variant} ${className}`} {...props} />;
+export function Button({ className = "", variant = "primary", type = "button", ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "danger" | "ghost" }) {
+  return <button type={type} className={`button button-${variant} ${className}`} {...props} />;
 }
 
-export function IconButton({ label, className = "", ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
-  return <button className={`icon-button ${className}`} aria-label={label} title={label} {...props} />;
+export function IconButton({ label, className = "", type = "button", ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
+  return <button type={type} className={`icon-button ${className}`} aria-label={label} title={label} {...props} />;
 }
 
 export function Badge({ tone = "neutral", children }: { tone?: "good" | "warn" | "bad" | "info" | "neutral"; children: ReactNode }) {

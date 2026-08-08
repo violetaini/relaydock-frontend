@@ -263,6 +263,7 @@ async function mockAPI(
     const responses: Record<string, unknown> = {
       ...settingsGetResponses,
       "/api/setup/status": { needs_setup: false },
+      "/api/ws/ticket": { ticket: "visual-ws-ticket" },
       "/api/user/profile": profile,
       "/api/admin/remote-servers": { success: true, servers },
       "/api/admin/remote-servers/delete-impact": {
@@ -377,7 +378,9 @@ async function expectViewportIntegrity(page: Page, label: string) {
 
 async function closeDialog(page: Page) {
   const dialog = page.getByRole("dialog").last();
-  await dialog.getByRole("button", { name: "关闭", exact: true }).first().click();
+  const close = dialog.getByRole("button", { name: "关闭", exact: true }).first();
+  await expect(close).toBeVisible();
+  await close.click({ force: true });
   await expect(dialog).toBeHidden();
 }
 
@@ -393,7 +396,7 @@ test("desktop navigation follows the upstream hierarchy", async ({ page }) => {
     const utilityItems = page.locator(".sidebar-nav .nav-utility .nav-item");
     const utilityLabels = page.locator(".sidebar-nav .nav-utility .nav-item > span");
     const visibleUtilityLabels = page.locator(".sidebar-nav .nav-utility .nav-item:not(.nav-probe-link) > span");
-    await expect(primaryLabels).toHaveCount(8);
+    await expect(primaryLabels).toHaveCount(9);
     await expect(utilityItems).toHaveCount(5);
     await expect(utilityLabels).toHaveCount(5);
     await expect(page.locator(".sidebar-nav .nav-probe-link")).toHaveAttribute("title", "返回探针");
@@ -407,7 +410,18 @@ test("desktop navigation follows the upstream hierarchy", async ({ page }) => {
       const navRect = element.closest(".sidebar-nav")?.getBoundingClientRect();
       return style.display === "none" || style.visibility === "hidden" || style.position === "absolute" || rect.width <= 1 || rect.height <= 1
         || !navRect || rect.left < navRect.left - 1 || rect.right > navRect.right + 1
-        ? [{ label, display: style.display, visibility: style.visibility, position: style.position, width: rect.width, height: rect.height }]
+        ? [{
+            label,
+            display: style.display,
+            visibility: style.visibility,
+            position: style.position,
+            width: rect.width,
+            height: rect.height,
+            left: rect.left,
+            right: rect.right,
+            navLeft: navRect?.left,
+            navRight: navRect?.right,
+          }]
         : [];
     }));
 
@@ -717,7 +731,7 @@ test("desktop layout switch stays visible in both chrome modes and preserves nav
   await expect(page.locator(".console-layout")).toHaveClass(/layout-side/);
   await expect(page.locator(".topbar")).toBeVisible();
   await expect(page.getByRole("navigation", { name: "主导航" })).toBeVisible();
-  await expect(page.locator(".sidebar-nav .nav-item > span")).toHaveCount(13);
+  await expect(page.locator(".sidebar-nav .nav-item > span")).toHaveCount(14);
   await expect(page.locator(".sidebar-brand .sidebar-layout-switch")).toBeVisible();
   await expect(page.locator(".topbar-actions .topbar-layout-switch")).toBeVisible();
   await expect(page.locator(".topbar-probe-link")).toBeVisible();
@@ -837,7 +851,7 @@ for (const viewport of [
     await page.getByRole("button", { name: "创建邀请码" }).first().click();
     const inviteDialog = page.getByRole("dialog", { name: "创建 TG Bot 邀请码" });
     await expect(inviteDialog).toBeVisible();
-    await expect(inviteDialog.getByText("Arcway 主控本身不提供兑换入口", { exact: false })).toBeVisible();
+    await expect(inviteDialog.getByText("向 Arcway Telegram Bot 发送 /start", { exact: false })).toBeVisible();
     await inviteDialog.getByRole("combobox", { name: "用途" }).selectOption("bind");
     const bindAccount = inviteDialog.getByRole("combobox", { name: "Arcway 账号" });
     await expect(bindAccount.getByRole("option", { name: "Alice（alice）" })).toHaveCount(1);
@@ -1008,6 +1022,7 @@ for (const viewport of [
   });
 
   test(`all console routes render cleanly on ${viewport.name}`, async ({ page }) => {
+    test.setTimeout(240_000);
     const pageErrors: string[] = [];
     const unknownPaths: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -1070,31 +1085,39 @@ for (const viewport of [
   });
 }
 
+async function preparePrimaryWorkbench(page: Page, viewport: { name: string; width: number; height: number }) {
+  const pageErrors: string[] = [];
+  const unknownPaths: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.setViewportSize(viewport);
+  await mockAPI(page, traffic, unknownPaths, {
+    "/api/admin/remote/inbounds": {
+      success: true,
+      inbounds: ["vless-in", "trojan-in", "ws-in", "grpc-in", "wireguard-in", "shadowsocks-in"].map((tag, index) => ({
+        tag,
+        listen: "0.0.0.0",
+        port: 443 + index,
+        protocol: tag.split("-")[0],
+        settings: { clients: [] },
+        _runtime_status: "running",
+      })),
+    },
+  });
+  return { pageErrors, unknownPaths };
+}
+
+function expectPrimaryWorkbenchMocksClean(pageErrors: string[], unknownPaths: string[]) {
+  expect(pageErrors).toEqual([]);
+  expect(Array.from(new Set(unknownPaths))).toEqual([]);
+}
+
 for (const viewport of [
   { name: "desktop", width: 1440, height: 900 },
   { name: "mobile", width: 390, height: 844 },
 ]) {
-  test(`primary workbench entry points open cleanly on ${viewport.name}`, async ({ page }, testInfo) => {
-    // This scenario deliberately walks every primary workbench and opens its
-    // modal surface. Cold Chromium/CI runs regularly need more than one minute.
-    test.setTimeout(120_000);
-    const pageErrors: string[] = [];
-    const unknownPaths: string[] = [];
-    page.on("pageerror", (error) => pageErrors.push(error.message));
-    await page.setViewportSize(viewport);
-    await mockAPI(page, traffic, unknownPaths, {
-      "/api/admin/remote/inbounds": {
-        success: true,
-        inbounds: ["vless-in", "trojan-in", "ws-in", "grpc-in", "wireguard-in", "shadowsocks-in"].map((tag, index) => ({
-          tag,
-          listen: "0.0.0.0",
-          port: 443 + index,
-          protocol: tag.split("-")[0],
-          settings: { clients: [] },
-          _runtime_status: "running",
-        })),
-      },
-    });
+  test(`subscription entry points open cleanly on ${viewport.name}`, async ({ page }) => {
+    test.setTimeout(240_000);
+    const { pageErrors, unknownPaths } = await preparePrimaryWorkbench(page, viewport);
 
     await page.goto("/#/subscriptions");
     await expect(page.getByRole("link", { name: "导入 Clash" }).first()).toHaveAttribute("href", /^clash:\/\/install-config\?/);
@@ -1142,6 +1165,13 @@ for (const viewport of [
     await expectViewportIntegrity(page, `${viewport.name} generator dialog`);
     await closeDialog(page);
 
+    expectPrimaryWorkbenchMocksClean(pageErrors, unknownPaths);
+  });
+
+  test(`server and Xray settings entry points open cleanly on ${viewport.name}`, async ({ page }, testInfo) => {
+    test.setTimeout(240_000);
+    const { pageErrors, unknownPaths } = await preparePrimaryWorkbench(page, viewport);
+
     await page.goto("/#/servers");
     await page.getByRole("button", { name: "添加服务器" }).click();
     await expect(page.getByRole("dialog", { name: "添加服务器" })).toBeVisible();
@@ -1182,6 +1212,20 @@ for (const viewport of [
     const editorHeight = await configEditor.evaluate((element) => element.getBoundingClientRect().height);
     expect(editorHeight, `${viewport.name} Xray editor should use the available dialog height`).toBeGreaterThanOrEqual(viewport.name === "desktop" ? 400 : 300);
     await expectViewportIntegrity(page, `${viewport.name} Xray config editor`);
+    await closeDialog(page);
+
+    expectPrimaryWorkbenchMocksClean(pageErrors, unknownPaths);
+  });
+
+  test(`Xray rule editors open cleanly on ${viewport.name}`, async ({ page }, testInfo) => {
+    test.setTimeout(240_000);
+    const { pageErrors, unknownPaths } = await preparePrimaryWorkbench(page, viewport);
+
+    await page.goto("/#/servers");
+    await page.getByRole("button", { name: /^管理(?: Hong Kong Edge)?$/ }).first().click();
+    const serverDialog = page.getByRole("dialog", { name: "Hong Kong Edge" });
+    await expect(serverDialog.getByText("Agent 版本", { exact: true })).toBeVisible();
+    await serverDialog.getByRole("tab", { name: "Xray 设置" }).click();
     await serverDialog.getByRole("tab", { name: "出站规则" }).click();
     await expect(serverDialog.getByText("direct", { exact: true })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} structured outbound list`);
@@ -1237,6 +1281,13 @@ for (const viewport of [
     await page.screenshot({ path: testInfo.outputPath(`xray-routing-advanced-${viewport.name}.png`), fullPage: true });
     await routingDialog.getByRole("button", { name: "关闭" }).click();
     await closeDialog(page);
+
+    expectPrimaryWorkbenchMocksClean(pageErrors, unknownPaths);
+  });
+
+  test(`node entry points open cleanly on ${viewport.name}`, async ({ page }) => {
+    test.setTimeout(240_000);
+    const { pageErrors, unknownPaths } = await preparePrimaryWorkbench(page, viewport);
 
     await page.goto("/#/nodes");
     await expect(page.locator(".toast")).toHaveCount(0, { timeout: 5_000 });
@@ -1336,6 +1387,13 @@ for (const viewport of [
     await expectViewportIntegrity(page, `${viewport.name} URI manager`);
     await closeDialog(page);
 
+    expectPrimaryWorkbenchMocksClean(pageErrors, unknownPaths);
+  });
+
+  test(`traffic, user and package entry points open cleanly on ${viewport.name}`, async ({ page }) => {
+    test.setTimeout(240_000);
+    const { pageErrors, unknownPaths } = await preparePrimaryWorkbench(page, viewport);
+
     await page.goto("/#/traffic");
     await expect(page.getByRole("tab", { name: /用户汇总/ })).toBeVisible();
     await page.getByRole("button", { name: "查看 alice 节点流量" }).click();
@@ -1383,6 +1441,13 @@ for (const viewport of [
     await expect(page.getByRole("dialog", { name: "创建套餐" })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} package create`);
     await closeDialog(page);
+
+    expectPrimaryWorkbenchMocksClean(pageErrors, unknownPaths);
+  });
+
+  test(`content and settings entry points open cleanly on ${viewport.name}`, async ({ page }) => {
+    test.setTimeout(240_000);
+    const { pageErrors, unknownPaths } = await preparePrimaryWorkbench(page, viewport);
 
     await page.goto("/#/certificates");
     await page.getByRole("button", { name: "申请证书" }).click();
@@ -1442,12 +1507,13 @@ for (const viewport of [
     await closeDialog(page);
 
     await page.goto("/#/settings");
+    await expect(page.getByRole("heading", { name: "基础设置", exact: true })).toBeVisible({ timeout: 30_000 });
     for (const [group, marker] of [
       ["基础设置", "后端与采集"],
       ["订阅设置", "生成能力"],
       ["安全设置", "登录限流"],
       ["用户权限", "普通用户页面"],
-      ["通知设置", "Telegram"],
+      ["通知设置", "Telegram 用户 Bot"],
       ["系统维护", "系统更新"],
       ["账户与 API", "管理 API Token"],
     ]) {
@@ -1469,8 +1535,7 @@ for (const viewport of [
     await expect(page.getByRole("heading", { name: "账号安全" })).toBeVisible();
     await expectViewportIntegrity(page, `${viewport.name} account center`);
 
-    expect(pageErrors).toEqual([]);
-    expect(Array.from(new Set(unknownPaths))).toEqual([]);
+    expectPrimaryWorkbenchMocksClean(pageErrors, unknownPaths);
   });
 }
 

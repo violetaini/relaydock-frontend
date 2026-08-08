@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import {
   Activity,
   ArrowDown,
@@ -44,6 +44,7 @@ import {
 } from "lucide-react";
 import { api, openDashboardSocket, requestStream } from "./api";
 import { CountryFlag } from "./country-flag";
+import { NAVIGATION_REQUEST_EVENT, type NavigationRequestDetail } from "./navigation-guard";
 import type { NginxMode, RealtimeMessage, RemoteServer, ServerListResponse, SharedServerToken } from "./types";
 import {
   buildTrojanInbound,
@@ -1441,6 +1442,7 @@ export function ServicesWorkbenchPage({ notify }: { notify: Notify }) {
   const [quickConfirm, setQuickConfirm] = useState<QuickXrayConfirmation | null>(null);
   const [quickTerminal, setQuickTerminal] = useState<ServiceTerminalState | null>(null);
   const serverListRefresh = useRef<Promise<void> | null>(null);
+  const serverListGeneration = useRef(0);
   const serviceRefreshes = useRef(new Set<number>());
 
   const load = useCallback(async (quiet = false) => {
@@ -1450,6 +1452,7 @@ export function ServicesWorkbenchPage({ notify }: { notify: Notify }) {
       return;
     }
 
+    const generation = serverListGeneration.current;
     const refresh = (async () => {
       if (!quiet) {
         setLoading(true);
@@ -1457,6 +1460,7 @@ export function ServicesWorkbenchPage({ notify }: { notify: Notify }) {
       }
       try {
         const response = assertSuccess(await api.get<ServerListResponse>("/api/admin/remote-servers"), "服务器列表加载失败");
+        if (generation !== serverListGeneration.current) return;
         setServers((response.servers ?? []) as ManagedServer[]);
         setSelected((current) => current.filter((id) => (response.servers ?? []).some((server) => server.id === id)));
       } catch (reason) {
@@ -1543,6 +1547,7 @@ export function ServicesWorkbenchPage({ notify }: { notify: Notify }) {
   useEffect(() => openDashboardSocket((payload) => {
     const message = payload as RealtimeMessage;
     if (message.type === "realtime" && message.servers) {
+      serverListGeneration.current += 1;
       setServers(message.servers as ManagedServer[]);
       return;
     }
@@ -1564,7 +1569,13 @@ export function ServicesWorkbenchPage({ notify }: { notify: Notify }) {
 
   useEffect(() => {
     if (dashboardConnected) return;
-    const timer = window.setInterval(() => { void load(true); }, serviceManagementRefreshIntervalMs);
+    let inFlight = false;
+    const poll = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try { await load(true); } finally { inFlight = false; }
+    };
+    const timer = window.setInterval(() => { void poll(); }, serviceManagementRefreshIntervalMs);
     return () => window.clearInterval(timer);
   }, [dashboardConnected, load]);
 
@@ -1591,7 +1602,13 @@ export function ServicesWorkbenchPage({ notify }: { notify: Notify }) {
   useEffect(() => {
     const fallbackIDs = fallbackStatusKey.split(",").map(Number).filter(Boolean);
     if (!fallbackIDs.length) return;
-    const timer = window.setInterval(() => { void refreshServiceStatuses(fallbackIDs); }, serviceManagementRefreshIntervalMs);
+    let inFlight = false;
+    const poll = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try { await refreshServiceStatuses(fallbackIDs); } finally { inFlight = false; }
+    };
+    const timer = window.setInterval(() => { void poll(); }, serviceManagementRefreshIntervalMs);
     return () => window.clearInterval(timer);
   }, [fallbackStatusKey, refreshServiceStatuses]);
 
@@ -1600,8 +1617,14 @@ export function ServicesWorkbenchPage({ notify }: { notify: Notify }) {
     const targetSet = new Set(targetIDs);
     setAgentVersions((current) => Object.fromEntries(Object.entries(current).filter(([id]) => targetSet.has(Number(id)))));
     if (!targetIDs.length) return;
-    void refreshAgentVersions(targetIDs);
-    const timer = window.setInterval(() => { void refreshAgentVersions(targetIDs); }, 10 * 60_000);
+    let inFlight = false;
+    const poll = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try { await refreshAgentVersions(targetIDs); } finally { inFlight = false; }
+    };
+    void poll();
+    const timer = window.setInterval(() => { void poll(); }, 10 * 60_000);
     return () => window.clearInterval(timer);
   }, [refreshAgentVersions, versionTargetKey]);
 
@@ -2794,6 +2817,25 @@ function XrayTagPicker({ label, description, ariaLabel, values, options, onChang
 type OperationTab = "overview" | "services" | "speedtest" | "xray" | "sharing";
 type XraySettingsTab = "basic" | "routing" | "outbounds" | "dns" | "warp" | "advanced";
 
+function handleTabKey<T extends string>(event: ReactKeyboardEvent<HTMLButtonElement>, keys: readonly T[], current: T, select: (next: T) => boolean | void) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key) || keys.length === 0) return;
+  event.preventDefault();
+  const currentIndex = Math.max(0, keys.indexOf(current));
+  const nextIndex = event.key === "Home"
+    ? 0
+    : event.key === "End"
+      ? keys.length - 1
+      : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + keys.length) % keys.length;
+  const next = keys[nextIndex];
+  if (select(next) === false) return;
+  const tablist = event.currentTarget.parentElement;
+  window.requestAnimationFrame(() => {
+    Array.from(tablist?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [])
+      .find((button) => button.dataset.tabKey === next)
+      ?.focus();
+  });
+}
+
 function ServerOperationsDialog({ server, initialTab = "overview", notify, onClose, onChanged, onUpgrade }: { server: ManagedServer; initialTab?: OperationTab; notify: Notify; onClose: () => void; onChanged: () => Promise<void>; onUpgrade: (version: AgentVersionResponse) => void }) {
   const [tab, setTab] = useState<OperationTab>(initialTab);
   const [xrayTab, setXrayTab] = useState<XraySettingsTab>("basic");
@@ -2812,10 +2854,13 @@ function ServerOperationsDialog({ server, initialTab = "overview", notify, onClo
   const [configPath, setConfigPath] = useState("");
   const [configLoaded, setConfigLoaded] = useState(false);
   const [configDirty, setConfigDirty] = useState(false);
+  const [discardIntent, setDiscardIntent] = useState<{ kind: "close" | "reload" | "tab" | "xray-tab" | "navigation"; tab?: OperationTab; xrayTab?: XraySettingsTab; proceed?: () => void } | null>(null);
+  const [hotMutationWorking, setHotMutationWorking] = useState(false);
   const [dnsDraft, setDNSDraft] = useState("{}");
   const [dnsDraftError, setDNSDraftError] = useState("");
   const [resetBasicConfirm, setResetBasicConfirm] = useState(false);
   const configLoadAttempted = useRef(false);
+  const allowNextNavigation = useRef(false);
   const [shares, setShares] = useState<SharedServerToken[]>([]);
   const [shareLabel, setShareLabel] = useState("");
   const [newShareToken, setNewShareToken] = useState("");
@@ -2953,8 +2998,10 @@ function ServerOperationsDialog({ server, initialTab = "overview", notify, onClo
       setConfigDirty(false);
       setDNSDraft(JSON.stringify(xrayConfigSection(nextConfig, "dns"), null, 2));
       setDNSDraftError("");
+      return true;
     } catch (reason) {
       setError(messageFrom(reason, "读取 Xray 配置失败"));
+      return false;
     } finally {
       setWorking("");
     }
@@ -2965,6 +3012,29 @@ function ServerOperationsDialog({ server, initialTab = "overview", notify, onClo
     configLoadAttempted.current = true;
     void loadConfig();
   }, [configLoaded, loadConfig, tab]);
+
+  useEffect(() => {
+    if (!configDirty) return;
+    const preventDiscard = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", preventDiscard);
+    const preventNavigation = (event: Event) => {
+      if (allowNextNavigation.current) {
+        allowNextNavigation.current = false;
+        return;
+      }
+      const request = event as CustomEvent<NavigationRequestDetail>;
+      event.preventDefault();
+      setDiscardIntent({ kind: "navigation", proceed: request.detail.proceed });
+    };
+    window.addEventListener(NAVIGATION_REQUEST_EVENT, preventNavigation);
+    return () => {
+      window.removeEventListener("beforeunload", preventDiscard);
+      window.removeEventListener(NAVIGATION_REQUEST_EVENT, preventNavigation);
+    };
+  }, [configDirty]);
 
   const updateConfigObject = (update: (draft: Record<string, unknown>) => void) => {
     const parsed = parseXrayConfigObject(config);
@@ -2978,10 +3048,79 @@ function ServerOperationsDialog({ server, initialTab = "overview", notify, onClo
     setError("");
   };
 
-  const selectXrayTab = (next: XraySettingsTab) => {
+  const applyXrayTab = (next: XraySettingsTab) => {
     if (next === "dns") setDNSDraft(JSON.stringify(xrayConfigSection(config, "dns"), null, 2));
     if (next !== "dns") setDNSDraftError("");
     setXrayTab(next);
+  };
+
+  const selectXrayTab = (next: XraySettingsTab): boolean => {
+    if (next === xrayTab) return true;
+    if (hotMutationWorking) return false;
+    if (configDirty && (next === "routing" || next === "outbounds" || next === "warp")) {
+      setDiscardIntent({ kind: "xray-tab", xrayTab: next });
+      return false;
+    }
+    applyXrayTab(next);
+    return true;
+  };
+
+  const restoreSavedConfig = () => {
+    setConfig(savedConfig);
+    setConfigDirty(false);
+    setDNSDraft(JSON.stringify(xrayConfigSection(savedConfig, "dns"), null, 2));
+    setDNSDraftError("");
+  };
+
+  const performDiscardIntent = (intent: NonNullable<typeof discardIntent>) => {
+    setDiscardIntent(null);
+    if (intent.kind === "close") {
+      onClose();
+      return;
+    }
+    restoreSavedConfig();
+    if (intent.kind === "navigation") {
+      allowNextNavigation.current = true;
+      intent.proceed?.();
+      return;
+    }
+    if (intent.kind === "reload") {
+      void loadConfig();
+      return;
+    }
+    if (intent.kind === "xray-tab" && intent.xrayTab) {
+      applyXrayTab(intent.xrayTab);
+      return;
+    }
+    if (intent.tab) setTab(intent.tab);
+  };
+
+  const requestDiscardIntent = (intent: NonNullable<typeof discardIntent>) => {
+    if (working || hotMutationWorking) return;
+    if (configDirty) {
+      setDiscardIntent(intent);
+      return;
+    }
+    performDiscardIntent(intent);
+  };
+
+  const selectOperationTab = (next: OperationTab): boolean => {
+    if (hotMutationWorking) return false;
+    if (next !== tab && tab === "xray" && configDirty) {
+      requestDiscardIntent({ kind: "tab", tab: next });
+      return false;
+    }
+    setTab(next);
+    return true;
+  };
+
+  const syncHotXrayMutation = async () => {
+    const synced = await loadConfig();
+    await onChanged();
+    if (!synced) {
+      setConfigLoaded(false);
+      throw new Error("热更新已生效，但完整配置重新读取失败，请重新读取后再继续编辑");
+    }
   };
 
   const updateDNS = (value: string) => {
@@ -3142,18 +3281,18 @@ function ServerOperationsDialog({ server, initialTab = "overview", notify, onClo
   const agentUpgradeAvailable = Boolean(version?.upgrade_available && cleanVersion(version.latest) && !version.latest_error);
   const agentVersionCurrent = Boolean(version && !version.upgrade_available && cleanVersion(version.latest) && !version.latest_error);
 
-  return <Dialog title={server.name} description={`${server.domain || server.ip_address || "地址待上报"} · ${isConnected(server) ? "Agent 在线" : "Agent 离线"}`} onClose={() => !working && onClose()} wide extraWide={needsExtraWideDialog}><div className="service-operation-tabs" role="tablist">{tabs.map((item) => <button key={item.key} role="tab" aria-selected={tab === item.key} className={tab === item.key ? "is-active" : ""} onClick={() => setTab(item.key)}>{item.icon}{item.label}</button>)}</div>{error ? <ErrorState message={error} onRetry={() => void (tab === "xray" ? loadConfig() : loadStatus())} /> : null}{loading ? <div className="center-state"><Spinner label="正在读取 Agent 状态" /></div> : null}
-    {!loading && tab === "overview" ? <div className="service-overview"><div className="service-overview-grid"><InfoTile label="连接状态" value={isConnected(server) ? "在线" : "离线"} detail={server.encrypted ? "加密 WebSocket" : server.connection_mode} icon={<Wifi size={18} />} /><InfoTile label="Agent 版本" value={version?.current || system?.agent_version || "未知"} detail={version?.latest ? `最新 ${version.latest}` : version?.latest_error || "未读取最新版本"} icon={<UploadCloud size={18} />} /><InfoTile label="主机名" value={system?.hostname || server.name} detail={system?.uptime ? `运行 ${Math.floor(Number(system.uptime) / 3600)} 小时` : relativeTime(server.last_heartbeat)} icon={<Server size={18} />} /><InfoTile label="系统负载" value={system?.loadavg?.split(" ").slice(0, 3).join(" / ") || "暂无"} detail={system?.memory?.MemAvailable ? `可用内存 ${system.memory.MemAvailable}` : "Agent 未上报内存"} icon={<Gauge size={18} />} /></div><Surface className="service-address-panel"><h3>连接与流量</h3><dl><div><dt>IPv4</dt><dd>{server.ip_address || "未上报"}</dd></div><div><dt>IPv6</dt><dd>{server.ipv6_enabled ? server.ip_address_v6 || "未上报" : "已关闭"}</dd></div><div><dt>节点域名</dt><dd>{server.domain || "未设置"}</dd></div><div><dt>Agent 端口</dt><dd>{server.listen_port || 23889}</dd></div><div><dt>统计口径</dt><dd>{server.traffic_source === "system" ? "系统网卡" : "Xray 聚合"} / {server.traffic_stats_mode || "both"}</dd></div><div><dt>本期流量</dt><dd>{formatBytes(server.traffic_used)}{server.traffic_limit ? ` / ${formatBytes(server.traffic_limit)}` : "（不限）"}</dd></div></dl></Surface><DDNSOverviewPanel status={ddnsStatus} working={working === "ddns-test"} onRetry={() => void triggerDDNS()} /><div className="dialog-actions"><Button variant="secondary" onClick={() => void loadStatus()}><RefreshCw size={16} />刷新状态</Button><Button title={agentUpgradeAvailable ? `升级到 v${cleanVersion(version?.latest)}` : agentVersionCurrent ? "当前已是最新版" : version?.latest_error || "未读取到可用的新版本"} onClick={() => version && onUpgrade(version)} disabled={!isConnected(server) || !agentUpgradeAvailable}><UploadCloud size={16} />{agentUpgradeAvailable ? "升级 Agent" : agentVersionCurrent ? "已是最新版" : "暂不可升级"}</Button></div></div> : null}
-    {!loading && tab === "services" ? <div className="service-control-stack">{reusesExistingNginx ? <div className="service-nginx-reuse-notice" role="note"><ShieldCheck size={18} /><span><strong>正在复用系统已有 Nginx</strong><small>Arcway 仅下发独立站点配置并执行预检与安全重载，不安装、不卸载、不覆盖主配置，也不接管服务启停。</small></span></div> : null}<ServiceControlCard name="Xray" state={status?.xray} fallbackVersion={server.xray_version} working={working} embeddedCore={server.xray_mode === "embedded"} allowCoreMaintenance={!server.is_federated} onAction={(action) => action === "stop" ? setConfirm({ service: "xray", action }) : void serviceAction("xray", action)} onUpdate={() => setConfirm({ service: "xray", action: "update" })} onRemove={() => setConfirm({ service: "xray", action: "remove" })} /><ServiceControlCard name="Nginx" state={status?.nginx} working={working} externallyManaged={reusesExistingNginx} onAction={(action) => action === "stop" ? setConfirm({ service: "nginx", action }) : void serviceAction("nginx", action)} onRemove={() => setConfirm({ service: "nginx", action: "remove" })} /></div> : null}
-    {!loading && tab === "speedtest" ? <ServerSpeedtestPanel server={server} notify={notify} /> : null}
-    {!loading && tab === "xray" ? <div className="xray-settings-shell">
-      <div className="xray-settings-tabs" role="tablist" aria-label="Xray 设置分类">{xrayTabs.map((item) => <button key={item.key} role="tab" aria-selected={xrayTab === item.key} className={xrayTab === item.key ? "is-active" : ""} onClick={() => selectXrayTab(item.key)}>{item.icon}{item.label}</button>)}</div>
-      {xrayTab === "routing" ? <XrayRoutingWorkbench serverId={server.id} notify={notify} /> : null}
-      {xrayTab === "outbounds" ? <XrayResourcesWorkbench serverId={server.id} serverDomain={server.domain} serverIPv4={server.ip_address} serverIPv6={server.ip_address_v6} kind="outbound" notify={notify} /> : null}
-      {xrayTab === "warp" && !server.is_federated ? <WarpManagement server={server} notify={notify} configDirty={configDirty} onChanged={async () => { await loadConfig(); await onChanged(); }} /> : null}
-      {xrayTab === "basic" || xrayTab === "dns" || xrayTab === "advanced" ? <div className="service-config-panel">
+  return <Dialog title={server.name} description={`${server.domain || server.ip_address || "地址待上报"} · ${isConnected(server) ? "Agent 在线" : "Agent 离线"}`} onClose={() => requestDiscardIntent({ kind: "close" })} wide extraWide={needsExtraWideDialog}><div className="service-operation-tabs" role="tablist" aria-label="服务器管理分类">{tabs.map((item) => <button type="button" id={`service-operation-${item.key}`} data-tab-key={item.key} key={item.key} role="tab" tabIndex={tab === item.key ? 0 : -1} aria-selected={tab === item.key} aria-controls={`service-panel-${item.key}`} className={tab === item.key ? "is-active" : ""} disabled={hotMutationWorking && tab !== item.key} onKeyDown={(event) => handleTabKey(event, tabs.map((entry) => entry.key), tab, selectOperationTab)} onClick={() => selectOperationTab(item.key)}>{item.icon}{item.label}</button>)}</div>{error ? <ErrorState message={error} onRetry={() => tab === "xray" ? requestDiscardIntent({ kind: "reload" }) : void loadStatus()} /> : null}{loading ? <div className="center-state"><Spinner label="正在读取 Agent 状态" /></div> : null}
+    {!loading && tab === "overview" ? <div id="service-panel-overview" role="tabpanel" aria-labelledby="service-operation-overview" className="service-overview"><div className="service-overview-grid"><InfoTile label="连接状态" value={isConnected(server) ? "在线" : "离线"} detail={server.encrypted ? "加密 WebSocket" : server.connection_mode} icon={<Wifi size={18} />} /><InfoTile label="Agent 版本" value={version?.current || system?.agent_version || "未知"} detail={version?.latest ? `最新 ${version.latest}` : version?.latest_error || "未读取最新版本"} icon={<UploadCloud size={18} />} /><InfoTile label="主机名" value={system?.hostname || server.name} detail={system?.uptime ? `运行 ${Math.floor(Number(system.uptime) / 3600)} 小时` : relativeTime(server.last_heartbeat)} icon={<Server size={18} />} /><InfoTile label="系统负载" value={system?.loadavg?.split(" ").slice(0, 3).join(" / ") || "暂无"} detail={system?.memory?.MemAvailable ? `可用内存 ${system.memory.MemAvailable}` : "Agent 未上报内存"} icon={<Gauge size={18} />} /></div><Surface className="service-address-panel"><h3>连接与流量</h3><dl><div><dt>IPv4</dt><dd>{server.ip_address || "未上报"}</dd></div><div><dt>IPv6</dt><dd>{server.ipv6_enabled ? server.ip_address_v6 || "未上报" : "已关闭"}</dd></div><div><dt>节点域名</dt><dd>{server.domain || "未设置"}</dd></div><div><dt>Agent 端口</dt><dd>{server.listen_port || 23889}</dd></div><div><dt>统计口径</dt><dd>{server.traffic_source === "system" ? "系统网卡" : "Xray 聚合"} / {server.traffic_stats_mode || "both"}</dd></div><div><dt>本期流量</dt><dd>{formatBytes(server.traffic_used)}{server.traffic_limit ? ` / ${formatBytes(server.traffic_limit)}` : "（不限）"}</dd></div></dl></Surface><DDNSOverviewPanel status={ddnsStatus} working={working === "ddns-test"} onRetry={() => void triggerDDNS()} /><div className="dialog-actions"><Button variant="secondary" onClick={() => void loadStatus()}><RefreshCw size={16} />刷新状态</Button><Button title={agentUpgradeAvailable ? `升级到 v${cleanVersion(version?.latest)}` : agentVersionCurrent ? "当前已是最新版" : version?.latest_error || "未读取到可用的新版本"} onClick={() => version && onUpgrade(version)} disabled={!isConnected(server) || !agentUpgradeAvailable}><UploadCloud size={16} />{agentUpgradeAvailable ? "升级 Agent" : agentVersionCurrent ? "已是最新版" : "暂不可升级"}</Button></div></div> : null}
+    {!loading && tab === "services" ? <div id="service-panel-services" role="tabpanel" aria-labelledby="service-operation-services" className="service-control-stack">{reusesExistingNginx ? <div className="service-nginx-reuse-notice" role="note"><ShieldCheck size={18} /><span><strong>正在复用系统已有 Nginx</strong><small>Arcway 仅下发独立站点配置并执行预检与安全重载，不安装、不卸载、不覆盖主配置，也不接管服务启停。</small></span></div> : null}<ServiceControlCard name="Xray" state={status?.xray} fallbackVersion={server.xray_version} working={working} embeddedCore={server.xray_mode === "embedded"} allowCoreMaintenance={!server.is_federated} onAction={(action) => action === "stop" ? setConfirm({ service: "xray", action }) : void serviceAction("xray", action)} onUpdate={() => setConfirm({ service: "xray", action: "update" })} onRemove={() => setConfirm({ service: "xray", action: "remove" })} /><ServiceControlCard name="Nginx" state={status?.nginx} working={working} externallyManaged={reusesExistingNginx} onAction={(action) => action === "stop" ? setConfirm({ service: "nginx", action }) : void serviceAction("nginx", action)} onRemove={() => setConfirm({ service: "nginx", action: "remove" })} /></div> : null}
+    {!loading && tab === "speedtest" ? <div id="service-panel-speedtest" role="tabpanel" aria-labelledby="service-operation-speedtest"><ServerSpeedtestPanel server={server} notify={notify} /></div> : null}
+    {!loading && tab === "xray" ? <div id="service-panel-xray" role="tabpanel" aria-labelledby="service-operation-xray" className="xray-settings-shell">
+      <div className="xray-settings-tabs" role="tablist" aria-label="Xray 设置分类">{xrayTabs.map((item) => <button type="button" id={`xray-setting-${item.key}`} data-tab-key={item.key} key={item.key} role="tab" tabIndex={xrayTab === item.key ? 0 : -1} aria-selected={xrayTab === item.key} aria-controls={`xray-panel-${item.key}`} className={xrayTab === item.key ? "is-active" : ""} disabled={hotMutationWorking && xrayTab !== item.key} onKeyDown={(event) => handleTabKey(event, xrayTabs.map((entry) => entry.key), xrayTab, selectXrayTab)} onClick={() => selectXrayTab(item.key)}>{item.icon}{item.label}</button>)}</div>
+      {xrayTab === "routing" ? <div id="xray-panel-routing" role="tabpanel" aria-labelledby="xray-setting-routing"><XrayRoutingWorkbench serverId={server.id} notify={notify} onChanged={syncHotXrayMutation} onMutationStateChange={setHotMutationWorking} /></div> : null}
+      {xrayTab === "outbounds" ? <div id="xray-panel-outbounds" role="tabpanel" aria-labelledby="xray-setting-outbounds"><XrayResourcesWorkbench serverId={server.id} serverDomain={server.domain} serverIPv4={server.ip_address} serverIPv6={server.ip_address_v6} kind="outbound" notify={notify} onChanged={syncHotXrayMutation} onMutationStateChange={setHotMutationWorking} /></div> : null}
+      {xrayTab === "warp" && !server.is_federated ? <div id="xray-panel-warp" role="tabpanel" aria-labelledby="xray-setting-warp"><WarpManagement server={server} notify={notify} configDirty={configDirty} onChanged={async () => { await loadConfig(); await onChanged(); }} /></div> : null}
+      {xrayTab === "basic" || xrayTab === "dns" || xrayTab === "advanced" ? <div id={`xray-panel-${xrayTab}`} role="tabpanel" aria-labelledby={`xray-setting-${xrayTab}`} className="service-config-panel">
         {!configLoaded ? <EmptyState icon={<Code2 size={23} />} title={working === "config-load" ? "正在读取 Xray 配置" : "暂未读取 Xray 配置"} description="配置直接来自目标服务器。" action={working === "config-load" ? <Spinner label="正在读取" /> : <Button onClick={() => void loadConfig()}><Clipboard size={16} />读取配置</Button>} /> : <>
-          <div className="service-config-head xray-settings-toolbar"><span><strong>{configPath || "config.json"}</strong><small className={configDirty ? "is-dirty" : ""}>{configDirty ? "存在未保存更改" : "已与 Agent 同步"}</small></span><div><Button variant="ghost" onClick={() => void loadConfig()} disabled={Boolean(working)}><RefreshCw size={15} />重新读取</Button><Button variant="secondary" onClick={() => void testConfig()} disabled={Boolean(working) || !config.trim() || Boolean(dnsDraftError)}>{working === "config-test" ? <Spinner label="预检中" /> : <><ShieldCheck size={15} />预检</>}</Button><Button onClick={() => void saveConfig()} disabled={Boolean(working) || !configDirty || Boolean(dnsDraftError)}>{working === "config-save" ? <Spinner label="应用中" /> : <><Check size={15} />保存并应用</>}</Button><Button variant="secondary" title={configDirty ? "请先保存配置" : "重启当前 Xray 服务"} onClick={() => void restartXray()} disabled={Boolean(working) || configDirty}>{working === "config-restart" ? <Spinner label="重启中" /> : <><RotateCw size={15} />重启 Xray</>}</Button></div></div>
+          <div className="service-config-head xray-settings-toolbar"><span><strong>{configPath || "config.json"}</strong><small className={configDirty ? "is-dirty" : ""}>{configDirty ? "存在未保存更改" : "已与 Agent 同步"}</small></span><div><Button variant="ghost" onClick={() => requestDiscardIntent({ kind: "reload" })} disabled={Boolean(working)}><RefreshCw size={15} />重新读取</Button><Button variant="secondary" onClick={() => void testConfig()} disabled={Boolean(working) || !config.trim() || Boolean(dnsDraftError)}>{working === "config-test" ? <Spinner label="预检中" /> : <><ShieldCheck size={15} />预检</>}</Button><Button onClick={() => void saveConfig()} disabled={Boolean(working) || !configDirty || Boolean(dnsDraftError)}>{working === "config-save" ? <Spinner label="应用中" /> : <><Check size={15} />保存并应用</>}</Button><Button variant="secondary" title={configDirty ? "请先保存配置" : "重启当前 Xray 服务"} onClick={() => void restartXray()} disabled={Boolean(working) || configDirty}>{working === "config-restart" ? <Spinner label="重启中" /> : <><RotateCw size={15} />重启 Xray</>}</Button></div></div>
           {xrayTab === "basic" ? parsedConfig && basicSettings ? <div className="xray-basic-settings">
             <div className="xray-settings-summary"><div><small>Xray 状态</small><strong>{status?.xray?.running ? "运行中" : "已停止"}</strong></div><div><small>入站</small><strong>{xrayConfigArrayLength(parsedConfig.inbounds)}</strong></div><div><small>出站</small><strong>{xrayConfigArrayLength(parsedConfig.outbounds)}</strong></div><div><small>路由规则</small><strong>{routingRules.length}</strong></div><div><small>DNS 服务器</small><strong>{dnsServers.length}</strong></div></div>
             <details className="xray-settings-group" open><summary><span><strong>常规配置</strong><small>域名解析与路由匹配策略</small></span><ChevronDown size={17} /></summary><div className="xray-setting-list">
@@ -3192,10 +3331,11 @@ function ServerOperationsDialog({ server, initialTab = "overview", notify, onClo
         </>}
       </div> : null}
     </div> : null}
-    {!loading && tab === "sharing" ? <div className="service-sharing"><form onSubmit={createShare} className="service-share-create"><Field label="令牌备注"><input required value={shareLabel} onChange={(event) => setShareLabel(event.target.value)} placeholder="提供给分控制端 A" /></Field><Button type="submit" disabled={working === "share-create"}>{working === "share-create" ? <Spinner label="生成中" /> : <><FileKey2 size={16} />生成分享令牌</>}</Button></form>{newShareToken ? <div className="credential-warning"><KeyRound size={19} /><span><strong>仅显示一次</strong><code>{newShareToken}</code></span><IconButton label="复制新分享令牌" onClick={() => navigator.clipboard.writeText(newShareToken).then(() => notify("分享令牌已复制")).catch(() => notify("复制失败", "error"))}><Copy size={17} /></IconButton></div> : null}<div className="service-share-list">{shares.length ? shares.map((share) => <div key={share.id}><span><strong>{share.label || `令牌 #${share.id}`}</strong><small>{share.revoked_at ? `已于 ${share.revoked_at} 吊销` : `创建于 ${share.created_at}`}</small></span><Badge tone={share.revoked_at ? "neutral" : "good"}>{share.revoked_at ? "已吊销" : "有效"}</Badge>{!share.revoked_at ? <IconButton label={`吊销 ${share.label || share.id}`} onClick={() => void revokeShare(share.id)} disabled={working === `share-${share.id}`}><Trash2 size={16} /></IconButton> : null}</div>) : <EmptyState icon={<FileKey2 size={22} />} title="暂无分享令牌" description="生成后可在其他 Arcway 控制端接入这台服务器" />}</div></div> : null}
+    {!loading && tab === "sharing" ? <div id="service-panel-sharing" role="tabpanel" aria-labelledby="service-operation-sharing" className="service-sharing"><form onSubmit={createShare} className="service-share-create"><Field label="令牌备注"><input required value={shareLabel} onChange={(event) => setShareLabel(event.target.value)} placeholder="提供给分控制端 A" /></Field><Button type="submit" disabled={working === "share-create"}>{working === "share-create" ? <Spinner label="生成中" /> : <><FileKey2 size={16} />生成分享令牌</>}</Button></form>{newShareToken ? <div className="credential-warning"><KeyRound size={19} /><span><strong>仅显示一次</strong><code>{newShareToken}</code></span><IconButton label="复制新分享令牌" onClick={() => navigator.clipboard.writeText(newShareToken).then(() => notify("分享令牌已复制")).catch(() => notify("复制失败", "error"))}><Copy size={17} /></IconButton></div> : null}<div className="service-share-list">{shares.length ? shares.map((share) => <div key={share.id}><span><strong>{share.label || `令牌 #${share.id}`}</strong><small>{share.revoked_at ? `已于 ${share.revoked_at} 吊销` : `创建于 ${share.created_at}`}</small></span><Badge tone={share.revoked_at ? "neutral" : "good"}>{share.revoked_at ? "已吊销" : "有效"}</Badge>{!share.revoked_at ? <IconButton label={`吊销 ${share.label || share.id}`} onClick={() => void revokeShare(share.id)} disabled={working === `share-${share.id}`}><Trash2 size={16} /></IconButton> : null}</div>) : <EmptyState icon={<FileKey2 size={22} />} title="暂无分享令牌" description="生成后可在其他 Arcway 控制端接入这台服务器" />}</div></div> : null}
     {confirm?.service === "xray" && confirm.action === "update" ? <XrayVersionDialog server={server} currentVersion={status?.xray?.version || server.xray_version} working={Boolean(working)} onCancel={() => !working && setConfirm(null)} onConfirm={(selectedVersion) => void serviceAction("xray", "update", selectedVersion)} /> : null}
     {confirm && !(confirm.service === "xray" && confirm.action === "update") ? <ConfirmDialog title={confirmTitle} description={confirmDescription} confirmLabel={confirm.action === "remove" ? "确认卸载" : "确认停止"} working={Boolean(working)} onCancel={() => !working && setConfirm(null)} onConfirm={() => void serviceAction(confirm.service, confirm.action)} /> : null}
     {resetBasicConfirm ? <ConfirmDialog title="恢复 Xray 基础默认值" description="只恢复常规策略、统计、日志和本页快捷路由；数据库入站、DNS、自定义复杂路由及其他出站不会改变。恢复后仍需保存并应用。" confirmLabel="确认恢复" working={false} onCancel={() => setResetBasicConfirm(false)} onConfirm={() => { updateConfigObject((draft) => applyXrayBasicDefaults(draft)); setResetBasicConfirm(false); }} /> : null}
+    {discardIntent ? <ConfirmDialog title="丢弃未保存的 Xray 配置" description="当前修改尚未写入 Agent。继续后将恢复最近一次保存的配置。" confirmLabel="丢弃修改" working={false} onCancel={() => setDiscardIntent(null)} onConfirm={() => performDiscardIntent(discardIntent)} /> : null}
     {terminal ? <RemoteServiceTerminalDialog terminal={terminal} onClose={() => !terminal.running && setTerminal(null)} /> : null}
   </Dialog>;
 }
@@ -3209,7 +3349,7 @@ function defaultXrayResource(kind: XrayResourceKind): XrayResource {
   return { tag: "", protocol: "freedom", settings: {} };
 }
 
-function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", serverIPv6 = "", nginxMode = "managed", kind, notify }: { serverId: number; serverDomain?: string; serverIPv4?: string; serverIPv6?: string; nginxMode?: NginxMode; kind: XrayResourceKind; notify: Notify }) {
+function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", serverIPv6 = "", nginxMode = "managed", kind, notify, onChanged, onMutationStateChange }: { serverId: number; serverDomain?: string; serverIPv4?: string; serverIPv6?: string; nginxMode?: NginxMode; kind: XrayResourceKind; notify: Notify; onChanged: () => Promise<void>; onMutationStateChange: (working: boolean) => void }) {
   const plural = kind === "inbound" ? "inbounds" : "outbounds";
   const label = kind === "inbound" ? "入站" : "出站";
   const endpoint = `/api/admin/remote/${plural}?server_id=${serverId}`;
@@ -3599,6 +3739,7 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
     }
 
     setWorking(true);
+    onMutationStateChange(true);
     try {
       if (editor.mode === "edit" && editor.original) {
         const original = cleanXrayResource(editor.original);
@@ -3639,10 +3780,12 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
         setEditor(null);
       }
       await load();
+      await onChanged();
     } catch (reason) {
       setEditorError(messageFrom(reason, `${label}保存失败`));
     } finally {
       setWorking(false);
+      onMutationStateChange(false);
     }
   };
 
@@ -3650,6 +3793,7 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
     if (!deleting) return;
     const deletingTag = xrayResourceTag(deleting);
     setWorking(true);
+    onMutationStateChange(true);
     setEditorError("");
     try {
       assertSuccess(await api.post<ActionResponse>(endpoint, { action: "remove", tag: deletingTag }), `删除${label}失败`);
@@ -3657,11 +3801,13 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
       setDeleting(null);
       if (editor?.original === deleting) setEditor(null);
       await load();
+      await onChanged();
     } catch (reason) {
       setDeleting(null);
       setListError(messageFrom(reason, `删除${label}失败`));
     } finally {
       setWorking(false);
+      onMutationStateChange(false);
     }
   };
 
@@ -3777,7 +3923,7 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
   </div>;
 }
 
-function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: Notify }) {
+function XrayRoutingWorkbench({ serverId, notify, onChanged, onMutationStateChange }: { serverId: number; notify: Notify; onChanged: () => Promise<void>; onMutationStateChange: (working: boolean) => void }) {
   const endpoint = `/api/admin/remote/routing?server_id=${serverId}`;
   const [rules, setRules] = useState<XrayRoutingRule[]>([]);
   const [domainStrategy, setDomainStrategy] = useState("");
@@ -3961,6 +4107,7 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
     }
 
     setWorking(true);
+    onMutationStateChange(true);
     try {
       const request = editing
         ? { action: "replace_rule_hot", index: editing.index, expected_rule: editing.rule, rule }
@@ -3970,27 +4117,32 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
       setEditorOpen(false);
       setEditing(null);
       await load();
+      await onChanged();
     } catch (reason) {
       setEditorError(messageFrom(reason, "创建路由规则失败"));
     } finally {
       setWorking(false);
+      onMutationStateChange(false);
     }
   };
 
   const remove = async () => {
     if (!deleting) return;
     setWorking(true);
+    onMutationStateChange(true);
     setListError("");
     try {
       assertSuccess(await api.post<ActionResponse>(endpoint, { action: "remove_rule_hot", index: deleting.index, expected_rule: deleting.rule }), "删除路由规则失败");
       notify(`路由规则 #${deleting.index + 1} 已删除`);
       setDeleting(null);
       await load();
+      await onChanged();
     } catch (reason) {
       setDeleting(null);
       setListError(messageFrom(reason, "删除路由规则失败"));
     } finally {
       setWorking(false);
+      onMutationStateChange(false);
     }
   };
 
@@ -3998,15 +4150,18 @@ function XrayRoutingWorkbench({ serverId, notify }: { serverId: number; notify: 
     const target = index + direction;
     if (target < 0 || target >= rules.length || working) return;
     setWorking(true);
+    onMutationStateChange(true);
     setListError("");
     try {
       assertSuccess(await api.post<ActionResponse>(endpoint, { action: "move_rule_hot", from: index, to: target, expected_rule: rules[index] }), "调整路由顺序失败");
       notify("路由顺序已调整");
       await load();
+      await onChanged();
     } catch (reason) {
       setListError(messageFrom(reason, "调整路由顺序失败"));
     } finally {
       setWorking(false);
+      onMutationStateChange(false);
     }
   };
 

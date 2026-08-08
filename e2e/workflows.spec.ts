@@ -171,6 +171,7 @@ async function createMock(page: Page) {
     .on("GET", "/api/setup/status", () => json({ needs_setup: false }))
     .on("GET", "/api/public/branding", () => json({ name: "RelayDock", logo: "", favicon: "" }))
     .on("GET", "/api/user/profile", () => json(profile))
+    .on("POST", "/api/ws/ticket", () => json({ ticket: "workflow-ws-ticket" }))
     .on("GET", "/api/admin/remote/services/status", () => json({
       success: true,
       xray: { installed: true, running: true, version: "25.6.8" },

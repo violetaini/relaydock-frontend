@@ -540,8 +540,10 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
   const [userView, setUserView] = useState<"mine" | "catalog">("mine");
   const toolMenuRef = useRef<HTMLDivElement>(null);
   const toolButtonRef = useRef<HTMLButtonElement>(null);
+  const loadRequestRef = useRef(0);
 
   const load = useCallback(async (quiet = false) => {
+    const requestID = ++loadRequestRef.current;
     if (!quiet) setLoading(true);
     setError("");
     try {
@@ -556,6 +558,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
           ? api.get<{ offers?: ManagedNodeOffer[] } | ManagedNodeOffer[]>("/api/admin/managed-node-offers").catch(() => ({ offers: [] }))
           : Promise.resolve({ offers: [] as ManagedNodeOffer[] }),
       ]);
+      if (requestID !== loadRequestRef.current) return;
       const list = nodeResponse.nodes ?? [];
       setNodes(list);
       setOffers(Array.isArray(offerResponse) ? offerResponse : offerResponse.offers ?? []);
@@ -565,9 +568,10 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       setLatest(Object.fromEntries((speedResponse.results ?? []).map((item) => [item.node_id, item])));
       setSelected((current) => new Set([...current].filter((id) => list.some((node) => node.id === id))));
     } catch (reason) {
+      if (requestID !== loadRequestRef.current) return;
       setError(reason instanceof Error ? reason.message : "节点列表加载失败");
     } finally {
-      if (!quiet) setLoading(false);
+      if (requestID === loadRequestRef.current) setLoading(false);
     }
   }, [isAdmin]);
 
@@ -642,7 +646,14 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
   const hasRunning = Object.values(latest).some((result) => result.status === "running");
   useEffect(() => {
     if (!hasRunning) return;
-    const timer = window.setInterval(() => void load(true), 1800);
+    let inFlight = false;
+    const poll = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try { await load(true); }
+      finally { inFlight = false; }
+    };
+    const timer = window.setInterval(() => void poll(), 1800);
     return () => window.clearInterval(timer);
   }, [hasRunning, load]);
 
@@ -768,9 +779,16 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
     confirmLabel: enabled ? "确认启用" : "确认停用",
     tone: "primary",
     run: async () => {
-      await Promise.all(selectedNodes.map((node) => api.put(`/api/admin/nodes/${node.id}`, nodePayload(node, { enabled }))));
-      notify(`已${enabled ? "启用" : "停用"} ${selectedNodes.length} 个节点`);
-      await load(true);
+      const action = enabled ? "启用" : "停用";
+      try {
+        const results = await Promise.allSettled(selectedNodes.map((node) => api.put(`/api/admin/nodes/${node.id}`, nodePayload(node, { enabled }))));
+        const succeeded = results.filter((result) => result.status === "fulfilled").length;
+        const failed = results.length - succeeded;
+        if (failed) notify(`批量${action}完成：成功 ${succeeded}，失败 ${failed}`, "error");
+        else notify(`已${action} ${succeeded} 个节点`);
+      } finally {
+        await load(true);
+      }
     },
   });
 
@@ -779,10 +797,14 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
     description: `将删除选中的 ${selectedNodes.length} 个节点，相关订阅和可定位的远程入站也会被清理。此操作无法撤销。`,
     confirmLabel: `删除 ${selectedNodes.length} 个节点`,
     run: async () => {
-      const result = await api.post<{ deleted?: number; total?: number }>("/api/admin/nodes/batch-delete", { node_ids: selectedNodes.map((node) => node.id) });
-      notify(`已删除 ${result.deleted ?? selectedNodes.length}/${result.total ?? selectedNodes.length} 个节点`);
-      setSelected(new Set());
-      await load(true);
+      try {
+        const result = await api.post<{ deleted?: number; total?: number }>("/api/admin/nodes/batch-delete", { node_ids: selectedNodes.map((node) => node.id) });
+        notify(`已删除 ${result.deleted ?? selectedNodes.length}/${result.total ?? selectedNodes.length} 个节点`);
+      } finally {
+        setPending(null);
+        setSelected(new Set());
+        await load(true);
+      }
     },
   });
 
@@ -839,7 +861,16 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       title: "删除重复节点",
       description: `发现 ${duplicates.length} 个重复节点。每组保留列表中最早的一项，其余项将被删除。`,
       confirmLabel: `删除 ${duplicates.length} 个重复节点`,
-      run: async () => { await api.post("/api/admin/nodes/batch-delete", { node_ids: duplicates.map((node) => node.id) }); notify(`已删除 ${duplicates.length} 个重复节点`); await load(true); },
+      run: async () => {
+        try {
+          await api.post("/api/admin/nodes/batch-delete", { node_ids: duplicates.map((node) => node.id) });
+          notify(`已删除 ${duplicates.length} 个重复节点`);
+        } finally {
+          setPending(null);
+          setSelected(new Set());
+          await load(true);
+        }
+      },
     });
   };
 
@@ -952,8 +983,8 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       {dialog?.kind === "chain" ? <ChainProxyDialog node={dialog.node} nodes={nodes} onClose={closeDialog} onComplete={async () => { closeDialog(); notify("链式代理已更新"); await load(true); }} /> : null}
       {dialog?.kind === "resolve" ? <ResolveIPDialog node={dialog.node} onClose={closeDialog} onComplete={async () => { closeDialog(); notify("节点服务器地址已更新"); await load(true); }} /> : null}
       {dialog?.kind === "region" ? <RegionEmojiDialog node={dialog.node} onClose={closeDialog} onComplete={async () => { closeDialog(); notify("节点地区标识已更新"); await load(true); }} /> : null}
-      {dialog?.kind === "rename" ? <BatchRenameDialog nodes={dialog.nodes} onClose={closeDialog} onComplete={async (count) => { closeDialog(); notify(`已修改 ${count} 个节点名称`); await load(true); }} /> : null}
-      {dialog?.kind === "tags" ? <BatchTagsDialog nodes={dialog.nodes} available={allTags} onClose={closeDialog} onComplete={async (count) => { closeDialog(); notify(`已更新 ${count} 个节点标签`); await load(true); }} /> : null}
+      {dialog?.kind === "rename" ? <BatchRenameDialog nodes={dialog.nodes} onClose={closeDialog} onComplete={async (succeeded, failed) => { closeDialog(); if (failed) notify(`批量改名完成：成功 ${succeeded}，失败 ${failed}`, "error"); else notify(`已修改 ${succeeded} 个节点名称`); await load(true); }} /> : null}
+      {dialog?.kind === "tags" ? <BatchTagsDialog nodes={dialog.nodes} available={allTags} onClose={closeDialog} onComplete={async (succeeded, failed) => { closeDialog(); if (failed) notify(`批量标签更新完成：成功 ${succeeded}，失败 ${failed}`, "error"); else notify(`已更新 ${succeeded} 个节点标签`); await load(true); }} /> : null}
       {dialog?.kind === "speed" ? <SpeedDialog nodes={nodes} initialNodeIDs={dialog.nodeIDs} latest={latest} notify={notify} onClose={closeDialog} onRefresh={() => load(true)} onOpenHistory={(nodeID) => setDialog({ kind: "history", nodeID })} onManageTesters={() => setDialog({ kind: "testers" })} /> : null}
       {dialog?.kind === "history" ? <SpeedHistoryDialog initialNodeID={dialog.nodeID} onClose={closeDialog} /> : null}
       {dialog?.kind === "testers" ? <TestersDialog notify={notify} onClose={closeDialog} /> : null}
@@ -1921,7 +1952,7 @@ export function RegionEmojiDialog({ node, onClose, onComplete }: {
   </Dialog>;
 }
 
-function BatchRenameDialog({ nodes, onClose, onComplete }: { nodes: WorkbenchNode[]; onClose: () => void; onComplete: (count: number) => void }) {
+export function BatchRenameDialog({ nodes, onClose, onComplete }: { nodes: WorkbenchNode[]; onClose: () => void; onComplete: (succeeded: number, failed: number) => void | Promise<void> }) {
   const [names, setNames] = useState(nodes.map((node) => node.node_name));
   const [find, setFind] = useState("");
   const [replace, setReplace] = useState("");
@@ -1934,15 +1965,14 @@ function BatchRenameDialog({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
     setWorking(true); setError("");
     try {
       const result = await api.post<{ success?: number; failed?: number }>("/api/admin/nodes/batch-rename", { updates: nodes.map((node, index) => ({ node_id: node.id, new_name: names[index].trim() })) });
-      if (result.failed) setError(`${result.failed} 个节点改名失败`);
-      else onComplete(result.success ?? nodes.length);
+      await onComplete(result.success ?? Math.max(0, nodes.length - (result.failed ?? 0)), result.failed ?? 0);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "批量改名失败"); }
     finally { setWorking(false); }
   };
   return <Dialog title="批量修改节点名称" description={`按当前选择顺序修改 ${nodes.length} 个节点`} onClose={onClose} wide><div className="form-stack">{error ? <ErrorState message={error} /> : null}<div className="nw-rename-tools"><Field label="查找"><input value={find} onChange={(event) => setFind(event.target.value)} /></Field><Field label="替换为"><input value={replace} onChange={(event) => setReplace(event.target.value)} /></Field><Button variant="secondary" disabled={!find} onClick={() => setNames(names.map((name) => name.split(find).join(replace)))}>替换</Button></div><div className="nw-rename-tools"><Field label="前缀"><input value={prefix} onChange={(event) => setPrefix(event.target.value)} /></Field><Field label="后缀"><input value={suffix} onChange={(event) => setSuffix(event.target.value)} /></Field><Button variant="secondary" disabled={!prefix && !suffix} onClick={() => setNames(names.map((name) => `${prefix}${name}${suffix}`))}>应用</Button></div><Field label={`节点名称（每行一个，共 ${nodes.length} 行）`}><textarea rows={Math.min(16, Math.max(6, nodes.length + 1))} value={names.join("\n")} onChange={(event) => setNames(event.target.value.split("\n"))} /></Field><div className="dialog-actions"><Button variant="secondary" onClick={onClose}>取消</Button><Button disabled={working} onClick={() => void applyNames()}>{working ? <Spinner label="正在修改" /> : <><Edit3 size={16} />确认修改</>}</Button></div></div></Dialog>;
 }
 
-function BatchTagsDialog({ nodes, available, onClose, onComplete }: { nodes: WorkbenchNode[]; available: string[]; onClose: () => void; onComplete: (count: number) => void }) {
+function BatchTagsDialog({ nodes, available, onClose, onComplete }: { nodes: WorkbenchNode[]; available: string[]; onClose: () => void; onComplete: (succeeded: number, failed: number) => Promise<void> }) {
   const same = nodes.length && nodes.every((node) => JSON.stringify(nodeTags(node)) === JSON.stringify(nodeTags(nodes[0])));
   const [tags, setTags] = useState<string[]>(same ? nodeTags(nodes[0]) : []);
   const [input, setInput] = useState("");
@@ -1952,8 +1982,9 @@ function BatchTagsDialog({ nodes, available, onClose, onComplete }: { nodes: Wor
   const save = async () => {
     setWorking(true); setError("");
     try {
-      await Promise.all(nodes.map((node) => api.put(`/api/admin/nodes/${node.id}`, nodePayload(node, { tags, tag: tags[0] || "" }))));
-      onComplete(nodes.length);
+      const results = await Promise.allSettled(nodes.map((node) => api.put(`/api/admin/nodes/${node.id}`, nodePayload(node, { tags, tag: tags[0] || "" }))));
+      const succeeded = results.filter((result) => result.status === "fulfilled").length;
+      await onComplete(succeeded, results.length - succeeded);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "标签更新失败"); }
     finally { setWorking(false); }
   };
@@ -2012,17 +2043,21 @@ function LineSpeedtestView({ notify }: { notify: NodesWorkbenchNotify }) {
   const [licenseAccepted, setLicenseAccepted] = useState(false);
   const [error, setError] = useState("");
   const targetNamesRef = useRef<Record<string, string>>({});
+  const loadTargetsRequestRef = useRef(0);
 
   const loadTargets = useCallback(async (quiet = false) => {
+    const requestID = ++loadTargetsRequestRef.current;
     if (!quiet) setLoading(true);
     setError("");
     try {
       const response = await api.get<{ targets?: LineSpeedtestTarget[] | null }>("/api/admin/line-speedtest/targets");
+      if (requestID !== loadTargetsRequestRef.current) return;
       setTargets(response.targets ?? []);
     } catch (reason) {
+      if (requestID !== loadTargetsRequestRef.current) return;
       setError(reasonMessage(reason, "线路测速目标加载失败"));
     } finally {
-      if (!quiet) setLoading(false);
+      if (requestID === loadTargetsRequestRef.current) setLoading(false);
     }
   }, []);
 
@@ -2239,12 +2274,22 @@ export function SpeedDialog({ nodes, initialNodeIDs, latest, notify, onClose, on
         ...(url.trim() && !latencyOnly ? { url: url.trim() } : {}),
         ...(testerID ? { tester_id: testerID } : {}),
       };
-      await Promise.all(nodeIDs.map((nodeID) => api.post("/api/admin/speedtest/run", { ...payload, node_id: nodeID })));
-      notify(nodeIDs.length === 1 ? "节点测速已开始" : `已提交 ${nodeIDs.length} 个节点测速`);
-      await onRefresh();
+      const results = await Promise.allSettled(nodeIDs.map((nodeID) => api.post("/api/admin/speedtest/run", { ...payload, node_id: nodeID })));
+      const succeeded = results.filter((result) => result.status === "fulfilled").length;
+      const failed = results.length - succeeded;
+      if (failed) {
+        setError(`节点测速提交完成：成功 ${succeeded}，失败 ${failed}`);
+        notify(`节点测速提交完成：成功 ${succeeded}，失败 ${failed}`, "error");
+      } else {
+        notify(nodeIDs.length === 1 ? "节点测速已开始" : `已提交 ${succeeded} 个节点测速`);
+      }
     } catch (reason) {
       setError(reasonMessage(reason, "测速任务提交失败"));
-    } finally { setWorking(false); }
+    } finally {
+      try { await onRefresh(); }
+      catch (reason) { setError(reasonMessage(reason, "节点状态刷新失败")); }
+      setWorking(false);
+    }
   };
 
   return <Dialog title="测速工作台" description="测试代理节点表现，或直接检查主控与受管服务器的公网线路" onClose={onClose} wide extraWide>
@@ -2273,21 +2318,31 @@ export function SpeedHistoryDialog({ initialNodeID, onClose }: { initialNodeID?:
   const [results, setResults] = useState<SpeedResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const loadRequestRef = useRef(0);
   const load = useCallback(async (quiet = false) => {
+    const requestID = ++loadRequestRef.current;
     if (!quiet) setLoading(true);
     setError("");
     try {
       const query = nodeID === "all" ? "limit=200" : `node_id=${encodeURIComponent(nodeID)}&limit=100`;
       const response = await api.get<{ results?: SpeedResult[] | null }>(`/api/admin/speedtest/results?${query}`);
+      if (requestID !== loadRequestRef.current) return;
       setResults(response.results ?? []);
-    } catch (reason) { setError(reasonMessage(reason, "测速记录加载失败")); }
-    finally { if (!quiet) setLoading(false); }
+    } catch (reason) { if (requestID === loadRequestRef.current) setError(reasonMessage(reason, "测速记录加载失败")); }
+    finally { if (requestID === loadRequestRef.current) setLoading(false); }
   }, [nodeID]);
   useEffect(() => { void load(); }, [load]);
   const running = results.some((result) => result.status === "running");
   useEffect(() => {
     if (!running) return;
-    const timer = window.setInterval(() => void load(true), 3000);
+    let inFlight = false;
+    const poll = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try { await load(true); }
+      finally { inFlight = false; }
+    };
+    const timer = window.setInterval(() => void poll(), 3000);
     return () => window.clearInterval(timer);
   }, [load, running]);
   const nodes = useMemo(() => Array.from(new Map(results.map((result) => [result.node_id, result.node_name])).entries()), [results]);
@@ -2312,15 +2367,24 @@ export function TestersDialog({ notify, onClose }: { notify: NodesWorkbenchNotif
   const [workingID, setWorkingID] = useState<number | "create" | null>(null);
   const [confirmRevoke, setConfirmRevoke] = useState<number | null>(null);
   const [error, setError] = useState("");
+  const loadRequestRef = useRef(0);
   const load = useCallback(async (quiet = false) => {
+    const requestID = ++loadRequestRef.current;
     if (!quiet) setLoading(true);
-    try { const response = await api.get<{ testers?: SpeedTester[] }>("/api/admin/speedtest/testers"); setTesters(response.testers ?? []); }
-    catch (reason) { setError(reasonMessage(reason, "测速端列表加载失败")); }
-    finally { if (!quiet) setLoading(false); }
+    try { const response = await api.get<{ testers?: SpeedTester[] }>("/api/admin/speedtest/testers"); if (requestID === loadRequestRef.current) setTesters(response.testers ?? []); }
+    catch (reason) { if (requestID === loadRequestRef.current) setError(reasonMessage(reason, "测速端列表加载失败")); }
+    finally { if (requestID === loadRequestRef.current) setLoading(false); }
   }, []);
   useEffect(() => {
     void load();
-    const timer = window.setInterval(() => void load(true), 5000);
+    let inFlight = false;
+    const poll = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try { await load(true); }
+      finally { inFlight = false; }
+    };
+    const timer = window.setInterval(() => void poll(), 5000);
     return () => window.clearInterval(timer);
   }, [load]);
   const create = async (event: FormEvent) => {

@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, openDashboardSocket } from "./api";
-import { TrafficWorkbenchPage } from "./traffic-workbench";
+import { filterTrafficHistoryByRange, localDateDaysAgo, TrafficWorkbenchPage } from "./traffic-workbench";
 import type { Profile, TrafficSummary } from "./types";
 
 vi.mock("./api", async (importOriginal) => {
@@ -67,10 +67,31 @@ const node = {
 };
 
 function dateDaysAgo(days: number): string {
-  const date = new Date();
-  date.setUTCDate(date.getUTCDate() - days);
-  return date.toISOString().slice(0, 10);
+  return localDateDaysAgo(days);
 }
+
+describe("traffic calendar ranges", () => {
+  const localMidnight = new Date(2026, 7, 8, 0, 30);
+
+  it("uses the local calendar date around the UTC rollover", () => {
+    expect(localDateDaysAgo(0, localMidnight)).toBe("2026-08-08");
+    expect(localDateDaysAgo(6, localMidnight)).toBe("2026-08-02");
+  });
+
+  it("filters sparse history by date instead of taking the latest item count", () => {
+    const sparse = [
+      { date: "2026-07-01", used_gb: 1 },
+      { date: "2026-08-01", used_gb: 2 },
+      { date: "2026-08-02", used_gb: 3 },
+      { date: "2026-08-08", used_gb: 4 },
+      { date: "2026-08-09", used_gb: 5 },
+    ];
+    expect(filterTrafficHistoryByRange(sparse, "week", localMidnight)).toEqual([
+      { date: "2026-08-02", used_gb: 3 },
+      { date: "2026-08-08", used_gb: 4 },
+    ]);
+  });
+});
 
 function mockAdminReads(options: { users?: typeof alice[]; nodes?: typeof node[] } = {}) {
   return vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
@@ -123,6 +144,56 @@ describe("traffic workbench", () => {
     expect(get).toHaveBeenCalledTimes(1);
     expect(get).toHaveBeenCalledWith("/api/traffic/summary");
     expect(openDashboardSocket).not.toHaveBeenCalled();
+  });
+
+  it("supports keyboard navigation and roving focus in the admin dimension tabs", async () => {
+    mockAdminReads();
+    render(<TrafficWorkbenchPage profile={admin} />);
+
+    await screen.findByText("alice+ops");
+    const usersTab = screen.getByRole("tab", { name: /用户汇总/ });
+    const nodesTab = screen.getByRole("tab", { name: /节点汇总/ });
+    expect(usersTab).toHaveAttribute("tabindex", "0");
+    expect(nodesTab).toHaveAttribute("tabindex", "-1");
+    expect(usersTab).toHaveAttribute("aria-controls", "traffic-admin-panel");
+
+    usersTab.focus();
+    fireEvent.keyDown(usersTab, { key: "ArrowRight" });
+
+    expect(nodesTab).toHaveFocus();
+    expect(nodesTab).toHaveAttribute("aria-selected", "true");
+    expect(nodesTab).toHaveAttribute("tabindex", "0");
+    expect(usersTab).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByRole("tabpanel", { name: /节点汇总/ })).toHaveAttribute("id", "traffic-admin-panel");
+
+    fireEvent.keyDown(nodesTab, { key: "Home" });
+    expect(usersTab).toHaveFocus();
+    expect(usersTab).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("supports keyboard navigation and panel relationships in the range tabs", async () => {
+    const accessibleSummary = { ...summary, history: [{ date: localDateDaysAgo(0), used_gb: 3 }] };
+    vi.spyOn(api, "get").mockResolvedValue(accessibleSummary);
+    render(<TrafficWorkbenchPage profile={member} />);
+
+    await screen.findByText("25%");
+    const cycleTab = screen.getByRole("tab", { name: "本周期" });
+    const monthTab = screen.getByRole("tab", { name: "近 30 日" });
+    expect(cycleTab).toHaveAttribute("tabindex", "0");
+    expect(monthTab).toHaveAttribute("tabindex", "-1");
+    expect(cycleTab).toHaveAttribute("aria-controls", "traffic-history-panel");
+    expect(screen.getByRole("img", { name: new RegExp(`${localDateDaysAgo(0)} 3 GB`) })).toBeInTheDocument();
+
+    cycleTab.focus();
+    fireEvent.keyDown(cycleTab, { key: "ArrowLeft" });
+
+    expect(monthTab).toHaveFocus();
+    expect(monthTab).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel", { name: "近 30 日" })).toHaveAttribute("id", "traffic-history-panel");
+
+    fireEvent.keyDown(monthTab, { key: "Home" });
+    expect(cycleTab).toHaveFocus();
+    expect(cycleTab).toHaveAttribute("aria-selected", "true");
   });
 
   it("passes the selected baseline to summaries and both drilldown directions", async () => {

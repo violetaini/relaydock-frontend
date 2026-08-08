@@ -4,6 +4,7 @@ import { api, getToken, openDashboardSocket, setToken } from "./api";
 describe("api client", () => {
   beforeEach(() => {
     localStorage.clear();
+    sessionStorage.clear();
     vi.restoreAllMocks();
   });
 
@@ -12,6 +13,13 @@ describe("api client", () => {
     expect(getToken()).toBe("session");
     setToken("");
     expect(getToken()).toBe("");
+  });
+
+  it("uses session storage when remember-me is disabled", () => {
+    setToken("session-only", false);
+    expect(sessionStorage.getItem("arcway-session-token")).toBe("session-only");
+    expect(localStorage.getItem("arcway-session-token")).toBeNull();
+    expect(getToken()).toBe("session-only");
   });
 
   it("sends the backend authorization header", async () => {
@@ -65,14 +73,25 @@ describe("api client", () => {
       close() { this.onclose?.(); }
     }
     setToken("socket-token");
+    let ticketNumber = 0;
+    vi.stubGlobal("fetch", vi.fn(async (path: string | URL | Request) => {
+      expect(String(path)).toBe("/api/ws/ticket");
+      ticketNumber += 1;
+      return new Response(JSON.stringify({ ticket: `ticket-${ticketNumber}` }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      });
+    }));
     vi.stubGlobal("WebSocket", FakeWebSocket);
     const onMessage = vi.fn();
     const onOpen = vi.fn();
     const onClose = vi.fn();
 
     const cleanupSocket = openDashboardSocket(onMessage, { onOpen, onClose });
+    await vi.advanceTimersByTimeAsync(0);
     const socket = FakeWebSocket.instances[0];
-    expect(socket.url).toContain("/api/ws/dashboard?token=socket-token");
+    expect(socket.url).toContain("/api/ws/dashboard?ticket=ticket-1");
+    expect(socket.url).not.toContain("socket-token");
     socket.onopen?.();
     socket.onmessage?.({ data: JSON.stringify({ type: "realtime" }) });
     expect(onOpen).toHaveBeenCalledOnce();
@@ -82,10 +101,42 @@ describe("api client", () => {
     expect(onClose).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(2_000);
     expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(FakeWebSocket.instances[1].url).toContain("ticket=ticket-2");
     cleanupSocket();
     expect(onClose).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(FakeWebSocket.instances).toHaveLength(2);
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("aborts requests at the configured timeout", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn((_path, init) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+    })));
+    const pending = api.get("/api/slow", { timeoutMs: 100 });
+    const rejected = expect(pending).rejects.toEqual(expect.objectContaining({ status: 0, message: "请求超时，请稍后重试" }));
+    await vi.advanceTimersByTimeAsync(100);
+    await rejected;
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps the timeout active while reading a normal response body", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn(async (_path, init) => {
+      const stream = new ReadableStream({
+        start(controller) {
+          init?.signal?.addEventListener("abort", () => controller.error(new DOMException("aborted", "AbortError")), { once: true });
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "application/json" } });
+    }));
+    const pending = api.get("/api/slow-body", { timeoutMs: 100 });
+    const rejected = expect(pending).rejects.toEqual(expect.objectContaining({ status: 0, message: "请求超时，请稍后重试" }));
+    await vi.advanceTimersByTimeAsync(100);
+    await rejected;
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });

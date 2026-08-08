@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useState, type ErrorInfo, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import {
   Activity,
   ArrowDownToLine,
@@ -37,27 +37,12 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import { AccountWorkbenchPage } from "./account-workbench";
 import { api, openDashboardSocket } from "./api";
 import { BrandMark, useBranding, type Branding } from "./brand";
-import {
-  CertificatesWorkbenchPage,
-  SubscribeFilesPage,
-  SubscriptionGeneratorPage,
-  SubscriptionLinksPage,
-  TemplatesWorkbenchPage,
-} from "./content-workbench";
-import { NodesWorkbench } from "./nodes-workbench";
-import { PackagesPage } from "./packages";
-import { CustomRulesWorkbenchPage, RulesConfigWorkbenchPage } from "./rules-workbench";
-import { ForwardingManagement } from "./forwarding-management";
-import { ServicesWorkbenchPage } from "./services-workbench";
-import { SettingsWorkbenchPage } from "./settings-workbench";
-import { TrafficWorkbenchPage } from "./traffic-workbench";
+import { requestNavigation } from "./navigation-guard";
 import { trafficProgressState } from "./traffic-progress";
 import { nextThemeMode, normalizeThemeMode, resolveThemeMode, type ThemeMode } from "./theme";
 import { TwoFactorSettings } from "./two-factor";
-import { UsersWorkbenchPage } from "./users-workbench";
 import type {
   NodeItem,
   NodeListResponse,
@@ -92,6 +77,25 @@ type UsersScope = "all" | "renewal" | "invites";
 
 interface ToastState { message: string; tone: "success" | "error" }
 type LayoutMode = "top" | "side";
+type ControlState = "checking" | "online" | "offline";
+
+const AccountWorkbenchPage = lazy(() => import("./account-workbench").then((module) => ({ default: module.AccountWorkbenchPage })));
+const contentWorkbench = () => import("./content-workbench");
+const CertificatesWorkbenchPage = lazy(() => contentWorkbench().then((module) => ({ default: module.CertificatesWorkbenchPage })));
+const SubscribeFilesPage = lazy(() => contentWorkbench().then((module) => ({ default: module.SubscribeFilesPage })));
+const SubscriptionGeneratorPage = lazy(() => contentWorkbench().then((module) => ({ default: module.SubscriptionGeneratorPage })));
+const SubscriptionLinksPage = lazy(() => contentWorkbench().then((module) => ({ default: module.SubscriptionLinksPage })));
+const TemplatesWorkbenchPage = lazy(() => contentWorkbench().then((module) => ({ default: module.TemplatesWorkbenchPage })));
+const NodesWorkbench = lazy(() => import("./nodes-workbench").then((module) => ({ default: module.NodesWorkbench })));
+const PackagesPage = lazy(() => import("./packages").then((module) => ({ default: module.PackagesPage })));
+const rulesWorkbench = () => import("./rules-workbench");
+const CustomRulesWorkbenchPage = lazy(() => rulesWorkbench().then((module) => ({ default: module.CustomRulesWorkbenchPage })));
+const RulesConfigWorkbenchPage = lazy(() => rulesWorkbench().then((module) => ({ default: module.RulesConfigWorkbenchPage })));
+const ForwardingManagement = lazy(() => import("./forwarding-management").then((module) => ({ default: module.ForwardingManagement })));
+const ServicesWorkbenchPage = lazy(() => import("./services-workbench").then((module) => ({ default: module.ServicesWorkbenchPage })));
+const SettingsWorkbenchPage = lazy(() => import("./settings-workbench").then((module) => ({ default: module.SettingsWorkbenchPage })));
+const TrafficWorkbenchPage = lazy(() => import("./traffic-workbench").then((module) => ({ default: module.TrafficWorkbenchPage })));
+const UsersWorkbenchPage = lazy(() => import("./users-workbench").then((module) => ({ default: module.UsersWorkbenchPage })));
 
 const pageTitles: Record<PageKey, string> = {
   dashboard: "流量信息",
@@ -141,6 +145,25 @@ function pageAllowed(page: PageKey, isAdmin: boolean, permissions: string[] | nu
   return Boolean(key && permissions?.includes(key));
 }
 
+class LazyPageBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("lazy page failed to load", error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.failed) {
+      return <div className="center-state"><ErrorState message="页面资源加载失败，可能刚完成版本更新" /><Button onClick={() => window.location.reload()}><RefreshCw size={16} />重新载入</Button></div>;
+    }
+    return this.props.children;
+  }
+}
+
 export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: Profile; onLogout: () => void; onBrandingChange?: (branding: Branding) => void }) {
   const branding = useBranding();
   const [page, setPage] = useState<PageKey>(() => resolvePage(profile.is_admin));
@@ -151,6 +174,9 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: P
   const [layoutMode, setLayoutMode] = useState<LayoutMode>(() => localStorage.getItem("arcway-layout") === "side" ? "side" : "top");
   const [toast, setToast] = useState<ToastState | null>(null);
   const [userPages, setUserPages] = useState<string[] | null>(profile.is_admin ? [] : null);
+  const [permissionsError, setPermissionsError] = useState("");
+  const [permissionsRevision, setPermissionsRevision] = useState(0);
+  const [controlState, setControlState] = useState<ControlState>("checking");
   const [identity, setIdentity] = useState(profile);
   const publicProbeURL = useMemo(() => {
     const target = new URL(location.href);
@@ -170,21 +196,62 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: P
 
   useEffect(() => {
     const onHash = () => {
-      setPage(resolvePage(profile.is_admin));
-      setUsersScope(resolveUsersScope());
+      const nextPage = resolvePage(profile.is_admin);
+      const nextUsersScope = resolveUsersScope();
+      if (nextPage === page && nextUsersScope === usersScope) return;
+      const targetHash = location.hash;
+      const commit = () => {
+        if (location.hash !== targetHash) location.hash = targetHash;
+        setPage(nextPage);
+        setUsersScope(nextUsersScope);
+      };
+      if (!requestNavigation(commit)) {
+        const currentUsersView = page === "users" && usersScope !== "all" ? `?view=${usersScope}` : "";
+        history.replaceState(null, "", `${location.pathname}${location.search}#/${page}${currentUsersView}`);
+      }
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
-  }, [profile.is_admin]);
+  }, [page, profile.is_admin, usersScope]);
 
   useEffect(() => {
     if (profile.is_admin) return;
     let cancelled = false;
+    setPermissionsError("");
     api.get<{ pages?: string[] }>("/api/user/permissions")
       .then((response) => { if (!cancelled) setUserPages(response.pages ?? []); })
-      .catch(() => { if (!cancelled) setUserPages([]); });
+      .catch((reason) => {
+        if (!cancelled) {
+          setUserPages(null);
+          setPermissionsError(reason instanceof Error ? reason.message : "页面权限加载失败");
+        }
+      });
     return () => { cancelled = true; };
-  }, [profile.is_admin]);
+  }, [profile.is_admin, permissionsRevision]);
+
+  useEffect(() => {
+    let stopped = false;
+    let timer: number | undefined;
+    let controller: AbortController | undefined;
+    const check = async () => {
+      controller = new AbortController();
+      try {
+        await api.get<Profile>("/api/user/profile", { signal: controller.signal, timeoutMs: 10_000 });
+        if (!stopped) setControlState("online");
+      } catch {
+        if (!stopped) setControlState("offline");
+      } finally {
+        controller = undefined;
+        if (!stopped) timer = window.setTimeout(() => { void check(); }, 30_000);
+      }
+    };
+    void check();
+    return () => {
+      stopped = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+      controller?.abort();
+    };
+  }, []);
 
   useEffect(() => {
     if (!profile.is_admin && userPages !== null && !pageAllowed(page, false, userPages)) {
@@ -201,10 +268,12 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: P
 
   const navigate = (next: PageKey, options?: { usersScope?: UsersScope }) => {
     const usersView = next === "users" ? options?.usersScope ?? "all" : "all";
-    location.hash = `/${next}${usersView === "all" ? "" : `?view=${usersView}`}`;
-    setPage(next);
-    setUsersScope(usersView);
-    setSidebarOpen(false);
+    requestNavigation(() => {
+      location.hash = `/${next}${usersView === "all" ? "" : `?view=${usersView}`}`;
+      setPage(next);
+      setUsersScope(usersView);
+      setSidebarOpen(false);
+    });
   };
 
   useEffect(() => {
@@ -253,6 +322,7 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: P
             {pageAllowed("generator", profile.is_admin, userPages) ? <NavItem active={page === "generator"} icon={<Wrench size={18} />} label="生成订阅" onClick={() => navigate("generator")} /> : null}
             {pageAllowed("nodes", profile.is_admin, userPages) ? <NavItem active={page === "nodes"} icon={<Route size={18} />} label="节点管理" onClick={() => navigate("nodes")} /> : null}
             <NavItem active={page === "forwarding"} icon={<Network size={18} />} label="转发管理" onClick={() => navigate("forwarding")} />
+            <NavItem active={page === "traffic"} icon={<Gauge size={18} />} label="流量明细" onClick={() => navigate("traffic")} />
             {profile.is_admin ? <>
               <NavItem active={page === "servers"} icon={<Server size={18} />} label="服务管理" onClick={() => navigate("servers")} />
               <NavItem active={page === "users"} icon={<Users size={18} />} label="用户管理" onClick={() => navigate("users")} />
@@ -287,7 +357,7 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: P
             <span className="topbar-page-title">{pageTitles[page]}</span>
           </div>
           <div className="topbar-actions">
-            <span className="control-state"><span className="status-dot status-good" />控制端在线</span>
+            <span className="control-state" role="status"><span className={`status-dot status-${controlState}`} />{controlState === "online" ? "控制端在线" : controlState === "offline" ? "控制端离线" : "正在检查"}</span>
             <a className="icon-button topbar-probe-link" href={publicProbeURL} aria-label="返回探针" title="返回探针"><House size={18} /></a>
             <IconButton className="topbar-layout-switch" label="切换到顶部栏" onClick={toggleLayout}><PanelTop size={19} /></IconButton>
             <IconButton className="mobile-page-shortcut" label="返回流量信息" onClick={() => navigate("dashboard")}><Activity size={18} /></IconButton>
@@ -296,7 +366,12 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: P
           </div>
         </header>
         <main className={`page-content page-${page}`}>
-          {page === "dashboard" ? <DashboardPage profile={profile} navigate={navigate} /> : null}
+          {!profile.is_admin && permissionKey[page] && userPages === null ? (
+            permissionsError
+              ? <ErrorState message={permissionsError} onRetry={() => setPermissionsRevision((value) => value + 1)} />
+              : <div className="center-state"><Spinner label="正在加载页面权限" /></div>
+          ) : <LazyPageBoundary key={page}><Suspense fallback={<div className="center-state"><Spinner label="正在加载页面" /></div>}>
+          {page === "dashboard" ? <DashboardPage profile={profile} navigate={navigate} canNavigateNodes={pageAllowed("nodes", profile.is_admin, userPages)} /> : null}
           {page === "subscriptions" && pageAllowed(page, profile.is_admin, userPages) ? <SubscriptionLinksPage notify={notify} /> : null}
           {page === "generator" && pageAllowed(page, profile.is_admin, userPages) ? <SubscriptionGeneratorPage notify={notify} /> : null}
           {page === "servers" && profile.is_admin ? <ServicesWorkbenchPage notify={notify} /> : null}
@@ -312,6 +387,7 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: P
           {page === "rulesConfig" && profile.is_admin ? <RulesConfigWorkbenchPage notify={notify} /> : null}
           {page === "settings" && profile.is_admin ? <SettingsWorkbenchPage notify={notify} onBrandingChange={onBrandingChange} /> : null}
           {page === "account" ? <AccountWorkbenchPage notify={notify} /> : null}
+          </Suspense></LazyPageBoundary>}
         </main>
       </div>
       <div className="floating-tools" aria-label="反馈工具">
@@ -330,14 +406,30 @@ function NavItem({ icon, label, active, onClick }: { icon: ReactNode; label: str
   return <button className={`nav-item ${active ? "is-active" : ""}`} aria-label={label} title={label} onClick={onClick}>{icon}<span>{label}</span><ChevronRight size={15} /></button>;
 }
 
-function DashboardPage({ profile, navigate }: { profile: Profile; navigate: (page: PageKey, options?: { usersScope?: UsersScope }) => void }) {
+type TrafficPeriod = "today" | "week" | "month";
+
+export function filterTrafficHistory<T extends { date: string }>(items: T[], period: TrafficPeriod, now = new Date()): T[] {
+  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
+  const start = period === "today"
+    ? new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+    : period === "week"
+      ? new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7)).getTime()
+      : new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  return items.filter((item) => {
+    const timestamp = new Date(/^\d{4}-\d{2}-\d{2}$/.test(item.date) ? `${item.date}T00:00:00` : item.date).getTime();
+    return Number.isFinite(timestamp) && timestamp >= start && timestamp < end;
+  });
+}
+
+function DashboardPage({ profile, navigate, canNavigateNodes }: { profile: Profile; navigate: (page: PageKey, options?: { usersScope?: UsersScope }) => void; canNavigateNodes: boolean }) {
   const [servers, setServers] = useState<RemoteServer[]>([]);
   const [nodes, setNodes] = useState<NodeItem[]>([]);
   const [users, setUsers] = useState<UserItem[]>([]);
   const [traffic, setTraffic] = useState<TrafficSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [period, setPeriod] = useState<"today" | "week" | "month">("month");
+  const [period, setPeriod] = useState<TrafficPeriod>("month");
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -366,16 +458,24 @@ function DashboardPage({ profile, navigate }: { profile: Profile; navigate: (pag
   }, [profile.is_admin]);
 
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => openDashboardSocket((data) => {
-    const message = data as RealtimeMessage;
-    if (message.type !== "realtime") return;
-    if (message.servers) setServers(message.servers);
-    if (message.trafficSummary) setTraffic(message.trafficSummary);
-  }), []);
+  useEffect(() => {
+    if (!profile.is_admin) {
+      setRealtimeConnected(false);
+      return;
+    }
+    return openDashboardSocket((data) => {
+      const message = data as RealtimeMessage;
+      if (message.type !== "realtime") return;
+      if (message.servers) setServers(message.servers);
+      if (message.trafficSummary) setTraffic(message.trafficSummary);
+    }, {
+      onOpen: () => setRealtimeConnected(true),
+      onClose: () => setRealtimeConnected(false),
+    });
+  }, [profile.is_admin]);
 
   const online = servers.filter((server) => server.ws_connected || ["online", "connected"].includes(server.status)).length;
-  const historyLimit = period === "today" ? 1 : period === "week" ? 7 : 30;
-  const history = (traffic?.history ?? []).slice(-historyLimit);
+  const history = filterTrafficHistory(traffic?.history ?? [], period);
   const maxHistory = Math.max(1, ...history.map((item) => item.used_gb));
   const periodUsed = history.reduce((total, item) => total + item.used_gb, 0);
   const uploadSpeed = servers.reduce((total, server) => total + Number(server.current_upload_speed || 0), 0);
@@ -391,7 +491,19 @@ function DashboardPage({ profile, navigate }: { profile: Profile; navigate: (pag
     const end = new Date(`${user.package_end_date}T23:59:59`).getTime();
     return Number.isFinite(end) && end <= renewalEdge;
   }).length;
-  const periodDescription = period === "today" ? "今天 00:00 起" : period === "week" ? "最近 7 天" : "自本月 1 日 00:00 起";
+  const periodDescription = period === "today" ? "今天 00:00 起" : period === "week" ? "本周一 00:00 起" : "自本月 1 日 00:00 起";
+  const periodTabs: Array<[TrafficPeriod, string]> = [["today", "今天"], ["week", "本周"], ["month", "本月"]];
+  const selectPeriodByKey = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    let next = index;
+    if (event.key === "ArrowRight") next = (index + 1) % periodTabs.length;
+    else if (event.key === "ArrowLeft") next = (index - 1 + periodTabs.length) % periodTabs.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = periodTabs.length - 1;
+    else return;
+    event.preventDefault();
+    setPeriod(periodTabs[next][0]);
+    document.getElementById(`dashboard-period-${periodTabs[next][0]}`)?.focus();
+  };
   const healthState = error
     ? { className: "is-error", label: "待检查" }
     : loading
@@ -410,24 +522,25 @@ function DashboardPage({ profile, navigate }: { profile: Profile; navigate: (pag
         <Metric tone="info" icon={<ArrowUpFromLine size={22} />} label="总流量配额" value={loading ? "--" : `${traffic?.metrics.total_limit_gb ?? 0} GB`} detail="所有节点的总配额" />
         <Metric tone="accent" icon={<Activity size={22} />} label="已用流量" value={loading ? "--" : `${traffic?.metrics.total_used_gb ?? 0} GB`} detail="所有节点累计消耗" />
         <Metric tone="good" icon={<Boxes size={22} />} label="剩余流量" value={loading ? "--" : `${traffic?.metrics.total_remaining_gb ?? 0} GB`} detail="仍可分配的余量" />
-        <Metric tone={usageTone} icon={<Gauge size={22} />} label="使用率" value={loading ? "--" : `${usagePercent.toFixed(1)}%`} detail={loading ? "正在汇总服务器流量" : `实时 ↑ ${formatBytes(uploadSpeed, true)} · ↓ ${formatBytes(downloadSpeed, true)}`} progress={loading ? undefined : usagePercent} />
+        <Metric tone={usageTone} icon={<Gauge size={22} />} label="使用率" value={loading ? "--" : `${usagePercent.toFixed(1)}%`} detail={loading ? "正在汇总流量" : profile.is_admin ? `${realtimeConnected ? "实时" : "最近同步"} ↑ ${formatBytes(uploadSpeed, true)} · ↓ ${formatBytes(downloadSpeed, true)}` : "账户流量汇总"} progress={loading ? undefined : usagePercent} />
       </div>
 
       <Surface className={`chart-surface dashboard-chart ${!loading && history.length === 0 ? "is-empty" : ""}`}>
         <div className="surface-heading dashboard-chart-heading">
           <div><h2>每日流量消耗</h2><small>{periodDescription}</small></div>
           <div className="dashboard-chart-tools">
-            <span className={`dashboard-live-state ${error ? "is-error" : loading ? "is-syncing" : "is-online"}`}><span />{error ? "数据异常" : loading ? "同步中" : "实时数据"}</span>
+            <span className={`dashboard-live-state ${error ? "is-error" : loading || (profile.is_admin && !realtimeConnected) ? "is-syncing" : "is-online"}`}><span />{error ? "数据异常" : loading ? "同步中" : profile.is_admin ? realtimeConnected ? "实时数据" : "轮询数据" : "最近同步"}</span>
             <IconButton label="查看流量明细" onClick={() => navigate("traffic")}><ChevronRight size={17} /></IconButton>
             <IconButton label="刷新流量概览" onClick={() => void load()} disabled={loading}><RefreshCw className={loading ? "is-spinning" : ""} size={17} /></IconButton>
             <span className="chart-total">{periodUsed.toFixed(1)} GB</span>
             <div className="dashboard-period" role="tablist" aria-label="流量周期">
-              {([['today', '今天'], ['week', '本周'], ['month', '本月']] as const).map(([value, label]) => <button key={value} type="button" role="tab" aria-selected={period === value} className={period === value ? "is-active" : ""} onClick={() => setPeriod(value)}>{label}</button>)}
+              {periodTabs.map(([value, label], index) => <button id={`dashboard-period-${value}`} key={value} type="button" role="tab" aria-controls="dashboard-traffic-chart" aria-selected={period === value} tabIndex={period === value ? 0 : -1} className={period === value ? "is-active" : ""} onKeyDown={(event) => selectPeriodByKey(event, index)} onClick={() => setPeriod(value)}>{label}</button>)}
             </div>
           </div>
         </div>
         {loading ? <div className="center-state"><Spinner /></div> : history.length === 0 ? <EmptyState icon={<Activity size={22} />} title="暂无历史记录" /> : (
-          <div className={`bar-chart period-${period}`} aria-label="每日流量消耗图">
+          <div id="dashboard-traffic-chart" className={`bar-chart period-${period}`} role="tabpanel" aria-label="每日流量消耗图">
+            <span className="sr-only">{history.map((item) => `${item.date} ${item.used_gb} GB`).join("；")}</span>
             {history.map((item) => <div className="bar-column" key={item.date} title={`${item.date}: ${item.used_gb} GB`}><span className="bar-value">{item.used_gb > 0 ? item.used_gb : ""}</span><span className="bar" style={{ height: `${Math.max(4, item.used_gb / maxHistory * 100)}%` }} /><small>{item.date.slice(-2)}</small></div>)}
           </div>
         )}
@@ -436,7 +549,7 @@ function DashboardPage({ profile, navigate }: { profile: Profile; navigate: (pag
       <Surface className="dashboard-health-strip">
         <div className="surface-heading"><div><h2>运行概览</h2><small>从这里进入需要处理的运营事项</small></div><span className={`dashboard-live-state ${healthState.className}`}><span />{healthState.label}</span></div>
         <div className={`dashboard-health-items ${profile.is_admin ? "is-admin" : ""}`}>
-          <button type="button" className="dashboard-health-item" onClick={() => navigate("nodes")}><span className="dashboard-health-icon"><Route size={18} /></span><span><small>已启用节点</small><strong>{loading ? "--" : `${enabledNodes} / ${nodes.length}`}</strong></span><ChevronRight size={18} /></button>
+          <button type="button" className="dashboard-health-item" disabled={!canNavigateNodes} onClick={() => navigate("nodes")}><span className="dashboard-health-icon"><Route size={18} /></span><span><small>已启用节点</small><strong>{loading ? "--" : `${enabledNodes} / ${nodes.length}`}</strong></span>{canNavigateNodes ? <ChevronRight size={18} /> : null}</button>
           {profile.is_admin ? <button type="button" className="dashboard-health-item" onClick={() => navigate("servers")}><span className="dashboard-health-icon"><Server size={18} /></span><span><small>在线服务器</small><strong>{loading ? "--" : `${online} / ${servers.length}`}</strong></span><ChevronRight size={18} /></button> : null}
           {profile.is_admin ? <button type="button" className="dashboard-health-item" onClick={() => navigate("users", { usersScope: "renewal" })}><span className="dashboard-health-icon"><Users size={18} /></span><span><small>待续期用户</small><strong>{loading ? "--" : renewalAttention}</strong></span><ChevronRight size={18} /></button> : null}
         </div>

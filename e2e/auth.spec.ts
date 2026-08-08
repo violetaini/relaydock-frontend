@@ -145,6 +145,8 @@ for (const recoveryMode of [false, true]) {
         verificationBodies.push(request.postDataJSON());
         return fulfill(route, session);
       }
+      if (key === "POST /api/ws/ticket") return fulfill(route, { ticket: "auth-test-ws-ticket" });
+      if (key === "GET /api/user/profile") return fulfill(route, session);
       const dashboard = dashboardResponse(pathname);
       if (request.method() === "GET" && dashboard !== undefined) return fulfill(route, dashboard);
       unknown.push(key);

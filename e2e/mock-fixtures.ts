@@ -39,6 +39,7 @@ export const settingsGetResponses: Record<string, unknown> = {
   "/api/admin/system-settings/override-scripts": { enable_override_scripts: false },
   "/api/admin/system-settings/subscription-output-format": { subscription_output_format: "yaml" },
   "/api/admin/system-settings/silent-mode": { silent_mode: false, silent_mode_timeout: 15 },
+  "/api/admin/system-settings/tgbot": { enabled: false, bot_token: "", admin_tg_ids: [], webapp_dev_preview: false, running: false, bot_url: "" },
   "/api/admin/system-settings/management-features": { enable_management_features: true },
   "/api/admin/system-settings/root-short-links": { enable_root_short_links: false },
   "/api/admin/system-settings/agent-log": { agent_log_enabled: false },

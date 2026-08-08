@@ -14,6 +14,31 @@ type BootState = "loading" | "setup" | "login" | "ready" | "error";
 // Keep the unauthenticated status page as responsive as Komari's default
 // live stream without changing the dashboard or Agent reporting cadence.
 const publicProbeRefreshIntervalMs = 1_000;
+const preloadRecoveryKey = "arcway-preload-recovery-at";
+const preloadRecoveryWindowMs = 60_000;
+
+export function recoverFromPreloadError(event: Event, reload: () => void = () => window.location.reload(), now = Date.now()): boolean {
+  let previous = 0;
+  try {
+    previous = Number(sessionStorage.getItem(preloadRecoveryKey)) || 0;
+  } catch {
+    // Let the import rejection reach the page error boundary when a retry marker cannot persist.
+    return false;
+  }
+  if (now - previous < preloadRecoveryWindowMs) return false;
+  try {
+    sessionStorage.setItem(preloadRecoveryKey, String(now));
+  } catch {
+    return false;
+  }
+  event.preventDefault();
+  reload();
+  return true;
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("vite:preloadError", recoverFromPreloadError);
+}
 
 function publicProbeFrame(value: unknown): PublicProbeState | null {
   const direct = normalizePublicProbeState(value);
@@ -38,6 +63,7 @@ export function App() {
   const [error, setError] = useState("");
   const [publicReady, setPublicReady] = useState(false);
   const [wallpaper, setWallpaper] = useState("");
+  const [logoutNotice, setLogoutNotice] = useState("");
   const [probe, setProbe] = useState<PublicProbeState>(emptyPublicProbeState);
   const [branding, setBranding] = useState<Branding>(DEFAULT_BRANDING);
   const [loginRequested, setLoginRequested] = useState(() => location.hash.replace(/^#\/?/, "") === "login");
@@ -114,16 +140,21 @@ export function App() {
     let reconnectTimer: number | undefined;
     let connectionFallbackTimer: number | undefined;
     let reconnectAttempts = 0;
+    let pollInFlight = false;
 
     const update = (value: unknown) => {
       const next = publicProbeFrame(value);
       if (!stopped && next) setProbe(next);
     };
     const poll = async () => {
+      if (pollInFlight) return;
+      pollInFlight = true;
       try {
         update(await api.get<unknown>("/api/public/probe-servers"));
       } catch {
         // The last valid snapshot remains visible while public polling retries.
+      } finally {
+        pollInFlight = false;
       }
     };
     const startPolling = () => {
@@ -217,16 +248,21 @@ export function App() {
   }, [state]);
 
   const onLogin = (session: Session) => {
+    setLogoutNotice("");
     setProfile(session);
     setState("ready");
     location.hash = "/dashboard";
   };
 
   const logout = () => {
-    setToken("");
+    const remoteLogout = revokeCurrentSession();
+    setLogoutNotice("");
     setProfile(null);
     location.hash = "/login";
     setState("login");
+    void remoteLogout.catch(() => {
+      setLogoutNotice("服务端会话注销未确认，本地登录信息已清除；如在共享设备上操作，请关闭其他已登录页面。");
+    });
   };
 
   const leaveProbePreview = () => {
@@ -256,11 +292,17 @@ export function App() {
   } else if (state === "login" && probe.enabled && !loginRequested) {
     content = <PublicProbeScreen probe={probe} onLogin={() => { location.hash = "/login"; setLoginRequested(true); }} />;
   } else if (state === "login") {
-    content = <LoginScreen wallpaper={wallpaper} onLogin={onLogin} />;
+    content = <LoginScreen wallpaper={wallpaper} notice={logoutNotice} onLogin={onLogin} />;
   } else if (profile) {
     content = <ConsoleApp profile={profile} onLogout={logout} onBrandingChange={setBranding} />;
   }
   return <BrandingProvider branding={branding}>{content}</BrandingProvider>;
+}
+
+export function revokeCurrentSession(): Promise<unknown> {
+  const remoteLogout = api.post("/api/logout", undefined, { suppressUnauthorizedEvent: true, timeoutMs: 5_000 });
+  setToken("");
+  return remoteLogout;
 }
 
 const rootElement = document.getElementById("root");

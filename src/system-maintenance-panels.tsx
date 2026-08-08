@@ -42,13 +42,18 @@ async function responseFailure(response: Response, fallback: string): Promise<Er
   return new Error(body.trim() || fallback);
 }
 
-async function downloadAuthenticated(path: string, fallbackName: string, extraHeaders?: Record<string, string>): Promise<string> {
+async function downloadAuthenticated(
+  path: string,
+  fallbackName: string,
+  extraHeaders?: Record<string, string>,
+  method: "GET" | "POST" = "GET",
+): Promise<string> {
   const headers = new Headers(extraHeaders);
   const token = getToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
   let response: Response;
   try {
-    response = await fetch(path, { method: "GET", headers });
+    response = await fetch(path, { method, headers });
   } catch {
     throw new Error("无法连接控制端，请检查网络或服务状态");
   }
@@ -75,12 +80,14 @@ type ValidatedBackup = { encrypted: boolean; description: string };
 export async function validateBackupFile(file: File): Promise<ValidatedBackup> {
   if (!/\.zip(?:\.enc)?$/i.test(file.name)) throw new Error("仅支持 .zip.enc 加密备份或旧版 .zip 备份");
   if (file.size === 0) throw new Error("备份文件为空");
-  if (file.size > 100 * 1024 * 1024) throw new Error("备份文件不能超过 100 MB");
+  if (file.size > 257 * 1024 * 1024) throw new Error("备份文件不能超过 257 MB");
   const prefix = new Uint8Array(await file.slice(0, 8).arrayBuffer());
   const magic = new TextDecoder().decode(prefix);
-  if (magic === "RLDKBKP1") {
-    if (file.size < 52) throw new Error("加密备份头不完整，文件可能已损坏");
-    return { encrypted: true, description: "Arcway 加密备份" };
+  if (magic === "RLDKBKP1" || magic === "RLDKBKP2") {
+    if (magic === "RLDKBKP1" && file.size > 64 * 1024 * 1024) throw new Error("旧版加密备份不能超过 64 MB，请使用新版备份格式");
+    const minimumSize = magic === "RLDKBKP2" ? 56 : 52;
+    if (file.size < minimumSize) throw new Error("加密备份头不完整，文件可能已损坏");
+    return { encrypted: true, description: magic === "RLDKBKP2" ? "Arcway 分块加密备份" : "Arcway 加密备份" };
   }
   if (prefix[0] === 0x50 && prefix[1] === 0x4b && file.name.toLowerCase().endsWith(".zip")) {
     return { encrypted: false, description: "旧版明文 ZIP 备份" };
@@ -108,7 +115,7 @@ export function BackupPanel({ notify }: { notify: Notify }) {
     if (downloadPassphrase !== downloadConfirm) return setDownloadError("两次输入的备份口令不一致");
     setDownloadWorking(true);
     try {
-      const filename = await downloadAuthenticated("/api/admin/backup/download", "arcway-backup.zip.enc", { "X-Backup-Passphrase": downloadPassphrase });
+      const filename = await downloadAuthenticated("/api/admin/backup/download", "arcway-backup.zip.enc", { "X-Backup-Passphrase": downloadPassphrase }, "POST");
       notify(`加密备份已下载：${filename}`);
       setDownloadPassphrase("");
       setDownloadConfirm("");
@@ -154,7 +161,7 @@ export function BackupPanel({ notify }: { notify: Notify }) {
       form.set("backup", restoreFile);
       if (restorePassphrase) form.set("passphrase", restorePassphrase);
       const response = await request<{ message?: string }>("/api/admin/backup/restore", { method: "POST", body: form });
-      notify(response.message || "备份恢复成功，请刷新页面确认数据");
+      notify(response.message || "备份已校验并暂存，必须重启 Arcway 服务后才会应用");
       setConfirmRestore(false);
       setRestoreFile(null);
       setRestoreKind(null);
@@ -181,17 +188,17 @@ export function BackupPanel({ notify }: { notify: Notify }) {
           </form>
         </Surface>
         <Surface className="ops-card ops-danger-card">
-          <div className="surface-heading"><div><h2><Upload size={17} />恢复备份</h2><small>恢复会覆盖当前 data 与 subscribes 中的同名文件</small></div></div>
+          <div className="surface-heading"><div><h2><Upload size={17} />恢复备份</h2><small>备份会先校验并暂存；重启 Arcway 服务后才会替换当前数据</small></div></div>
           <form className="ops-form" onSubmit={requestRestore}>
             {restoreError ? <ErrorState message={restoreError} /> : null}
-            <Field label="备份文件" hint="最大 100 MB；支持 .zip.enc 和旧版 .zip"><input ref={restoreInput} type="file" accept=".zip,.enc,.zip.enc" onChange={(event) => void chooseBackup(event.target.files?.[0] ?? null)} /></Field>
+            <Field label="备份文件" hint="新版最大 257 MB，旧版加密备份最大 64 MB；支持 .zip.enc 和旧版 .zip"><input ref={restoreInput} type="file" accept=".zip,.enc,.zip.enc" onChange={(event) => void chooseBackup(event.target.files?.[0] ?? null)} /></Field>
             {restoreFile && restoreKind ? <div className="ops-file-check"><ShieldCheck size={17} /><span><strong>{restoreFile.name}</strong><small>{restoreKind.description} · {formatBytes(restoreFile.size)}</small></span></div> : null}
             <Field label="原备份口令" hint={restoreKind?.encrypted ? "此文件已加密，必须填写" : "旧版明文 ZIP 可留空"}><input type="password" autoComplete="off" value={restorePassphrase} onChange={(event) => setRestorePassphrase(event.target.value)} /></Field>
-            <div className="ops-card-actions"><Button type="submit" variant="danger" disabled={restoreWorking || !restoreFile}>{restoreWorking ? <Spinner label="正在恢复" /> : <><Upload size={16} />校验并恢复</>}</Button></div>
+            <div className="ops-card-actions"><Button type="submit" variant="danger" disabled={restoreWorking || !restoreFile}>{restoreWorking ? <Spinner label="正在暂存" /> : <><Upload size={16} />校验并暂存</>}</Button></div>
           </form>
         </Surface>
       </div>
-      {confirmRestore && restoreFile ? <ConfirmDialog title="恢复数据备份" description={`即将恢复“${restoreFile.name}”（${formatBytes(restoreFile.size)}）。当前同名数据会被覆盖，操作完成后应立即刷新并核对节点、用户和订阅。`} confirmLabel="确认恢复" working={restoreWorking} onCancel={() => setConfirmRestore(false)} onConfirm={() => void restore()} /> : null}
+      {confirmRestore && restoreFile ? <ConfirmDialog title="暂存数据备份" description={`将先校验并暂存“${restoreFile.name}”（${formatBytes(restoreFile.size)}），当前运行中的数据不会立即改变。重启 Arcway 服务后才会原子替换 data 和 subscribes，请在重启后核对节点、用户和订阅。`} confirmLabel="校验并暂存" working={restoreWorking} onCancel={() => setConfirmRestore(false)} onConfirm={() => void restore()} /> : null}
     </div>
   );
 }

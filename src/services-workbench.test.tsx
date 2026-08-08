@@ -1,11 +1,19 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
+import { requestNavigation } from "./navigation-guard";
 import { consumeRemoteServiceStream, parseSSELog, ServicesWorkbenchPage } from "./services-workbench";
 import type { RemoteServer } from "./types";
 
 vi.hoisted(() => {
   (globalThis as unknown as { process: { env: { NODE_ENV?: string } } }).process.env.NODE_ENV = "test";
+});
+
+const dashboardSocketMock = vi.hoisted(() => vi.fn((_callback: (payload: unknown) => void, _options?: { onOpen?: () => void; onClose?: () => void }) => () => undefined));
+
+vi.mock("./api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./api")>();
+  return { ...actual, openDashboardSocket: dashboardSocketMock };
 });
 
 const onlineServer: RemoteServer = {
@@ -57,7 +65,7 @@ const offlineServer: RemoteServer = {
 
 function mockServerReads(servers: RemoteServer[] = [onlineServer, offlineServer], resources: {
   inbounds?: Record<string, unknown>[];
-  outbounds?: Record<string, unknown>[];
+    outbounds?: Record<string, unknown>[] | (() => Record<string, unknown>[]);
   routing?: { rules?: Record<string, unknown>[]; domainStrategy?: string; balancers?: Record<string, unknown>[] };
   dnsProviders?: Record<string, unknown>[];
   ddnsStatuses?: Record<string, unknown>[];
@@ -68,7 +76,7 @@ function mockServerReads(servers: RemoteServer[] = [onlineServer, offlineServer]
   inboundError?: string;
   xrayVersions?: Record<string, unknown>;
   agentVersion?: Record<string, unknown>;
-  xrayConfig?: string;
+    xrayConfig?: string | (() => string);
   warpStatus?: Record<string, unknown>;
 } = {}) {
   let ddnsStatusRead = 0;
@@ -147,9 +155,9 @@ function mockServerReads(servers: RemoteServer[] = [onlineServer, offlineServer]
       if (resources.inboundError) throw new Error(resources.inboundError);
       return { success: true, inbounds: resources.inbounds ?? [] } as T;
     }
-    if (path === "/api/admin/remote/outbounds?server_id=11") return { success: true, outbounds: resources.outbounds ?? [] } as T;
+    if (path === "/api/admin/remote/outbounds?server_id=11") return { success: true, outbounds: typeof resources.outbounds === "function" ? resources.outbounds() : resources.outbounds ?? [] } as T;
     if (path === "/api/admin/remote/routing?server_id=11") return { success: true, routing: resources.routing ?? { rules: [] } } as T;
-    if (path === "/api/admin/remote/xray/config?server_id=11") return { success: true, path: "/usr/local/etc/xray/config.json", config: resources.xrayConfig ?? JSON.stringify({ log: { loglevel: "warning" }, inbounds: [], outbounds: [], routing: { rules: [] }, dns: { servers: ["1.1.1.1"] } }, null, 2) } as T;
+    if (path === "/api/admin/remote/xray/config?server_id=11") return { success: true, path: "/usr/local/etc/xray/config.json", config: typeof resources.xrayConfig === "function" ? resources.xrayConfig() : resources.xrayConfig ?? JSON.stringify({ log: { loglevel: "warning" }, inbounds: [], outbounds: [], routing: { rules: [] }, dns: { servers: ["1.1.1.1"] } }, null, 2) } as T;
     if (path === "/api/admin/remote/warp/status?server_id=11") return (resources.warpStatus ?? { success: true, installed: false }) as T;
     if (path === "/api/admin/line-speedtest/targets") return { success: true, targets: resources.lineSpeedtestTargets ?? [] } as T;
     if (path === "/api/admin/certificates/valid") return { success: true, certificates: resources.certificates ?? [] } as T;
@@ -171,6 +179,7 @@ afterEach(() => {
   localStorage.clear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  dashboardSocketMock.mockClear();
 });
 
 describe("service management workbench", () => {
@@ -252,6 +261,39 @@ describe("service management workbench", () => {
     expect(listRequests).toBe(2);
   });
 
+  it("does not let an older REST list overwrite a newer websocket snapshot", async () => {
+    let resolveList!: (value: unknown) => void;
+    const pendingList = new Promise((resolve) => { resolveList = resolve; });
+    let push: ((payload: unknown) => void) | undefined;
+    let open: (() => void) | undefined;
+    dashboardSocketMock.mockImplementationOnce((callback: (payload: unknown) => void, options?: { onOpen?: () => void }) => {
+      push = callback;
+      open = options?.onOpen;
+      return () => undefined;
+    });
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/remote-servers") return await pendingList as T;
+      if (path.includes("/api/admin/remote/services/status")) return { success: true, xray: {}, nginx: {} } as T;
+      if (path.includes("/api/admin/remote/agent/version-info")) return { server_id: 11, current: "0.3.0", latest: "0.3.0", upgrade_available: false } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+    await act(async () => { await Promise.resolve(); });
+
+    const realtimeServer = { ...onlineServer, name: "Realtime Edge", current_download_speed: 9_999 };
+    act(() => {
+      open?.();
+      push?.({ type: "realtime", servers: [realtimeServer] });
+    });
+    await act(async () => {
+      resolveList({ success: true, servers: [{ ...onlineServer, name: "Stale REST Edge" }] });
+      await pendingList;
+    });
+
+    expect(await screen.findByText("Realtime Edge")).toBeInTheDocument();
+    expect(screen.queryByText("Stale REST Edge")).not.toBeInTheDocument();
+  });
+
   it("does not expose the retired advanced management entry", async () => {
     mockServerReads();
     render(<ServicesWorkbenchPage notify={vi.fn()} />);
@@ -316,6 +358,7 @@ describe("service management workbench", () => {
     await screen.findByText("Edge Hong Kong");
     const card = container.querySelector(".service-card") as HTMLElement;
     const flag = within(card).getByTitle("HK");
+    await waitFor(() => expect(flag.querySelector("img")).toBeInTheDocument());
     expect(flag.querySelector("img")).toHaveAttribute("src", expect.stringMatching(/(?:data:image\/svg\+xml|\.svg(?:\?|$))/));
     expect(flag).not.toHaveTextContent("HK");
     expect(within(card).getByText("CPU")).toBeInTheDocument();
@@ -707,18 +750,30 @@ describe("service management workbench", () => {
 
     expect(within(dialog).queryByRole("tab", { name: "入站" })).not.toBeInTheDocument();
     expect(within(dialog).queryByRole("button", { name: "添加入站" })).not.toBeInTheDocument();
-    expect(within(dialog).getByRole("tab", { name: "概览" })).toBeInTheDocument();
+    const overviewTab = within(dialog).getByRole("tab", { name: "概览" });
+    expect(overviewTab).toHaveAttribute("aria-controls", "service-panel-overview");
     expect(within(dialog).getByRole("tab", { name: "服务控制" })).toBeInTheDocument();
     expect(within(dialog).getByRole("tab", { name: "Speedtest" })).toBeInTheDocument();
     expect(within(dialog).getByRole("tab", { name: "Xray 设置" })).toBeInTheDocument();
     expect(within(dialog).queryByRole("tab", { name: "出站" })).not.toBeInTheDocument();
     expect(within(dialog).getByRole("tab", { name: "服务器分享" })).toBeInTheDocument();
+    overviewTab.focus();
+    fireEvent.keyDown(overviewTab, { key: "ArrowRight" });
+    const servicesTab = within(dialog).getByRole("tab", { name: "服务控制" });
+    await waitFor(() => expect(servicesTab).toHaveFocus());
+    expect(servicesTab).toHaveAttribute("aria-selected", "true");
     fireEvent.click(within(dialog).getByRole("tab", { name: "Xray 设置" }));
-    expect(within(dialog).getByRole("tab", { name: "基础设置" })).toBeInTheDocument();
+    const basicTab = within(dialog).getByRole("tab", { name: "基础设置" });
+    expect(basicTab).toHaveAttribute("aria-controls", "xray-panel-basic");
     expect(within(dialog).getByRole("tab", { name: "路由规则" })).toBeInTheDocument();
     expect(within(dialog).getByRole("tab", { name: "出站规则" })).toBeInTheDocument();
     expect(within(dialog).getByRole("tab", { name: "DNS" })).toBeInTheDocument();
     expect(within(dialog).getByRole("tab", { name: "高级配置" })).toBeInTheDocument();
+    basicTab.focus();
+    fireEvent.keyDown(basicTab, { key: "End" });
+    const advancedTab = within(dialog).getByRole("tab", { name: "高级配置" });
+    await waitFor(() => expect(advancedTab).toHaveFocus());
+    expect(advancedTab).toHaveAttribute("aria-selected", "true");
     expect(get).not.toHaveBeenCalledWith("/api/admin/remote/inbounds?server_id=11");
   });
 
@@ -754,6 +809,112 @@ describe("service management workbench", () => {
     const configWrite = post.mock.calls.find(([path]) => path === "/api/admin/remote/xray/config?server_id=11");
     expect(JSON.parse((configWrite?.[1] as { config: string }).config).inbounds).toEqual(initialConfig.inbounds);
     expect(post).toHaveBeenCalledWith("/api/admin/remote/services/control?server_id=11", { service: "xray", action: "restart" });
+  });
+
+  it("requires confirmation before closing or reloading a dirty Xray configuration", async () => {
+    const initialConfig = JSON.stringify({
+      log: { loglevel: "warning" },
+      inbounds: [],
+      outbounds: [{ tag: "direct", protocol: "freedom" }],
+      routing: { rules: [] },
+      dns: { servers: ["1.1.1.1"] },
+    }, null, 2);
+    mockServerReads([onlineServer], { xrayConfig: initialConfig });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Xray 设置" }));
+    const serverDialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    const logLevel = await within(serverDialog).findByRole("combobox", { name: "Xray 日志级别" });
+    fireEvent.change(logLevel, { target: { value: "info" } });
+    expect(within(serverDialog).getByText("存在未保存更改")).toBeInTheDocument();
+
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "出站规则" }));
+    let discardDialog = await screen.findByRole("dialog", { name: "丢弃未保存的 Xray 配置" });
+    expect(within(serverDialog).getByRole("tab", { name: "基础设置" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(within(discardDialog).getByRole("button", { name: "取消" }));
+    expect(logLevel).toHaveValue("info");
+
+    fireEvent.click(within(serverDialog).getByRole("button", { name: "关闭" }));
+    discardDialog = await screen.findByRole("dialog", { name: "丢弃未保存的 Xray 配置" });
+    fireEvent.click(within(discardDialog).getByRole("button", { name: "取消" }));
+    expect(screen.getByRole("dialog", { name: "Edge Hong Kong" })).toBeInTheDocument();
+    expect(logLevel).toHaveValue("info");
+
+    fireEvent.click(within(serverDialog).getByRole("button", { name: "重新读取" }));
+    discardDialog = screen.getByRole("dialog", { name: "丢弃未保存的 Xray 配置" });
+    fireEvent.click(within(discardDialog).getByRole("button", { name: "丢弃修改" }));
+    await waitFor(() => expect(within(serverDialog).getByRole("combobox", { name: "Xray 日志级别" })).toHaveValue("warning"));
+    expect(within(serverDialog).queryByText("存在未保存更改")).not.toBeInTheDocument();
+  });
+
+  it("requires confirmation before leaving the SPA with a dirty Xray configuration", async () => {
+    const initialConfig = JSON.stringify({
+      log: { loglevel: "warning" }, inbounds: [], outbounds: [], routing: { rules: [] }, dns: {},
+    }, null, 2);
+    mockServerReads([onlineServer], { xrayConfig: initialConfig });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Xray 设置" }));
+    const serverDialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    fireEvent.change(await within(serverDialog).findByRole("combobox", { name: "Xray 日志级别" }), { target: { value: "info" } });
+    const proceed = vi.fn();
+
+    expect(requestNavigation(proceed)).toBe(false);
+    let discardDialog = await screen.findByRole("dialog", { name: "丢弃未保存的 Xray 配置" });
+    fireEvent.click(within(discardDialog).getByRole("button", { name: "取消" }));
+    expect(proceed).not.toHaveBeenCalled();
+    expect(within(serverDialog).getByRole("combobox", { name: "Xray 日志级别" })).toHaveValue("info");
+
+    expect(requestNavigation(proceed)).toBe(false);
+    discardDialog = await screen.findByRole("dialog", { name: "丢弃未保存的 Xray 配置" });
+    fireEvent.click(within(discardDialog).getByRole("button", { name: "丢弃修改" }));
+    expect(proceed).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes the full Xray snapshot after a hot outbound mutation before a later save", async () => {
+    const currentConfig = {
+      log: { loglevel: "warning" },
+      inbounds: [{ tag: "database-owned", protocol: "vless", port: 443 }],
+      outbounds: [{ tag: "proxy-old", protocol: "socks", settings: { servers: [{ address: "old.example", port: 1080 }] } }],
+      routing: { rules: [{ type: "field", outboundTag: "proxy-old" }] },
+      dns: { servers: ["1.1.1.1"] },
+    };
+    const get = mockServerReads([onlineServer], {
+      outbounds: () => currentConfig.outbounds,
+      xrayConfig: () => JSON.stringify(currentConfig, null, 2),
+    });
+    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string, body?: unknown): Promise<T> => {
+      if (path === "/api/admin/remote/outbounds?server_id=11") {
+        const request = body as { action: string; tag?: string; outbound?: typeof currentConfig.outbounds[number] };
+        if (request.action === "remove") currentConfig.outbounds = currentConfig.outbounds.filter((item) => item.tag !== request.tag);
+        if (request.action === "add" && request.outbound) currentConfig.outbounds = [...currentConfig.outbounds, request.outbound];
+      }
+      return { success: true } as T;
+    });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Xray 设置" }));
+    const serverDialog = await screen.findByRole("dialog", { name: "Edge Hong Kong" });
+    await within(serverDialog).findByRole("combobox", { name: "Xray 日志级别" });
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "出站规则" }));
+    fireEvent.click(await within(serverDialog).findByRole("button", { name: "编辑出站 proxy-old" }));
+    const editor = screen.getByRole("dialog", { name: "编辑出站" });
+    fireEvent.change(within(editor).getByRole("textbox", { name: "出站 Tag" }), { target: { value: "proxy-new" } });
+    fireEvent.change(within(editor).getByRole("textbox", { name: "出站高级 JSON" }), { target: { value: JSON.stringify({ tag: "proxy-new", protocol: "socks", settings: { servers: [{ address: "new.example", port: 2080 }] } }) } });
+    fireEvent.click(within(editor).getByRole("button", { name: "保存并重建" }));
+
+    await waitFor(() => expect(get.mock.calls.filter(([path]) => path === "/api/admin/remote/xray/config?server_id=11")).toHaveLength(2));
+    await waitFor(() => expect(within(serverDialog).getByRole("tab", { name: "基础设置" })).toBeEnabled());
+    fireEvent.click(within(serverDialog).getByRole("tab", { name: "基础设置" }));
+    fireEvent.change(within(serverDialog).getByRole("combobox", { name: "Xray 日志级别" }), { target: { value: "info" } });
+    fireEvent.click(within(serverDialog).getByRole("button", { name: "保存并应用" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote/xray/config?server_id=11", expect.anything()));
+    const configWrite = post.mock.calls.find(([path]) => path === "/api/admin/remote/xray/config?server_id=11");
+    const written = JSON.parse((configWrite?.[1] as { config: string }).config);
+    expect(written.log.loglevel).toBe("info");
+    expect(written.outbounds).toContainEqual(expect.objectContaining({ tag: "proxy-new" }));
+    expect(written.outbounds).not.toContainEqual(expect.objectContaining({ tag: "proxy-old" }));
   });
 
   it("applies basic Xray presets without changing database-owned or conditional configuration", async () => {

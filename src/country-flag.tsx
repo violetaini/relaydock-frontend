@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Globe2 } from "lucide-react";
 
 const countryCodePattern = /^[A-Z]{2}$/;
@@ -7,7 +8,6 @@ const countryCodePattern = /^[A-Z]{2}$/;
 const countryCodeAliases: Record<string, string> = { UK: "GB" };
 
 const countryFlagAssets = import.meta.glob<string>("../node_modules/country-flag-icons/3x2/*.svg", {
-  eager: true,
   query: "?url&no-inline",
   import: "default",
 });
@@ -25,7 +25,21 @@ export function CountryFlag({ countryCode, className = "country-flag-svg", fallb
 }) {
   const normalizedCode = normalizeCountryCode(countryCode);
   const assetCode = normalizedCode ? countryCodeAliases[normalizedCode] ?? normalizedCode : undefined;
-  const asset = assetCode ? countryFlagAssets[`../node_modules/country-flag-icons/3x2/${assetCode}.svg`] : undefined;
+  const assetLoader = assetCode ? countryFlagAssets[`../node_modules/country-flag-icons/3x2/${assetCode}.svg`] : undefined;
+  const [asset, setAsset] = useState<string | null>();
+
+  useEffect(() => {
+    let active = true;
+    setAsset(undefined);
+    if (!assetLoader) {
+      setAsset(null);
+      return () => { active = false; };
+    }
+    void assetLoader()
+      .then((source) => { if (active) setAsset(source); })
+      .catch(() => { if (active) setAsset(null); });
+    return () => { active = false; };
+  }, [assetLoader]);
 
   if (asset) return <img aria-hidden="true" alt="" className={className} src={asset} />;
   return <Globe2 aria-hidden="true" className={`${className} country-flag-fallback`} size={fallbackSize} />;

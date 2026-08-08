@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   Bell,
   Bot,
@@ -27,6 +27,7 @@ import {
   Shield,
   SlidersHorizontal,
   Users,
+  X,
 } from "lucide-react";
 import { api, getToken } from "./api";
 import { brandFaviconURL, brandLogoURL, DEFAULT_BRANDING, normalizeBranding, type Branding } from "./brand";
@@ -526,7 +527,7 @@ function parseTelegramAdminIDs(value: string): number[] {
   const entries = value.trim() ? value.trim().split(/[\s,]+/) : [];
   const ids = entries.map((entry) => Number(entry));
   if (ids.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
-    throw new Error("管理员 Telegram ID 必须是正整数，多个 ID 请用逗号分隔");
+    throw new Error("管理员 Telegram ID 必须是正整数");
   }
   return Array.from(new Set(ids));
 }
@@ -609,8 +610,10 @@ function messageOf(reason: unknown, fallback: string) {
 export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: Notify; onBrandingChange?: (branding: Branding) => void }) {
   const [loading, setLoading] = useState(true);
   const [loaded, setLoaded] = useState(false);
-  const [saving, setSaving] = useState("");
+  const [saving, setSaving] = useState<Set<string>>(() => new Set());
+  const savingRef = useRef<Set<string>>(new Set());
   const [error, setError] = useState("");
+  const [loadFailures, setLoadFailures] = useState<string[]>([]);
   const [masterURL, setMasterURL] = useState("");
   const [theme, setTheme] = useState("flat");
   const [wallpaper, setWallpaper] = useState("");
@@ -638,7 +641,8 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
   const [permissions, setPermissions] = useState<PermissionSettings>(defaultPermissions);
   const [notifications, setNotifications] = useState<NotificationSettings>(defaultNotify);
   const [tgBot, setTGBot] = useState<TGBotSettings>(defaultTGBot);
-  const [tgBotAdminIDs, setTGBotAdminIDs] = useState("");
+  const [tgBotAdminIDs, setTGBotAdminIDs] = useState<number[]>([]);
+  const [tgBotAdminIDDraft, setTGBotAdminIDDraft] = useState("");
   const tgBotPreviewURL = localMiniAppPreviewURL();
   const [userSubscription, setUserSubscription] = useState<UserSubscriptionConfig>(defaultUserSubscription);
   const [apiToken, setApiToken] = useState("");
@@ -691,40 +695,55 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
   };
 
   const load = useCallback(async () => {
-    setLoading(true); setLoaded(false); setError("");
+    setLoading(true); setLoaded(false); setError(""); setLoadFailures([]);
     try {
+      const failures: string[] = [];
+      let successes = 0;
+      const tolerant = async <T,>(label: string, operation: Promise<T>, fallback: T): Promise<T> => {
+        try {
+          const value = await operation;
+          successes += 1;
+          return value;
+        } catch {
+          failures.push(label);
+          return fallback;
+        }
+      };
       const [master, themeData, wall, brandingData, intervalData, refreshData, probeData, serverData, shortData, prefixData, overrideData, formatData, silentData, featureData, rootLinksData, logData, templateData, defaultTemplateData, redeemData, secData, encryptData, permissionData, notifyData, tgBotData, tokenData, userSubscriptionData] = await Promise.all([
-        api.get<{ master_url: string }>("/api/admin/system-settings/master-url"),
-        api.get<{ default_theme: string }>("/api/admin/system-settings/default-theme"),
-        api.get<{ login_wallpaper: string }>("/api/admin/system-settings/login-wallpaper"),
-        api.get<Branding>("/api/admin/system-settings/branding"),
-        api.get<typeof intervals>("/api/admin/system-settings/intervals"),
-        api.get<{ refetch_interval_ms: number }>("/api/system-config/refetch-interval"),
-        api.get<ProbeDisguiseSettings>("/api/admin/system-settings/probe-disguise"),
-        api.get<ServerListResponse>("/api/admin/remote-servers"),
-        api.get<{ enable_short_link: boolean }>("/api/admin/system-settings/short-link"),
-        api.get<typeof prefix>("/api/admin/system-settings/node-name-multiplier-prefix"),
-        api.get<{ enable_override_scripts: boolean }>("/api/admin/system-settings/override-scripts"),
-        api.get<{ subscription_output_format: string }>("/api/admin/system-settings/subscription-output-format"),
-        api.get<typeof silent>("/api/admin/system-settings/silent-mode"),
-        loadManagementFeatures(),
-        api.get<{ enable_root_short_links: boolean }>("/api/admin/system-settings/root-short-links"),
-        api.get<{ agent_log_enabled: boolean }>("/api/admin/system-settings/agent-log"),
-        api.get<{ templates?: string[] }>("/api/admin/rule-templates"),
-        api.get<{ default_template_filename: string }>("/api/admin/system-settings/default-template"),
-        api.get<{ redeem_template: string }>("/api/admin/system-settings/redeem-template"),
-        api.get<SecuritySettings>("/api/admin/security-settings"),
-        api.get<{ require_encryption: boolean }>("/api/admin/system-settings/require-encryption"),
-        api.get<{ config: PermissionSettings }>("/api/admin/system-settings/user-permissions"),
-        api.get<NotificationSettings>("/api/admin/notify-config"),
-        api.get<TGBotSettings>("/api/admin/system-settings/tgbot"),
-        api.get<{ token: string }>("/api/admin/system-settings/api-token"),
-        api.get<UserSubscriptionConfig>("/api/user/config"),
+        tolerant("公开 URL", api.get<{ master_url: string }>("/api/admin/system-settings/master-url"), { master_url: location.origin }),
+        tolerant("默认主题", api.get<{ default_theme: string }>("/api/admin/system-settings/default-theme"), { default_theme: "flat" }),
+        tolerant("登录壁纸", api.get<{ login_wallpaper: string }>("/api/admin/system-settings/login-wallpaper"), { login_wallpaper: "" }),
+        tolerant("项目品牌", api.get<Branding>("/api/admin/system-settings/branding"), DEFAULT_BRANDING),
+        tolerant("采集间隔", api.get<typeof intervals>("/api/admin/system-settings/intervals"), { speed_collect_interval: 3, traffic_collect_interval: 60, traffic_check_interval: 120, heartbeat_interval: 30, report_interval: 1 }),
+        tolerant("看板刷新", api.get<{ refetch_interval_ms: number }>("/api/system-config/refetch-interval"), { refetch_interval_ms: 1000 }),
+        tolerant("公开探针", api.get<ProbeDisguiseSettings>("/api/admin/system-settings/probe-disguise"), defaultProbeDisguise),
+        tolerant("服务器列表", api.get<ServerListResponse>("/api/admin/remote-servers"), { success: false, servers: [] }),
+        tolerant("订阅短链", api.get<{ enable_short_link: boolean }>("/api/admin/system-settings/short-link"), { enable_short_link: true }),
+        tolerant("节点名前缀", api.get<typeof prefix>("/api/admin/system-settings/node-name-multiplier-prefix"), { enabled: false, left: "「", right: "」" }),
+        tolerant("覆写脚本", api.get<{ enable_override_scripts: boolean }>("/api/admin/system-settings/override-scripts"), { enable_override_scripts: false }),
+        tolerant("订阅格式", api.get<{ subscription_output_format: string }>("/api/admin/system-settings/subscription-output-format"), { subscription_output_format: "yaml" }),
+        tolerant("静默模式", api.get<typeof silent>("/api/admin/system-settings/silent-mode"), { silent_mode: false, silent_mode_timeout: 15 }),
+        tolerant("管理功能", loadManagementFeatures(), { enable_management_features: true }),
+        tolerant("根路径短链", api.get<{ enable_root_short_links: boolean }>("/api/admin/system-settings/root-short-links"), { enable_root_short_links: false }),
+        tolerant("Agent 日志", api.get<{ agent_log_enabled: boolean }>("/api/admin/system-settings/agent-log"), { agent_log_enabled: false }),
+        tolerant("规则模板", api.get<{ templates?: string[] }>("/api/admin/rule-templates"), { templates: [] }),
+        tolerant("默认模板", api.get<{ default_template_filename: string }>("/api/admin/system-settings/default-template"), { default_template_filename: "" }),
+        tolerant("兑换模板", api.get<{ redeem_template: string }>("/api/admin/system-settings/redeem-template"), { redeem_template: "" }),
+        tolerant("登录安全", api.get<SecuritySettings>("/api/admin/security-settings"), defaultSecurity),
+        tolerant("传输加密", api.get<{ require_encryption: boolean }>("/api/admin/system-settings/require-encryption"), { require_encryption: false }),
+        tolerant("用户权限", api.get<{ config: PermissionSettings }>("/api/admin/system-settings/user-permissions"), { config: defaultPermissions }),
+        tolerant("通知设置", api.get<NotificationSettings>("/api/admin/notify-config"), defaultNotify),
+        tolerant("Telegram Bot", api.get<TGBotSettings>("/api/admin/system-settings/tgbot"), defaultTGBot),
+        tolerant("API Token", api.get<{ token: string }>("/api/admin/system-settings/api-token"), { token: "" }),
+        tolerant("用户订阅", api.get<UserSubscriptionConfig>("/api/user/config"), defaultUserSubscription),
       ]);
       const loadedServers = serverData.servers ?? [];
       const loadedProbe = normalizeProbeDisguise(probeData);
       const loadedServerIDs = new Set(loadedServers.map((server) => server.id));
-      setMasterURL(master.master_url || location.origin); setTheme(themeData.default_theme); setWallpaper(wall.login_wallpaper); setBranding(normalizeBranding(brandingData));
+      const loadedBranding = normalizeBranding(brandingData);
+      setMasterURL(master.master_url || location.origin); setTheme(themeData.default_theme); setWallpaper(wall.login_wallpaper); setBranding(loadedBranding);
+      if (!failures.includes("默认主题")) document.documentElement.dataset.styleTheme = themeData.default_theme;
+      if (!failures.includes("项目品牌")) onBrandingChange?.(loadedBranding);
       setIntervals(intervalData); setDashboardRefreshMs(refreshData.refetch_interval_ms); setProbe({
         ...loadedProbe,
         server_ids: loadedProbe.server_ids_default
@@ -735,11 +754,20 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
       setSilent(silentData); setFeatures(featureData.enable_management_features); setRootShortLinks(rootLinksData.enable_root_short_links); setAgentLog(logData.agent_log_enabled);
       setTemplates(templateData.templates ?? []); setDefaultTemplate(defaultTemplateData.default_template_filename); setRedeemTemplate(redeemData.redeem_template);
       setSecurity(secData); setRequireEncryption(encryptData.require_encryption); setPermissions(permissionData.config); setNotifications(notifyData);
-      setTGBot({ ...defaultTGBot, ...tgBotData, admin_tg_ids: tgBotData.admin_tg_ids ?? [] }); setTGBotAdminIDs((tgBotData.admin_tg_ids ?? []).join(", "));
+      setTGBot({ ...defaultTGBot, ...tgBotData, admin_tg_ids: tgBotData.admin_tg_ids ?? [] }); setTGBotAdminIDs(tgBotData.admin_tg_ids ?? []); setTGBotAdminIDDraft("");
       setApiToken(tokenData.token); setUserSubscription(userSubscriptionData);
-      setLoaded(true);
-    } catch (reason) { setError(messageOf(reason, "设置加载失败")); } finally { setLoading(false); }
-  }, []);
+      setLoaded(successes > 0);
+      setLoadFailures(failures);
+      if (failures.length) {
+        setError(successes > 0
+          ? `部分设置未能加载：${failures.join("、")}。其余设置仍可查看，保存前请先重试。`
+          : "全部设置加载失败，请检查控制端后重试。");
+      }
+    } catch (reason) {
+      setLoadFailures(["全部设置"]);
+      setError(messageOf(reason, "设置加载失败"));
+    } finally { setLoading(false); }
+  }, [onBrandingChange]);
 
   const checkUpdate = useCallback(async (): Promise<UpdateInfo | null> => {
     setUpdateChecking(true);
@@ -793,11 +821,26 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
     }
   };
 
+  const runSettingBatch = async (operations: Array<{ label: string; run: () => Promise<unknown> }>) => {
+    const results = await Promise.allSettled(operations.map((operation) => operation.run()));
+    const failed = operations.filter((_, index) => results[index].status === "rejected").map((operation) => operation.label);
+    if (!failed.length) return;
+    const succeeded = operations.length - failed.length;
+    await load();
+    throw new Error(`${failed.join("、")}保存失败${succeeded ? `，其余 ${succeeded} 项可能已生效` : ""}；已重新读取控制端实际配置。`);
+  };
+
   const save = async (key: string, operation: () => Promise<unknown>, message: string) => {
-    setSaving(key); setError("");
+    if (savingRef.current.size > 0) return;
+    savingRef.current.add(key);
+    setSaving(new Set(savingRef.current));
+    setError("");
     try { await operation(); notify(message); }
     catch (reason) { const text = messageOf(reason, "保存失败"); setError(text); notify(text, "error"); }
-    finally { setSaving(""); }
+    finally {
+      savingRef.current.delete(key);
+      setSaving(new Set(savingRef.current));
+    }
   };
 
   const saveGeneral = (event: FormEvent) => {
@@ -812,15 +855,15 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
         probePayload.server_ids = validProbeServerIDs(probe.server_ids);
       }
       const savedBranding = normalizeBranding(branding);
-      await Promise.all([
-        api.put("/api/admin/system-settings/master-url", { master_url: masterURL.trim().replace(/\/$/, "") }),
-        api.put("/api/admin/system-settings/default-theme", { default_theme: theme }),
-        api.put("/api/admin/system-settings/login-wallpaper", { login_wallpaper: wallpaper.trim() }),
-        api.put("/api/admin/system-settings/branding", savedBranding),
-        api.put("/api/admin/system-settings/intervals", { ...intervals, report_interval: reportInterval }),
-        api.put("/api/admin/system-settings/probe-disguise", probePayload),
+      await runSettingBatch([
+        { label: "公开 URL", run: () => api.put("/api/admin/system-settings/master-url", { master_url: masterURL.trim().replace(/\/$/, "") }) },
+        { label: "默认主题", run: () => api.put("/api/admin/system-settings/default-theme", { default_theme: theme }) },
+        { label: "登录壁纸", run: () => api.put("/api/admin/system-settings/login-wallpaper", { login_wallpaper: wallpaper.trim() }) },
+        { label: "项目品牌", run: () => api.put("/api/admin/system-settings/branding", savedBranding) },
+        { label: "采集间隔", run: () => api.put("/api/admin/system-settings/intervals", { ...intervals, report_interval: reportInterval }) },
+        { label: "公开探针", run: () => api.put("/api/admin/system-settings/probe-disguise", probePayload) },
+        { label: "看板刷新", run: () => api.put("/api/admin/system-settings/dashboard-refresh", { refetch_interval_ms: normalizedRefreshMs }) },
       ]);
-      await api.put("/api/admin/system-settings/dashboard-refresh", { refetch_interval_ms: normalizedRefreshMs });
       document.documentElement.dataset.styleTheme = theme;
       setBranding(savedBranding);
       onBrandingChange?.(savedBranding);
@@ -841,27 +884,27 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
 
   const saveSubscription = (event: FormEvent) => {
     event.preventDefault();
-    void save("subscription", () => Promise.all([
-      api.put("/api/admin/system-settings/short-link", { enable_short_link: shortLink }),
-      api.put("/api/admin/system-settings/node-name-multiplier-prefix", prefix),
-      api.put("/api/admin/system-settings/override-scripts", { enable_override_scripts: overrideScripts }),
-      api.put("/api/admin/system-settings/subscription-output-format", { subscription_output_format: outputFormat }),
-      api.put("/api/admin/system-settings/silent-mode", silent),
-      saveManagementFeatures(features),
-      api.put("/api/admin/system-settings/root-short-links", { enable_root_short_links: rootShortLinks }),
-      api.put("/api/admin/system-settings/agent-log", { agent_log_enabled: agentLog }),
-      api.put("/api/admin/system-settings/default-template", { default_template_filename: defaultTemplate }),
-      api.put("/api/admin/system-settings/redeem-template", { redeem_template: redeemTemplate }),
-      api.put("/api/user/config", userSubscriptionPayload(userSubscription)),
+    void save("subscription", () => runSettingBatch([
+      { label: "订阅短链", run: () => api.put("/api/admin/system-settings/short-link", { enable_short_link: shortLink }) },
+      { label: "节点名前缀", run: () => api.put("/api/admin/system-settings/node-name-multiplier-prefix", prefix) },
+      { label: "覆写脚本", run: () => api.put("/api/admin/system-settings/override-scripts", { enable_override_scripts: overrideScripts }) },
+      { label: "订阅格式", run: () => api.put("/api/admin/system-settings/subscription-output-format", { subscription_output_format: outputFormat }) },
+      { label: "静默模式", run: () => api.put("/api/admin/system-settings/silent-mode", silent) },
+      { label: "管理功能", run: () => saveManagementFeatures(features) },
+      { label: "根路径短链", run: () => api.put("/api/admin/system-settings/root-short-links", { enable_root_short_links: rootShortLinks }) },
+      { label: "Agent 日志", run: () => api.put("/api/admin/system-settings/agent-log", { agent_log_enabled: agentLog }) },
+      { label: "默认模板", run: () => api.put("/api/admin/system-settings/default-template", { default_template_filename: defaultTemplate }) },
+      { label: "兑换模板", run: () => api.put("/api/admin/system-settings/redeem-template", { redeem_template: redeemTemplate }) },
+      { label: "用户订阅", run: () => api.put("/api/user/config", userSubscriptionPayload(userSubscription)) },
     ]), "订阅与功能设置已保存");
   };
 
   const saveSecurity = (event: FormEvent) => {
     event.preventDefault();
-    void save("security", async () => {
-      await api.put("/api/admin/security-settings", security);
-      await api.put("/api/admin/system-settings/require-encryption", { require_encryption: requireEncryption });
-    }, "安全策略已热更新");
+    void save("security", () => runSettingBatch([
+      { label: "登录与防爆破", run: () => api.put("/api/admin/security-settings", security) },
+      { label: "传输加密", run: () => api.put("/api/admin/system-settings/require-encryption", { require_encryption: requireEncryption }) },
+    ]), "安全策略已热更新");
   };
 
   const savePermissions = (event: FormEvent) => {
@@ -873,7 +916,10 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
     event.preventDefault();
     let adminTGIDs: number[];
     try {
-      adminTGIDs = parseTelegramAdminIDs(tgBotAdminIDs);
+      adminTGIDs = Array.from(new Set([
+        ...tgBotAdminIDs,
+        ...parseTelegramAdminIDs(tgBotAdminIDDraft),
+      ]));
     } catch (reason) {
       const message = messageOf(reason, "管理员 Telegram ID 格式无效");
       setError(message);
@@ -889,7 +935,8 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
       });
       const normalized = { ...defaultTGBot, ...saved, admin_tg_ids: saved.admin_tg_ids ?? adminTGIDs };
       setTGBot(normalized);
-      setTGBotAdminIDs(normalized.admin_tg_ids.join(", "));
+      setTGBotAdminIDs(normalized.admin_tg_ids);
+      setTGBotAdminIDDraft("");
     }, "Telegram 用户 Bot 设置已保存");
   };
 
@@ -1052,7 +1099,10 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
     <PageHeader title="系统设置" description="后端、订阅、安全、权限与通知策略" actions={<IconButton label="重新加载设置" onClick={() => void load()} disabled={loading}><RefreshCw size={18} /></IconButton>} />
     {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
     {loading ? <Surface className="center-state"><Spinner label="正在加载全部设置" /></Surface> : loaded ? <div className="settings-workbench settings-workbench-continuous">
-      <form className="settings-settings-group" onSubmit={saveGeneral}>
+      <nav className="settings-group-nav" aria-label="设置分组">
+        {[["settings-general", "基础"], ["settings-subscription", "订阅"], ["settings-security", "安全"], ["settings-permissions", "权限"], ["settings-tgbot", "Telegram Bot"], ["settings-notifications", "通知"], ["settings-maintenance", "维护"], ["settings-account", "账户"]].map(([target, label]) => <button type="button" key={target} onClick={() => document.getElementById(target)?.scrollIntoView({ behavior: "smooth", block: "start" })}>{label}</button>)}
+      </nav>
+      <form id="settings-general" className="settings-settings-group" onSubmit={saveGeneral}>
         <SettingsGroupHeading icon={<SlidersHorizontal size={18} />} title="基础设置" description="后端、采集间隔与界面外观" />
         <SettingSection icon={<Network size={19} />} title="后端与采集" description="Agent 回连地址及运行间隔">
           <Field label="公开 URL"><input type="url" required value={masterURL} onChange={(e) => setMasterURL(e.target.value)} /></Field>
@@ -1088,10 +1138,10 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
             </div>
           </div>
         </SettingSection>
-        <SaveRow label="保存基础设置" saving={saving === "general"} />
+        <SaveRow label="保存基础设置" saving={saving.has("general")} disabled={saving.size > 0 || loadFailures.length > 0} />
       </form>
 
-      <form className="settings-settings-group" onSubmit={saveSubscription}>
+      <form id="settings-subscription" className="settings-settings-group" onSubmit={saveSubscription}>
         <SettingsGroupHeading icon={<Link2 size={18} />} title="订阅设置" description="订阅同步、输出格式与生成功能" />
         <SettingSection icon={<Link2 size={19} />} title="订阅链接" description="链接格式、短码与节点名称">
           <Toggle checked={shortLink} onChange={setShortLink} label="启用短链接" /><Toggle checked={rootShortLinks} onChange={setRootShortLinks} label="启用根路径短码" /><Toggle checked={prefix.enabled} onChange={(enabled) => setPrefix({ ...prefix, enabled })} label="节点名显示流量倍率" />
@@ -1127,27 +1177,27 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
           <Toggle checked={silent.silent_mode} onChange={(silent_mode) => setSilent({ ...silent, silent_mode })} label="启用静默模式" /><Field label="静默超时（秒）"><input type="number" min="1" value={silent.silent_mode_timeout} onChange={(e) => setSilent({ ...silent, silent_mode_timeout: Number(e.target.value) })} /></Field>
         </SettingSection>
         <SettingSection icon={<Clipboard size={19} />} title="兑换码文案" description="支持 {兑换码}、{机器人地址}、{主控域名} 占位符"><Field label="复制模板"><textarea className="settings-redeem-template" rows={10} spellCheck={false} value={redeemTemplate} onChange={(e) => setRedeemTemplate(e.target.value)} /></Field></SettingSection>
-        <SaveRow label="保存订阅设置" saving={saving === "subscription"} />
+        <SaveRow label="保存订阅设置" saving={saving.has("subscription")} disabled={saving.size > 0 || loadFailures.length > 0} />
       </form>
 
-      <form className="settings-settings-group" onSubmit={saveSecurity}>
+      <form id="settings-security" className="settings-settings-group" onSubmit={saveSecurity}>
         <SettingsGroupHeading icon={<Shield size={18} />} title="安全设置" description="登录、订阅请求与 Agent 通道防护" />
         <SettingSection icon={<LockKeyhole size={19} />} title="登录限流" description="连续失败后锁定来源地址"><div className="settings-fields-grid"><NumberField label="最大尝试" value={security.login_rate_max_attempts} onChange={(value) => setSecurity({ ...security, login_rate_max_attempts: value })} /><NumberField label="统计窗口（分钟）" value={security.login_rate_window_minutes} onChange={(value) => setSecurity({ ...security, login_rate_window_minutes: value })} /><NumberField label="锁定（分钟）" value={security.login_rate_lock_minutes} onChange={(value) => setSecurity({ ...security, login_rate_lock_minutes: value })} /></div><Toggle checked={security.skip_local_ip} onChange={(skip_local_ip) => setSecurity({ ...security, skip_local_ip })} label="跳过本地与私有地址" /></SettingSection>
         <SettingSection icon={<Shield size={19} />} title="暴力与订阅防护" description="策略保存后无需重启即可生效"><Toggle checked={security.brute_force_enabled} onChange={(brute_force_enabled) => setSecurity({ ...security, brute_force_enabled })} label="启用暴力枚举防护" /><div className="settings-fields-grid"><NumberField label="失败阈值" value={security.brute_force_max_failures} onChange={(value) => setSecurity({ ...security, brute_force_max_failures: value })} /><NumberField label="检测窗口（分钟）" value={security.brute_force_window_minutes} onChange={(value) => setSecurity({ ...security, brute_force_window_minutes: value })} /><NumberField label="封禁（分钟）" value={security.brute_force_block_minutes} onChange={(value) => setSecurity({ ...security, brute_force_block_minutes: value })} /></div><Toggle checked={security.sub_rate_enabled} onChange={(sub_rate_enabled) => setSecurity({ ...security, sub_rate_enabled })} label="限制订阅请求频率" /><div className="settings-fields-grid"><NumberField label="请求上限" value={security.sub_rate_limit} onChange={(value) => setSecurity({ ...security, sub_rate_limit: value })} /><NumberField label="窗口（分钟）" value={security.sub_rate_window_minutes} onChange={(value) => setSecurity({ ...security, sub_rate_window_minutes: value })} /></div></SettingSection>
         <SettingSection icon={<Check size={19} />} title="Turnstile" description="两项都填写才会在登录页启用"><Field label="Site Key"><input autoComplete="off" value={security.turnstile_site_key} onChange={(e) => setSecurity({ ...security, turnstile_site_key: e.target.value })} /></Field><Field label="Secret Key" hint="已配置时显示掩码；不修改可原样保存"><input type="password" autoComplete="new-password" value={security.turnstile_secret_key} onChange={(e) => setSecurity({ ...security, turnstile_secret_key: e.target.value })} /></Field></SettingSection>
         <SettingSection icon={<Network size={19} />} title="Agent 通道" description="要求已配对 Agent 使用加密通道"><Toggle checked={requireEncryption} onChange={setRequireEncryption} label="强制 Agent 管理通信加密" /></SettingSection>
-        <SaveRow label="保存安全设置" saving={saving === "security"} />
+        <SaveRow label="保存安全设置" saving={saving.has("security")} disabled={saving.size > 0 || loadFailures.length > 0} />
       </form>
 
-      <form className="settings-settings-group" onSubmit={savePermissions}>
+      <form id="settings-permissions" className="settings-settings-group" onSubmit={savePermissions}>
         <SettingsGroupHeading icon={<Users size={18} />} title="用户权限" description="普通用户可访问页面与资源配额" />
         <SettingSection icon={<Users size={19} />} title="普通用户页面" description="管理员始终拥有全部页面"><div className="settings-check-list permission-pages">{[["subscription", "订阅链接"], ["generator", "生成订阅"], ["nodes", "节点管理"], ["templates", "模板管理"], ["subscribe-files", "订阅管理"], ["custom-rules", "覆写管理"]].map(([key, label]) => <label className="checkbox-row" key={key}><input type="checkbox" checked={permissions.pages.includes(key)} onChange={() => setPermissions({ ...permissions, pages: permissions.pages.includes(key) ? permissions.pages.filter((page) => page !== key) : [...permissions.pages, key] })} /><span>{label}</span></label>)}</div></SettingSection>
         <SettingSection icon={<FileJson size={19} />} title="资源配额" description="0 表示不限数量"><div className="settings-fields-grid"><NumberField label="模板数量" min={0} value={permissions.quota_template} onChange={(value) => setPermissions({ ...permissions, quota_template: value })} /><NumberField label="覆写数量" min={0} value={permissions.quota_override} onChange={(value) => setPermissions({ ...permissions, quota_override: value })} /><NumberField label="订阅数量" min={0} value={permissions.quota_subscribe} onChange={(value) => setPermissions({ ...permissions, quota_subscribe: value })} /></div></SettingSection>
         <SettingSection icon={<Network size={19} />} title="私有路由出站" description="每次操作都会让对应 Agent 重载 Xray"><Toggle checked={permissions.routed_outbound_enabled} onChange={(routed_outbound_enabled) => setPermissions({ ...permissions, routed_outbound_enabled })} label="允许普通用户创建路由出站" /><div className="settings-fields-grid"><NumberField label="每用户数量" min={1} value={permissions.quota_routed_outbound} onChange={(value) => setPermissions({ ...permissions, quota_routed_outbound: value })} /><NumberField label="每日操作次数" min={1} value={permissions.daily_limit_routed_outbound} onChange={(value) => setPermissions({ ...permissions, daily_limit_routed_outbound: value })} /></div></SettingSection>
-        <SaveRow label="保存用户权限" saving={saving === "permissions"} />
+        <SaveRow label="保存用户权限" saving={saving.has("permissions")} disabled={saving.size > 0 || loadFailures.length > 0} />
       </form>
 
-      <form className="settings-settings-group" onSubmit={saveTGBot}>
+      <form id="settings-tgbot" className="settings-settings-group" onSubmit={saveTGBot}>
         <SettingsGroupHeading icon={<Bot size={18} />} title="Telegram 用户 Bot" description="内嵌用户自助 Bot 与 Mini App" />
         <SettingSection icon={<Bot size={19} />} title="Bot 与 Mini App" description="保存后主控会按新配置启动或重启 Bot">
           <div className="tgbot-status-row">
@@ -1156,7 +1206,31 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
           </div>
           <Toggle checked={tgBot.enabled} onChange={(enabled) => setTGBot({ ...tgBot, enabled })} label="启用 Telegram 用户 Bot" />
           <Field label="Bot Token" hint="从 BotFather 获取；已保存的 Token 会以掩码显示，可原样保存"><input type="password" autoComplete="new-password" value={tgBot.bot_token} onChange={(event) => setTGBot({ ...tgBot, bot_token: event.target.value })} placeholder="123456789:AA..." /></Field>
-          <Field label="管理员 Telegram ID" hint="多个 ID 用逗号分隔；这些账号可使用 Bot 和 Mini App 的管理功能"><input inputMode="numeric" value={tgBotAdminIDs} onChange={(event) => setTGBotAdminIDs(event.target.value)} placeholder="123456789, 987654321" /></Field>
+          <Field label="管理员 Telegram ID" hint="这些账号可使用 Bot 和 Mini App 的管理功能">
+            <div className="tgbot-id-input">
+              {tgBotAdminIDs.map((id) => <span key={id}>{id}<button type="button" aria-label={`移除管理员 Telegram ID ${id}`} onMouseDown={(event) => event.preventDefault()} onClick={() => setTGBotAdminIDs(tgBotAdminIDs.filter((value) => value !== id))}><X size={12} /></button></span>)}
+              <input
+                aria-label="管理员 Telegram ID，支持输入多个"
+                inputMode="numeric"
+                autoComplete="off"
+                value={tgBotAdminIDDraft}
+                onChange={(event) => setTGBotAdminIDDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" && event.key !== ",") return;
+                  event.preventDefault();
+                  try {
+                    setTGBotAdminIDs(Array.from(new Set([...tgBotAdminIDs, ...parseTelegramAdminIDs(tgBotAdminIDDraft)])));
+                    setTGBotAdminIDDraft("");
+                  } catch (reason) {
+                    const message = messageOf(reason, "管理员 Telegram ID 格式无效");
+                    setError(message);
+                    notify(message, "error");
+                  }
+                }}
+                placeholder={tgBotAdminIDs.length ? "继续添加" : "输入 Telegram ID"}
+              />
+            </div>
+          </Field>
           <Toggle checked={tgBot.webapp_dev_preview} onChange={(webapp_dev_preview) => setTGBot({ ...tgBot, webapp_dev_preview })} label="允许本机浏览器预览 Mini App" />
           <p className="tgbot-preview-note">仅从主控本机的 localhost 或 127.0.0.1 访问时生效，并使用首个管理员 Telegram ID 模拟登录；公网访问始终要求 Telegram 签名。</p>
           {tgBot.running && (tgBot.bot_url || (tgBot.webapp_dev_preview && tgBotPreviewURL)) ? <div className="tgbot-links">
@@ -1164,18 +1238,18 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
             {tgBot.webapp_dev_preview && tgBotPreviewURL ? <a href={tgBotPreviewURL} target="_blank" rel="noreferrer"><ExternalLink size={16} /><span><strong>本机预览 Mini App</strong><small>{tgBotPreviewURL}</small></span><ExternalLink size={15} /></a> : null}
           </div> : null}
         </SettingSection>
-        <SaveRow label="保存 Bot 设置" saving={saving === "tgbot"} />
+        <SaveRow label="保存 Bot 设置" saving={saving.has("tgbot")} disabled={saving.size > 0 || loadFailures.length > 0} />
       </form>
 
-      <form className="settings-settings-group" onSubmit={saveNotifications}>
+      <form id="settings-notifications" className="settings-settings-group" onSubmit={saveNotifications}>
         <SettingsGroupHeading icon={<Bell size={18} />} title="通知设置" description="管理事件通知与阈值策略" />
-        <SettingSection icon={<Send size={19} />} title="Telegram 管理通知" description="向固定 Chat ID 推送系统事件，与用户自助 Bot 相互独立"><Toggle checked={notifications.notify_enabled} onChange={(notify_enabled) => setNotifications({ ...notifications, notify_enabled })} label="启用 Telegram 管理通知" /><Field label="通知 Bot Token"><input type="password" autoComplete="new-password" value={notifications.telegram_bot_token} onChange={(e) => setNotifications({ ...notifications, telegram_bot_token: e.target.value })} /></Field><Field label="接收 Chat ID"><input value={notifications.telegram_chat_id} onChange={(e) => setNotifications({ ...notifications, telegram_chat_id: e.target.value })} /></Field><Button type="button" variant="secondary" onClick={() => void save("notify-test", () => api.post("/api/admin/notify-config/test"), "测试通知已发送")} disabled={saving === "notify-test"}>{saving === "notify-test" ? <Spinner label="正在发送" /> : <><Send size={16} />发送测试</>}</Button></SettingSection>
+        <SettingSection icon={<Send size={19} />} title="Telegram 管理通知" description="向固定 Chat ID 推送系统事件，与用户自助 Bot 相互独立"><Toggle checked={notifications.notify_enabled} onChange={(notify_enabled) => setNotifications({ ...notifications, notify_enabled })} label="启用 Telegram 管理通知" /><Field label="通知 Bot Token"><input type="password" autoComplete="new-password" value={notifications.telegram_bot_token} onChange={(e) => setNotifications({ ...notifications, telegram_bot_token: e.target.value })} /></Field><Field label="接收 Chat ID"><input value={notifications.telegram_chat_id} onChange={(e) => setNotifications({ ...notifications, telegram_chat_id: e.target.value })} /></Field><Button type="button" variant="secondary" onClick={() => void save("notify-test", () => api.post("/api/admin/notify-config/test"), "测试通知已发送")} disabled={saving.size > 0 || loadFailures.length > 0}>{saving.has("notify-test") ? <Spinner label="正在发送" /> : <><Send size={16} />发送测试</>}</Button></SettingSection>
         <SettingSection icon={<Bell size={19} />} title="事件通知" description="选择需要推送的管理事件"><div className="settings-check-list event-grid">{[["notify_login", "用户登录"], ["notify_subscribe_fetch", "订阅拉取"], ["notify_server_offline", "服务器离线"], ["notify_server_online", "服务器恢复"], ["notify_over_limit", "流量超限"], ["notify_package_expiring", "套餐即将到期"], ["notify_package_expired", "套餐已到期"], ["notify_user_registered", "用户注册"], ["notify_telegram_bound", "Telegram 绑定"], ["notify_cert_result", "证书操作"], ["notify_agent_long_offline", "Agent 长时离线"], ["notify_device_limit_exceeded", "设备数超限"]].map(([key, label]) => <label className="checkbox-row" key={key}><input type="checkbox" checked={Boolean(notifications[key as keyof NotificationSettings])} onChange={(e) => setNotifications({ ...notifications, [key]: e.target.checked })} /><span>{label}</span></label>)}</div></SettingSection>
         <SettingSection icon={<Gauge size={19} />} title="阈值与日报" description="通知触发条件"><Toggle checked={notifications.notify_daily_traffic} onChange={(notify_daily_traffic) => setNotifications({ ...notifications, notify_daily_traffic })} label="发送每日流量摘要" /><Toggle checked={notifications.notify_traffic_threshold} onChange={(notify_traffic_threshold) => setNotifications({ ...notifications, notify_traffic_threshold })} label="启用自定义流量阈值" /><div className="settings-fields-grid"><Field label="日报时间"><input type="time" value={notifications.notify_daily_traffic_time} onChange={(e) => setNotifications({ ...notifications, notify_daily_traffic_time: e.target.value })} /></Field><NumberField label="流量阈值（%）" min={1} max={100} value={notifications.notify_traffic_threshold_percent} onChange={(value) => setNotifications({ ...notifications, notify_traffic_threshold_percent: value })} /><NumberField label="到期提前（天）" min={1} max={365} value={notifications.notify_package_expiring_days} onChange={(value) => setNotifications({ ...notifications, notify_package_expiring_days: value })} /><NumberField label="Agent 离线（分钟）" min={1} max={1440} value={notifications.notify_agent_long_offline_minutes} onChange={(value) => setNotifications({ ...notifications, notify_agent_long_offline_minutes: value })} /><NumberField label="上下线容忍（秒）" min={0} value={notifications.notify_server_tolerance_seconds} onChange={(value) => setNotifications({ ...notifications, notify_server_tolerance_seconds: value })} /></div></SettingSection>
-        <SaveRow label="保存通知设置" saving={saving === "notifications"} />
+        <SaveRow label="保存通知设置" saving={saving.has("notifications")} disabled={saving.size > 0 || loadFailures.length > 0} />
       </form>
 
-      <section className="settings-settings-group settings-update-group">
+      <section id="settings-maintenance" className="settings-settings-group settings-update-group">
         <SettingsGroupHeading icon={<Download size={18} />} title="系统维护" description="检查正式版本并安全更新后端" />
         <SystemUpdatePanel
           info={updateInfo}
@@ -1201,13 +1275,13 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
         <DebugLogsPanel notify={notify} />
       </section>
 
-      <section className="settings-settings-group settings-account-group">
+      <section id="settings-account" className="settings-settings-group settings-account-group">
         <SettingsGroupHeading icon={<KeyRound size={18} />} title="账户与 API" description="管理接口凭据与双因素认证" />
-        <SettingSection icon={<KeyRound size={19} />} title="管理 API Token" description="用于可信自动化调用；重新生成后旧 Token 立即失效"><div className="api-token-row"><code>{apiToken || "尚未生成"}</code><IconButton label="复制 API Token" disabled={!apiToken} onClick={() => void navigator.clipboard.writeText(apiToken).then(() => notify("API Token 已复制"))}><Copy size={16} /></IconButton></div><Button type="button" variant="danger" onClick={() => setConfirmTokenReset(true)}>重新生成 Token</Button></SettingSection>
+        <SettingSection icon={<KeyRound size={19} />} title="管理 API Token" description="用于可信自动化调用；重新生成后旧 Token 立即失效"><div className="api-token-row"><code>{apiToken || "尚未生成"}</code><IconButton label="复制 API Token" disabled={!apiToken} onClick={() => void navigator.clipboard.writeText(apiToken).then(() => notify("API Token 已复制"))}><Copy size={16} /></IconButton></div><Button type="button" variant="danger" disabled={loadFailures.length > 0 || saving.size > 0} onClick={() => setConfirmTokenReset(true)}>重新生成 Token</Button></SettingSection>
         <TwoFactorSettings notify={notify} />
       </section>
     </div> : null}
-    {confirmTokenReset ? <ConfirmDialog title="重新生成 API Token" description="所有使用当前 Token 的脚本和集成都会立即失效，需要逐一替换。" confirmLabel="确认重新生成" working={saving === "token"} onCancel={() => setConfirmTokenReset(false)} onConfirm={() => void regenerateToken()} /> : null}
+    {confirmTokenReset ? <ConfirmDialog title="重新生成 API Token" description="所有使用当前 Token 的脚本和集成都会立即失效，需要逐一替换。" confirmLabel="确认重新生成" working={saving.has("token")} onCancel={() => setConfirmTokenReset(false)} onConfirm={() => void regenerateToken()} /> : null}
     {confirmUpdate && updateInfo ? <ConfirmDialog
       title={`更新到 ${updateTargetLabel(updateInfo)}`}
       description={updateConfirmationDescription(updateInfo)}
@@ -1253,7 +1327,7 @@ function SettingsGroupHeading({ icon, title, description }: { icon: ReactNode; t
 }
 
 function SettingSection({ icon, title, description, children }: { icon: ReactNode; title: string; description: string; children: ReactNode }) {
-  return <Surface className="settings-workbench-section"><div className="settings-heading"><span className="settings-icon">{icon}</span><div><h2>{title}</h2><p>{description}</p></div></div><div className="settings-section-body">{children}</div></Surface>;
+  return <Surface className="settings-workbench-section"><div className="settings-heading"><span className="settings-icon">{icon}</span><div><h3>{title}</h3><p>{description}</p></div></div><div className="settings-section-body">{children}</div></Surface>;
 }
 
 function BrandAssetField({ label, value, preview, onValueChange, onUpload, onReset }: {
@@ -1428,6 +1502,6 @@ function NumberField({ label, value, onChange, min = 1, max }: { label: string; 
   return <Field label={label}><input type="number" min={min} max={max} value={value} onChange={(event) => onChange(Number(event.target.value))} /></Field>;
 }
 
-function SaveRow({ label, saving }: { label: string; saving: boolean }) {
-  return <div className="settings-save-row"><Button type="submit" disabled={saving}>{saving ? <Spinner label="正在保存" /> : <><Save size={16} />{label}</>}</Button></div>;
+function SaveRow({ label, saving, disabled = false }: { label: string; saving: boolean; disabled?: boolean }) {
+  return <div className="settings-save-row"><Button type="submit" disabled={disabled}>{saving ? <Spinner label="正在保存" /> : <><Save size={16} />{label}</>}</Button></div>;
 }

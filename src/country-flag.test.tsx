@@ -1,4 +1,4 @@
-import { render } from "@testing-library/react";
+import { render, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { CountryFlag, normalizeCountryCode } from "./country-flag";
 
@@ -7,8 +7,9 @@ vi.hoisted(() => {
 });
 
 describe("CountryFlag", () => {
-  it.each(["HK", "US", "JP", "UK"])("renders %s as a bundled SVG flag", (countryCode) => {
+  it.each(["HK", "US", "JP", "UK"])("renders %s as a bundled SVG flag", async (countryCode) => {
     const { container } = render(<CountryFlag countryCode={countryCode} />);
+    await waitFor(() => expect(container.querySelector("img")).toBeInTheDocument());
     const flag = container.querySelector("img");
 
     expect(flag).toBeInTheDocument();

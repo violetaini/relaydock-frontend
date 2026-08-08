@@ -96,6 +96,32 @@ describe("content workbench templates", () => {
     expect((form.get("template") as File).name).toBe("remote.yaml");
   });
 
+  it("surfaces subscription loading failures and retries before template creation", async () => {
+    let subscriptionAttempts = 0;
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/rule-templates") return { templates: [], owners: {}, username: "admin", is_admin: true } as T;
+      if (path === "/api/admin/system-settings/default-template") return { default_template_filename: "" } as T;
+      if (path === "/api/admin/subscribe-files") {
+        subscriptionAttempts += 1;
+        if (subscriptionAttempts === 1) throw new Error("subscription list unavailable");
+        return { files: [{ id: 4, name: "主订阅", filename: "main.yaml" }] } as T;
+      }
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    render(<TemplatesWorkbenchPage notify={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "新建模板" }));
+    fireEvent.click(screen.getByRole("button", { name: "从订阅" }));
+
+    expect(await screen.findByText("subscription list unavailable")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "创建模板" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+
+    expect(await screen.findByRole("option", { name: "主订阅 · main.yaml" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "创建模板" })).toBeEnabled();
+    expect(subscriptionAttempts).toBe(2);
+  });
+
   it("deletes a rule template only after confirmation", async () => {
     vi.spyOn(api, "get").mockResolvedValue({ templates: ["private.yaml"], owners: { "private.yaml": "admin" }, username: "admin", is_admin: true });
     const remove = vi.spyOn(api, "delete").mockResolvedValue({ message: "ok" });

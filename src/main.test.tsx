@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError, getToken, setToken } from "./api";
-import { App } from "./main";
+import { App, recoverFromPreloadError, revokeCurrentSession } from "./main";
 
 vi.hoisted(() => {
   (globalThis as unknown as { process: { env: { NODE_ENV?: string } } }).process.env.NODE_ENV = "test";
@@ -89,7 +89,7 @@ describe("application bootstrap", () => {
     expect(await screen.findByRole("heading", { name: "Edge Service Status" })).toBeInTheDocument();
     expect(screen.getByText("Hong Kong Edge")).toBeInTheDocument();
     const flag = screen.getByTitle("HK");
-    expect(flag.querySelector("img")).toHaveAttribute("src", expect.stringMatching(/(?:data:image\/svg\+xml|\.svg(?:\?|$))/));
+    await waitFor(() => expect(flag.querySelector("img")).toHaveAttribute("src", expect.stringMatching(/(?:data:image\/svg\+xml|\.svg(?:\?|$))/)));
     expect(flag).not.toHaveTextContent("HK");
     expect(screen.getByRole("progressbar", { name: "CPU 13%" })).toBeInTheDocument();
     expect(screen.getByRole("progressbar", { name: "内存 38%" })).toBeInTheDocument();
@@ -154,5 +154,59 @@ describe("application bootstrap", () => {
     expect(screen.queryByText("CPU")).not.toBeInTheDocument();
     expect(screen.queryByText("内存")).not.toBeInTheDocument();
     expect(screen.queryByText("磁盘")).not.toBeInTheDocument();
+  });
+});
+
+describe("lazy release recovery", () => {
+  it("reloads once per recovery window when an old hashed chunk disappears", () => {
+    sessionStorage.clear();
+    const reload = vi.fn();
+    const first = new Event("vite:preloadError", { cancelable: true });
+    expect(recoverFromPreloadError(first, reload, 100_000)).toBe(true);
+    expect(first.defaultPrevented).toBe(true);
+    expect(reload).toHaveBeenCalledOnce();
+
+    const repeated = new Event("vite:preloadError", { cancelable: true });
+    expect(recoverFromPreloadError(repeated, reload, 120_000)).toBe(false);
+    expect(repeated.defaultPrevented).toBe(false);
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it("lets the page boundary handle the failure when session storage is unavailable", () => {
+    const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("storage disabled"); });
+    const reload = vi.fn();
+    const event = new Event("vite:preloadError", { cancelable: true });
+
+    expect(recoverFromPreloadError(event, reload, 100_000)).toBe(false);
+    expect(event.defaultPrevented).toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+    getItem.mockRestore();
+  });
+
+  it("does not reload when the recovery marker cannot be written", () => {
+    sessionStorage.clear();
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("storage full"); });
+    const reload = vi.fn();
+    const event = new Event("vite:preloadError", { cancelable: true });
+
+    expect(recoverFromPreloadError(event, reload, 100_000)).toBe(false);
+    expect(event.defaultPrevented).toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+    setItem.mockRestore();
+  });
+});
+
+describe("session logout", () => {
+  it("clears both local stores before the server logout request settles", () => {
+    setToken("persistent-session", true);
+    sessionStorage.setItem("arcway-session-token", "stale-session-copy");
+    const pending = new Promise<never>(() => undefined);
+    const post = vi.spyOn(api, "post").mockReturnValue(pending);
+
+    expect(revokeCurrentSession()).toBe(pending);
+    expect(post).toHaveBeenCalledWith("/api/logout", undefined, { suppressUnauthorizedEvent: true, timeoutMs: 5_000 });
+    expect(getToken()).toBe("");
+    expect(localStorage.getItem("arcway-session-token")).toBeNull();
+    expect(sessionStorage.getItem("arcway-session-token")).toBeNull();
   });
 });

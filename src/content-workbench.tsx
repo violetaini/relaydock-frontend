@@ -59,6 +59,7 @@ export interface ContentPageProps {
   notify?: ContentNotify;
   onOpenCustomRules?: () => void;
   onOpenRulesConfig?: () => void;
+  isAdmin?: boolean;
 }
 
 interface Envelope { success?: boolean; message?: string; error?: string }
@@ -876,7 +877,7 @@ type FilePendingAction =
   | { kind: "delete-external"; item: ExternalSubscription }
   | { kind: "delete-provider"; item: ProxyProviderConfig };
 
-export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpenRulesConfig }: ContentPageProps) {
+export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpenRulesConfig, isAdmin = true }: ContentPageProps) {
   const [tab, setTab] = useState<"files" | "external" | "providers">("files");
   const [files, setFiles] = useState<SubscribeFile[]>([]);
   const [external, setExternal] = useState<ExternalSubscription[]>([]);
@@ -890,6 +891,7 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
+  const [loadWarning, setLoadWarning] = useState("");
   const [showImport, setShowImport] = useState(false);
   const [editingFile, setEditingFile] = useState<SubscribeFile | null>(null);
   const [editingContent, setEditingContent] = useState<SubscribeFile | null>(null);
@@ -898,9 +900,8 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
   const [pending, setPending] = useState<FilePendingAction | null>(null);
 
   const load = useCallback(async () => {
-    setLoading(true); setError("");
-    try {
-      const [filePayload, externalPayload, bundle, rulePayload, scriptPayload, nodePayload, templatePayload, serverPayload, providerPayload] = await Promise.all([
+    setLoading(true); setError(""); setLoadWarning("");
+    const requests = [
         api.get<{ files?: SubscribeFile[] }>("/api/admin/subscribe-files"),
         api.get<ExternalSubscription[]>("/api/user/external-subscriptions"),
         api.get<TokenBundle>("/api/user/token"),
@@ -908,22 +909,26 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
         api.get<OverrideScriptOption[]>("/api/admin/override-scripts"),
         api.get<{ nodes?: NodeItem[] }>("/api/admin/nodes"),
         api.get<RuleTemplateList>("/api/admin/rule-templates"),
-        api.get<{ servers?: RemoteServerItem[] }>("/api/admin/remote-servers"),
+        isAdmin ? api.get<{ servers?: RemoteServerItem[] }>("/api/admin/remote-servers") : Promise.resolve({ servers: [] }),
         api.get<ProxyProviderConfig[]>("/api/user/proxy-provider-configs"),
-      ]);
-      setFiles((filePayload.files ?? []).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)));
-      setExternal(Array.isArray(externalPayload) ? externalPayload : []);
-      setRules(Array.isArray(rulePayload) ? rulePayload : []);
-      setScripts(Array.isArray(scriptPayload) ? scriptPayload : []);
-      setNodes(nodePayload.nodes ?? []);
-      setTemplates(templatePayload.templates ?? []);
-      setServers(serverPayload.servers ?? []);
-      setProviders(Array.isArray(providerPayload) ? providerPayload : []);
-      setToken(bundle);
-    } catch (reason) {
-      setError(fail(reason, "加载订阅管理数据失败"));
-    } finally { setLoading(false); }
-  }, []);
+      ] as const;
+    const labels = ["订阅列表", "外部订阅", "订阅令牌", "覆写规则", "覆写脚本", "节点", "模板", "服务器", "Provider"];
+    const results = await Promise.allSettled(requests);
+    const fileResult = results[0];
+    if (fileResult.status === "rejected") setError(fail(fileResult.reason, "订阅列表加载失败"));
+    else setFiles((fileResult.value.files ?? []).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)));
+    if (results[1].status === "fulfilled") setExternal(Array.isArray(results[1].value) ? results[1].value : []);
+    if (results[2].status === "fulfilled") setToken(results[2].value);
+    if (results[3].status === "fulfilled") setRules(Array.isArray(results[3].value) ? results[3].value : []);
+    if (results[4].status === "fulfilled") setScripts(Array.isArray(results[4].value) ? results[4].value : []);
+    if (results[5].status === "fulfilled") setNodes(results[5].value.nodes ?? []);
+    if (results[6].status === "fulfilled") setTemplates(results[6].value.templates ?? []);
+    if (results[7].status === "fulfilled") setServers(results[7].value.servers ?? []);
+    if (results[8].status === "fulfilled") setProviders(Array.isArray(results[8].value) ? results[8].value : []);
+    const failures = results.flatMap((result, index) => result.status === "rejected" && index !== 0 ? [labels[index]] : []);
+    if (failures.length) setLoadWarning(`${failures.join("、")}加载失败；其余订阅管理功能仍可使用。`);
+    setLoading(false);
+  }, [isAdmin]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -989,6 +994,7 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
       <PageHeader title="订阅管理" description="维护订阅文件、第三方订阅源和 Mihomo Proxy Provider。" actions={<>{onOpenCustomRules ? <Button variant="secondary" onClick={onOpenCustomRules}><Braces size={16} />覆写规则</Button> : null}{onOpenRulesConfig ? <Button variant="secondary" onClick={onOpenRulesConfig}><FileCode2 size={16} />规则配置</Button> : null}<IconButton label="刷新订阅管理" onClick={() => void load()}><RefreshCw size={18} /></IconButton>{tab === "files" ? <Button onClick={() => setShowImport(true)}><Plus size={16} />添加订阅</Button> : tab === "external" ? <><Button variant="secondary" onClick={() => void syncExternal()} disabled={working || external.length === 0}><RotateCw size={16} />同步全部</Button><Button onClick={() => setEditingExternal("new")}><Plus size={16} />外部订阅</Button></> : <Button onClick={() => setEditingProvider("new")}><Plus size={16} />Proxy Provider</Button>}</>} />
       <div className="cw-tabs cw-tabs-three" role="tablist" aria-label="订阅管理分类"><button type="button" role="tab" aria-selected={tab === "files"} className={tab === "files" ? "is-active" : ""} onClick={() => setTab("files")}><FileText size={16} />订阅列表 <span>{files.length}</span></button><button type="button" role="tab" aria-selected={tab === "external"} className={tab === "external" ? "is-active" : ""} onClick={() => setTab("external")}><CloudDownload size={16} />外部订阅 <span>{external.length}</span></button><button type="button" role="tab" aria-selected={tab === "providers"} className={tab === "providers" ? "is-active" : ""} onClick={() => setTab("providers")}><Server size={16} />Provider <span>{providers.length}</span></button></div>
       {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
+      {loadWarning ? <div className="cw-help"><Info size={16} /><span>{loadWarning}</span></div> : null}
       {loading ? <Surface className="cw-loading"><Spinner /></Surface> : tab === "files" ? (
         <Surface className="table-surface cw-compact-table">
           <div className="surface-heading"><div><h2>订阅列表</h2><small>已添加的订阅文件，可编辑内容与同步策略</small></div></div>
@@ -1022,7 +1028,7 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
           )}
         </Surface>
       )}
-      {showImport ? <ImportSubscriptionDialog nodes={nodes} templates={templates} rules={rules} scripts={scripts} servers={servers} onClose={() => setShowImport(false)} onComplete={async () => { setShowImport(false); notify("订阅已添加"); await load(); }} /> : null}
+      {showImport ? <ImportSubscriptionDialog nodes={nodes} templates={templates} rules={rules} scripts={scripts} servers={servers} onClose={(created) => { setShowImport(false); if (created) { notify("订阅已导入，但高级设置尚未保存", "error"); void load(); } }} onComplete={async () => { setShowImport(false); notify("订阅已添加"); await load(); }} /> : null}
       {editingFile ? <EditSubscribeFileDialog item={editingFile} nodes={nodes} templates={templates} rules={rules} scripts={scripts} servers={servers} onClose={() => setEditingFile(null)} onComplete={async () => { setEditingFile(null); notify("订阅信息已更新"); await load(); }} /> : null}
       {editingContent ? <EditSubscribeContentDialog item={editingContent} onClose={() => setEditingContent(null)} onComplete={async () => { setEditingContent(null); notify("订阅内容已保存"); await load(); }} /> : null}
       {editingExternal ? <ExternalSubscriptionDialog item={editingExternal === "new" ? undefined : editingExternal} onClose={() => setEditingExternal(null)} onComplete={async () => { setEditingExternal(null); notify(editingExternal === "new" ? "外部订阅已添加" : "外部订阅已更新"); await load(); }} /> : null}
@@ -1038,7 +1044,7 @@ function ImportSubscriptionDialog({ nodes, templates, rules, scripts, servers, o
   rules: CustomRuleOption[];
   scripts: OverrideScriptOption[];
   servers: RemoteServerItem[];
-  onClose: () => void;
+  onClose: (created: boolean) => void;
   onComplete: () => void;
 }) {
   const [mode, setMode] = useState<"url" | "upload">("url");
@@ -1056,24 +1062,34 @@ function ImportSubscriptionDialog({ nodes, templates, rules, scripts, servers, o
   const [trafficLimit, setTrafficLimit] = useState("");
   const [autoSync, setAutoSync] = useState(false);
   const [rawOutput, setRawOutput] = useState(false);
+  const [createdFile, setCreatedFile] = useState<SubscribeFile | null>(null);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
+  const close = () => {
+    if (working) return;
+    onClose(Boolean(createdFile));
+  };
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setWorking(true); setError("");
     try {
-      let result: { file?: SubscribeFile };
-      if (mode === "url") {
-        result = await api.post<{ file?: SubscribeFile }>("/api/admin/subscribe-files/import", { name, description, url, filename: filename ? normalizedFilename(filename) : "" });
-      } else {
-        if (!file) throw new Error("请选择 YAML 文件");
-        const form = new FormData(); form.set("file", file); form.set("name", name || file.name.replace(/\.ya?ml$/i, "")); form.set("description", description); if (filename) form.set("filename", normalizedFilename(filename));
-        result = await request<{ file?: SubscribeFile }>("/api/admin/subscribe-files/upload", { method: "POST", body: form });
-      }
-      if (!result.file?.id) throw new Error("订阅已导入，但后端没有返回可继续配置的文件 ID");
       const limit = trafficLimit.trim() ? Number(trafficLimit) : null;
       if (limit != null && (!Number.isFinite(limit) || limit < 0)) throw new Error("流量上限必须是大于等于 0 的 GB 数值");
+      let importedFile = createdFile;
+      if (!importedFile) {
+        let result: { file?: SubscribeFile };
+        if (mode === "url") {
+          result = await api.post<{ file?: SubscribeFile }>("/api/admin/subscribe-files/import", { name, description, url, filename: filename ? normalizedFilename(filename) : "" });
+        } else {
+          if (!file) throw new Error("请选择 YAML 文件");
+          const form = new FormData(); form.set("file", file); form.set("name", name || file.name.replace(/\.ya?ml$/i, "")); form.set("description", description); if (filename) form.set("filename", normalizedFilename(filename));
+          result = await request<{ file?: SubscribeFile }>("/api/admin/subscribe-files/upload", { method: "POST", body: form });
+        }
+        if (!result.file?.id) throw new Error("订阅已导入，但后端没有返回可继续配置的文件 ID");
+        importedFile = result.file;
+        setCreatedFile(result.file);
+      }
       if (advanced) {
-        await api.put(`/api/admin/subscribe-files/${result.file.id}`, subscribeFilePayload(result.file, {
+        await api.put(`/api/admin/subscribe-files/${importedFile.id}`, subscribeFilePayload(importedFile, {
           template_filename: templateFilename,
           selected_node_ids: [...selectedNodeIDs],
           selected_custom_rule_ids: [...selectedRuleIDs],
@@ -1089,14 +1105,14 @@ function ImportSubscriptionDialog({ nodes, templates, rules, scripts, servers, o
     finally { setWorking(false); }
   };
   const toggle = (setter: Dispatch<SetStateAction<Set<number>>>, id: number) => setter((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
-  return <Dialog title="添加订阅" description="从 Clash 订阅链接导入或上传本地 YAML 文件" onClose={onClose} wide><form className="cw-form" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}<div className="cw-mode"><button type="button" className={mode === "url" ? "is-active" : ""} onClick={() => setMode("url")}><Link2 size={16} />链接导入</button><button type="button" className={mode === "upload" ? "is-active" : ""} onClick={() => setMode("upload")}><Upload size={16} />本地文件</button></div><div className="cw-form-grid"><Field label="订阅名称"><input required={mode === "url"} value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：机场订阅" /></Field><Field label="文件名" hint="留空时自动生成"><input value={filename} onChange={(event) => setFilename(event.target.value)} placeholder="subscription.yaml" /></Field></div>{mode === "url" ? <Field label="订阅 URL"><input required type="url" value={url} onChange={(event) => setURL(event.target.value)} placeholder="https://example.com/subscribe" /></Field> : <Field label="YAML 文件"><input required type="file" accept=".yaml,.yml,application/yaml,text/yaml" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></Field>}<Field label="说明"><textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="可选" /></Field><Button type="button" variant="ghost" onClick={() => setAdvanced((value) => !value)}><Settings2 size={16} />{advanced ? "收起高级设置" : "配置模板、节点与覆写范围"}</Button>{advanced ? <>
+  return <Dialog title="添加订阅" description="从 Clash 订阅链接导入或上传本地 YAML 文件" onClose={close} dismissible={!working} wide><form className="cw-form" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}{createdFile ? <div className="cw-help"><Info size={16} /><span>订阅“{createdFile.name}”已导入；再次提交只会重试尚未保存的高级设置，不会重复创建。</span></div> : null}<div className="cw-mode"><button type="button" disabled={Boolean(createdFile)} className={mode === "url" ? "is-active" : ""} onClick={() => setMode("url")}><Link2 size={16} />链接导入</button><button type="button" disabled={Boolean(createdFile)} className={mode === "upload" ? "is-active" : ""} onClick={() => setMode("upload")}><Upload size={16} />本地文件</button></div><div className="cw-form-grid"><Field label="订阅名称"><input disabled={Boolean(createdFile)} required={mode === "url"} value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：机场订阅" /></Field><Field label="文件名" hint="留空时自动生成"><input disabled={Boolean(createdFile)} value={filename} onChange={(event) => setFilename(event.target.value)} placeholder="subscription.yaml" /></Field></div>{mode === "url" ? <Field label="订阅 URL"><input disabled={Boolean(createdFile)} required type="url" value={url} onChange={(event) => setURL(event.target.value)} placeholder="https://example.com/subscribe" /></Field> : <Field label="YAML 文件"><input disabled={Boolean(createdFile)} required type="file" accept=".yaml,.yml,application/yaml,text/yaml" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></Field>}<Field label="说明"><textarea disabled={Boolean(createdFile)} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="可选" /></Field><Button type="button" variant="ghost" disabled={Boolean(createdFile)} onClick={() => setAdvanced((value) => !value)}><Settings2 size={16} />{advanced ? "收起高级设置" : "配置模板、节点与覆写范围"}</Button>{advanced ? <>
     <div className="cw-form-grid"><Field label="V3 模板"><select value={templateFilename} onChange={(event) => setTemplateFilename(event.target.value)}><option value="">不绑定模板</option>{templates.map((template) => <option value={template} key={template}>{template}</option>)}</select></Field><Field label="手动流量上限（GB）"><input type="number" min="0" step="0.1" value={trafficLimit} onChange={(event) => setTrafficLimit(event.target.value)} placeholder="留空跟随服务器" /></Field></div>
     <div className="cw-checkboxes"><Toggle checked={autoSync} onChange={setAutoSync} label="自动同步自定义规则" /><Toggle checked={rawOutput} onChange={setRawOutput} label="输出原始配置" /></div>
     <div className="cw-form-section"><strong>节点范围</strong><div className="cw-option-grid">{nodes.map((node) => <label className="cw-option-check" key={node.id}><input type="checkbox" checked={selectedNodeIDs.has(node.id)} onChange={() => toggle(setSelectedNodeIDs, node.id)} /><span><strong>{node.node_name}</strong><small>{node.protocol || "未知协议"}</small></span></label>)}</div></div>
     <div className="cw-form-grid"><div className="cw-form-section"><strong>指定覆写规则</strong><p className="cw-section-hint">不选表示全部已启用规则。</p><div className="cw-option-stack">{rules.map((rule) => <label className="cw-option-check" key={rule.id}><input type="checkbox" checked={selectedRuleIDs.has(rule.id)} onChange={() => toggle(setSelectedRuleIDs, rule.id)} /><span><strong>{rule.name}</strong><small>{rule.type}</small></span></label>)}</div></div><div className="cw-form-section"><strong>指定覆写脚本</strong><p className="cw-section-hint">不选表示全部已启用脚本。</p><div className="cw-option-stack">{scripts.map((script) => <label className="cw-option-check" key={script.id}><input type="checkbox" checked={selectedScriptIDs.has(script.id)} onChange={() => toggle(setSelectedScriptIDs, script.id)} /><span><strong>{script.name}</strong><small>{script.hook}</small></span></label>)}</div></div></div>
     <div className="cw-form-section"><strong>流量统计服务器</strong><p className="cw-section-hint">不选表示汇总全部服务器。</p><div className="cw-option-grid">{servers.map((server) => <label className="cw-option-check" key={server.id}><input type="checkbox" checked={selectedServerIDs.has(server.id)} onChange={() => toggle(setSelectedServerIDs, server.id)} /><span><strong>{server.name}</strong><small>服务器 #{server.id}</small></span></label>)}</div></div>
     <div className="cw-help"><Info size={16} /><span>高级设置在导入成功后通过返回的文件 ID 立即写入；若后端不返回 ID，前端会明确报错而不是假装保存成功。</span></div>
-  </> : null}<div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在导入" /> : "添加"}</Button></div></form></Dialog>;
+  </> : null}<div className="dialog-actions"><Button type="button" variant="secondary" disabled={working} onClick={close}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label={createdFile ? "正在保存" : "正在导入"} /> : createdFile ? "重试高级设置" : "添加"}</Button></div></form></Dialog>;
 }
 
 function EditSubscribeFileDialog({ item, nodes, templates, rules, scripts, servers, onClose, onComplete }: {
@@ -1397,7 +1413,6 @@ function VisualTemplateDialog({ onClose, onComplete }: { onClose: () => void; on
     return defaultVisualDraft();
   });
   const [nodes, setNodes] = useState<NodeItem[]>([]);
-  const [providers, setProviders] = useState<ProxyProviderConfig[]>([]);
   const [regions, setRegions] = useState<{ name: string; filter: string }[]>([]);
   const [region, setRegion] = useState("");
   const [tab, setTab] = useState<"design" | "yaml" | "json">("design");
@@ -1409,13 +1424,11 @@ function VisualTemplateDialog({ onClose, onComplete }: { onClose: () => void; on
     const loadOptions = async () => {
       const results = await Promise.allSettled([
         api.get<{ nodes?: NodeItem[] }>("/api/admin/nodes"),
-        api.get<ProxyProviderConfig[]>("/api/user/proxy-provider-configs"),
         api.get<{ region_filters?: unknown }>("/api/admin/template-v3/region-filters"),
       ]);
       if (results[0].status === "fulfilled") setNodes(results[0].value.nodes ?? []);
-      if (results[1].status === "fulfilled") setProviders(Array.isArray(results[1].value) ? results[1].value : []);
-      if (results[2].status === "fulfilled") {
-        const raw = results[2].value.region_filters;
+      if (results[1].status === "fulfilled") {
+        const raw = results[1].value.region_filters;
         if (raw && typeof raw === "object" && !Array.isArray(raw)) {
           setRegions(Object.entries(raw as Record<string, unknown>).flatMap(([name, value]) => typeof value === "string" ? [{ name, filter: value }] : []));
         } else if (Array.isArray(raw)) {
@@ -1430,7 +1443,7 @@ function VisualTemplateDialog({ onClose, onComplete }: { onClose: () => void; on
         }
       }
       const failures = results.filter((result) => result.status === "rejected").length;
-      if (failures) setLoadWarning(`${failures} 项节点 / Provider / 地区预设数据加载失败，仍可使用占位来源手动设计。`);
+      if (failures) setLoadWarning(`${failures} 项节点 / 地区预设数据加载失败，仍可使用占位来源手动设计。`);
     };
     void loadOptions();
   }, []);
@@ -1483,7 +1496,8 @@ function VisualTemplateDialog({ onClose, onComplete }: { onClose: () => void; on
       if (names.some((name) => !name)) throw new Error("代理组名称不能为空");
       if (new Set(names).size !== names.length) throw new Error("代理组名称不能重复");
       for (const group of draft.groups) {
-        if (group.sources.length === 0) throw new Error(`代理组“${group.name}”至少需要一个节点、Provider 或组来源`);
+        if (group.sources.some((source) => source.kind === "provider")) throw new Error(`代理组“${group.name}”引用了当前生成链路尚不支持的 Proxy Provider，请移除后再保存`);
+        if (group.sources.length === 0) throw new Error(`代理组“${group.name}”至少需要一个节点或组来源`);
         if (group.type === "relay" && group.sources.filter((source) => source.kind !== "provider").length < 2) throw new Error(`Relay 组“${group.name}”至少需要两个有序节点来源`);
       }
       if (!draft.rules.some((rule) => rule.trim())) throw new Error("至少需要一条规则");
@@ -1497,11 +1511,9 @@ function VisualTemplateDialog({ onClose, onComplete }: { onClose: () => void; on
 
   const sourceOptions = (group: VisualProxyGroup) => [
     { label: "全部注入节点", kind: "node" as const, value: "__PROXY_NODES__" },
-    { label: "全部 Proxy Provider", kind: "provider" as const, value: "__PROXY_PROVIDERS__" },
     { label: "DIRECT", kind: "builtin" as const, value: "DIRECT" },
     { label: "REJECT", kind: "builtin" as const, value: "REJECT" },
     ...draft.groups.filter((item) => item.id !== group.id && item.name.trim()).map((item) => ({ label: `组 · ${item.name}`, kind: "group" as const, value: item.name.trim() })),
-    ...providers.map((item) => ({ label: `Provider · ${item.name}`, kind: "provider" as const, value: item.name })),
     ...nodes.filter((item) => item.enabled).map((item) => ({ label: `节点 · ${item.node_name}`, kind: "node" as const, value: item.node_name })),
   ];
 
@@ -1514,11 +1526,11 @@ function VisualTemplateDialog({ onClose, onComplete }: { onClose: () => void; on
       {tab === "design" ? <>
         <div className="cw-form-grid"><Field label="模板文件名"><input required value={draft.filename} onChange={(event) => setDraft((current) => ({ ...current, filename: event.target.value }))} /></Field><Field label="DNS 模式"><select value={draft.dnsMode} onChange={(event) => setDraft((current) => ({ ...current, dnsMode: event.target.value as VisualTemplateDraft["dnsMode"] }))}><option value="fake-ip">Fake IP</option><option value="redir-host">Redir Host</option><option value="off">不写入 DNS</option></select></Field></div>
         {draft.dnsMode !== "off" ? <div className="cw-form-section"><strong>DNS</strong><div className="cw-form-grid"><Field label="Nameserver（每行一个）"><textarea value={draft.nameservers.join("\n")} onChange={(event) => setDraft((current) => ({ ...current, nameservers: event.target.value.split("\n") }))} /></Field>{draft.dnsMode === "fake-ip" ? <><Field label="Fake IP 范围"><input value={draft.fakeIPRange} onChange={(event) => setDraft((current) => ({ ...current, fakeIPRange: event.target.value }))} /></Field><Field label="Fake IP 排除（每行一个）"><textarea value={draft.fakeIPFilters.join("\n")} onChange={(event) => setDraft((current) => ({ ...current, fakeIPFilters: event.target.value.split("\n") }))} /></Field></> : null}<div className="cw-toggle-field"><Toggle checked={draft.ipv6} onChange={(ipv6) => setDraft((current) => ({ ...current, ipv6 }))} label="DNS IPv6" /></div></div></div> : null}
-        <div className="cw-form-section"><div className="cw-section-title"><div><h2>代理组</h2><p>来源顺序会写入 proxies；Provider 来源按 Mihomo 语义写入 use。</p></div><div className="cw-toolbar"><select aria-label="地区分组预设" value={region} onChange={(event) => setRegion(event.target.value)}><option value="">地区预设</option>{regions.map((item) => <option value={item.name} key={item.name}>{item.name}</option>)}</select><Button variant="secondary" onClick={addRegionGroup} disabled={!region}>添加地区组</Button><Button onClick={() => setDraft((current) => ({ ...current, groups: [...current.groups, { ...defaultVisualGroup(), name: `PROXY ${current.groups.length + 1}` }] }))}><Plus size={16} />代理组</Button></div></div>
+        <div className="cw-form-section"><div className="cw-section-title"><div><h2>代理组</h2><p>来源顺序会写入 proxies；可选择节点、内置项或其他代理组。</p></div><div className="cw-toolbar"><select aria-label="地区分组预设" value={region} onChange={(event) => setRegion(event.target.value)}><option value="">地区预设</option>{regions.map((item) => <option value={item.name} key={item.name}>{item.name}</option>)}</select><Button variant="secondary" onClick={addRegionGroup} disabled={!region}>添加地区组</Button><Button onClick={() => setDraft((current) => ({ ...current, groups: [...current.groups, { ...defaultVisualGroup(), name: `PROXY ${current.groups.length + 1}` }] }))}><Plus size={16} />代理组</Button></div></div>
           <div className="cw-visual-groups">{draft.groups.map((group, groupIndex) => <Surface className="cw-visual-group" key={group.id}>
             <div className="cw-visual-group-head"><strong>{group.name || "未命名组"}</strong><div className="cw-table-actions"><IconButton label={`上移代理组 ${group.name}`} disabled={groupIndex === 0} onClick={() => moveGroup(groupIndex, -1)}><ArrowUp size={15} /></IconButton><IconButton label={`下移代理组 ${group.name}`} disabled={groupIndex === draft.groups.length - 1} onClick={() => moveGroup(groupIndex, 1)}><ArrowDown size={15} /></IconButton><IconButton label={`删除代理组 ${group.name}`} disabled={draft.groups.length === 1} onClick={() => setDraft((current) => ({ ...current, groups: current.groups.filter((item) => item.id !== group.id) }))}><Trash2 size={15} /></IconButton></div></div>
             <div className="cw-form-grid"><Field label="组名"><input value={group.name} onChange={(event) => updateGroup(group.id, { name: event.target.value })} /></Field><Field label="类型"><select value={group.type} onChange={(event) => updateGroup(group.id, { type: event.target.value as ProxyGroupType })}><option value="select">Select</option><option value="url-test">URL Test</option><option value="fallback">Fallback</option><option value="load-balance">Load Balance</option><option value="relay">Relay</option></select></Field></div>
-            <Field label="添加节点 / Provider / 代理组来源"><select aria-label={`添加 ${group.name} 来源`} value="" onChange={(event) => addSource(group, event.target.value)}><option value="">选择来源</option>{sourceOptions(group).map((option) => <option value={JSON.stringify({ kind: option.kind, value: option.value })} key={`${option.kind}:${option.value}`}>{option.label}</option>)}</select></Field>
+            <Field label="添加节点 / 代理组来源"><select aria-label={`添加 ${group.name} 来源`} value="" onChange={(event) => addSource(group, event.target.value)}><option value="">选择来源</option>{sourceOptions(group).map((option) => <option value={JSON.stringify({ kind: option.kind, value: option.value })} key={`${option.kind}:${option.value}`}>{option.label}</option>)}</select></Field>
             <div className="cw-source-list">{group.sources.map((source, sourceIndex) => <div className="cw-source-row" key={source.id}><Badge tone={source.kind === "provider" ? "info" : "neutral"}>{({ node: "节点", provider: "Provider", group: "代理组", builtin: "内置" } as const)[source.kind]}</Badge><code>{source.value}</code><div className="cw-table-actions"><IconButton label={`上移来源 ${source.value}`} disabled={sourceIndex === 0} onClick={() => moveSource(group, sourceIndex, -1)}><ArrowUp size={14} /></IconButton><IconButton label={`下移来源 ${source.value}`} disabled={sourceIndex === group.sources.length - 1} onClick={() => moveSource(group, sourceIndex, 1)}><ArrowDown size={14} /></IconButton><IconButton label={`移除来源 ${source.value}`} onClick={() => updateGroup(group.id, { sources: group.sources.filter((item) => item.id !== source.id) })}><Trash2 size={14} /></IconButton></div></div>)}</div>
             {["url-test", "fallback", "load-balance"].includes(group.type) ? <div className="cw-form-grid"><Field label="健康检查 URL"><input type="url" value={group.url} onChange={(event) => updateGroup(group.id, { url: event.target.value })} /></Field><Field label="检查间隔（秒）"><input type="number" min="1" value={group.interval} onChange={(event) => updateGroup(group.id, { interval: Number(event.target.value) })} /></Field>{group.type === "url-test" ? <Field label="容差（毫秒）"><input type="number" min="0" value={group.tolerance} onChange={(event) => updateGroup(group.id, { tolerance: Number(event.target.value) })} /></Field> : null}{group.type === "load-balance" ? <Field label="负载策略"><select value={group.strategy} onChange={(event) => updateGroup(group.id, { strategy: event.target.value })}><option value="consistent-hashing">Consistent Hashing</option><option value="round-robin">Round Robin</option><option value="sticky-sessions">Sticky Sessions</option></select></Field> : null}<div className="cw-toggle-field"><Toggle checked={group.lazy} onChange={(lazy) => updateGroup(group.id, { lazy })} label="Lazy 检测" /></div></div> : null}
             <div className="cw-form-grid"><Field label="包含过滤（filter）"><input value={group.filter} onChange={(event) => updateGroup(group.id, { filter: event.target.value })} /></Field><Field label="排除过滤（exclude-filter）"><input value={group.excludeFilter} onChange={(event) => updateGroup(group.id, { excludeFilter: event.target.value })} /></Field><Field label="排除类型（exclude-type）"><input value={group.excludeType} onChange={(event) => updateGroup(group.id, { excludeType: event.target.value })} /></Field><Field label="链式前置组" hint="生成 dialer-proxy-group，由现有订阅 handler 注入到节点"><select value={group.dialerProxyGroup} onChange={(event) => updateGroup(group.id, { dialerProxyGroup: event.target.value })}><option value="">不设置</option>{draft.groups.filter((item) => item.id !== group.id && item.name.trim()).map((item) => <option value={item.name} key={item.id}>{item.name}</option>)}</select></Field></div>
@@ -1567,10 +1579,7 @@ function EditTemplateDialog({ filename, onClose, onComplete }: { filename: strin
     event.preventDefault(); setWorking(true); setError("");
     try {
       const normalized = normalizedFilename(nextName, "template");
-      await api.put(`/api/admin/rule-templates/${encodeURIComponent(filename)}`, { content });
-      if (normalized !== filename) {
-        await api.post<{ filename?: string }>("/api/admin/rule-templates/rename", { old_name: filename, new_name: normalized });
-      }
+      await api.put(`/api/admin/rule-templates/${encodeURIComponent(filename)}`, { content, new_name: normalized });
       onComplete();
     } catch (reason) { setError(fail(reason, "保存模板失败")); }
     finally { setWorking(false); }
@@ -1723,10 +1732,10 @@ export function CertificatesWorkbenchPage({ notify = noNotify }: ContentPageProp
     <div className="cw-tabs" role="tablist" aria-label="证书管理分类"><button type="button" role="tab" aria-selected={tab === "certificates"} className={tab === "certificates" ? "is-active" : ""} onClick={() => setTab("certificates")}><Award size={16} />证书 <span>{certificates.length}</span></button><button type="button" role="tab" aria-selected={tab === "providers"} className={tab === "providers" ? "is-active" : ""} onClick={() => setTab("providers")}><KeyRound size={16} />DNS 提供商 <span>{providers.length}</span></button></div>
     {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
     {loading ? <Surface className="cw-loading"><Spinner /></Surface> : tab === "certificates" ? <CertificateTable items={certificates} working={working} onApply={() => setShowApply(true)} onEdit={setEditingCertificate} onRenew={(item) => void renew(item)} onToggle={(item, key, value) => void toggleCertificate(item, key, value)} onDeploy={setDeploying} onDelete={(item) => setPending({ kind: "certificate", item })} /> : <DNSProviderTable items={providers} onCreate={() => setEditingProvider("new")} onEdit={setEditingProvider} onDelete={(item) => setPending({ kind: "provider", item })} />}
-    {showApply ? <ApplyCertificateDialog providers={providers} servers={servers} onCreateProvider={() => { setShowApply(false); setProviderForApply(true); setEditingProvider("new"); }} onClose={() => setShowApply(false)} onComplete={async () => { setShowApply(false); notify("证书申请已提交"); await load(); }} /> : null}
+    {showApply ? <ApplyCertificateDialog providers={providers} onCreateProvider={() => { setShowApply(false); setProviderForApply(true); setEditingProvider("new"); }} onClose={() => setShowApply(false)} onComplete={async () => { setShowApply(false); notify("证书申请已提交"); await load(); }} /> : null}
     {showUpload ? <UploadCertificateDialog onClose={() => setShowUpload(false)} onComplete={async () => { setShowUpload(false); notify("证书已上传"); await load(); }} /> : null}
     {editingCertificate ? <EditCertificateDialog item={editingCertificate} providers={providers} onClose={() => setEditingCertificate(null)} onComplete={async () => { setEditingCertificate(null); notify("证书设置已更新"); await load(); }} /> : null}
-    {deploying ? <DeployCertificateDialog item={deploying} onClose={() => setDeploying(null)} onComplete={async () => { setDeploying(null); notify("证书已部署"); await load(); }} /> : null}
+    {deploying ? <DeployCertificateDialog item={deploying} servers={servers} onClose={() => setDeploying(null)} onComplete={async () => { setDeploying(null); notify("证书已部署"); await load(); }} /> : null}
     {editingProvider ? <DNSProviderDialog item={editingProvider === "new" ? undefined : editingProvider} onClose={() => { setEditingProvider(null); if (providerForApply) { setProviderForApply(false); setShowApply(true); } }} onComplete={async () => { const returnToApply = providerForApply; setEditingProvider(null); setProviderForApply(false); notify(editingProvider === "new" ? "DNS 提供商已创建" : "DNS 提供商已更新"); await load(); if (returnToApply) setShowApply(true); }} /> : null}
     {pending ? <ConfirmDialog title={pending.kind === "certificate" ? "删除证书" : "删除 DNS 提供商"} description={pending.kind === "certificate" ? `将删除“${pending.item.domain}”的证书记录和自动化策略。` : `将删除“${pending.item.name}”，使用该凭据的证书后续无法自动续期。`} confirmLabel="确认删除" working={working} onCancel={() => setPending(null)} onConfirm={() => void remove()} /> : null}
   </section>;
@@ -1737,14 +1746,19 @@ function CertificateTable({ items, working, onApply, onEdit, onRenew, onToggle, 
   return <Surface className="table-surface cw-compact-table cw-managed-table cw-certificate-table">
     <div className="table-wrap"><table>
       <thead><tr><th>域名</th><th>状态 / CA</th><th>目标</th><th>有效期</th><th>自动化</th><th aria-label="操作" /></tr></thead>
-      <tbody>{items.map((item) => <tr key={item.id}>
+      <tbody>{items.map((item) => {
+        const manual = item.provider === "manual" || item.challenge_mode === "manual";
+        const hasDeployConfig = ["nginx", "xray", "both"].includes(item.deploy_target || "") && Boolean(item.deploy_cert_path?.trim()) && Boolean(item.deploy_key_path?.trim());
+        const scope = item.remote_server_id ? item.remote_server_name || `服务器 #${item.remote_server_id}` : "主控";
+        const canAutoDeploy = hasDeployConfig;
+        return <tr key={item.id}>
         <td data-label="域名"><div className="cw-file-name"><span className="cw-file-icon"><LockKeyhole size={16} /></span><span><strong title={item.domain}>{item.domain}</strong><small title={item.email}>{item.email || "未记录邮箱"}</small></span></div>{item.message ? <span className={`cw-table-note cw-clamp-note ${item.status === "failed" ? "cw-private-warning" : ""}`} title={item.message}>{item.message}</span> : null}</td>
         <td data-label="状态 / CA"><span className="cw-status"><span className={`cw-status-dot is-${item.status}`} /><Badge tone={certificateTone(item.status)}>{certificateStatus(item.status)}</Badge></span><span className="cw-table-note">{item.provider || "manual"} · {item.challenge_mode || "manual"}</span></td>
         <td data-label="目标"><strong title={item.remote_server_name}>{item.remote_server_name || (item.remote_server_id ? `服务器 #${item.remote_server_id}` : "主控本地")}</strong><span className="cw-table-note">{item.deploy_target && item.deploy_target !== "none" ? `部署到 ${item.deploy_target}` : "未配置部署"}</span></td>
         <td data-label="有效期"><strong>{formatDate(item.expiry_date)}</strong><span className="cw-table-note">签发 {formatDate(item.issue_date)}</span></td>
-        <td data-label="自动化"><div className="cw-auto-stack"><Toggle checked={item.auto_renew} onChange={(value) => onToggle(item, "auto_renew", value)} label="自动续期" /><Toggle checked={item.auto_deploy} onChange={(value) => onToggle(item, "auto_deploy", value)} label="自动部署" /></div></td>
+        <td data-label="自动化"><div className="cw-auto-stack"><Toggle checked={item.auto_renew} disabled={manual && !item.auto_renew} onChange={(value) => onToggle(item, "auto_renew", value)} label="自动续期" /><Toggle checked={item.auto_deploy} disabled={!canAutoDeploy && !item.auto_deploy} onChange={(value) => onToggle(item, "auto_deploy", value)} label={`${manual ? "自动部署到" : "签发或续期后自动部署到"}${scope}`} /><span className="cw-table-note">{manual ? hasDeployConfig ? `手动证书不自动续期；部署范围：${scope}` : "手动证书不自动续期；请先配置部署目标和路径" : hasDeployConfig ? `自动部署范围：${scope}` : "请先配置部署目标和路径"}</span></div></td>
         <td data-label="操作"><div className="cw-table-actions"><IconButton label={`编辑 ${item.domain}`} onClick={() => onEdit(item)}><Pencil size={16} /></IconButton>{item.status === "failed" ? <Button variant="secondary" disabled={working || item.provider === "manual"} onClick={() => onRenew(item)}><RotateCw size={15} />重试申请</Button> : <IconButton label={`续期 ${item.domain}`} disabled={working || item.status === "pending" || item.provider === "manual"} onClick={() => onRenew(item)}><RotateCw size={16} /></IconButton>}<IconButton label={`部署 ${item.domain}`} disabled={item.status !== "valid"} onClick={() => onDeploy(item)}><Server size={16} /></IconButton><IconButton label={`删除 ${item.domain}`} onClick={() => onDelete(item)}><Trash2 size={16} /></IconButton></div></td>
-      </tr>)}</tbody>
+      </tr>})}</tbody>
     </table></div>
   </Surface>;
 }
@@ -1754,7 +1768,7 @@ function DNSProviderTable({ items, onCreate, onEdit, onDelete }: { items: DNSPro
   return <Surface className="table-surface cw-compact-table cw-managed-table cw-provider-table"><div className="table-wrap"><table><thead><tr><th>名称</th><th>提供商</th><th>凭据</th><th>更新时间</th><th aria-label="操作" /></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td data-label="名称"><div className="cw-file-name"><span className="cw-file-icon"><Globe2 size={16} /></span><span><strong title={item.name}>{item.name}</strong><small>ID {item.id}</small></span></div></td><td data-label="提供商"><Badge tone="info">{item.provider_type}</Badge></td><td data-label="凭据"><span className="cw-secret">••••••••</span><span className="cw-table-note">编辑后可按需显示</span></td><td data-label="更新时间">{formatDate(item.updated_at || item.created_at)}</td><td data-label="操作"><div className="cw-table-actions"><IconButton label={`编辑 ${item.name}`} onClick={() => onEdit(item)}><Pencil size={16} /></IconButton><IconButton label={`删除 ${item.name}`} onClick={() => onDelete(item)}><Trash2 size={16} /></IconButton></div></td></tr>)}</tbody></table></div></Surface>;
 }
 
-function ApplyCertificateDialog({ providers, servers: _servers, onCreateProvider, onClose, onComplete }: { providers: DNSProviderItem[]; servers: RemoteServerItem[]; onCreateProvider: () => void; onClose: () => void; onComplete: () => void }) {
+function ApplyCertificateDialog({ providers, onCreateProvider, onClose, onComplete }: { providers: DNSProviderItem[]; onCreateProvider: () => void; onClose: () => void; onComplete: () => void }) {
   const [domain, setDomain] = useState("");
   const [email, setEmail] = useState("");
   const [provider, setProvider] = useState("letsencrypt");
@@ -1798,7 +1812,7 @@ function ApplyCertificateDialog({ providers, servers: _servers, onCreateProvider
     } catch (reason) { setError(fail(reason, "提交证书申请失败")); }
     finally { setWorking(false); }
   };
-  return <Dialog title="申请 ACME 证书" description="支持 HTTP、Webroot 与 DNS-01 验证" onClose={onClose} wide><form className="cw-form" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}<div className="cw-form-grid"><Field label="域名"><input required value={domain} onChange={(event) => setDomain(event.target.value)} placeholder="example.com 或 *.example.com" /></Field><Field label="联系邮箱"><input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="admin@example.com" /></Field><Field label="证书颁发机构"><select value={provider} onChange={(event) => setProvider(event.target.value)}><option value="letsencrypt">Let's Encrypt</option><option value="letsencrypt-staging">Let's Encrypt Staging</option></select></Field><Field label="验证方式"><select value={challenge} onChange={(event) => setChallenge(event.target.value)}><option value="dns">DNS-01</option><option value="standalone">HTTP 独立验证</option><option value="webroot">网站根目录</option></select></Field>{challenge === "dns" ? <Field label="DNS 提供商" hint={providers.length ? "使用已保存的 DNS API 凭据" : "还没有可用凭据，请先添加 DNS 提供商"}><div className="cw-provider-picker"><select required aria-label="DNS 提供商" value={dnsProviderID} onChange={(event) => setDNSProviderID(event.target.value)}><option value="">请选择 DNS 提供商</option>{providers.map((item) => <option key={item.id} value={String(item.id)}>{item.name} · {item.provider_type}</option>)}</select><Button type="button" variant="secondary" onClick={onCreateProvider}><Plus size={15} />添加</Button></div></Field> : null}{challenge === "webroot" ? <Field label="网站根目录"><input required value={webrootPath} onChange={(event) => setWebrootPath(event.target.value)} /></Field> : null}<Field label="部署目标"><select value={deployTarget} onChange={(event) => { const value = event.target.value; setDeployTarget(value); if (value === "none") setAutoDeploy(false); }}><option value="none">仅保存</option><option value="nginx">Nginx</option><option value="xray">Xray</option><option value="both">Nginx + Xray</option></select></Field></div>{deployTarget !== "none" ? <div className="cw-form-grid"><Field label="证书部署路径"><input required value={certPath} onChange={(event) => setCertPath(event.target.value)} /></Field><Field label="私钥部署路径"><input required value={keyPath} onChange={(event) => setKeyPath(event.target.value)} /></Field></div> : null}<div className="cw-checkboxes"><Toggle checked={autoRenew} onChange={setAutoRenew} label="自动续期" /><Toggle checked={autoDeploy} onChange={setAutoDeploy} label="续期后自动部署" /></div><div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在提交" /> : <><ShieldCheck size={16} />提交申请</>}</Button></div></form></Dialog>;
+  return <Dialog title="申请 ACME 证书" description="支持 HTTP、Webroot 与 DNS-01 验证" onClose={onClose} dismissible={!working} wide><form className="cw-form" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}<div className="cw-form-grid"><Field label="域名"><input required value={domain} onChange={(event) => setDomain(event.target.value)} placeholder="example.com 或 *.example.com" /></Field><Field label="联系邮箱"><input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="admin@example.com" /></Field><Field label="证书颁发机构"><select value={provider} onChange={(event) => setProvider(event.target.value)}><option value="letsencrypt">Let's Encrypt</option><option value="letsencrypt-staging">Let's Encrypt Staging</option></select></Field><Field label="验证方式"><select value={challenge} onChange={(event) => setChallenge(event.target.value)}><option value="dns">DNS-01</option><option value="standalone">HTTP 独立验证</option><option value="webroot">网站根目录</option></select></Field>{challenge === "dns" ? <Field label="DNS 提供商" hint={providers.length ? "使用已保存的 DNS API 凭据" : "还没有可用凭据，请先添加 DNS 提供商"}><div className="cw-provider-picker"><select required aria-label="DNS 提供商" value={dnsProviderID} onChange={(event) => setDNSProviderID(event.target.value)}><option value="">请选择 DNS 提供商</option>{providers.map((item) => <option key={item.id} value={String(item.id)}>{item.name} · {item.provider_type}</option>)}</select><Button type="button" variant="secondary" onClick={onCreateProvider}><Plus size={15} />添加</Button></div></Field> : null}{challenge === "webroot" ? <Field label="网站根目录"><input required value={webrootPath} onChange={(event) => setWebrootPath(event.target.value)} /></Field> : null}<Field label="部署目标"><select value={deployTarget} onChange={(event) => { const value = event.target.value; setDeployTarget(value); if (value === "none") setAutoDeploy(false); }}><option value="none">仅保存</option><option value="nginx">Nginx</option><option value="xray">Xray</option><option value="both">Nginx + Xray</option></select></Field></div>{deployTarget !== "none" ? <div className="cw-form-grid"><Field label="证书部署路径"><input required value={certPath} onChange={(event) => setCertPath(event.target.value)} /></Field><Field label="私钥部署路径"><input required value={keyPath} onChange={(event) => setKeyPath(event.target.value)} /></Field></div> : null}<div className="cw-checkboxes"><Toggle checked={autoRenew} onChange={setAutoRenew} label="自动续期" /><Toggle checked={autoDeploy} disabled={deployTarget === "none" || !certPath.trim() || !keyPath.trim()} onChange={setAutoDeploy} label="签发或续期后自动部署到主控" /></div><div className="cw-help"><Info size={16} /><span>证书始终由主控签发；自动部署只写入主控。需要下发远端时，请在签发完成后使用“手动部署”选择具体服务器。</span></div><div className="dialog-actions"><Button type="button" variant="secondary" disabled={working} onClick={onClose}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在提交" /> : <><ShieldCheck size={16} />提交申请</>}</Button></div></form></Dialog>;
 }
 
 function EditCertificateDialog({ item, providers, onClose, onComplete }: { item: CertificateItem; providers: DNSProviderItem[]; onClose: () => void; onComplete: () => void }) {
@@ -1819,6 +1833,8 @@ function EditCertificateDialog({ item, providers, onClose, onComplete }: { item:
   const issued = item.status === "valid" || Boolean(item.issue_date);
   const providerIsKnown = ["manual", "letsencrypt", "letsencrypt-staging"].includes(provider);
   const challengeIsKnown = ["dns", "standalone", "webroot", "manual"].includes(challenge);
+  const deploymentScope = item.remote_server_id ? item.remote_server_name || `服务器 #${item.remote_server_id}` : "主控";
+  const autoDeployAvailable = deployTarget !== "none" && Boolean(certPath.trim()) && Boolean(keyPath.trim());
 
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setWorking(true); setError("");
@@ -1858,8 +1874,8 @@ function EditCertificateDialog({ item, providers, onClose, onComplete }: { item:
         <Field label="部署目标"><select value={deployTarget} onChange={(event) => { const value = event.target.value; setDeployTarget(value); if (value === "none") setAutoDeploy(false); }}><option value="none">仅保存</option><option value="nginx">Nginx</option><option value="xray">Xray</option><option value="both">Nginx + Xray</option></select></Field>
       </div>
       {deployTarget !== "none" ? <div className="cw-form-grid"><Field label="证书部署路径"><input required value={certPath} onChange={(event) => setCertPath(event.target.value)} /></Field><Field label="私钥部署路径"><input required value={keyPath} onChange={(event) => setKeyPath(event.target.value)} /></Field></div> : null}
-      <div className="cw-checkboxes">{!manual ? <Toggle checked={autoRenew} onChange={setAutoRenew} label="自动续期" /> : null}<Toggle checked={autoDeploy} disabled={deployTarget === "none"} onChange={setAutoDeploy} label="续期后自动部署" /></div>
-      <div className="cw-help"><Info size={16} /><span>更换 DNS 提供商后，新设置会在下一次续期时生效；当前证书文件不会被覆盖。</span></div>
+      <div className="cw-checkboxes">{!manual ? <Toggle checked={autoRenew} onChange={setAutoRenew} label="自动续期" /> : null}<Toggle checked={autoDeploy} disabled={!autoDeployAvailable} onChange={setAutoDeploy} label={`${manual ? "自动部署到" : "签发或续期后自动部署到"}${deploymentScope}`} /></div>
+      <div className="cw-help"><Info size={16} /><span>{manual ? `手动上传证书不参与自动续期；自动部署范围固定为${deploymentScope}。需要下发其他位置时请使用“手动部署”。` : `更换 DNS 提供商后会在下一次续期生效；自动部署范围固定为${deploymentScope}，不会广播到其他服务器。`}</span></div>
       <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在保存" /> : <><Save size={16} />保存设置</>}</Button></div>
     </form>
   </Dialog>;
@@ -1878,23 +1894,46 @@ function UploadCertificateDialog({ onClose, onComplete }: { onClose: () => void;
     catch (reason) { setError(fail(reason, "上传证书失败")); }
     finally { setWorking(false); }
   };
-  return <Dialog title="上传证书" description="导入 PEM 证书链和对应私钥" onClose={onClose} wide><form className="cw-form" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}<Field label="证书域名"><input required value={domain} onChange={(event) => setDomain(event.target.value)} /></Field><div className="cw-form-grid"><Field label="证书文件"><input type="file" accept=".pem,.crt,.cer" onChange={(event) => void readFile(event.target.files?.[0], setCertPEM)} /></Field><Field label="私钥文件"><input type="file" accept=".pem,.key" onChange={(event) => void readFile(event.target.files?.[0], setKeyPEM)} /></Field></div><Field label="证书链 PEM"><textarea required className="cw-dialog-code" value={certPEM} onChange={(event) => setCertPEM(event.target.value)} spellCheck={false} placeholder="-----BEGIN CERTIFICATE-----" /></Field><Field label="私钥 PEM"><textarea required className="cw-dialog-code is-private" value={keyPEM} onChange={(event) => setKeyPEM(event.target.value)} spellCheck={false} autoComplete="new-password" placeholder="私钥仅提交到服务器，不会回显" /></Field><div className="cw-help"><LockKeyhole size={16} /><span>私钥仅用于本次写入，证书列表和编辑页面不会读取或显示私钥内容。</span></div><div className="dialog-actions"><Button type="button" variant="secondary" onClick={() => { setKeyPEM(""); onClose(); }}>取消</Button><Button type="submit" disabled={working || !certPEM.trim() || !keyPEM.trim()}>{working ? <Spinner label="正在上传" /> : <><Upload size={16} />上传证书</>}</Button></div></form></Dialog>;
+  return <Dialog title="上传证书" description="导入 PEM 证书链和对应私钥" onClose={onClose} dismissible={!working} wide><form className="cw-form" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}<Field label="证书域名"><input required value={domain} onChange={(event) => setDomain(event.target.value)} /></Field><div className="cw-form-grid"><Field label="证书文件"><input type="file" accept=".pem,.crt,.cer" onChange={(event) => void readFile(event.target.files?.[0], setCertPEM)} /></Field><Field label="私钥文件"><input type="file" accept=".pem,.key" onChange={(event) => void readFile(event.target.files?.[0], setKeyPEM)} /></Field></div><Field label="证书链 PEM"><textarea required className="cw-dialog-code" value={certPEM} onChange={(event) => setCertPEM(event.target.value)} spellCheck={false} placeholder="-----BEGIN CERTIFICATE-----" /></Field><Field label="私钥 PEM"><textarea required className="cw-dialog-code is-private" value={keyPEM} onChange={(event) => setKeyPEM(event.target.value)} spellCheck={false} autoComplete="new-password" placeholder="私钥仅提交到服务器，不会回显" /></Field><div className="cw-help"><LockKeyhole size={16} /><span>私钥仅用于本次写入，证书列表和编辑页面不会读取或显示私钥内容。</span></div><div className="dialog-actions"><Button type="button" variant="secondary" disabled={working} onClick={() => { setKeyPEM(""); onClose(); }}>取消</Button><Button type="submit" disabled={working || !certPEM.trim() || !keyPEM.trim()}>{working ? <Spinner label="正在上传" /> : <><Upload size={16} />上传证书</>}</Button></div></form></Dialog>;
 }
 
-function DeployCertificateDialog({ item, onClose, onComplete }: { item: CertificateItem; onClose: () => void; onComplete: () => void }) {
+function DeployCertificateDialog({ item, servers, onClose, onComplete }: { item: CertificateItem; servers: RemoteServerItem[]; onClose: () => void; onComplete: () => void }) {
   const name = certFilename(item.domain);
   const [target, setTarget] = useState(item.deploy_target && item.deploy_target !== "none" ? item.deploy_target : "both");
   const [certPath, setCertPath] = useState(item.deploy_cert_path || `/usr/local/nginx/cert/${name}.pem`);
   const [keyPath, setKeyPath] = useState(item.deploy_key_path || `/usr/local/nginx/cert/${name}.key`);
+  const boundServerID = item.remote_server_id || 0;
+  const deploymentServers = boundServerID > 0 && !servers.some((server) => server.id === boundServerID)
+    ? [...servers, { id: boundServerID, name: item.remote_server_name || `服务器 #${boundServerID}` }]
+    : servers;
+  const [deployLocal, setDeployLocal] = useState(boundServerID === 0);
+  const [remoteServerIDs, setRemoteServerIDs] = useState<Set<number>>(() => boundServerID > 0 ? new Set([boundServerID]) : new Set());
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
+  const hasDeploymentTarget = deployLocal || remoteServerIDs.size > 0;
+  const toggleRemoteServer = (serverID: number) => setRemoteServerIDs((current) => {
+    const next = new Set(current);
+    if (next.has(serverID)) next.delete(serverID); else next.add(serverID);
+    return next;
+  });
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setWorking(true); setError("");
-    try { assertSuccess(await api.post<Envelope>("/api/admin/certificates/deploy", { id: item.id, deploy_target: target, deploy_cert_path: certPath.trim(), deploy_key_path: keyPath.trim() }), "部署证书失败"); onComplete(); }
+    try {
+      if (!hasDeploymentTarget) throw new Error("至少选择主控或一台远端服务器");
+      assertSuccess(await api.post<Envelope>("/api/admin/certificates/deploy", {
+        id: item.id,
+        deploy_target: target,
+        deploy_cert_path: certPath.trim(),
+        deploy_key_path: keyPath.trim(),
+        deploy_local: deployLocal,
+        remote_server_ids: [...remoteServerIDs].sort((a, b) => a - b),
+      }), "部署证书失败");
+      onComplete();
+    }
     catch (reason) { setError(fail(reason, "部署证书失败")); }
     finally { setWorking(false); }
   };
-  return <Dialog title="手动部署证书" description={item.domain} onClose={onClose}><form className="cw-form" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}<Field label="部署目标"><select value={target} onChange={(event) => setTarget(event.target.value)}><option value="nginx">Nginx</option><option value="xray">Xray</option><option value="both">Nginx + Xray</option></select></Field><Field label="证书路径"><input required value={certPath} onChange={(event) => setCertPath(event.target.value)} /></Field><Field label="私钥路径"><input required value={keyPath} onChange={(event) => setKeyPath(event.target.value)} /></Field><div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在部署" /> : <><Server size={16} />立即部署</>}</Button></div></form></Dialog>;
+  return <Dialog title="手动部署证书" description={item.domain} onClose={onClose} dismissible={!working} wide><form className="cw-form" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}<Field label="部署目标"><select value={target} onChange={(event) => setTarget(event.target.value)}><option value="nginx">Nginx</option><option value="xray">Xray</option><option value="both">Nginx + Xray</option></select></Field><Field label="证书路径"><input required value={certPath} onChange={(event) => setCertPath(event.target.value)} /></Field><Field label="私钥路径"><input required value={keyPath} onChange={(event) => setKeyPath(event.target.value)} /></Field><fieldset className="cw-form-section"><legend>部署范围</legend><div className="cw-option-grid"><label className="cw-option-check"><input type="checkbox" aria-label="主控本地" checked={deployLocal} onChange={(event) => setDeployLocal(event.target.checked)} /><span><strong>主控本地</strong><small>写入并重载主控上的所选服务</small></span></label>{deploymentServers.map((server) => <label className="cw-option-check" key={server.id}><input type="checkbox" aria-label={`远端服务器 ${server.name}`} checked={remoteServerIDs.has(server.id)} onChange={() => toggleRemoteServer(server.id)} /><span><strong>{server.name}</strong><small>远端服务器 #{server.id}</small></span></label>)}</div>{deploymentServers.length === 0 ? <p className="cw-section-hint">暂无可选远端服务器。</p> : null}</fieldset><div className="cw-help"><Info size={16} /><span>只部署到本次勾选的目标，不会自动广播到其他服务器。远端部署会等待 Agent 返回写入和重载结果。</span></div><div className="dialog-actions"><Button type="button" variant="secondary" disabled={working} onClick={onClose}>取消</Button><Button type="submit" disabled={working || !hasDeploymentTarget}>{working ? <Spinner label="正在部署" /> : <><Server size={16} />立即部署</>}</Button></div></form></Dialog>;
 }
 
 function DNSProviderDialog({ item, onClose, onComplete }: { item?: DNSProviderItem; onClose: () => void; onComplete: () => void }) {

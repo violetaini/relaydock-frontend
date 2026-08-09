@@ -2,6 +2,10 @@
 .two-factor-status { min-height: 48px; }
 .two-factor-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
 .two-factor-actions .spinner { white-space: nowrap; }
+.two-factor-qr { min-height: 256px; padding: 14px; display: grid; place-items: center; align-content: center; gap: 8px; border: 2px solid var(--border); background: #fff; color: #202124; }
+.two-factor-qr img { display: block; width: min(220px, 100%); aspect-ratio: 1; }
+.two-factor-qr > span { font-size: 12px; font-weight: 700; }
+.two-factor-qr > small { color: #5f6368; text-align: center; }
 .two-factor-credential { padding: 12px 14px; display: grid; gap: 7px; border: 2px solid var(--border); background: var(--surface-muted); }
 .two-factor-credential > span { color: var(--text-soft); font-size: 11px; font-weight: 700; }
 .two-factor-credential code { overflow-wrap: anywhere; user-select: all; font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; line-height: 1.6; }

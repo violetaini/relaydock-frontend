@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import {
   Activity,
   ArrowDownToLine,
@@ -257,14 +257,17 @@ export function TrafficWorkbenchPage({ profile }: { profile: Profile }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [drilldown, setDrilldown] = useState<DrilldownState | null>(null);
+  const loadGeneration = useRef(0);
 
   const date = rangeDate(range);
   const load = useCallback(async () => {
+    const generation = ++loadGeneration.current;
     setLoading(true);
     setError("");
     try {
       if (!profile.is_admin) {
-        setSummary(await api.get<TrafficSummary>("/api/traffic/summary"));
+        const response = await api.get<TrafficSummary>("/api/traffic/summary");
+        if (generation === loadGeneration.current) setSummary(response);
         return;
       }
       const requests: [
@@ -283,15 +286,16 @@ export function TrafficWorkbenchPage({ profile }: { profile: Profile }) {
           : Promise.resolve({ snapshots: [] }),
       ];
       const [summaryResponse, usersResponse, nodesResponse, connectionsResponse, snapshotsResponse] = await Promise.all(requests);
+      if (generation !== loadGeneration.current) return;
       setSummary(summaryResponse);
       setRawUsers(usersResponse.users ?? []);
       setNodes(nodesResponse.items ?? []);
       setConnections(connectionsResponse.connections ?? {});
       setUserSnapshots(snapshotsResponse.snapshots ?? []);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "流量数据加载失败");
+      if (generation === loadGeneration.current) setError(reason instanceof Error ? reason.message : "流量数据加载失败");
     } finally {
-      setLoading(false);
+      if (generation === loadGeneration.current) setLoading(false);
     }
   }, [date, profile.is_admin]);
 

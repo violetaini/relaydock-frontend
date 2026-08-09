@@ -834,6 +834,7 @@ for (const viewport of [
     await closeDialog(page);
 
     await page.goto("/#/settings");
+    await page.getByRole("tab", { name: "维护", exact: true }).click();
     const maintenance = page.locator(".settings-update-group");
     await expect(page.getByRole("heading", { name: "数据备份" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "恢复备份" })).toBeVisible();
@@ -991,6 +992,7 @@ for (const viewport of [
     await page.setViewportSize(viewport);
     await mockAPI(page);
     await page.goto("/#/settings");
+    await page.getByRole("tab", { name: "维护", exact: true }).click();
 
     const panel = page.locator(".settings-update-group .settings-workbench-section").filter({
       has: page.getByRole("heading", { name: "系统更新", exact: true }),
@@ -1068,6 +1070,7 @@ for (const viewport of [
         }
       }
       if (item.route === "settings") {
+        await page.getByRole("tab", { name: "订阅", exact: true }).click();
         const redeemTemplate = page.getByRole("textbox", { name: "复制模板" });
         await expect(redeemTemplate).toHaveAttribute("rows", "10");
         const redeemTemplateHeight = await redeemTemplate.evaluate((element) => element.getBoundingClientRect().height);
@@ -1508,19 +1511,22 @@ for (const viewport of [
 
     await page.goto("/#/settings");
     await expect(page.getByRole("heading", { name: "基础设置", exact: true })).toBeVisible({ timeout: 30_000 });
-    for (const [group, marker] of [
-      ["基础设置", "后端与采集"],
-      ["订阅设置", "生成能力"],
-      ["安全设置", "登录限流"],
-      ["用户权限", "普通用户页面"],
-      ["通知设置", "Telegram 用户 Bot"],
-      ["系统维护", "系统更新"],
-      ["账户与 API", "管理 API Token"],
+    for (const [tab, group, marker] of [
+      ["基础", "基础设置", "后端与采集"],
+      ["订阅", "订阅设置", "生成能力"],
+      ["安全", "安全设置", "登录限流"],
+      ["权限", "用户权限", "普通用户页面"],
+      ["Telegram Bot", "Telegram 用户 Bot", "Bot 与 Mini App"],
+      ["通知", "通知设置", "Telegram 管理通知"],
+      ["维护", "系统维护", "系统更新"],
+      ["账户", "账户与 API", "管理 API Token"],
     ]) {
+      await page.getByRole("tab", { name: tab, exact: true }).click();
       await expect(page.getByRole("heading", { name: group, exact: true })).toBeVisible();
       await expect(page.getByRole("heading", { name: marker, exact: true })).toBeVisible();
       await expectViewportIntegrity(page, `${viewport.name} settings ${group}`);
     }
+    await page.getByRole("tab", { name: "订阅", exact: true }).click();
     await page.getByRole("button", { name: "打开迁移向导" }).click();
     const migrationDialog = page.getByRole("dialog", { name: "从旧版面板迁移" });
     await expect(migrationDialog.getByRole("tab", { name: "远程拉取" })).toBeVisible();

@@ -114,6 +114,23 @@ afterEach(() => {
 });
 
 describe("traffic workbench", () => {
+  it("does not let a stale range request overwrite the latest selection", async () => {
+    const resolvers: Array<(value: TrafficSummary) => void> = [];
+    vi.spyOn(api, "get").mockImplementation(() => new Promise<TrafficSummary>((resolve) => resolvers.push(resolve)));
+    render(<TrafficWorkbenchPage profile={member} />);
+
+    fireEvent.click(screen.getByRole("tab", { name: "近 7 日" }));
+    await waitFor(() => expect(resolvers).toHaveLength(2));
+    const latest = { ...summary, metrics: { ...summary.metrics, usage_percentage: 44, total_used_gb: 44 } };
+    act(() => resolvers[1](latest));
+    expect(await screen.findByText("44%")).toBeInTheDocument();
+
+    const stale = { ...summary, metrics: { ...summary.metrics, usage_percentage: 11, total_used_gb: 11 } };
+    act(() => resolvers[0](stale));
+    await waitFor(() => expect(screen.getByText("44%")).toBeInTheDocument());
+    expect(screen.queryByText("11%")).not.toBeInTheDocument();
+  });
+
   it("loads the admin summary, user and node aggregates, and live connection contract", async () => {
     const get = mockAdminReads();
     render(<TrafficWorkbenchPage profile={admin} />);

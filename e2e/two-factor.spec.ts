@@ -53,6 +53,7 @@ test("mobile 2FA setup stays within the viewport and recovery codes cannot be di
   await page.setViewportSize({ width: 390, height: 844 });
   await installSettingsAPI(page);
   await page.goto("/#/settings");
+  await page.getByRole("tab", { name: "账户", exact: true }).click();
 
   await page.getByRole("button", { name: "启用 2FA" }).click();
   await page.getByLabel("当前密码").fill("correct-password");
@@ -61,6 +62,7 @@ test("mobile 2FA setup stays within the viewport and recovery codes cannot be di
 
   await expect(page.getByText("JBSWY3DPEHPK3PXP", { exact: true })).toBeVisible();
   await expect(page.getByText(/otpauth:\/\/totp\/Arcway:admin/)).toBeVisible();
+  await expect(page.getByRole("img", { name: "双因素认证设置二维码" })).toBeVisible();
   await expectNoViewportOverflow(page);
   await page.getByLabel("6 位动态验证码").fill("123456");
   await page.getByRole("button", { name: "验证并启用" }).click();
@@ -79,6 +81,7 @@ test("mobile 2FA setup stays within the viewport and recovery codes cannot be di
 test("an invalid setup password does not expire the active admin session", async ({ page }) => {
   await installSettingsAPI(page, 401);
   await page.goto("/#/settings");
+  await page.getByRole("tab", { name: "账户", exact: true }).click();
   await page.getByRole("button", { name: "启用 2FA" }).click();
   await page.getByLabel("当前密码").fill("wrong-password");
   await page.getByRole("button", { name: "继续" }).click();

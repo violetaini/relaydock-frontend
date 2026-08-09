@@ -47,6 +47,61 @@
   accent-color: var(--accent);
 }
 
+.nw-duplicate-groups {
+  display: grid;
+  gap: 12px;
+  max-height: min(56vh, 560px);
+  overflow: auto;
+}
+
+.nw-duplicate-groups fieldset {
+  min-width: 0;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+  border: 2px solid var(--border);
+}
+
+.nw-duplicate-groups legend {
+  padding: 0 6px;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.nw-duplicate-groups label {
+  min-width: 0;
+  padding: 9px 10px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.nw-duplicate-groups label.is-survivor {
+  border-color: var(--green);
+  background: var(--green-soft);
+}
+
+.nw-duplicate-groups label > span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.nw-duplicate-groups label strong,
+.nw-duplicate-groups label small {
+  overflow-wrap: anywhere;
+}
+
+.nw-duplicate-groups label small {
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
 .nw-tool-menu,
 .nw-row-menu {
   position: relative;

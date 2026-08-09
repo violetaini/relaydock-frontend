@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   Braces,
   Clock3,
@@ -71,6 +71,12 @@ interface RuleDocument {
   name: string;
   content: string;
   latest_version: number;
+}
+
+interface RuleDocumentEditor extends RuleDocument {
+  originalContent: string;
+  loading: boolean;
+  error: string;
 }
 
 interface RuleVersionWire {
@@ -533,13 +539,15 @@ export function RulesConfigWorkbenchPage({ notify = noop }: { notify?: Notify })
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [document, setDocument] = useState<(RuleDocument & { loading: boolean; error: string }) | null>(null);
+  const [document, setDocument] = useState<RuleDocumentEditor | null>(null);
   const [saving, setSaving] = useState(false);
+  const [discardDocumentConfirm, setDiscardDocumentConfirm] = useState(false);
   const [historyFile, setHistoryFile] = useState<RuleFile | null>(null);
   const [history, setHistory] = useState<RuleVersion[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState("");
   const [selectedVersion, setSelectedVersion] = useState<RuleVersion | null>(null);
+  const documentRequestGeneration = useRef(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -556,17 +564,42 @@ export function RulesConfigWorkbenchPage({ notify = noop }: { notify?: Notify })
 
   useEffect(() => { void load(); }, [load]);
 
+  useEffect(() => () => {
+    documentRequestGeneration.current += 1;
+  }, []);
+
   const visibleFiles = useMemo(() => {
     const query = search.trim().toLowerCase();
     return files.filter((item) => !query || item.name.toLowerCase().includes(query));
   }, [files, search]);
 
+  const documentDirty = Boolean(document && !document.loading && document.content !== document.originalContent);
+
+  const discardDocument = () => {
+    documentRequestGeneration.current += 1;
+    setDiscardDocumentConfirm(false);
+    setDocument(null);
+  };
+
+  const requestDocumentClose = () => {
+    if (saving) return;
+    if (documentDirty) {
+      setDiscardDocumentConfirm(true);
+      return;
+    }
+    discardDocument();
+  };
+
   const openDocument = async (file: RuleFile) => {
-    setDocument({ name: file.name, content: "", latest_version: file.latest_version, loading: true, error: "" });
+    const generation = ++documentRequestGeneration.current;
+    setDiscardDocumentConfirm(false);
+    setDocument({ name: file.name, content: "", originalContent: "", latest_version: file.latest_version, loading: true, error: "" });
     try {
       const response = await api.get<RuleDocument>(`/api/admin/rules/${encodeURIComponent(file.name)}`);
-      setDocument({ ...response, loading: false, error: "" });
+      if (generation !== documentRequestGeneration.current) return;
+      setDocument({ ...response, name: file.name, originalContent: response.content, loading: false, error: "" });
     } catch (reason) {
+      if (generation !== documentRequestGeneration.current) return;
       setDocument((current) => current ? { ...current, loading: false, error: errorMessage(reason, "规则文件读取失败") } : null);
     }
   };
@@ -578,7 +611,7 @@ export function RulesConfigWorkbenchPage({ notify = noop }: { notify?: Notify })
     setDocument({ ...document, error: "" });
     try {
       const response = await api.put<{ version: number }>(`/api/admin/rules/${encodeURIComponent(document.name)}`, { content: document.content });
-      setDocument(null);
+      discardDocument();
       notify(`规则文件已保存为版本 ${response.version || "-"}`);
       await load();
     } catch (reason) {
@@ -645,17 +678,28 @@ export function RulesConfigWorkbenchPage({ notify = noop }: { notify?: Notify })
       </Surface>
 
       {document ? (
-        <Dialog title={`编辑 ${document.name}`} description={`当前归档版本：${document.latest_version > 0 ? `v${document.latest_version}` : "暂无"}`} onClose={() => !saving && setDocument(null)} wide dismissible={!saving}>
+        <Dialog title={`编辑 ${document.name}`} description={`当前归档版本：${document.latest_version > 0 ? `v${document.latest_version}` : "暂无"}`} onClose={requestDocumentClose} wide dismissible={!saving}>
           {document.loading ? <div className="rw-loading rw-dialog-loading"><Spinner label="正在读取文件" /></div> : (
             <form className="rw-editor-form" onSubmit={saveDocument}>
               {document.error ? <ErrorState message={document.error} /> : null}
-              <Field label="YAML 内容" hint="保存时服务端会校验 YAML 语法并自动创建历史版本">
+              <Field label="YAML 内容" hint={documentDirty ? "存在未保存修改；保存时服务端会校验 YAML 语法并创建历史版本" : "保存时服务端会校验 YAML 语法并自动创建历史版本"}>
                 <textarea aria-label="YAML 内容" className="rw-code-editor rw-rule-file-editor" required spellCheck={false} value={document.content} onChange={(event) => setDocument({ ...document, content: event.target.value })} />
               </Field>
-              <div className="dialog-actions"><Button type="button" variant="secondary" onClick={() => setDocument(null)} disabled={saving}>取消</Button><Button type="submit" disabled={saving || !document.content.trim()}>{saving ? <Spinner label="正在保存" /> : <><Save size={16} />保存新版本</>}</Button></div>
+              <div className="dialog-actions"><Button type="button" variant="secondary" onClick={requestDocumentClose} disabled={saving}>取消</Button><Button type="submit" disabled={saving || !documentDirty || !document.content.trim()}>{saving ? <Spinner label="正在保存" /> : <><Save size={16} />保存新版本</>}</Button></div>
             </form>
           )}
         </Dialog>
+      ) : null}
+
+      {discardDocumentConfirm ? (
+        <ConfirmDialog
+          title="丢弃未保存的规则文件修改"
+          description="当前 YAML 修改尚未保存。继续关闭将丢弃这些修改。"
+          confirmLabel="丢弃修改"
+          working={false}
+          onCancel={() => setDiscardDocumentConfirm(false)}
+          onConfirm={discardDocument}
+        />
       ) : null}
 
       {historyFile ? (

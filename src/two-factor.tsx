@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Copy, KeyRound, ShieldCheck, ShieldOff } from "lucide-react";
+import QRCode from "qrcode";
 import { api } from "./api";
 import { Badge, Button, Dialog, ErrorState, Field, Spinner, Surface } from "./ui";
 import "./two-factor.css";
@@ -47,6 +48,8 @@ export function TwoFactorSettings({ notify }: { notify: Notify }) {
   const [setupStep, setSetupStep] = useState<"password" | "verify" | "recovery" | null>(null);
   const [password, setPassword] = useState("");
   const [setupData, setSetupData] = useState<{ secret: string; url: string } | null>(null);
+  const [setupQRCode, setSetupQRCode] = useState("");
+  const [setupQRCodeError, setSetupQRCodeError] = useState(false);
   const [setupCode, setSetupCode] = useState("");
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
   const [recoveryAcknowledged, setRecoveryAcknowledged] = useState(false);
@@ -75,10 +78,23 @@ export function TwoFactorSettings({ notify }: { notify: Notify }) {
 
   useEffect(() => { void refreshStatus(); }, [refreshStatus]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setSetupQRCode("");
+    setSetupQRCodeError(false);
+    if (!setupData?.url) return;
+    void QRCode.toDataURL(setupData.url, { errorCorrectionLevel: "M", margin: 1, width: 220 })
+      .then((value) => { if (!cancelled) setSetupQRCode(value); })
+      .catch(() => { if (!cancelled) setSetupQRCodeError(true); });
+    return () => { cancelled = true; };
+  }, [setupData?.url]);
+
   const resetSetup = () => {
     setSetupStep(null);
     setPassword("");
     setSetupData(null);
+    setSetupQRCode("");
+    setSetupQRCodeError(false);
     setSetupCode("");
     setRecoveryCodes([]);
     setRecoveryAcknowledged(false);
@@ -221,6 +237,10 @@ export function TwoFactorSettings({ notify }: { notify: Notify }) {
         <Dialog title="连接认证器" description="将下方信息添加到认证器，再输入生成的动态验证码" onClose={resetSetup} wide dismissible={!working}>
           <form className="form-stack" onSubmit={verifySetup}>
             {dialogError ? <ErrorState message={dialogError} /> : null}
+            <div className="two-factor-qr">
+              {setupQRCode ? <img src={setupQRCode} alt="双因素认证设置二维码" /> : setupQRCodeError ? <small>二维码生成失败，请使用下方密钥手动添加。</small> : <Spinner label="正在生成二维码" />}
+              <span>使用认证器扫描</span>
+            </div>
             <div className="two-factor-credential"><span>手动输入密钥</span><code>{setupData.secret}</code></div>
             <div className="two-factor-credential"><span>otpauth URL</span><code>{setupData.url}</code></div>
             <Field label="6 位动态验证码"><input autoFocus required inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={setupCode} onChange={(event) => setSetupCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="000000" /></Field>

@@ -21,6 +21,35 @@ afterEach(() => {
 });
 
 describe("users workbench", () => {
+  it("never saves an empty subscription assignment after either source failed to load", async () => {
+    let fileAttempts = 0;
+    vi.spyOn(api, "get").mockImplementation(async (path) => {
+      if (path === "/api/admin/users") return { users: [alice] };
+      if (path === "/api/admin/packages") return { packages: [] };
+      if (path === "/api/admin/subscribe-files") {
+        fileAttempts += 1;
+        if (fileAttempts === 1) throw new Error("订阅列表暂不可用");
+        return { files: [{ id: 7, name: "主订阅", filename: "main.yaml", type: "create" }] };
+      }
+      if (path === "/api/admin/users/alice/subscriptions") return { subscription_ids: [7] };
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const put = vi.spyOn(api, "put").mockResolvedValue({});
+    render(<UsersWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "用户设置 alice" }));
+    fireEvent.click(screen.getByRole("tab", { name: "订阅分配" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("订阅列表暂不可用");
+    expect(screen.queryByRole("button", { name: /保存分配/ })).not.toBeInTheDocument();
+    expect(put).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+
+    expect(await screen.findByRole("checkbox", { name: /主订阅/ })).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "保存分配（1）" }));
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/users/alice/subscriptions", { subscription_ids: [7] }));
+  });
+
   it("keeps the selected user view in the URL", async () => {
     vi.spyOn(api, "get").mockImplementation(async (path) => {
       if (path === "/api/admin/users") return { users: [alice] };

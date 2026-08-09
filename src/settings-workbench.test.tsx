@@ -75,6 +75,12 @@ function mockCompleteSettings(overrides: Record<string, unknown> = {}, failingPa
   });
 }
 
+async function openSettingsGroup(name: string) {
+  const tab = await screen.findByRole("tab", { name });
+  fireEvent.click(tab);
+  return tab;
+}
+
 describe("settings workbench", () => {
   it("lets the administrator update an Arcway-managed Mihomo core", async () => {
     mockCompleteSettings({
@@ -98,6 +104,7 @@ describe("settings workbench", () => {
     const notify = vi.fn();
     render(<SettingsWorkbenchPage notify={notify} />);
 
+    await openSettingsGroup("维护");
     fireEvent.click(await screen.findByRole("button", { name: "更新到 1.19.29" }));
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/speedtest/mihomo/install"));
@@ -117,6 +124,7 @@ describe("settings workbench", () => {
     });
     render(<SettingsWorkbenchPage notify={vi.fn()} />);
 
+    await openSettingsGroup("维护");
     fireEvent.click(await screen.findByRole("button", { name: "检查并更新" }));
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/speedtest/mihomo/install"));
@@ -135,6 +143,7 @@ describe("settings workbench", () => {
     });
     render(<SettingsWorkbenchPage notify={vi.fn()} />);
 
+    await openSettingsGroup("维护");
     expect(await screen.findByText("当前平台不支持自动安装 Mihomo；请通过 MIHOMO_BIN 提供兼容核心。")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /安装.*Mihomo|安装上游最新版/ })).not.toBeInTheDocument();
   });
@@ -177,6 +186,7 @@ describe("settings workbench", () => {
     });
     render(<SettingsWorkbenchPage notify={vi.fn()} />);
 
+    await openSettingsGroup("Telegram Bot");
     expect(await screen.findByText("运行中")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /打开 Telegram Bot/ })).toHaveAttribute("href", "https://t.me/example_bot");
     expect(screen.queryByRole("link", { name: /Mini App/ })).not.toBeInTheDocument();
@@ -208,6 +218,7 @@ describe("settings workbench", () => {
     const notify = vi.fn();
     render(<SettingsWorkbenchPage notify={notify} />);
 
+    await openSettingsGroup("Telegram Bot");
     fireEvent.change(await screen.findByRole("textbox", { name: /^管理员 Telegram ID/ }), { target: { value: "123456789, invalid" } });
     fireEvent.click(screen.getByRole("button", { name: "保存 Bot 设置" }));
 
@@ -229,6 +240,7 @@ describe("settings workbench", () => {
     const put = vi.spyOn(api, "put").mockImplementation(async <T,>(_path: string, payload?: unknown): Promise<T> => payload as T);
     render(<SettingsWorkbenchPage notify={vi.fn()} />);
 
+    await openSettingsGroup("Telegram Bot");
     await screen.findByRole("button", { name: "移除管理员 Telegram ID 123456789" });
     fireEvent.click(screen.getByRole("button", { name: "移除管理员 Telegram ID 123456789" }));
     fireEvent.click(screen.getByRole("button", { name: "保存 Bot 设置" }));
@@ -407,6 +419,7 @@ describe("settings workbench", () => {
     const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
     render(<SettingsWorkbenchPage notify={vi.fn()} />);
 
+    await openSettingsGroup("订阅");
     expect(await screen.findByRole("combobox", { name: "节点匹配规则" })).toHaveValue("server_port");
     expect(screen.getByRole("spinbutton", { name: "缓存有效期（分钟）" })).toHaveValue(30);
     expect(screen.getByRole("textbox", { name: "复制模板" })).toHaveAttribute("rows", "10");
@@ -448,6 +461,7 @@ describe("settings workbench", () => {
     const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
     render(<SettingsWorkbenchPage notify={vi.fn()} />);
 
+    await openSettingsGroup("安全");
     await screen.findByRole("heading", { name: "安全设置" });
     fireEvent.click(screen.getByRole("button", { name: "保存安全设置" }));
 
@@ -465,23 +479,50 @@ describe("settings workbench", () => {
     expect(await screen.findByText(/部分设置未能加载：订阅短链/)).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "公开 URL" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "保存基础设置" })).toBeDisabled();
+    await openSettingsGroup("订阅");
     expect(screen.getByRole("button", { name: "保存订阅设置" })).toBeDisabled();
     expect(screen.getByRole("navigation", { name: "设置分组" })).toBeInTheDocument();
+    expect(screen.getByRole("tablist", { name: "设置分组" })).toBeInTheDocument();
     expect(put).not.toHaveBeenCalled();
   });
 
-  it("scrolls between setting groups without changing the console route hash", async () => {
+  it("shows one accessible setting panel and supports tab keyboard navigation", async () => {
     mockCompleteSettings();
     location.hash = "#/settings";
     render(<SettingsWorkbenchPage notify={vi.fn()} />);
 
-    await screen.findByRole("heading", { name: "安全设置" });
-    const target = document.getElementById("settings-security") as HTMLElement;
-    const scrollIntoView = vi.fn();
-    target.scrollIntoView = scrollIntoView;
-    fireEvent.click(screen.getByRole("button", { name: "安全" }));
+    const tablist = await screen.findByRole("tablist", { name: "设置分组" });
+    const generalTab = within(tablist).getByRole("tab", { name: "基础" });
+    const securityTab = within(tablist).getByRole("tab", { name: "安全" });
+    const permissionsTab = within(tablist).getByRole("tab", { name: "权限" });
+    const accountTab = within(tablist).getByRole("tab", { name: "账户" });
+    expect(generalTab).toHaveAttribute("aria-selected", "true");
+    expect(generalTab).toHaveAttribute("aria-controls", "settings-general");
+    expect(generalTab).toHaveAttribute("tabindex", "0");
+    expect(securityTab).toHaveAttribute("tabindex", "-1");
+    expect(screen.getAllByRole("tabpanel")).toHaveLength(1);
+    expect(screen.getByRole("tabpanel", { name: "基础" })).toBeVisible();
+    fireEvent.change(screen.getByRole("textbox", { name: "公开 URL" }), { target: { value: "https://draft.example.com" } });
 
-    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+    fireEvent.click(securityTab);
+    expect(securityTab).toHaveAttribute("aria-selected", "true");
+    expect(screen.getAllByRole("tabpanel")).toHaveLength(1);
+    expect(screen.getByRole("tabpanel", { name: "安全" })).toBeVisible();
+    expect(document.getElementById("settings-general")).toHaveAttribute("hidden");
+
+    securityTab.focus();
+    fireEvent.keyDown(securityTab, { key: "ArrowRight" });
+    expect(permissionsTab).toHaveFocus();
+    expect(permissionsTab).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(permissionsTab, { key: "End" });
+    expect(accountTab).toHaveFocus();
+    fireEvent.keyDown(accountTab, { key: "ArrowRight" });
+    expect(generalTab).toHaveFocus();
+    fireEvent.keyDown(generalTab, { key: "ArrowLeft" });
+    expect(accountTab).toHaveFocus();
+    fireEvent.keyDown(accountTab, { key: "Home" });
+    expect(generalTab).toHaveFocus();
+    expect(screen.getByRole("textbox", { name: "公开 URL" })).toHaveValue("https://draft.example.com");
     expect(location.hash).toBe("#/settings");
     location.hash = "";
   });
@@ -498,6 +539,7 @@ describe("settings workbench", () => {
     });
     render(<SettingsWorkbenchPage notify={vi.fn()} />);
 
+    await openSettingsGroup("维护");
     expect(await screen.findByRole("heading", { name: "系统更新" })).toBeInTheDocument();
     expect(screen.getByText("Docker 部署需要在宿主机拉取新镜像。")).toBeInTheDocument();
     expect(screen.getByText("docker compose pull && docker compose up -d")).toBeInTheDocument();
@@ -513,6 +555,7 @@ describe("settings workbench", () => {
     });
     render(<SettingsWorkbenchPage notify={vi.fn()} />);
 
+    await openSettingsGroup("维护");
     expect(await screen.findByText("当前后端尚未提供安全的网页更新能力，请先按 README 使用命令行更新。")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "立即更新" })).toBeDisabled();
   });
@@ -534,6 +577,7 @@ describe("settings workbench", () => {
     });
     render(<SettingsWorkbenchPage notify={vi.fn()} />);
 
+    await openSettingsGroup("维护");
     const components = await screen.findByLabelText("发布组件");
     expect(within(components).getByText("后端")).toBeInTheDocument();
     expect(within(components).getByText("前端")).toBeInTheDocument();
@@ -586,6 +630,7 @@ describe("settings workbench", () => {
     const notify = vi.fn();
     render(<SettingsWorkbenchPage notify={notify} />);
 
+    await openSettingsGroup("维护");
     await screen.findByText("发现新版本");
     fireEvent.click(screen.getByRole("button", { name: "立即更新" }));
     expect(screen.getByRole("dialog", { name: "更新到 0.6.0" })).toBeInTheDocument();
@@ -656,6 +701,7 @@ describe("settings workbench", () => {
     const notify = vi.fn();
     render(<SettingsWorkbenchPage notify={notify} />);
 
+    await openSettingsGroup("维护");
     expect(await screen.findByText("前端")).toBeInTheDocument();
     expect(screen.getByText("保持")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "立即更新" }));
@@ -692,6 +738,7 @@ describe("settings workbench", () => {
     const notify = vi.fn();
     render(<SettingsWorkbenchPage notify={notify} />);
 
+    await openSettingsGroup("维护");
     await screen.findByText("发现新版本");
     fireEvent.click(screen.getByRole("button", { name: "立即更新" }));
     fireEvent.click(screen.getByRole("button", { name: "确认更新" }));

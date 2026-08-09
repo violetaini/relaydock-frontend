@@ -1,11 +1,12 @@
-.settings-workbench { width: min(100%, 860px); display: flex; flex-direction: column; gap: 34px; }
+.settings-workbench { width: min(100%, 860px); display: flex; flex-direction: column; gap: 22px; }
 .settings-settings-group { display: flex; flex-direction: column; gap: 14px; margin: 0; padding: 0; border: 0; }
-.settings-settings-group[id] { scroll-margin-top: 76px; }
-.settings-settings-group + .settings-settings-group { padding-top: 30px; border-top: 1px solid var(--border); }
-.settings-group-nav { position: sticky; top: 8px; z-index: 4; display: flex; gap: 4px; overflow-x: auto; padding: 7px; border: 1px solid var(--border); border-radius: 6px; background: color-mix(in srgb, var(--surface) 94%, transparent); box-shadow: var(--shadow-sm); scrollbar-width: thin; }
-.settings-group-nav button { flex: 0 0 auto; padding: 7px 10px; border: 0; border-radius: 4px; color: var(--text-soft); background: transparent; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.settings-settings-group[hidden] { display: none; }
+.settings-group-nav { position: sticky; top: 8px; z-index: 4; min-width: 0; padding: 7px; border: 1px solid var(--border); border-radius: 6px; background: color-mix(in srgb, var(--surface) 94%, transparent); box-shadow: var(--shadow-sm); }
+.settings-group-tabs { width: 100%; display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 4px; }
+.settings-group-nav button { min-width: 0; min-height: 34px; padding: 7px 6px; border: 0; border-radius: 4px; color: var(--text-soft); background: transparent; font: inherit; font-size: 12px; font-weight: 700; line-height: 1.25; overflow-wrap: anywhere; cursor: pointer; }
 .settings-group-nav button:hover,
 .settings-group-nav button:focus-visible { color: var(--text); background: var(--surface-strong); }
+.settings-group-nav button[aria-selected="true"] { color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent); }
 .settings-group-heading { display: flex; align-items: center; gap: 11px; padding: 0 2px 3px; }
 .settings-group-heading h2 { margin: 0; font-size: 18px; line-height: 1.25; }
 .settings-group-heading p { margin: 4px 0 0; color: var(--text-soft); font-size: 12px; line-height: 1.45; }
@@ -117,8 +118,8 @@
 .system-update-actions { display: flex; justify-content: flex-end; align-items: center; gap: 9px; flex-wrap: wrap; }
 .system-update-actions .button { text-decoration: none; }
 @media (max-width: 680px) {
-  .settings-workbench { gap: 28px; }
-  .settings-settings-group + .settings-settings-group { padding-top: 24px; }
+  .settings-workbench { gap: 18px; }
+  .settings-group-tabs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .settings-workbench-section { padding: 18px; }
   .settings-fields-grid, .permission-pages, .event-grid { grid-template-columns: 1fr 1fr; }
   .settings-check-list { grid-template-columns: 1fr; }
@@ -133,6 +134,7 @@
   .tgbot-links { grid-template-columns: 1fr; }
 }
 @media (max-width: 420px) {
+  .settings-group-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .settings-fields-grid, .permission-pages, .event-grid, .system-update-versions { grid-template-columns: 1fr; }
   .probe-server-picker-toolbar { align-items: stretch; flex-direction: column; }
   .probe-server-picker-toolbar > .button { width: 100%; }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import {
   Bell,
   Bot,
@@ -607,6 +607,23 @@ function messageOf(reason: unknown, fallback: string) {
   return reason instanceof Error && reason.message ? reason.message : fallback;
 }
 
+const SETTINGS_GROUPS = [
+  { id: "settings-general", label: "基础" },
+  { id: "settings-subscription", label: "订阅" },
+  { id: "settings-security", label: "安全" },
+  { id: "settings-permissions", label: "权限" },
+  { id: "settings-tgbot", label: "Telegram Bot" },
+  { id: "settings-notifications", label: "通知" },
+  { id: "settings-maintenance", label: "维护" },
+  { id: "settings-account", label: "账户" },
+] as const;
+
+type SettingsGroupID = typeof SETTINGS_GROUPS[number]["id"];
+
+function settingsTabID(groupID: SettingsGroupID): string {
+  return `${groupID}-tab`;
+}
+
 export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: Notify; onBrandingChange?: (branding: Branding) => void }) {
   const [loading, setLoading] = useState(true);
   const [loaded, setLoaded] = useState(false);
@@ -660,6 +677,24 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
   const [mihomoLoading, setMihomoLoading] = useState(true);
   const [mihomoWorking, setMihomoWorking] = useState(false);
   const [mihomoError, setMihomoError] = useState("");
+  const [activeGroup, setActiveGroup] = useState<SettingsGroupID>("settings-general");
+  const groupTabRefs = useRef<Partial<Record<SettingsGroupID, HTMLButtonElement | null>>>({});
+
+  const selectSettingsGroup = (groupID: SettingsGroupID, focus = false) => {
+    setActiveGroup(groupID);
+    if (focus) groupTabRefs.current[groupID]?.focus();
+  };
+
+  const handleSettingsGroupKeyDown = (event: KeyboardEvent<HTMLButtonElement>, currentIndex: number) => {
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % SETTINGS_GROUPS.length;
+    if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + SETTINGS_GROUPS.length) % SETTINGS_GROUPS.length;
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = SETTINGS_GROUPS.length - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    selectSettingsGroup(SETTINGS_GROUPS[nextIndex].id, true);
+  };
 
   const knownProbeServerIDs = servers.map((server) => server.id);
   const knownProbeServerIDSet = new Set(knownProbeServerIDs);
@@ -1098,11 +1133,24 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
   return <>
     <PageHeader title="系统设置" description="后端、订阅、安全、权限与通知策略" actions={<IconButton label="重新加载设置" onClick={() => void load()} disabled={loading}><RefreshCw size={18} /></IconButton>} />
     {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
-    {loading ? <Surface className="center-state"><Spinner label="正在加载全部设置" /></Surface> : loaded ? <div className="settings-workbench settings-workbench-continuous">
+    {loading ? <Surface className="center-state"><Spinner label="正在加载全部设置" /></Surface> : loaded ? <div className="settings-workbench">
       <nav className="settings-group-nav" aria-label="设置分组">
-        {[["settings-general", "基础"], ["settings-subscription", "订阅"], ["settings-security", "安全"], ["settings-permissions", "权限"], ["settings-tgbot", "Telegram Bot"], ["settings-notifications", "通知"], ["settings-maintenance", "维护"], ["settings-account", "账户"]].map(([target, label]) => <button type="button" key={target} onClick={() => document.getElementById(target)?.scrollIntoView({ behavior: "smooth", block: "start" })}>{label}</button>)}
+        <div className="settings-group-tabs" role="tablist" aria-label="设置分组">
+          {SETTINGS_GROUPS.map((group, index) => <button
+            id={settingsTabID(group.id)}
+            type="button"
+            role="tab"
+            key={group.id}
+            ref={(element) => { groupTabRefs.current[group.id] = element; }}
+            aria-controls={group.id}
+            aria-selected={activeGroup === group.id}
+            tabIndex={activeGroup === group.id ? 0 : -1}
+            onClick={() => selectSettingsGroup(group.id)}
+            onKeyDown={(event) => handleSettingsGroupKeyDown(event, index)}
+          >{group.label}</button>)}
+        </div>
       </nav>
-      <form id="settings-general" className="settings-settings-group" onSubmit={saveGeneral}>
+      <form id="settings-general" className="settings-settings-group" role="tabpanel" aria-labelledby={settingsTabID("settings-general")} hidden={activeGroup !== "settings-general"} tabIndex={0} onSubmit={saveGeneral}>
         <SettingsGroupHeading icon={<SlidersHorizontal size={18} />} title="基础设置" description="后端、采集间隔与界面外观" />
         <SettingSection icon={<Network size={19} />} title="后端与采集" description="Agent 回连地址及运行间隔">
           <Field label="公开 URL"><input type="url" required value={masterURL} onChange={(e) => setMasterURL(e.target.value)} /></Field>
@@ -1141,7 +1189,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
         <SaveRow label="保存基础设置" saving={saving.has("general")} disabled={saving.size > 0 || loadFailures.length > 0} />
       </form>
 
-      <form id="settings-subscription" className="settings-settings-group" onSubmit={saveSubscription}>
+      <form id="settings-subscription" className="settings-settings-group" role="tabpanel" aria-labelledby={settingsTabID("settings-subscription")} hidden={activeGroup !== "settings-subscription"} tabIndex={0} onSubmit={saveSubscription}>
         <SettingsGroupHeading icon={<Link2 size={18} />} title="订阅设置" description="订阅同步、输出格式与生成功能" />
         <SettingSection icon={<Link2 size={19} />} title="订阅链接" description="链接格式、短码与节点名称">
           <Toggle checked={shortLink} onChange={setShortLink} label="启用短链接" /><Toggle checked={rootShortLinks} onChange={setRootShortLinks} label="启用根路径短码" /><Toggle checked={prefix.enabled} onChange={(enabled) => setPrefix({ ...prefix, enabled })} label="节点名显示流量倍率" />
@@ -1180,7 +1228,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
         <SaveRow label="保存订阅设置" saving={saving.has("subscription")} disabled={saving.size > 0 || loadFailures.length > 0} />
       </form>
 
-      <form id="settings-security" className="settings-settings-group" onSubmit={saveSecurity}>
+      <form id="settings-security" className="settings-settings-group" role="tabpanel" aria-labelledby={settingsTabID("settings-security")} hidden={activeGroup !== "settings-security"} tabIndex={0} onSubmit={saveSecurity}>
         <SettingsGroupHeading icon={<Shield size={18} />} title="安全设置" description="登录、订阅请求与 Agent 通道防护" />
         <SettingSection icon={<LockKeyhole size={19} />} title="登录限流" description="连续失败后锁定来源地址"><div className="settings-fields-grid"><NumberField label="最大尝试" value={security.login_rate_max_attempts} onChange={(value) => setSecurity({ ...security, login_rate_max_attempts: value })} /><NumberField label="统计窗口（分钟）" value={security.login_rate_window_minutes} onChange={(value) => setSecurity({ ...security, login_rate_window_minutes: value })} /><NumberField label="锁定（分钟）" value={security.login_rate_lock_minutes} onChange={(value) => setSecurity({ ...security, login_rate_lock_minutes: value })} /></div><Toggle checked={security.skip_local_ip} onChange={(skip_local_ip) => setSecurity({ ...security, skip_local_ip })} label="跳过本地与私有地址" /></SettingSection>
         <SettingSection icon={<Shield size={19} />} title="暴力与订阅防护" description="策略保存后无需重启即可生效"><Toggle checked={security.brute_force_enabled} onChange={(brute_force_enabled) => setSecurity({ ...security, brute_force_enabled })} label="启用暴力枚举防护" /><div className="settings-fields-grid"><NumberField label="失败阈值" value={security.brute_force_max_failures} onChange={(value) => setSecurity({ ...security, brute_force_max_failures: value })} /><NumberField label="检测窗口（分钟）" value={security.brute_force_window_minutes} onChange={(value) => setSecurity({ ...security, brute_force_window_minutes: value })} /><NumberField label="封禁（分钟）" value={security.brute_force_block_minutes} onChange={(value) => setSecurity({ ...security, brute_force_block_minutes: value })} /></div><Toggle checked={security.sub_rate_enabled} onChange={(sub_rate_enabled) => setSecurity({ ...security, sub_rate_enabled })} label="限制订阅请求频率" /><div className="settings-fields-grid"><NumberField label="请求上限" value={security.sub_rate_limit} onChange={(value) => setSecurity({ ...security, sub_rate_limit: value })} /><NumberField label="窗口（分钟）" value={security.sub_rate_window_minutes} onChange={(value) => setSecurity({ ...security, sub_rate_window_minutes: value })} /></div></SettingSection>
@@ -1189,7 +1237,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
         <SaveRow label="保存安全设置" saving={saving.has("security")} disabled={saving.size > 0 || loadFailures.length > 0} />
       </form>
 
-      <form id="settings-permissions" className="settings-settings-group" onSubmit={savePermissions}>
+      <form id="settings-permissions" className="settings-settings-group" role="tabpanel" aria-labelledby={settingsTabID("settings-permissions")} hidden={activeGroup !== "settings-permissions"} tabIndex={0} onSubmit={savePermissions}>
         <SettingsGroupHeading icon={<Users size={18} />} title="用户权限" description="普通用户可访问页面与资源配额" />
         <SettingSection icon={<Users size={19} />} title="普通用户页面" description="管理员始终拥有全部页面"><div className="settings-check-list permission-pages">{[["subscription", "订阅链接"], ["generator", "生成订阅"], ["nodes", "节点管理"], ["templates", "模板管理"], ["subscribe-files", "订阅管理"], ["custom-rules", "覆写管理"]].map(([key, label]) => <label className="checkbox-row" key={key}><input type="checkbox" checked={permissions.pages.includes(key)} onChange={() => setPermissions({ ...permissions, pages: permissions.pages.includes(key) ? permissions.pages.filter((page) => page !== key) : [...permissions.pages, key] })} /><span>{label}</span></label>)}</div></SettingSection>
         <SettingSection icon={<FileJson size={19} />} title="资源配额" description="0 表示不限数量"><div className="settings-fields-grid"><NumberField label="模板数量" min={0} value={permissions.quota_template} onChange={(value) => setPermissions({ ...permissions, quota_template: value })} /><NumberField label="覆写数量" min={0} value={permissions.quota_override} onChange={(value) => setPermissions({ ...permissions, quota_override: value })} /><NumberField label="订阅数量" min={0} value={permissions.quota_subscribe} onChange={(value) => setPermissions({ ...permissions, quota_subscribe: value })} /></div></SettingSection>
@@ -1197,7 +1245,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
         <SaveRow label="保存用户权限" saving={saving.has("permissions")} disabled={saving.size > 0 || loadFailures.length > 0} />
       </form>
 
-      <form id="settings-tgbot" className="settings-settings-group" onSubmit={saveTGBot}>
+      <form id="settings-tgbot" className="settings-settings-group" role="tabpanel" aria-labelledby={settingsTabID("settings-tgbot")} hidden={activeGroup !== "settings-tgbot"} tabIndex={0} onSubmit={saveTGBot}>
         <SettingsGroupHeading icon={<Bot size={18} />} title="Telegram 用户 Bot" description="内嵌用户自助 Bot 与 Mini App" />
         <SettingSection icon={<Bot size={19} />} title="Bot 与 Mini App" description="保存后主控会按新配置启动或重启 Bot">
           <div className="tgbot-status-row">
@@ -1241,7 +1289,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
         <SaveRow label="保存 Bot 设置" saving={saving.has("tgbot")} disabled={saving.size > 0 || loadFailures.length > 0} />
       </form>
 
-      <form id="settings-notifications" className="settings-settings-group" onSubmit={saveNotifications}>
+      <form id="settings-notifications" className="settings-settings-group" role="tabpanel" aria-labelledby={settingsTabID("settings-notifications")} hidden={activeGroup !== "settings-notifications"} tabIndex={0} onSubmit={saveNotifications}>
         <SettingsGroupHeading icon={<Bell size={18} />} title="通知设置" description="管理事件通知与阈值策略" />
         <SettingSection icon={<Send size={19} />} title="Telegram 管理通知" description="向固定 Chat ID 推送系统事件，与用户自助 Bot 相互独立"><Toggle checked={notifications.notify_enabled} onChange={(notify_enabled) => setNotifications({ ...notifications, notify_enabled })} label="启用 Telegram 管理通知" /><Field label="通知 Bot Token"><input type="password" autoComplete="new-password" value={notifications.telegram_bot_token} onChange={(e) => setNotifications({ ...notifications, telegram_bot_token: e.target.value })} /></Field><Field label="接收 Chat ID"><input value={notifications.telegram_chat_id} onChange={(e) => setNotifications({ ...notifications, telegram_chat_id: e.target.value })} /></Field><Button type="button" variant="secondary" onClick={() => void save("notify-test", () => api.post("/api/admin/notify-config/test"), "测试通知已发送")} disabled={saving.size > 0 || loadFailures.length > 0}>{saving.has("notify-test") ? <Spinner label="正在发送" /> : <><Send size={16} />发送测试</>}</Button></SettingSection>
         <SettingSection icon={<Bell size={19} />} title="事件通知" description="选择需要推送的管理事件"><div className="settings-check-list event-grid">{[["notify_login", "用户登录"], ["notify_subscribe_fetch", "订阅拉取"], ["notify_server_offline", "服务器离线"], ["notify_server_online", "服务器恢复"], ["notify_over_limit", "流量超限"], ["notify_package_expiring", "套餐即将到期"], ["notify_package_expired", "套餐已到期"], ["notify_user_registered", "用户注册"], ["notify_telegram_bound", "Telegram 绑定"], ["notify_cert_result", "证书操作"], ["notify_agent_long_offline", "Agent 长时离线"], ["notify_device_limit_exceeded", "设备数超限"]].map(([key, label]) => <label className="checkbox-row" key={key}><input type="checkbox" checked={Boolean(notifications[key as keyof NotificationSettings])} onChange={(e) => setNotifications({ ...notifications, [key]: e.target.checked })} /><span>{label}</span></label>)}</div></SettingSection>
@@ -1249,7 +1297,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
         <SaveRow label="保存通知设置" saving={saving.has("notifications")} disabled={saving.size > 0 || loadFailures.length > 0} />
       </form>
 
-      <section id="settings-maintenance" className="settings-settings-group settings-update-group">
+      <section id="settings-maintenance" className="settings-settings-group settings-update-group" role="tabpanel" aria-labelledby={settingsTabID("settings-maintenance")} hidden={activeGroup !== "settings-maintenance"} tabIndex={0}>
         <SettingsGroupHeading icon={<Download size={18} />} title="系统维护" description="检查正式版本并安全更新后端" />
         <SystemUpdatePanel
           info={updateInfo}
@@ -1275,7 +1323,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
         <DebugLogsPanel notify={notify} />
       </section>
 
-      <section id="settings-account" className="settings-settings-group settings-account-group">
+      <section id="settings-account" className="settings-settings-group settings-account-group" role="tabpanel" aria-labelledby={settingsTabID("settings-account")} hidden={activeGroup !== "settings-account"} tabIndex={0}>
         <SettingsGroupHeading icon={<KeyRound size={18} />} title="账户与 API" description="管理接口凭据与双因素认证" />
         <SettingSection icon={<KeyRound size={19} />} title="管理 API Token" description="用于可信自动化调用；重新生成后旧 Token 立即失效"><div className="api-token-row"><code>{apiToken || "尚未生成"}</code><IconButton label="复制 API Token" disabled={!apiToken} onClick={() => void navigator.clipboard.writeText(apiToken).then(() => notify("API Token 已复制"))}><Copy size={16} /></IconButton></div><Button type="button" variant="danger" disabled={loadFailures.length > 0 || saving.size > 0} onClick={() => setConfirmTokenReset(true)}>重新生成 Token</Button></SettingSection>
         <TwoFactorSettings notify={notify} />

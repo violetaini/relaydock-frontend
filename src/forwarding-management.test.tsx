@@ -128,6 +128,42 @@ describe("user forwarding workflow", () => {
 });
 
 describe("administrator tunnel composition", () => {
+  it("keeps successful admin data usable when one user's grants fail", async () => {
+    const bobGrant = { ...compactGrant, id: 10, public_id: "grant_bob_tokyo", username: "bob" };
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/tunnel-templates") return { templates: [tunnel] } as T;
+      if (path === "/api/admin/remote-servers") return { servers: [
+        { id: 11, name: "东京入口", status: "online", ws_connected: true, is_federated: false },
+      ] } as T;
+      if (path === "/api/admin/users") return { users: [
+        { username: "alice", nickname: "Alice", role: "user" },
+        { username: "bob", nickname: "Bob", role: "user" },
+      ] } as T;
+      if (path === "/api/admin/forwards") return { forwards: [{
+        id: "forward_bob",
+        username: "bob",
+        name: "Bob 游戏转发",
+        grant_id: "grant_bob_tokyo",
+        observed_state: "active",
+      }] } as T;
+      if (path === "/api/admin/users/alice/tunnel-grants") throw new Error("Alice 授权接口暂不可用");
+      if (path === "/api/admin/users/bob/tunnel-grants") return { grants: [bobGrant] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    render(<ForwardingManagement isAdmin notify={vi.fn()} />);
+
+    expect(await screen.findByText("东京到洛杉矶")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: /用户授权/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("用户授权：alice 加载失败");
+    expect(screen.getByText("bob")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "新增授权" }));
+    expect(screen.getByRole("dialog", { name: "新增隧道授权" })).toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole("dialog", { name: "新增隧道授权" })).getByRole("button", { name: "取消" }));
+
+    fireEvent.click(screen.getByRole("tab", { name: /全部转发/ }));
+    expect(screen.getByText("Bob 游戏转发")).toBeInTheDocument();
+  });
+
   it("preflights and submits the explicitly ordered managed servers", async () => {
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
       if (path === "/api/admin/tunnel-templates") return { data: { templates: [] } } as T;

@@ -21,6 +21,7 @@ import {
   managedCertificateMatchesServer,
   managedCertificateNameMatchesHost,
   managedTLSHostnameForCertificate,
+  nodeDuplicateIdentity,
   type WorkbenchNode,
 } from "./nodes-workbench";
 
@@ -126,6 +127,59 @@ describe("batch rename reconciliation", () => {
   });
 });
 
+describe("duplicate node review", () => {
+  it("uses a stable configuration identity regardless of object key order or display name", () => {
+    const first = node(1, "First");
+    const second = node(2, "Second");
+    first.clash_config = JSON.stringify({ name: "First", server: "edge.example.com", port: 443, nested: { z: 2, a: 1 } });
+    second.clash_config = JSON.stringify({ nested: { a: 1, z: 2 }, port: 443, server: "edge.example.com", name: "Second" });
+    expect(nodeDuplicateIdentity(first)).toBe(nodeDuplicateIdentity(second));
+  });
+
+  it("falls back to parsed config and never groups nodes whose configuration is unknown", () => {
+    const first = node(1, "Parsed A", "vless", "a.example.com");
+    const second = node(2, "Parsed B", "vless", "b.example.com");
+    first.clash_config = "";
+    second.clash_config = "{}";
+    expect(nodeDuplicateIdentity(first)).not.toBe(nodeDuplicateIdentity(second));
+
+    first.parsed_config = "";
+    second.parsed_config = "not-json";
+    expect(nodeDuplicateIdentity(first)).not.toBe(nodeDuplicateIdentity(second));
+  });
+
+  it("previews each duplicate and lets the operator choose the survivor", async () => {
+    const first = node(3, "保留候选 A");
+    const second = node(8, "保留候选 B");
+    const shared = { type: "vless", server: "edge.example.com", port: 443, uuid: "same-uuid" };
+    first.clash_config = JSON.stringify({ ...shared, name: first.node_name });
+    second.clash_config = JSON.stringify({ uuid: "same-uuid", port: 443, server: "edge.example.com", type: "vless", name: second.node_name });
+    first.tags = ["生产"];
+    second.tags = ["备用"];
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [second, first] } as T;
+      if (path === "/api/admin/speedtest/results?latest=1") return { results: [] } as T;
+      if (path === "/api/user/config") return userConfig([8, 3]) as T;
+      if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ deleted: 1, total: 1 });
+    render(<NodesWorkbench isAdmin notify={vi.fn()} />);
+
+    await screen.findByText("保留候选 A");
+    fireEvent.click(screen.getByRole("button", { name: "工具" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "删除重复" }));
+    const dialog = screen.getByRole("dialog", { name: "确认删除重复节点" });
+    expect(within(dialog).getByRole("radio", { name: "保留 保留候选 A" })).toBeChecked();
+    expect(within(dialog).getByText(/生产/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/备用/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("radio", { name: "保留 保留候选 B" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "删除 1 个节点" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/nodes/batch-delete", { node_ids: [3] }));
+  });
+});
+
 describe("WireGuard nodes", () => {
   it("tests WireGuard by node id and labels the Mihomo end-to-end result", async () => {
     const wireGuard = node(12, "办公室 WireGuard", "wg", "203.0.113.10");
@@ -216,6 +270,25 @@ describe("WireGuard nodes", () => {
 });
 
 describe("managed offer protocol guard", () => {
+  it("edits node tags with reusable choices and custom chips", async () => {
+    const tagged = node(6, "香港线路");
+    tagged.tag = "香港";
+    tagged.tags = ["香港"];
+    const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
+    render(<NodeEditor node={tagged} availableTags={["香港", "高级线路"]} onClose={vi.fn()} onComplete={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "高级线路" }));
+    const input = screen.getByRole("textbox", { name: "添加标签" });
+    fireEvent.change(input, { target: { value: "低延迟" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "保存节点" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/nodes/6", expect.objectContaining({
+      tag: "香港",
+      tags: ["香港", "高级线路", "低延迟"],
+    })));
+  });
+
   it("keeps classic Shadowsocks unavailable in the generic node editor", async () => {
     const classic = node(7, "Classic SS", "ss");
     const config = { name: "Classic SS", type: "ss", server: "edge.example.com", port: 8388, cipher: "aes-128-gcm", password: "shared" };

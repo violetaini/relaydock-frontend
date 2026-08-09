@@ -266,7 +266,13 @@ type WorkbenchDialog =
   | { kind: "route"; node: WorkbenchNode }
   | { kind: "qr"; node: WorkbenchNode }
   | { kind: "temp-sub"; nodes: WorkbenchNode[] }
+  | { kind: "duplicates"; groups: DuplicateNodeGroup[] }
   | null;
+
+interface DuplicateNodeGroup {
+  key: string;
+  nodes: WorkbenchNode[];
+}
 
 interface PendingAction {
   title: string;
@@ -355,12 +361,32 @@ interface ManagedInboundInventoryResponse {
 
 function readConfig(node: WorkbenchNode): Record<string, unknown> {
   for (const raw of [node.clash_config, node.parsed_config]) {
+    if (!raw?.trim()) continue;
     try {
-      const parsed = JSON.parse(raw || "{}");
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const config = parsed as Record<string, unknown>;
+        if (Object.keys(config).length > 0) return config;
+      }
     } catch { /* Keep trying fallbacks. */ }
   }
   return {};
+}
+
+function stableJSONValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableJSONValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, entry]) => [key, stableJSONValue(entry)]));
+}
+
+export function nodeDuplicateIdentity(node: WorkbenchNode): string {
+  const config = { ...readConfig(node) };
+  delete config.name;
+  if (Object.keys(config).length === 0) return `unknown-node:${node.id}`;
+  return JSON.stringify(stableJSONValue(config));
 }
 
 function managedSelfServiceConfigSupported(protocol: string, rawConfig: string): boolean {
@@ -666,6 +692,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
   const protocolFilterOptions = useMemo(() => Array.from(new Set([...protocols, ...Object.keys(protocolCounts)])).filter((item) => item !== "snell" && protocolCounts[item]), [protocolCounts]);
   const protocolScopedNodes = useMemo(() => protocol === "all" ? sourceScopedNodes : sourceScopedNodes.filter((node) => displayedNodeProtocol(node) === protocol), [protocol, sourceScopedNodes]);
   const allTags = useMemo(() => Array.from(new Set(protocolScopedNodes.flatMap(nodeTags))).sort((a, b) => a.localeCompare(b, "zh-CN")), [protocolScopedNodes]);
+  const knownTags = useMemo(() => Array.from(new Set(nodes.flatMap(nodeTags))).sort((a, b) => a.localeCompare(b, "zh-CN")), [nodes]);
   const sourceCounts = useMemo(() => {
     const counts: Record<Exclude<SourceFilter, "all">, number> = { managed: 0, imported: 0, routed: 0 };
     for (const node of nodes) counts[nodeSource(node)] += 1;
@@ -850,28 +877,27 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
   const deleteDuplicates = () => {
     const groups = new Map<string, WorkbenchNode[]>();
     for (const node of nodes) {
-      const config = { ...readConfig(node) };
-      delete config.name;
-      const key = JSON.stringify(config);
+      const key = nodeDuplicateIdentity(node);
       groups.set(key, [...(groups.get(key) ?? []), node]);
     }
-    const duplicates = [...groups.values()].filter((items) => items.length > 1).flatMap((items) => items.slice(1));
-    if (!duplicates.length) return notify("未发现重复节点");
-    setPending({
-      title: "删除重复节点",
-      description: `发现 ${duplicates.length} 个重复节点。每组保留列表中最早的一项，其余项将被删除。`,
-      confirmLabel: `删除 ${duplicates.length} 个重复节点`,
-      run: async () => {
-        try {
-          await api.post("/api/admin/nodes/batch-delete", { node_ids: duplicates.map((node) => node.id) });
-          notify(`已删除 ${duplicates.length} 个重复节点`);
-        } finally {
-          setPending(null);
-          setSelected(new Set());
-          await load(true);
-        }
-      },
-    });
+    const duplicateGroups = [...groups.entries()]
+      .filter(([, items]) => items.length > 1)
+      .map(([key, items]) => ({ key, nodes: [...items].sort((left, right) => left.id - right.id) }));
+    if (!duplicateGroups.length) return notify("未发现重复节点");
+    setDialog({ kind: "duplicates", groups: duplicateGroups });
+  };
+
+  const deleteDuplicateSelection = async (nodeIDs: number[]) => {
+    try {
+      const result = await api.post<{ deleted?: number; total?: number }>("/api/admin/nodes/batch-delete", { node_ids: nodeIDs });
+      notify(`已删除 ${result.deleted ?? nodeIDs.length}/${result.total ?? nodeIDs.length} 个重复节点`);
+    } catch (reason) {
+      notify(reason instanceof Error ? reason.message : "重复节点删除失败", "error");
+    } finally {
+      setDialog(null);
+      setSelected(new Set());
+      await load(true);
+    }
   };
 
   const closeDialog = () => setDialog(null);
@@ -975,7 +1001,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       </>}
 
       {dialog?.kind === "managed-create" ? <ManagedNodeWizard nodes={nodes} onClose={closeDialog} onComplete={async (message, tone) => { closeDialog(); if (tone) notify(message, tone); else notify(message); await load(true); }} /> : null}
-      {dialog?.kind === "edit" ? <NodeEditor node={dialog.node} offer={offers.find((item) => item.node_id === dialog.node.id)} onClose={closeDialog} onComplete={async (message) => { closeDialog(); notify(message); await load(true); }} /> : null}
+      {dialog?.kind === "edit" ? <NodeEditor node={dialog.node} offer={offers.find((item) => item.node_id === dialog.node.id)} availableTags={knownTags} onClose={closeDialog} onComplete={async (message) => { closeDialog(); notify(message); await load(true); }} /> : null}
       {dialog?.kind === "config" ? <ConfigDialog node={dialog.node} editable={isAdmin} onClose={closeDialog} onComplete={async () => { closeDialog(); notify("节点配置已更新"); await load(true); }} /> : null}
       {dialog?.kind === "import" ? <ImportDialog onClose={closeDialog} onComplete={async (count) => { closeDialog(); notify(`已导入 ${count} 个节点`); await load(true); }} /> : null}
       {dialog?.kind === "relay" ? <RelayDialog node={dialog.node} onClose={closeDialog} onComplete={async () => { closeDialog(); notify("节点中转已更新"); await load(true); }} /> : null}
@@ -993,8 +1019,47 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       {dialog?.kind === "route" ? <RoutedOutboundDialog node={dialog.node} nodes={nodes} isAdmin={isAdmin} userStatus={userRouted} onClose={closeDialog} onComplete={async () => { closeDialog(); notify(isAdmin ? "路由出站已创建" : "私有路由出站已创建"); await load(true); }} /> : null}
       {dialog?.kind === "qr" ? <NodeShareQRCodeDialog node={dialog.node} notify={notify} onClose={closeDialog} /> : null}
       {dialog?.kind === "temp-sub" ? <TempSubscriptionDialog nodes={dialog.nodes} notify={notify} onClose={closeDialog} /> : null}
+      {dialog?.kind === "duplicates" ? <DuplicateNodesDialog groups={dialog.groups} onClose={closeDialog} onDelete={deleteDuplicateSelection} /> : null}
       {pending ? <ConfirmDialog title={pending.title} description={pending.description} confirmLabel={pending.confirmLabel} tone={pending.tone} working={working} onCancel={() => !working && setPending(null)} onConfirm={() => void runPending()} /> : null}
     </div>
+  );
+}
+
+function DuplicateNodesDialog({ groups, onClose, onDelete }: { groups: DuplicateNodeGroup[]; onClose: () => void; onDelete: (nodeIDs: number[]) => Promise<void> }) {
+  const [survivors, setSurvivors] = useState<Record<string, number>>(() => Object.fromEntries(groups.map((group) => [group.key, group.nodes[0].id])));
+  const [working, setWorking] = useState(false);
+  const deleteIDs = groups.flatMap((group) => group.nodes.filter((node) => node.id !== survivors[group.key]).map((node) => node.id));
+  const submit = async () => {
+    setWorking(true);
+    try {
+      await onDelete(deleteIDs);
+    } finally {
+      setWorking(false);
+    }
+  };
+  return (
+    <Dialog title="确认删除重复节点" description={`发现 ${groups.length} 组重复配置。请确认每组要保留的节点。`} onClose={onClose} wide dismissible={!working}>
+      <div className="nw-duplicate-groups">
+        {groups.map((group, index) => (
+          <fieldset key={group.key}>
+            <legend>重复组 {index + 1}</legend>
+            {group.nodes.map((node) => {
+              const tags = node.tags?.length ? node.tags : node.tag ? [node.tag] : [];
+              const keep = survivors[group.key] === node.id;
+              return <label key={node.id} className={keep ? "is-survivor" : ""}>
+                <input type="radio" name={`duplicate-${index}`} aria-label={`保留 ${node.node_name}`} checked={keep} onChange={() => setSurvivors((current) => ({ ...current, [group.key]: node.id }))} />
+                <span><strong>{node.node_name}</strong><small>#{node.id} · {nodeSource(node) === "managed" ? "受管节点" : nodeSource(node) === "routed" ? "路由出站" : "导入节点"}{tags.length ? ` · ${tags.join("、")}` : " · 无标签"}</small></span>
+                <Badge tone={keep ? "good" : "warn"}>{keep ? "保留" : "删除"}</Badge>
+              </label>;
+            })}
+          </fieldset>
+        ))}
+      </div>
+      <div className="dialog-actions">
+        <Button type="button" variant="secondary" onClick={onClose} disabled={working}>取消</Button>
+        <Button type="button" variant="danger" onClick={() => void submit()} disabled={working || !deleteIDs.length}>{working ? <Spinner label="正在删除" /> : `删除 ${deleteIDs.length} 个节点`}</Button>
+      </div>
+    </Dialog>
   );
 }
 
@@ -1128,20 +1193,21 @@ function NodeActions({ node, isAdmin, userRouted, onEdit, onConfig, onQRCode, on
   </div>;
 }
 
-export function NodeEditor({ node, offer, onClose, onComplete }: { node?: WorkbenchNode; offer?: ManagedNodeOffer; onClose: () => void; onComplete: (message: string) => void }) {
+export function NodeEditor({ node, offer, availableTags = [], onClose, onComplete }: { node?: WorkbenchNode; offer?: ManagedNodeOffer; availableTags?: string[]; onClose: () => void; onComplete: (message: string) => void }) {
   const initial = node ? readConfig(node) : { name: "", type: "vless", server: "", port: 443 };
   const [form, setForm] = useState({
     name: node?.node_name || String(initial.name || ""),
     protocol: node?.protocol || String(initial.type || "vless"),
     server: String(initial.server || ""),
     port: String(initial.port || 443),
-    tags: nodeTags(node ?? {} as WorkbenchNode).join(", "),
     rawURL: node?.raw_url || "",
     enabled: node?.enabled ?? true,
     selfService: offer?.enabled ?? false,
     offerOrder: String(offer?.sort_order ?? 0),
     config: JSON.stringify(initial, null, 2),
   });
+  const [tags, setTags] = useState(() => nodeTags(node ?? {} as WorkbenchNode));
+  const [tagInput, setTagInput] = useState("");
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
   const tunnelNode = isTunnelNode(node);
@@ -1163,7 +1229,6 @@ export function NodeEditor({ node, offer, onClose, onComplete }: { node?: Workbe
       if (form.selfService && tunnelNode) throw new Error("Tunnel 转发节点不能发布到用户自助目录");
       if (form.selfService && !managedSelfServiceConfigSupported(form.protocol, JSON.stringify(config))) throw new Error(nodeProtocolKey(form.protocol) === "wireguard" ? "WireGuard 暂不支持按用户自助开通；管理员创建的普通节点仍可分配到套餐和订阅" : "经典 Shadowsocks 使用共享密码，不能发布到用户自助目录；请改用 Shadowsocks 2022");
       const configJSON = JSON.stringify(config);
-      const tags = form.tags.split(/[,，\n]/).map((value) => value.trim()).filter(Boolean);
       const payload = {
         raw_url: form.rawURL.trim(),
         node_name: form.name.trim(),
@@ -1195,12 +1260,18 @@ export function NodeEditor({ node, offer, onClose, onComplete }: { node?: Workbe
       setError(reason instanceof Error ? reason.message : "保存失败");
     } finally { setWorking(false); }
   };
+  const addTag = (value: string) => {
+    const clean = value.trim();
+    if (clean && !tags.includes(clean)) setTags((current) => [...current, clean]);
+    setTagInput("");
+  };
   return <Dialog title={node ? `编辑 ${node.node_name}` : "手工添加节点"} description="基础字段会同步写回完整 Clash JSON 配置" onClose={onClose} wide>
     <form className="form-stack" onSubmit={submit}>
       {error ? <ErrorState message={error} /> : null}
       <div className="form-grid"><Field label="节点名称"><input autoFocus required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field><Field label="协议"><select value={form.protocol} onChange={(event) => setForm({ ...form, protocol: event.target.value })}>{protocolOptions.map((item) => <option value={item} key={item}>{item.toUpperCase()}</option>)}</select></Field></div>
       <div className="form-grid"><Field label="服务器地址"><input required value={form.server} onChange={(event) => setForm({ ...form, server: event.target.value })} placeholder="example.com 或 IP" /></Field><Field label="端口"><input required type="number" min="1" max="65535" value={form.port} onChange={(event) => setForm({ ...form, port: event.target.value })} /></Field></div>
-      <Field label="标签" hint="多个标签使用逗号分隔"><input value={form.tags} onChange={(event) => setForm({ ...form, tags: event.target.value })} placeholder="香港, 高级线路" /></Field>
+      <Field label="标签" hint="选择已有标签，或输入新标签后按回车"><div className="nw-chip-input">{tags.map((item) => <span key={item}>{item}<button type="button" aria-label={`移除标签 ${item}`} onClick={() => setTags((current) => current.filter((tag) => tag !== item))}><X size={12} /></button></span>)}<input aria-label="添加标签" value={tagInput} onChange={(event) => setTagInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === ",") { event.preventDefault(); addTag(tagInput); } }} onBlur={() => addTag(tagInput)} placeholder={tags.length ? "继续输入" : "输入标签后按回车"} /></div></Field>
+      {availableTags.length ? <div className="nw-tag-choices" aria-label="已有标签">{availableTags.map((item) => <button type="button" key={item} className={tags.includes(item) ? "is-active" : ""} aria-pressed={tags.includes(item)} onClick={() => setTags((current) => current.includes(item) ? current.filter((tag) => tag !== item) : [...current, item])}>{item}</button>)}</div> : null}
       <Field label="原始 URI（可选）"><input value={form.rawURL} onChange={(event) => setForm({ ...form, rawURL: event.target.value })} placeholder="vless://..." /></Field>
       {node?.original_server ? <div className="nw-inline-note"><Server size={16} /><span>受管服务器：<strong>{node.original_server}</strong>{node.inbound_tag ? ` · 入站 ${node.inbound_tag}` : ""}</span></div> : null}
       <Field label="Clash JSON 配置" hint="保存前会校验 JSON，并以顶部基础字段覆盖 name/type/server/port"><textarea className="nw-code-editor" rows={14} spellCheck={false} value={form.config} onChange={(event) => setForm({ ...form, config: event.target.value })} /></Field>

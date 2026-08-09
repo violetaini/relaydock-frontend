@@ -42,6 +42,7 @@ type Notify = (message: string, tone?: "success" | "error") => void;
 type AdminTab = "templates" | "grants" | "forwards";
 type UserTab = "forwards" | "grants";
 type ResourceID = string | number;
+type AdminLoadSection = "general" | "templates" | "servers" | "users" | "forwards" | "grants";
 
 // The current Agent cannot enforce limits on raw tunnel inbounds yet.
 const INBOUND_LIMITER_V1 = false;
@@ -239,6 +240,10 @@ function idempotencyKey(): string {
     : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function loadFailure(reason: unknown, fallback: string): string {
+  return reason instanceof Error && reason.message.trim() ? reason.message : fallback;
+}
+
 function responseObject<T>(payload: unknown, ...keys: string[]): T {
   const root = asRecord(payload);
   if (!root) return payload as T;
@@ -425,7 +430,7 @@ function AdminForwarding({ notify }: { notify: Notify }) {
   const [servers, setServers] = useState<RemoteServer[]>([]);
   const [users, setUsers] = useState<UserItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [loadErrors, setLoadErrors] = useState<Partial<Record<AdminLoadSection, string>>>({});
   const [dialog, setDialog] = useState<"template" | "grant" | null>(null);
   const [editingGrant, setEditingGrant] = useState<TunnelGrant | undefined>();
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
@@ -433,26 +438,65 @@ function AdminForwarding({ notify }: { notify: Notify }) {
 
   const load = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
-    setError("");
+    const nextErrors: Partial<Record<AdminLoadSection, string>> = {};
     try {
-      const [templatePayload, serverPayload, userPayload, forwardPayload] = await Promise.all([
+      const [templateResult, serverResult, userResult, forwardResult] = await Promise.allSettled([
         api.get<unknown>("/api/admin/tunnel-templates"),
         api.get<ServerListResponse | RemoteServer[]>("/api/admin/remote-servers"),
         api.get<unknown>("/api/admin/users"),
         api.get<unknown>("/api/admin/forwards"),
       ]);
-      const nextTemplates = extractList<TunnelTemplate>(templatePayload, "templates", "tunnels");
-      const nextServers = Array.isArray(serverPayload) ? serverPayload : serverPayload.servers ?? [];
-      const nextUsers = extractList<UserItem>(userPayload, "users");
-      const grantPayloads = await Promise.all(nextUsers.map((user) => api.get<unknown>(`/api/admin/users/${encodeURIComponent(user.username)}/tunnel-grants`)));
-      setTemplates(nextTemplates);
-      setServers(nextServers);
-      setUsers(nextUsers);
-      setForwards(extractList<ForwardRule>(forwardPayload, "forwards", "rules"));
-      setGrants(grantPayloads.flatMap((payload) => extractList<TunnelGrant>(payload, "grants", "tunnel_grants")));
+
+      if (templateResult.status === "fulfilled") {
+        setTemplates(extractList<TunnelTemplate>(templateResult.value, "templates", "tunnels"));
+      } else {
+        nextErrors.templates = `隧道模板：${loadFailure(templateResult.reason, "加载失败")}`;
+      }
+      if (serverResult.status === "fulfilled") {
+        const serverPayload = serverResult.value;
+        const serverRoot = asRecord(serverPayload);
+        setServers(Array.isArray(serverPayload)
+          ? serverPayload
+          : Array.isArray(serverRoot?.servers) ? serverRoot.servers as RemoteServer[] : []);
+      } else {
+        nextErrors.servers = `服务器列表：${loadFailure(serverResult.reason, "加载失败")}`;
+      }
+      if (forwardResult.status === "fulfilled") {
+        setForwards(extractList<ForwardRule>(forwardResult.value, "forwards", "rules"));
+      } else {
+        nextErrors.forwards = `全部转发：${loadFailure(forwardResult.reason, "加载失败")}`;
+      }
+
+      if (userResult.status === "fulfilled") {
+        const nextUsers = extractList<UserItem>(userResult.value, "users");
+        const grantUsers = [...new Map(nextUsers.filter((user) => user.username).map((user) => [user.username, user])).values()];
+        setUsers(nextUsers);
+        const grantResults = await Promise.allSettled(grantUsers.map((user) => (
+          api.get<unknown>(`/api/admin/users/${encodeURIComponent(user.username)}/tunnel-grants`)
+        )));
+        const failedUsernames = grantResults.flatMap((result, index) => (
+          result.status === "rejected" ? [grantUsers[index].username] : []
+        ));
+        setGrants((current) => {
+          const currentByUsername = new Map<string, TunnelGrant[]>();
+          current.forEach((grant) => currentByUsername.set(grant.username, [...(currentByUsername.get(grant.username) ?? []), grant]));
+          return grantResults.flatMap((result, index) => {
+            const username = grantUsers[index].username;
+            if (result.status === "rejected") return currentByUsername.get(username) ?? [];
+            return extractList<TunnelGrant>(result.value, "grants", "tunnel_grants")
+              .map((grant) => grant.username ? grant : { ...grant, username });
+          });
+        });
+        if (failedUsernames.length) {
+          nextErrors.grants = `用户授权：${failedUsernames.join("、")} 加载失败`;
+        }
+      } else {
+        nextErrors.users = `用户列表：${loadFailure(userResult.reason, "加载失败")}`;
+      }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "转发管理数据加载失败");
+      nextErrors.general = loadFailure(reason, "转发管理数据加载失败");
     } finally {
+      setLoadErrors(nextErrors);
       if (!quiet) setLoading(false);
     }
   }, []);
@@ -485,6 +529,13 @@ function AdminForwarding({ notify }: { notify: Notify }) {
     await load(true);
   };
 
+  const visibleLoadErrors = (tab === "templates"
+    ? [loadErrors.general, loadErrors.templates, loadErrors.servers]
+    : tab === "grants"
+      ? [loadErrors.general, loadErrors.users, loadErrors.grants, loadErrors.templates]
+      : [loadErrors.general, loadErrors.forwards, loadErrors.templates])
+    .filter((message): message is string => Boolean(message));
+
   return <section className="fm-root" aria-label="转发管理">
     <div className="fm-section-heading">
       <div><span className="eyebrow">FORWARDING</span><h2>转发管理</h2><p>由管理员编排服务器路线，再按用户授权创建转发。</p></div>
@@ -504,7 +555,7 @@ function AdminForwarding({ notify }: { notify: Notify }) {
       <button role="tab" aria-selected={tab === "forwards"} className={tab === "forwards" ? "is-active" : ""} onClick={() => setTab("forwards")}><Network size={16} />全部转发 <span>{forwards.length}</span></button>
     </div>
 
-    {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
+    {visibleLoadErrors.length ? <ErrorState message={`部分数据未能刷新：${visibleLoadErrors.join("；")}。已保留其余成功数据，可继续操作。`} onRetry={() => void load(true)} /> : null}
     {loading ? <div className="center-state"><Spinner label="正在加载转发管理" /></div> : null}
     {!loading && tab === "templates" ? <TemplatePanel templates={templates} servers={servers} onCreate={() => setDialog("template")} onState={changeTemplateState} onDelete={(template) => setConfirm({
       title: "删除隧道模板",

@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
 import { TwoFactorSettings } from "./two-factor";
 
+vi.mock("qrcode", () => ({ default: { toDataURL: vi.fn().mockResolvedValue("data:image/png;base64,arcway-2fa") } }));
+
 vi.hoisted(() => {
   (globalThis as unknown as { process: { env: { NODE_ENV?: string } } }).process.env.NODE_ENV = "test";
 });
@@ -44,6 +46,7 @@ describe("two-factor settings", () => {
     await openSetup();
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/user/2fa/setup", { password: "correct-password" }, { suppressUnauthorizedEvent: true }));
+    expect(await screen.findByRole("img", { name: "双因素认证设置二维码" })).toHaveAttribute("src", "data:image/png;base64,arcway-2fa");
     expect(await screen.findByText("JBSWY3DPEHPK3PXP")).toBeInTheDocument();
     expect(screen.getByText(/otpauth:\/\/totp\/Arcway:admin/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("6 位动态验证码"), { target: { value: "123456" } });

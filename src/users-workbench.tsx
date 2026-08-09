@@ -654,10 +654,24 @@ function LimitsSettingsPanel({ user, onBack, onComplete }: { user: ManagedUser; 
 }
 
 function SubscriptionsSettingsPanel({ user, onBack, onComplete }: { user: ManagedUser; onBack: () => void; onComplete: (message: string) => void }) {
-  const [files, setFiles] = useState<SubscribeFile[]>([]); const [selected, setSelected] = useState<number[]>([]); const [loading, setLoading] = useState(true); const [working, setWorking] = useState(false); const [error, setError] = useState("");
-  useEffect(() => { Promise.all([api.get<{ files?: SubscribeFile[] }>("/api/admin/subscribe-files"), api.get<{ subscription_ids?: number[] }>(`/api/admin/users/${encodeURIComponent(user.username)}/subscriptions`)]).then(([all, assigned]) => { setFiles(all.files ?? []); setSelected(assigned.subscription_ids ?? []); }).catch((reason) => setError(messageOf(reason, "订阅分配加载失败"))).finally(() => setLoading(false)); }, [user.username]);
+  const [files, setFiles] = useState<SubscribeFile[]>([]); const [selected, setSelected] = useState<number[]>([]); const [loading, setLoading] = useState(true); const [ready, setReady] = useState(false); const [working, setWorking] = useState(false); const [loadError, setLoadError] = useState(""); const [error, setError] = useState("");
+  const load = useCallback(async () => {
+    setLoading(true); setReady(false); setLoadError("");
+    try {
+      const [all, assigned] = await Promise.all([
+        api.get<{ files?: SubscribeFile[] }>("/api/admin/subscribe-files"),
+        api.get<{ subscription_ids?: number[] }>(`/api/admin/users/${encodeURIComponent(user.username)}/subscriptions`),
+      ]);
+      setFiles(all.files ?? []);
+      setSelected(assigned.subscription_ids ?? []);
+      setReady(true);
+    } catch (reason) {
+      setLoadError(messageOf(reason, "订阅分配加载失败"));
+    } finally { setLoading(false); }
+  }, [user.username]);
+  useEffect(() => { void load(); }, [load]);
   const submit = async () => { setWorking(true); setError(""); try { await api.put(`/api/admin/users/${encodeURIComponent(user.username)}/subscriptions`, { subscription_ids: selected }); onComplete(`${user.username} 的订阅分配已更新`); } catch (reason) { setError(messageOf(reason, "订阅分配保存失败")); } finally { setWorking(false); } };
-  return <>{error ? <ErrorState message={error} /> : null}{loading ? <div className="center-state"><Spinner /></div> : <div className="form-stack"><div className="preview-list subscription-assignment-list">{files.length === 0 ? <div><span className="muted">暂无可分配订阅</span></div> : files.map((file) => <div key={file.id}><label className="checkbox-row"><input type="checkbox" checked={selected.includes(file.id)} onChange={() => setSelected((current) => current.includes(file.id) ? current.filter((id) => id !== file.id) : [...current, file.id])} /><span><strong>{file.name}</strong><small>{file.description || file.filename}</small></span></label><Badge tone={selected.includes(file.id) ? "good" : "neutral"}>{file.type || "订阅"}</Badge></div>)}</div><div className="dialog-actions"><Button variant="secondary" onClick={onBack}>返回设置总览</Button><Button onClick={() => void submit()} disabled={working}>{working ? <Spinner label="正在保存" /> : <><Link2 size={16} />保存分配（{selected.length}）</>}</Button></div></div>}</>;
+  return <>{loadError ? <ErrorState message={loadError} onRetry={() => void load()} /> : null}{error ? <ErrorState message={error} /> : null}{loading ? <div className="center-state"><Spinner /></div> : ready ? <div className="form-stack"><div className="preview-list subscription-assignment-list">{files.length === 0 ? <div><span className="muted">暂无可分配订阅</span></div> : files.map((file) => <div key={file.id}><label className="checkbox-row"><input type="checkbox" checked={selected.includes(file.id)} onChange={() => setSelected((current) => current.includes(file.id) ? current.filter((id) => id !== file.id) : [...current, file.id])} /><span><strong>{file.name}</strong><small>{file.description || file.filename}</small></span></label><Badge tone={selected.includes(file.id) ? "good" : "neutral"}>{file.type || "订阅"}</Badge></div>)}</div><div className="dialog-actions"><Button variant="secondary" onClick={onBack}>返回设置总览</Button><Button onClick={() => void submit()} disabled={working}>{working ? <Spinner label="正在保存" /> : <><Link2 size={16} />保存分配（{selected.length}）</>}</Button></div></div> : <div className="dialog-actions"><Button variant="secondary" onClick={onBack}>返回设置总览</Button></div>}</>;
 }
 
 function SubaccountsSettingsPanel({ user }: { user: ManagedUser }) {

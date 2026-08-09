@@ -9,7 +9,7 @@ import { Button, ErrorState, Field, Spinner, formatBytes } from "./ui";
 declare global {
   interface Window {
     turnstile?: {
-      render: (element: HTMLElement, options: { sitekey: string; callback: (token: string) => void; "expired-callback": () => void; theme: "light" | "dark" }) => string;
+      render: (element: HTMLElement, options: { sitekey: string; callback: (token: string) => void; "expired-callback": () => void; "error-callback": () => void; "timeout-callback": () => void; theme: "light" | "dark" }) => string;
       remove: (id: string) => void;
     };
   }
@@ -346,23 +346,45 @@ export function PublicProbeScreen({ probe, onLogin, loginLabel = "登录" }: { p
 
 function Turnstile({ siteKey, onToken }: { siteKey: string; onToken: (token: string) => void }) {
   const ref = useRef<HTMLDivElement>(null);
+  const [attempt, setAttempt] = useState(0);
+  const [loadError, setLoadError] = useState("");
   useEffect(() => {
     let widget = "";
     let cancelled = false;
+    let poll = 0;
+    let timeout = 0;
+    let script: HTMLScriptElement | null = null;
+    const fail = (message: string) => {
+      if (cancelled) return;
+      window.clearInterval(poll);
+      window.clearTimeout(timeout);
+      onToken("");
+      setLoadError(message);
+    };
     const render = () => {
       if (cancelled || !ref.current || !window.turnstile) return;
-      widget = window.turnstile.render(ref.current, {
-        sitekey: siteKey,
-        callback: onToken,
-        "expired-callback": () => onToken(""),
-        theme: document.documentElement.dataset.theme === "dark" ? "dark" : "light",
-      });
+      window.clearInterval(poll);
+      window.clearTimeout(timeout);
+      try {
+        widget = window.turnstile.render(ref.current, {
+          sitekey: siteKey,
+          callback: (token) => { setLoadError(""); onToken(token); },
+          "expired-callback": () => onToken(""),
+          "error-callback": () => fail("人机验证加载失败，请重试"),
+          "timeout-callback": () => fail("人机验证已超时，请重试"),
+          theme: document.documentElement.dataset.theme === "dark" ? "dark" : "light",
+        });
+      } catch {
+        fail("人机验证初始化失败，请重试");
+      }
     };
+    setLoadError("");
+    onToken("");
     if (window.turnstile) {
       render();
     } else {
       const existing = document.querySelector<HTMLScriptElement>("script[data-arcway-turnstile]");
-      const script = existing ?? document.createElement("script");
+      script = existing ?? document.createElement("script");
       if (!existing) {
         script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
         script.async = true;
@@ -371,13 +393,22 @@ function Turnstile({ siteKey, onToken }: { siteKey: string; onToken: (token: str
         document.head.appendChild(script);
       }
       script.addEventListener("load", render, { once: true });
+      script.addEventListener("error", () => fail("人机验证脚本加载失败，请检查网络后重试"), { once: true });
+      poll = window.setInterval(render, 100);
+      timeout = window.setTimeout(() => fail("人机验证加载超时，请重试"), 10_000);
     }
     return () => {
       cancelled = true;
+      window.clearInterval(poll);
+      window.clearTimeout(timeout);
       if (widget) window.turnstile?.remove(widget);
     };
-  }, [siteKey, onToken]);
-  return <div className="turnstile-slot" ref={ref} />;
+  }, [attempt, siteKey, onToken]);
+  const retry = () => {
+    if (!window.turnstile) document.querySelector<HTMLScriptElement>("script[data-arcway-turnstile]")?.remove();
+    setAttempt((value) => value + 1);
+  };
+  return <div className="turnstile-field"><div className="turnstile-slot" ref={ref} />{loadError ? <ErrorState message={loadError} onRetry={retry} /> : null}</div>;
 }
 
 export function LoginScreen({ onLogin, wallpaper = "", notice = "" }: { onLogin: (session: Session) => void; wallpaper?: string; notice?: string }) {
@@ -389,6 +420,7 @@ export function LoginScreen({ onLogin, wallpaper = "", notice = "" }: { onLogin:
   const [recoveryMode, setRecoveryMode] = useState(false);
   const [captcha, setCaptcha] = useState<{ enabled: boolean; site_key: string }>({ enabled: false, site_key: "" });
   const [captchaToken, setCaptchaToken] = useState("");
+  const [captchaAttempt, setCaptchaAttempt] = useState(0);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -415,11 +447,19 @@ export function LoginScreen({ onLogin, wallpaper = "", notice = "" }: { onLogin:
         turnstile_token: captchaToken,
       });
       if (response.requires_2fa && response.two_factor_token) {
+        if (captcha.enabled) {
+          setCaptchaToken("");
+          setCaptchaAttempt((value) => value + 1);
+        }
         setPending2FA(response.two_factor_token);
       } else {
         finish(response);
       }
     } catch (reason) {
+      if (captcha.enabled) {
+        setCaptchaToken("");
+        setCaptchaAttempt((value) => value + 1);
+      }
       setError(reason instanceof ApiError && reason.status === 401 ? "账号或密码错误" : reason instanceof Error ? reason.message : "登录失败");
     } finally {
       setSubmitting(false);
@@ -429,6 +469,14 @@ export function LoginScreen({ onLogin, wallpaper = "", notice = "" }: { onLogin:
   const verify2FA = async (event: FormEvent) => {
     event.preventDefault();
     setError("");
+    if (!recoveryMode && !/^\d{6}$/.test(code)) {
+      setError("动态验证码必须是 6 位数字");
+      return;
+    }
+    if (recoveryMode && !code.trim()) {
+      setError("请输入恢复码");
+      return;
+    }
     setSubmitting(true);
     try {
       const path = recoveryMode ? "/api/login/recovery" : "/api/login/2fa";
@@ -457,18 +505,19 @@ export function LoginScreen({ onLogin, wallpaper = "", notice = "" }: { onLogin:
           {pending2FA ? (
             <form onSubmit={verify2FA} className="form-stack">
               <Field label={recoveryMode ? "恢复码" : "动态验证码"}>
-                <div className="input-with-icon"><KeyRound size={17} /><input required autoFocus inputMode={recoveryMode ? "text" : "numeric"} autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} /></div>
+                <div className="input-with-icon"><KeyRound size={17} /><input required autoFocus inputMode={recoveryMode ? "text" : "numeric"} autoComplete="one-time-code" value={code} onChange={(e) => setCode(recoveryMode ? e.target.value : e.target.value.replace(/\D/g, "").slice(0, 6))} /></div>
               </Field>
-              <Button type="submit" disabled={submitting}>{submitting ? <Spinner label="正在验证" /> : <>验证并登录<ArrowRight size={17} /></>}</Button>
+              <Button type="submit" disabled={submitting || (recoveryMode ? !code.trim() : code.length !== 6)}>{submitting ? <Spinner label="正在验证" /> : <>验证并登录<ArrowRight size={17} /></>}</Button>
               <button type="button" className="text-button" onClick={() => { setRecoveryMode(!recoveryMode); setCode(""); setError(""); }}>{recoveryMode ? "使用动态验证码" : "使用恢复码"}</button>
+              <button type="button" className="text-button" onClick={() => { setPending2FA(""); setRecoveryMode(false); setCode(""); setError(""); }}>返回账号密码登录</button>
             </form>
           ) : (
             <form onSubmit={login} className="form-stack">
               <Field label="账号"><div className="input-with-icon"><KeyRound size={17} /><input required autoFocus autoComplete="username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></div></Field>
               <Field label="密码"><div className="input-with-icon"><LockKeyhole size={17} /><input required type="password" autoComplete="current-password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></div></Field>
               <label className="checkbox-row"><input type="checkbox" checked={form.remember_me} onChange={(e) => setForm({ ...form, remember_me: e.target.checked })} /><span>保持登录</span></label>
-              {captcha.enabled && captcha.site_key ? <Turnstile siteKey={captcha.site_key} onToken={setCaptchaToken} /> : null}
-              <Button type="submit" disabled={submitting}>{submitting ? <Spinner label="正在登录" /> : <>登录<ArrowRight size={17} /></>}</Button>
+              {captcha.enabled && captcha.site_key ? <Turnstile key={`${captcha.site_key}-${captchaAttempt}`} siteKey={captcha.site_key} onToken={setCaptchaToken} /> : null}
+              <Button type="submit" disabled={submitting || (captcha.enabled && !captchaToken)}>{submitting ? <Spinner label="正在登录" /> : <>登录<ArrowRight size={17} /></>}</Button>
             </form>
           )}
           <div className="auth-security"><ShieldCheck size={16} /><span>会话由控制端本地签发</span></div>

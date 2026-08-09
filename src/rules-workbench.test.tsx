@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
 import { CustomRulesWorkbenchPage, RulesConfigWorkbenchPage } from "./rules-workbench";
@@ -60,6 +60,12 @@ function mockRuleFileLoads() {
     } as T;
     throw new Error(`unexpected GET ${path}`);
   });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((next) => { resolve = next; });
+  return { promise, resolve };
 }
 
 afterEach(() => {
@@ -189,5 +195,114 @@ describe("rules config workbench", () => {
     expect(within(dialog).getByText(/MATCH,DIRECT/)).toBeInTheDocument();
     expect(within(dialog).queryByRole("textbox")).not.toBeInTheDocument();
     expect(get).toHaveBeenCalledWith("/api/admin/rules/Hong%20Kong%20rules.yaml/history");
+  });
+
+  it("keeps the newest file when document requests resolve out of order", async () => {
+    const slowA = deferred<{
+      name: string;
+      content: string;
+      latest_version: number;
+    }>();
+    const fastB = deferred<{
+      name: string;
+      content: string;
+      latest_version: number;
+    }>();
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/rules/") return {
+        files: [
+          { name: "A.yaml", size: 120, mod_time: 1784426400, latest_version: 1 },
+          { name: "B.yaml", size: 140, mod_time: 1784426401, latest_version: 2 },
+        ],
+      } as T;
+      if (path === "/api/admin/rules/A.yaml") return slowA.promise as Promise<T>;
+      if (path === "/api/admin/rules/B.yaml") return fastB.promise as Promise<T>;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    render(<RulesConfigWorkbenchPage notify={vi.fn()} />);
+
+    const rowA = (await screen.findByText("A.yaml")).closest("tr")!;
+    const rowB = screen.getByText("B.yaml").closest("tr")!;
+    fireEvent.click(within(rowA).getByRole("button", { name: "编辑" }));
+    expect(screen.getByRole("dialog", { name: "编辑 A.yaml" })).toBeInTheDocument();
+    fireEvent.click(within(rowB).getByRole("button", { name: "编辑" }));
+
+    await act(async () => {
+      fastB.resolve({ name: "B.yaml", content: "rules:\n  - MATCH,B\n", latest_version: 2 });
+    });
+    const editorB = await screen.findByRole("dialog", { name: "编辑 B.yaml" });
+    expect(within(editorB).getByRole("textbox", { name: "YAML 内容" })).toHaveValue("rules:\n  - MATCH,B\n");
+
+    await act(async () => {
+      slowA.resolve({ name: "A.yaml", content: "rules:\n  - MATCH,A\n", latest_version: 1 });
+    });
+    expect(screen.getByRole("dialog", { name: "编辑 B.yaml" })).toBeInTheDocument();
+    expect(within(editorB).getByRole("textbox", { name: "YAML 内容" })).toHaveValue("rules:\n  - MATCH,B\n");
+    expect(screen.queryByRole("dialog", { name: "编辑 A.yaml" })).not.toBeInTheDocument();
+  });
+
+  it("does not reopen an editor when a closed document request resolves later", async () => {
+    const pending = deferred<{
+      name: string;
+      content: string;
+      latest_version: number;
+    }>();
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/rules/") return {
+        files: [{ name: "A.yaml", size: 120, mod_time: 1784426400, latest_version: 1 }],
+      } as T;
+      if (path === "/api/admin/rules/A.yaml") return pending.promise as Promise<T>;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    render(<RulesConfigWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    const editor = screen.getByRole("dialog", { name: "编辑 A.yaml" });
+    fireEvent.click(within(editor).getByRole("button", { name: "关闭" }));
+    expect(screen.queryByRole("dialog", { name: "编辑 A.yaml" })).not.toBeInTheDocument();
+
+    await act(async () => {
+      pending.resolve({ name: "A.yaml", content: "rules:\n  - MATCH,A\n", latest_version: 1 });
+    });
+    expect(screen.queryByRole("dialog", { name: "编辑 A.yaml" })).not.toBeInTheDocument();
+  });
+
+  it("confirms every dirty close path while unchanged content closes directly", async () => {
+    mockRuleFileLoads();
+    render(<RulesConfigWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    let editor = await screen.findByRole("dialog", { name: "编辑 Hong Kong rules.yaml" });
+    await within(editor).findByRole("textbox", { name: "YAML 内容" });
+    expect(within(editor).getByRole("button", { name: "保存新版本" })).toBeDisabled();
+    fireEvent.click(within(editor).getByRole("button", { name: "关闭" }));
+    expect(screen.queryByRole("dialog", { name: "丢弃未保存的规则文件修改" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "编辑 Hong Kong rules.yaml" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    editor = await screen.findByRole("dialog", { name: "编辑 Hong Kong rules.yaml" });
+    const textarea = await within(editor).findByRole("textbox", { name: "YAML 内容" });
+    fireEvent.change(textarea, { target: { value: "rules:\n  - MATCH,PROXY\n" } });
+    expect(within(editor).getByRole("button", { name: "保存新版本" })).toBeEnabled();
+
+    const cancelDiscard = async () => {
+      const confirm = await screen.findByRole("dialog", { name: "丢弃未保存的规则文件修改" });
+      fireEvent.click(within(confirm).getByRole("button", { name: "取消" }));
+      expect(screen.getByRole("dialog", { name: "编辑 Hong Kong rules.yaml" })).toBeInTheDocument();
+    };
+
+    fireEvent.click(within(editor).getByRole("button", { name: "取消" }));
+    await cancelDiscard();
+
+    fireEvent.click(within(editor).getByRole("button", { name: "关闭" }));
+    await cancelDiscard();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await cancelDiscard();
+
+    fireEvent.mouseDown(editor.closest(".dialog-backdrop")!);
+    const confirm = await screen.findByRole("dialog", { name: "丢弃未保存的规则文件修改" });
+    fireEvent.click(within(confirm).getByRole("button", { name: "丢弃修改" }));
+    expect(screen.queryByRole("dialog", { name: "编辑 Hong Kong rules.yaml" })).not.toBeInTheDocument();
   });
 });

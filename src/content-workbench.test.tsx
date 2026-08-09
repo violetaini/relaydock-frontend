@@ -39,6 +39,29 @@ function subscribeLoad(path: string, files: unknown[] = [], external: unknown[] 
 }
 
 describe("content workbench templates", () => {
+  it("updates template content and filename in one atomic request", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/rule-templates") return { templates: ["old.yaml"], owners: { "old.yaml": "alice" }, username: "alice", is_admin: false } as T;
+      if (path === "/api/admin/rule-templates/old.yaml") return { content: "rules:\n  - MATCH,DIRECT\n" } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const put = vi.spyOn(api, "put").mockResolvedValue({ filename: "new.yaml" });
+    const post = vi.spyOn(api, "post");
+    render(<TemplatesWorkbenchPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 old.yaml" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "文件名" }), { target: { value: "new" } });
+    const editor = await screen.findByRole("textbox", { name: "YAML 内容" });
+    fireEvent.change(editor, { target: { value: "rules:\n  - MATCH,PROXY\n" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存模板" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/rule-templates/old.yaml", {
+      content: "rules:\n  - MATCH,PROXY\n",
+      new_name: "new.yaml",
+    }));
+    expect(post).not.toHaveBeenCalledWith("/api/admin/rule-templates/rename", expect.anything());
+  });
+
   it("marks the current default template and can change it in place", async () => {
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
       if (path === "/api/admin/rule-templates") return { templates: ["edge_v3.yaml", "private.yaml"], owners: {}, username: "admin", is_admin: true } as T;
@@ -138,7 +161,6 @@ describe("content workbench templates", () => {
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
       if (path === "/api/admin/rule-templates") return { templates: [], owners: {}, username: "admin", is_admin: true } as T;
       if (path === "/api/admin/nodes") return { nodes: [{ id: 7, node_name: "香港 01", protocol: "vless", clash_config: "{}", enabled: true }] } as T;
-      if (path === "/api/user/proxy-provider-configs") return [{ id: 8, external_subscription_id: 3, name: "Airport HK", type: "http" }] as T;
       if (path === "/api/admin/template-v3/region-filters") return { region_filters: { 香港: "香港|HK" } } as T;
       throw new Error(`unexpected GET ${path}`);
     });
@@ -149,12 +171,13 @@ describe("content workbench templates", () => {
     fireEvent.click(await screen.findByRole("button", { name: "可视化设计" }));
     fireEvent.change(screen.getByRole("textbox", { name: "模板文件名" }), { target: { value: "structured" } });
     fireEvent.change(screen.getByRole("combobox", { name: "类型" }), { target: { value: "url-test" } });
-    const source = await screen.findByRole("option", { name: "Provider · Airport HK" });
+    const source = await screen.findByRole("option", { name: "节点 · 香港 01" });
     fireEvent.change(screen.getByRole("combobox", { name: "添加 PROXY 来源" }), { target: { value: source.getAttribute("value") } });
     fireEvent.click(screen.getByRole("tab", { name: "YAML 预览" }));
 
     expect(screen.getByText(/type: "url-test"/)).toBeInTheDocument();
-    expect(screen.getByText(/use:[\s\S]*Airport HK/)).toBeInTheDocument();
+    expect(screen.getByText(/proxies:[\s\S]*香港 01/)).toBeInTheDocument();
+    expect(screen.queryByText(/use:/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "保存新模板" }));
 
     await waitFor(() => expect(validate).toHaveBeenCalledWith("/api/admin/template-v3/preview", expect.objectContaining({ proxies: [], template_content: expect.stringContaining('type: "url-test"') })));
@@ -163,7 +186,7 @@ describe("content workbench templates", () => {
     const file = form.get("template") as File;
     expect(file.name).toBe("structured.yaml");
     expect(await file.text()).toContain('type: "url-test"');
-    expect(await file.text()).toContain('use:\n      - "Airport HK"');
+    expect(await file.text()).toContain('proxies:\n      - "__PROXY_NODES__"\n      - "DIRECT"\n      - "香港 01"');
   });
 
   it("restores a valid visual template draft from local storage", async () => {
@@ -181,7 +204,6 @@ describe("content workbench templates", () => {
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
       if (path === "/api/admin/rule-templates") return { templates: [], owners: {}, username: "admin", is_admin: true } as T;
       if (path === "/api/admin/nodes") return { nodes: [] } as T;
-      if (path === "/api/user/proxy-provider-configs") return [] as T;
       if (path === "/api/admin/template-v3/region-filters") return { region_filters: {} } as T;
       throw new Error(`unexpected GET ${path}`);
     });
@@ -192,9 +214,53 @@ describe("content workbench templates", () => {
     expect(screen.getByDisplayValue("recovered.yaml")).toBeInTheDocument();
     expect(screen.getByDisplayValue("RECOVERED")).toBeInTheDocument();
   });
+
+  it("blocks restored Provider references until the generation pipeline supports them", async () => {
+    window.localStorage.setItem("arcway:visual-template-draft:v1", JSON.stringify({
+      version: 1,
+      filename: "provider.yaml",
+      dnsMode: "off",
+      ipv6: false,
+      nameservers: [],
+      fakeIPRange: "198.18.0.1/16",
+      fakeIPFilters: [],
+      groups: [{ id: "g1", name: "PROXY", type: "select", sources: [{ id: "s1", kind: "provider", value: "Airport HK" }], url: "", interval: 300, tolerance: 0, lazy: true, filter: "", excludeFilter: "", excludeType: "", strategy: "consistent-hashing", dialerProxyGroup: "" }],
+      rules: ["MATCH,PROXY"],
+    }));
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/rule-templates") return { templates: [], owners: {}, username: "admin", is_admin: true } as T;
+      if (path === "/api/admin/nodes") return { nodes: [] } as T;
+      if (path === "/api/admin/template-v3/region-filters") return { region_filters: {} } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ content: "ok" });
+    render(<TemplatesWorkbenchPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "可视化设计" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存新模板" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("尚不支持的 Proxy Provider");
+    expect(post).not.toHaveBeenCalled();
+    expect(requestMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("content workbench subscriptions", () => {
+  it("keeps the core list usable for a normal user without calling the admin-only server endpoint", async () => {
+    const get = vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/remote-servers") throw new Error("admin endpoint must not be called");
+      if (path === "/api/admin/nodes") throw new Error("节点服务暂不可用");
+      return subscribeLoad(path, [{ id: 4, name: "可用订阅", filename: "ready.yaml", type: "create", auto_sync_custom_rules: false }]) as T;
+    });
+
+    render(<SubscribeFilesPage isAdmin={false} />);
+
+    expect(await screen.findByText("可用订阅")).toBeInTheDocument();
+    expect(screen.getByText(/节点加载失败/)).toBeInTheDocument();
+    expect(get).not.toHaveBeenCalledWith("/api/admin/remote-servers");
+    expect(screen.queryByText("admin endpoint must not be called")).not.toBeInTheDocument();
+  });
+
   it("includes a normal WireGuard node and GEO defaults in generated subscriptions", async () => {
     const wireGuard = {
       id: 12,
@@ -394,6 +460,83 @@ describe("content workbench subscriptions", () => {
     })));
   });
 
+  it("retries only advanced settings when import succeeded before the update failed", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path) as T);
+    const created = { id: 15, name: "新订阅", description: "", type: "import", filename: "new.yaml", auto_sync_custom_rules: false };
+    const post = vi.spyOn(api, "post").mockResolvedValue({ file: created });
+    const put = vi.spyOn(api, "put")
+      .mockRejectedValueOnce(new Error("高级设置暂不可用"))
+      .mockResolvedValueOnce({});
+    render(<SubscribeFilesPage />);
+
+    fireEvent.click((await screen.findAllByRole("button", { name: "添加订阅" }))[0]);
+    fireEvent.change(screen.getByRole("textbox", { name: "订阅名称" }), { target: { value: "新订阅" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "订阅 URL" }), { target: { value: "https://sub.example/new" } });
+    fireEvent.click(screen.getByRole("button", { name: "配置模板、节点与覆写范围" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "V3 模板" }), { target: { value: "edge_v3.yaml" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+
+    expect(await screen.findByText("高级设置暂不可用")).toBeInTheDocument();
+    expect(screen.getByText(/已导入；再次提交只会重试/)).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "订阅名称" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "重试高级设置" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(2));
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it("reloads an imported file when advanced settings fail and the dialog closes", async () => {
+    const created = { id: 15, name: "新订阅", description: "", type: "import", filename: "new.yaml", auto_sync_custom_rules: false };
+    let fileLoads = 0;
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/subscribe-files") {
+        fileLoads += 1;
+        return { files: fileLoads > 1 ? [created] : [] } as T;
+      }
+      return subscribeLoad(path) as T;
+    });
+    vi.spyOn(api, "post").mockResolvedValue({ file: created });
+    vi.spyOn(api, "put").mockRejectedValue(new Error("高级设置暂不可用"));
+    const notify = vi.fn();
+    render(<SubscribeFilesPage notify={notify} />);
+
+    fireEvent.click((await screen.findAllByRole("button", { name: "添加订阅" }))[0]);
+    fireEvent.change(screen.getByRole("textbox", { name: "订阅名称" }), { target: { value: "新订阅" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "订阅 URL" }), { target: { value: "https://sub.example/new" } });
+    fireEvent.click(screen.getByRole("button", { name: "配置模板、节点与覆写范围" }));
+    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+
+    expect(await screen.findByText("高级设置暂不可用")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "添加订阅" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("新订阅")).toBeInTheDocument());
+    expect(fileLoads).toBeGreaterThanOrEqual(2);
+    expect(notify).toHaveBeenCalledWith("订阅已导入，但高级设置尚未保存", "error");
+  });
+
+  it("cannot dismiss an import while its create request is still running", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path) as T);
+    const created = { id: 15, name: "新订阅", description: "", type: "import", filename: "new.yaml", auto_sync_custom_rules: false };
+    let resolveImport!: (value: { file: typeof created }) => void;
+    vi.spyOn(api, "post").mockImplementation(() => new Promise((resolve) => { resolveImport = resolve; }));
+    render(<SubscribeFilesPage />);
+
+    fireEvent.click((await screen.findAllByRole("button", { name: "添加订阅" }))[0]);
+    fireEvent.change(screen.getByRole("textbox", { name: "订阅名称" }), { target: { value: "新订阅" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "订阅 URL" }), { target: { value: "https://sub.example/new" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "取消" })).toBeDisabled());
+    expect(screen.queryByRole("button", { name: "关闭" })).not.toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.mouseDown(screen.getByRole("presentation"));
+    expect(screen.getByRole("dialog", { name: "添加订阅" })).toBeInTheDocument();
+
+    resolveImport({ file: created });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "添加订阅" })).not.toBeInTheDocument());
+  });
+
   it("creates and validates a Proxy Provider with every backend DTO field", async () => {
     const external = [{ id: 3, name: "Airport", url: "https://sub.example/value", node_count: 10, traffic_mode: "both" }];
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path, [], external) as T);
@@ -444,12 +587,13 @@ describe("content workbench certificates", () => {
   function mockCertificateLoads(
     certificate: Record<string, unknown> = {},
     credentialsResponse: unknown = { success: true, credentials: { CF_DNS_API_TOKEN: "SAVED_TOKEN" } },
+    servers: Array<{ id: number; name: string }> = [],
   ) {
     return vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
       if (path === "/api/admin/certificates") return { success: true, certificates: [{ id: 3, domain: "*.example.com", email: "ops@example.com", provider: "letsencrypt", status: "valid", expiry_date: "2030-01-01T00:00:00Z", issue_date: "2029-10-01T00:00:00Z", auto_renew: false, auto_deploy: false, challenge_mode: "dns", dns_provider_id: 8, deploy_target: "none", ...certificate }] } as T;
       if (path === "/api/admin/dns-providers") return { success: true, providers: [{ ID: 8, Name: "Cloudflare", ProviderType: "cloudflare", Credentials: "TOP_SECRET_TOKEN", UpdatedAt: "2026-01-01T00:00:00Z" }] } as T;
       if (path === "/api/admin/dns-providers/8/credentials") return credentialsResponse as T;
-      if (path === "/api/admin/remote-servers") return { servers: [] } as T;
+      if (path === "/api/admin/remote-servers") return { servers } as T;
       throw new Error(`unexpected GET ${path}`);
     });
   }
@@ -465,6 +609,21 @@ describe("content workbench certificates", () => {
       method: "PATCH",
       body: JSON.stringify({ id: 3, auto_renew: true }),
     })));
+  });
+
+  it("disables invalid automation shortcuts for manual certificates and missing deployment paths", async () => {
+    mockCertificateLoads({ provider: "manual", challenge_mode: "manual", deploy_target: "xray", deploy_cert_path: "/etc/arcway/manual.pem", deploy_key_path: "/etc/arcway/manual.key" });
+    render(<CertificatesWorkbenchPage notify={vi.fn()} />);
+
+    expect(await screen.findByRole("switch", { name: "自动续期" })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "自动部署到主控" })).toBeEnabled();
+
+    cleanup();
+    vi.restoreAllMocks();
+    mockCertificateLoads({ deploy_target: "xray", deploy_cert_path: "", deploy_key_path: "" });
+    render(<CertificatesWorkbenchPage notify={vi.fn()} />);
+
+    expect(await screen.findByRole("switch", { name: "签发或续期后自动部署到主控" })).toBeDisabled();
   });
 
   it("does not fetch stored DNS credentials automatically and preserves them on an untouched edit", async () => {
@@ -635,6 +794,51 @@ describe("content workbench certificates", () => {
     expect(screen.queryByRole("combobox", { name: "签发目标" })).not.toBeInTheDocument();
   });
 
+  it("cannot dismiss an ACME request while submission is still running", async () => {
+    mockCertificateLoads();
+    let resolveApply!: (value: { success: boolean }) => void;
+    vi.spyOn(api, "post").mockImplementation(() => new Promise((resolve) => { resolveApply = resolve; }));
+    render(<CertificatesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "申请证书" }));
+    const dialog = screen.getByRole("dialog", { name: "申请 ACME 证书" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "域名" }), { target: { value: "*.new.example.com" } });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "联系邮箱" }), { target: { value: "ops@example.com" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "提交申请" }));
+
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "取消" })).toBeDisabled());
+    expect(within(dialog).queryByRole("button", { name: "关闭" })).not.toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.mouseDown(screen.getByRole("presentation"));
+    expect(screen.getByRole("dialog", { name: "申请 ACME 证书" })).toBeInTheDocument();
+
+    resolveApply({ success: true });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "申请 ACME 证书" })).not.toBeInTheDocument());
+  });
+
+  it("cannot dismiss a certificate upload while submission is still running", async () => {
+    mockCertificateLoads();
+    let resolveUpload!: (value: { success: boolean }) => void;
+    vi.spyOn(api, "post").mockImplementation(() => new Promise((resolve) => { resolveUpload = resolve; }));
+    render(<CertificatesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "上传证书" }));
+    const dialog = screen.getByRole("dialog", { name: "上传证书" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "证书域名" }), { target: { value: "manual.example.com" } });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "证书链 PEM" }), { target: { value: "-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----" } });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "私钥 PEM" }), { target: { value: "-----BEGIN PRIVATE KEY-----\nTEST\n-----END PRIVATE KEY-----" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "上传证书" }));
+
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "取消" })).toBeDisabled());
+    expect(within(dialog).queryByRole("button", { name: "关闭" })).not.toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.mouseDown(screen.getByRole("presentation"));
+    expect(screen.getByRole("dialog", { name: "上传证书" })).toBeInTheDocument();
+
+    resolveUpload({ success: true });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "上传证书" })).not.toBeInTheDocument());
+  });
+
   it("offers DNS provider creation directly when the certificate selector is empty", async () => {
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
       if (path === "/api/admin/certificates") return { success: true, certificates: [] } as T;
@@ -675,6 +879,51 @@ describe("content workbench certificates", () => {
       deploy_target: "both",
       deploy_cert_path: "/usr/local/nginx/cert/_.example.com.pem",
       deploy_key_path: "/usr/local/nginx/cert/_.example.com.key",
+      deploy_local: true,
+      remote_server_ids: [],
+    }));
+  });
+
+  it("cannot dismiss a manual deployment while its request is still running", async () => {
+    mockCertificateLoads();
+    let resolveDeploy!: (value: { success: boolean }) => void;
+    vi.spyOn(api, "post").mockImplementation(() => new Promise((resolve) => { resolveDeploy = resolve; }));
+    render(<CertificatesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "部署 *.example.com" }));
+    fireEvent.click(screen.getByRole("button", { name: "立即部署" }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "取消" })).toBeDisabled());
+    expect(screen.queryByRole("button", { name: "关闭" })).not.toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.mouseDown(screen.getByRole("presentation"));
+    expect(screen.getByRole("dialog", { name: "手动部署证书" })).toBeInTheDocument();
+
+    resolveDeploy({ success: true });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "手动部署证书" })).not.toBeInTheDocument());
+  });
+
+  it("deploys only to the explicitly selected remote servers", async () => {
+    mockCertificateLoads({}, { success: true, credentials: {} }, [{ id: 12, name: "Edge HK" }, { id: 14, name: "Edge JP" }]);
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<CertificatesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "部署 *.example.com" }));
+    const dialog = screen.getByRole("dialog", { name: "手动部署证书" });
+    expect(within(dialog).getByRole("checkbox", { name: "主控本地" })).toBeChecked();
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "主控本地" }));
+    expect(within(dialog).getByRole("button", { name: "立即部署" })).toBeDisabled();
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "远端服务器 Edge HK" }));
+    expect(within(dialog).getByRole("checkbox", { name: "远端服务器 Edge JP" })).not.toBeChecked();
+    fireEvent.click(within(dialog).getByRole("button", { name: "立即部署" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/certificates/deploy", {
+      id: 3,
+      deploy_target: "both",
+      deploy_cert_path: "/usr/local/nginx/cert/_.example.com.pem",
+      deploy_key_path: "/usr/local/nginx/cert/_.example.com.key",
+      deploy_local: false,
+      remote_server_ids: [12],
     }));
   });
 });

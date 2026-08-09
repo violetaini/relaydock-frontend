@@ -25,7 +25,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function subscribeLoad(path: string, files: unknown[] = [], external: unknown[] = []): unknown {
+function subscribeLoad(path: string, files: unknown[] = [], external: unknown[] = [], providers: unknown[] = []): unknown {
   if (path === "/api/admin/subscribe-files") return { files };
   if (path === "/api/user/external-subscriptions") return external;
   if (path === "/api/user/token") return { token: "secret", user_short_code: "usr" };
@@ -34,7 +34,7 @@ function subscribeLoad(path: string, files: unknown[] = [], external: unknown[] 
   if (path === "/api/admin/nodes") return { nodes: [{ id: 7, node_name: "香港 01", protocol: "vless", clash_config: "{}", enabled: true }] };
   if (path === "/api/admin/rule-templates") return { templates: ["edge_v3.yaml"], owners: {}, username: "admin", is_admin: true };
   if (path === "/api/admin/remote-servers") return { servers: [{ id: 2, name: "Edge HK" }] };
-  if (path === "/api/user/proxy-provider-configs") return [];
+  if (path === "/api/user/proxy-provider-configs") return providers;
   throw new Error(`unexpected GET ${path}`);
 }
 
@@ -215,7 +215,31 @@ describe("content workbench templates", () => {
     expect(screen.getByDisplayValue("RECOVERED")).toBeInTheDocument();
   });
 
-  it("blocks restored Provider references until the generation pipeline supports them", async () => {
+  it("loads Provider sources and preserves them as use references", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/rule-templates") return { templates: [], owners: {}, username: "admin", is_admin: true } as T;
+      if (path === "/api/admin/nodes") return { nodes: [] } as T;
+      if (path === "/api/admin/template-v3/region-filters") return { region_filters: {} } as T;
+      if (path === "/api/user/proxy-provider-configs") return [{ id: 9, name: "Airport HK", process_mode: "" }] as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ content: "ok" });
+    requestMock.mockResolvedValue({ filename: "visual_v3.yaml" });
+    render(<TemplatesWorkbenchPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "可视化设计" }));
+    const provider = await screen.findByRole("option", { name: "Provider · Airport HK · Mihomo 拉取" });
+    fireEvent.change(screen.getByRole("combobox", { name: "添加 PROXY 来源" }), { target: { value: provider.getAttribute("value") } });
+    fireEvent.click(screen.getByRole("tab", { name: "YAML 预览" }));
+
+    expect(screen.getByText(/use:[\s\S]*Airport HK/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存新模板" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/template-v3/preview", expect.objectContaining({ template_content: expect.stringContaining('use:\n      - "Airport HK"') })));
+    await waitFor(() => expect(requestMock).toHaveBeenCalledWith("/api/admin/rule-templates/upload", expect.objectContaining({ method: "POST", body: expect.any(FormData) })));
+  });
+
+  it("clearly rejects a restored draft whose Provider no longer exists", async () => {
     window.localStorage.setItem("arcway:visual-template-draft:v1", JSON.stringify({
       version: 1,
       filename: "provider.yaml",
@@ -224,24 +248,55 @@ describe("content workbench templates", () => {
       nameservers: [],
       fakeIPRange: "198.18.0.1/16",
       fakeIPFilters: [],
-      groups: [{ id: "g1", name: "PROXY", type: "select", sources: [{ id: "s1", kind: "provider", value: "Airport HK" }], url: "", interval: 300, tolerance: 0, lazy: true, filter: "", excludeFilter: "", excludeType: "", strategy: "consistent-hashing", dialerProxyGroup: "" }],
+      groups: [{ id: "g1", name: "PROXY", type: "select", sources: [{ id: "s1", kind: "provider", value: "Removed Airport" }], url: "", interval: 300, tolerance: 0, lazy: true, filter: "", excludeFilter: "", excludeType: "", strategy: "consistent-hashing", dialerProxyGroup: "" }],
       rules: ["MATCH,PROXY"],
     }));
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
       if (path === "/api/admin/rule-templates") return { templates: [], owners: {}, username: "admin", is_admin: true } as T;
       if (path === "/api/admin/nodes") return { nodes: [] } as T;
       if (path === "/api/admin/template-v3/region-filters") return { region_filters: {} } as T;
+      if (path === "/api/user/proxy-provider-configs") return [] as T;
       throw new Error(`unexpected GET ${path}`);
     });
-    const post = vi.spyOn(api, "post").mockResolvedValue({ content: "ok" });
+    const post = vi.spyOn(api, "post");
+    render(<TemplatesWorkbenchPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "可视化设计" }));
+    expect(await screen.findByText(/Removed Airport。请重新选择来源后再保存/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存新模板" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Proxy Provider 已不存在或不可用：Removed Airport");
+    expect(post).not.toHaveBeenCalled();
+    expect(requestMock).not.toHaveBeenCalled();
+  });
+
+  it("cannot dismiss the visual editor while its template is saving", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/rule-templates") return { templates: [], owners: {}, username: "admin", is_admin: true } as T;
+      if (path === "/api/admin/nodes") return { nodes: [] } as T;
+      if (path === "/api/admin/template-v3/region-filters") return { region_filters: {} } as T;
+      if (path === "/api/user/proxy-provider-configs") return [] as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    let resolvePreview!: (value: { content: string }) => void;
+    vi.spyOn(api, "post").mockImplementation(<T,>(): Promise<T> => new Promise((resolve) => {
+      resolvePreview = resolve as (value: { content: string }) => void;
+    }));
+    requestMock.mockResolvedValue({ filename: "visual_v3.yaml" });
     render(<TemplatesWorkbenchPage />);
 
     fireEvent.click(await screen.findByRole("button", { name: "可视化设计" }));
     fireEvent.click(screen.getByRole("button", { name: "保存新模板" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("尚不支持的 Proxy Provider");
-    expect(post).not.toHaveBeenCalled();
-    expect(requestMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByRole("button", { name: "取消" })).toBeDisabled());
+    expect(screen.getByRole("textbox", { name: "模板文件名" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "关闭" })).not.toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.mouseDown(screen.getByRole("presentation"));
+    expect(screen.getByRole("dialog", { name: "可视化模板设计" })).toBeInTheDocument();
+
+    resolvePreview({ content: "ok" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "可视化模板设计" })).not.toBeInTheDocument());
   });
 });
 
@@ -537,6 +592,40 @@ describe("content workbench subscriptions", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "添加订阅" })).not.toBeInTheDocument());
   });
 
+  it("rotates a Provider access link only after confirmation and never displays it", async () => {
+    const external = [{ id: 3, name: "Airport", url: "https://sub.example/value", node_count: 10, traffic_mode: "both" }];
+    const providers = [{ id: 9, external_subscription_id: 3, name: "airport-hk", type: "http", interval: 3600, process_mode: "client", health_check_enabled: true, health_check_interval: 300 }];
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path, [], external, providers) as T);
+    const post = vi.spyOn(api, "post").mockResolvedValue({ access_token: "rotated-secret-must-not-render" });
+    const notify = vi.fn();
+    render(<SubscribeFilesPage notify={notify} />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: /Provider/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "轮换 Provider airport-hk 访问凭据" }));
+    expect(post).not.toHaveBeenCalled();
+    expect(screen.getByText(/现有 Mihomo 配置需要重新获取订阅/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认轮换" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/user/proxy-provider-configs/rotate?id=9"));
+    await waitFor(() => expect(notify).toHaveBeenCalledWith("Provider 访问凭据已轮换"));
+    expect(screen.queryByText("rotated-secret-must-not-render")).not.toBeInTheDocument();
+  });
+
+  it("keeps Provider rotation errors visible in the confirmation dialog", async () => {
+    const external = [{ id: 3, name: "Airport", url: "https://sub.example/value", node_count: 10, traffic_mode: "both" }];
+    const providers = [{ id: 9, external_subscription_id: 3, name: "airport-hk", type: "http", interval: 3600, process_mode: "client", health_check_enabled: true, health_check_interval: 300 }];
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path, [], external, providers) as T);
+    vi.spyOn(api, "post").mockRejectedValue(new Error("rotation denied"));
+    render(<SubscribeFilesPage />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: /Provider/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "轮换 Provider airport-hk 访问凭据" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认轮换" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("rotation denied");
+    expect(screen.getByRole("dialog", { name: "轮换 Provider 访问凭据" })).toBeInTheDocument();
+  });
+
   it("creates and validates a Proxy Provider with every backend DTO field", async () => {
     const external = [{ id: 3, name: "Airport", url: "https://sub.example/value", node_count: 10, traffic_mode: "both" }];
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path, [], external) as T);
@@ -549,14 +638,18 @@ describe("content workbench subscriptions", () => {
 
     fireEvent.click(await screen.findByRole("tab", { name: /Provider/ }));
     fireEvent.click(screen.getByRole("button", { name: "Proxy Provider" }));
+    const providerType = screen.getByRole("combobox", { name: "Provider 类型" });
+    expect(providerType).toBeDisabled();
+    expect(within(providerType).getAllByRole("option").map((option) => option.textContent)).toEqual(["HTTP"]);
+    expect(screen.getByText(/Mihomo 通过各节点请求/)).toBeInTheDocument();
+    expect(screen.getByText(/Arcway 不会用它测试外部订阅地址/)).toBeInTheDocument();
     fireEvent.change(screen.getByRole("textbox", { name: "Provider 名称" }), { target: { value: "airport-hk" } });
     fireEvent.change(screen.getByRole("combobox", { name: "处理模式" }), { target: { value: "server" } });
     fireEvent.change(screen.getByRole("textbox", { name: "包含名称（正则）" }), { target: { value: "香港|HK" } });
-    fireEvent.change(screen.getByRole("textbox", { name: "GeoIP 国家代码" }), { target: { value: "HK" } });
     fireEvent.click(screen.getByRole("button", { name: "检查匹配" }));
 
     await screen.findByText("匹配 4 个节点");
-    expect(post).toHaveBeenCalledWith("/api/user/external-subscriptions/check-filter", { subscription_id: 3, filter: "香港|HK", exclude_filter: "", geo_ip_filter: "HK" });
+    expect(post).toHaveBeenCalledWith("/api/user/external-subscriptions/check-filter", { subscription_id: 3, filter: "香港|HK", exclude_filter: "", geo_ip_filter: "" });
     fireEvent.click(screen.getByRole("button", { name: "保存 Provider" }));
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/user/proxy-provider-configs", {
@@ -576,10 +669,51 @@ describe("content workbench subscriptions", () => {
       filter: "香港|HK",
       exclude_filter: "",
       exclude_type: "",
-      geo_ip_filter: "HK",
+      geo_ip_filter: "",
       override: "",
       process_mode: "server",
     }));
+  });
+
+  it("cannot dismiss the Provider editor while it is saving", async () => {
+    const external = [{ id: 3, name: "Airport", url: "https://sub.example/value", node_count: 10, traffic_mode: "both" }];
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path, [], external) as T);
+    let resolveSave!: (value: { id: number }) => void;
+    vi.spyOn(api, "post").mockImplementation(<T,>(path: string): Promise<T> => {
+      if (path !== "/api/user/proxy-provider-configs") return Promise.reject(new Error(`unexpected POST ${path}`));
+      return new Promise((resolve) => { resolveSave = resolve as (value: { id: number }) => void; });
+    });
+    render(<SubscribeFilesPage />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: /Provider/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Proxy Provider" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Provider 名称" }), { target: { value: "airport-hk" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存 Provider" }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "取消" })).toBeDisabled());
+    expect(screen.getByRole("textbox", { name: "Provider 名称" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "关闭" })).not.toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.mouseDown(screen.getByRole("presentation"));
+    expect(screen.getByRole("dialog", { name: "创建 Proxy Provider" })).toBeInTheDocument();
+
+    resolveSave({ id: 9 });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "创建 Proxy Provider" })).not.toBeInTheDocument());
+  });
+
+  it("requires confirmation before clearing unsupported legacy Provider fields", async () => {
+    const external = [{ id: 3, name: "Airport", url: "https://sub.example/value", node_count: 10, traffic_mode: "both" }];
+    const providers = [{ id: 9, external_subscription_id: 3, name: "legacy", type: "file", process_mode: "", header: "Authorization: old", geo_ip_filter: "HK", override: "old" }];
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path, [], external, providers) as T);
+    render(<SubscribeFilesPage />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: /Provider/ }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑 Provider legacy" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("自定义请求头");
+    const save = screen.getByRole("button", { name: "保存 Provider" });
+    expect(save).toBeDisabled();
+    fireEvent.click(screen.getByRole("switch", { name: "确认移除旧版不兼容字段" }));
+    expect(save).not.toBeDisabled();
   });
 });
 

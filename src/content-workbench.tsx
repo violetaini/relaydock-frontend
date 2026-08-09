@@ -150,6 +150,17 @@ interface ProxyProviderConfig {
   created_at?: string;
   updated_at?: string;
 }
+
+function proxyProviderMode(value: string): "client" | "server" | null {
+  switch (value.trim().toLowerCase()) {
+    case "":
+    case "client": return "client";
+    case "server":
+    case "mmw": return "server";
+    default: return null;
+  }
+}
+
 interface ExternalSubscription {
   id: number;
   username?: string;
@@ -875,7 +886,8 @@ function subscribeFilePayload(file: SubscribeFile, overrides: Partial<SubscribeF
 type FilePendingAction =
   | { kind: "delete-file"; item: SubscribeFile }
   | { kind: "delete-external"; item: ExternalSubscription }
-  | { kind: "delete-provider"; item: ProxyProviderConfig };
+  | { kind: "delete-provider"; item: ProxyProviderConfig }
+  | { kind: "rotate-provider"; item: ProxyProviderConfig };
 
 export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpenRulesConfig, isAdmin = true }: ContentPageProps) {
   const [tab, setTab] = useState<"files" | "external" | "providers">("files");
@@ -898,6 +910,7 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
   const [editingExternal, setEditingExternal] = useState<ExternalSubscription | "new" | null>(null);
   const [editingProvider, setEditingProvider] = useState<ProxyProviderConfig | "new" | null>(null);
   const [pending, setPending] = useState<FilePendingAction | null>(null);
+  const [pendingError, setPendingError] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true); setError(""); setLoadWarning("");
@@ -960,7 +973,7 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
 
   const confirmPending = async () => {
     if (!pending) return;
-    setWorking(true); setError("");
+    setWorking(true); setError(""); setPendingError("");
     try {
       if (pending.kind === "delete-file") {
         await api.delete(`/api/admin/subscribe-files/${pending.item.id}`);
@@ -968,13 +981,16 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
       } else if (pending.kind === "delete-external") {
         await api.delete(`/api/user/external-subscriptions?id=${pending.item.id}`);
         notify("外部订阅已删除");
-      } else {
+      } else if (pending.kind === "delete-provider") {
         await api.delete(`/api/user/proxy-provider-configs?id=${pending.item.id}`);
         notify("Proxy Provider 已删除");
+      } else {
+        await api.post(`/api/user/proxy-provider-configs/rotate?id=${pending.item.id}`);
+        notify("Provider 访问凭据已轮换");
       }
       setPending(null);
       await load();
-    } catch (reason) { setError(fail(reason, "删除失败")); }
+    } catch (reason) { setPendingError(fail(reason, pending.kind === "rotate-provider" ? "轮换 Provider 访问凭据失败" : "删除失败")); }
     finally { setWorking(false); }
   };
 
@@ -1021,9 +1037,10 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
         <Surface className="table-surface cw-compact-table">
           <div className="surface-heading"><div><h2>Proxy Provider</h2><small>把外部订阅作为 Mihomo provider 使用，完整保留过滤、健康检查和处理模式。</small></div></div>
           {providers.length === 0 ? <EmptyState icon={<Server size={23} />} title="暂无 Proxy Provider" description="先添加外部订阅，再创建一个可复用的 provider 配置。" action={<Button onClick={() => setEditingProvider("new")}><Plus size={16} />创建 Provider</Button>} /> : (
-            <div className="table-wrap"><table><thead><tr><th>Provider</th><th>来源 / 模式</th><th>健康检查</th><th>过滤</th><th aria-label="操作" /></tr></thead><tbody>{providers.map((item) => {
+            <div className="table-wrap"><table><thead><tr><th>Provider</th><th>来源 / 模式</th><th>节点健康检查</th><th>过滤</th><th aria-label="操作" /></tr></thead><tbody>{providers.map((item) => {
               const source = external.find((entry) => entry.id === item.external_subscription_id);
-              return <tr key={item.id}><td><div className="cw-file-name"><span className="cw-file-icon"><Server size={16} /></span><span><strong>{item.name}</strong><small>{item.type || "http"} · {item.interval || 0} 秒</small></span></div></td><td><strong>{source?.name || `外部订阅 #${item.external_subscription_id}`}</strong><span className="cw-table-note">{item.process_mode === "server" ? "服务端处理" : "客户端 Provider"}</span></td><td><Badge tone={item.health_check_enabled ? "good" : "neutral"}>{item.health_check_enabled ? "已启用" : "未启用"}</Badge><span className="cw-table-note">{item.health_check_enabled ? `${item.health_check_interval || 0}s · HTTP ${item.health_check_expected_status || 204}` : "-"}</span></td><td><strong>{item.filter || "全部节点"}</strong><span className="cw-table-note">{item.exclude_filter ? `排除 ${item.exclude_filter}` : item.geo_ip_filter ? `GeoIP ${item.geo_ip_filter}` : "无排除条件"}</span></td><td><div className="cw-table-actions"><IconButton label={`编辑 Provider ${item.name}`} onClick={() => setEditingProvider(item)}><Pencil size={16} /></IconButton><IconButton label={`删除 Provider ${item.name}`} onClick={() => setPending({ kind: "delete-provider", item })}><Trash2 size={16} /></IconButton></div></td></tr>;
+              const mode = proxyProviderMode(item.process_mode);
+              return <tr key={item.id}><td><div className="cw-file-name"><span className="cw-file-icon"><Server size={16} /></span><span><strong>{item.name}</strong><small>HTTP · {item.interval || 0} 秒</small></span></div></td><td><strong>{source?.name || `外部订阅 #${item.external_subscription_id}`}</strong><span className="cw-table-note">{mode === "server" ? "Arcway 展开节点" : mode === "client" ? "Mihomo 拉取受保护端点" : "处理模式无效"}</span></td><td><Badge tone={item.health_check_enabled ? "good" : "neutral"}>{item.health_check_enabled ? "已启用" : "未启用"}</Badge><span className="cw-table-note">{item.health_check_enabled ? `Mihomo 测试 · ${item.health_check_interval || 0}s` : "-"}</span></td><td><strong>{item.filter || "全部节点"}</strong><span className="cw-table-note">{item.exclude_filter ? `排除 ${item.exclude_filter}` : item.geo_ip_filter ? `GeoIP ${item.geo_ip_filter}` : "无排除条件"}</span></td><td><div className="cw-table-actions"><IconButton label={`编辑 Provider ${item.name}`} onClick={() => setEditingProvider(item)}><Pencil size={16} /></IconButton><IconButton label={`轮换 Provider ${item.name} 访问凭据`} onClick={() => { setPendingError(""); setPending({ kind: "rotate-provider", item }); }}><RotateCw size={16} /></IconButton><IconButton label={`删除 Provider ${item.name}`} onClick={() => setPending({ kind: "delete-provider", item })}><Trash2 size={16} /></IconButton></div></td></tr>;
             })}</tbody></table></div>
           )}
         </Surface>
@@ -1033,7 +1050,7 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
       {editingContent ? <EditSubscribeContentDialog item={editingContent} onClose={() => setEditingContent(null)} onComplete={async () => { setEditingContent(null); notify("订阅内容已保存"); await load(); }} /> : null}
       {editingExternal ? <ExternalSubscriptionDialog item={editingExternal === "new" ? undefined : editingExternal} onClose={() => setEditingExternal(null)} onComplete={async () => { setEditingExternal(null); notify(editingExternal === "new" ? "外部订阅已添加" : "外部订阅已更新"); await load(); }} /> : null}
       {editingProvider ? <ProxyProviderDialog item={editingProvider === "new" ? undefined : editingProvider} subscriptions={external} onClose={() => setEditingProvider(null)} onComplete={async () => { setEditingProvider(null); notify(editingProvider === "new" ? "Proxy Provider 已创建" : "Proxy Provider 已更新"); await load(); }} /> : null}
-      {pending ? <ConfirmDialog title={pending.kind === "delete-file" ? "删除订阅文件" : pending.kind === "delete-external" ? "删除外部订阅" : "删除 Proxy Provider"} description={pending.kind === "delete-file" ? `将永久删除“${pending.item.name}”及其 YAML 文件，已分配链接会立即失效。` : pending.kind === "delete-external" ? `将删除“${pending.item.name}”的同步源；已经保存的节点不会自动删除。` : `将删除“${pending.item.name}”的 Provider 配置；引用它的模板需要同步调整。`} confirmLabel="确认删除" working={working} onCancel={() => setPending(null)} onConfirm={() => void confirmPending()} /> : null}
+      {pending ? <ConfirmDialog title={pending.kind === "delete-file" ? "删除订阅文件" : pending.kind === "delete-external" ? "删除外部订阅" : pending.kind === "delete-provider" ? "删除 Proxy Provider" : "轮换 Provider 访问凭据"} description={pending.kind === "delete-file" ? `将永久删除“${pending.item.name}”及其 YAML 文件，已分配链接会立即失效。` : pending.kind === "delete-external" ? `将删除“${pending.item.name}”的同步源；已经保存的节点不会自动删除。` : pending.kind === "delete-provider" ? `将删除“${pending.item.name}”的 Provider 配置；引用它的模板需要同步调整。` : `将立即撤销“${pending.item.name}”的旧访问凭据。现有 Mihomo 配置需要重新获取订阅后才能继续更新此 Provider。`} confirmLabel={pending.kind === "rotate-provider" ? "确认轮换" : "确认删除"} tone={pending.kind === "rotate-provider" ? "primary" : "danger"} working={working} error={pendingError} onCancel={() => { setPendingError(""); setPending(null); }} onConfirm={() => void confirmPending()} /> : null}
     </section>
   );
 }
@@ -1224,14 +1241,18 @@ function ExternalSubscriptionDialog({ item, onClose, onComplete }: { item?: Exte
 }
 
 function ProxyProviderDialog({ item, subscriptions, onClose, onComplete }: { item?: ProxyProviderConfig; subscriptions: ExternalSubscription[]; onClose: () => void; onComplete: () => void }) {
+  const legacyUnsupportedFields = [
+    item?.type && item.type.trim().toLowerCase() !== "http" ? "Provider 类型" : "",
+    item?.header?.trim() ? "自定义请求头" : "",
+    item?.geo_ip_filter?.trim() ? "GeoIP 过滤" : "",
+    item?.override?.trim() ? "Override" : "",
+  ].filter(Boolean);
   const [name, setName] = useState(item?.name || "");
   const [subscriptionID, setSubscriptionID] = useState(item?.external_subscription_id || subscriptions[0]?.id || 0);
-  const [type, setType] = useState(item?.type || "http");
   const [interval, setInterval] = useState(item?.interval || 3600);
-  const [processMode, setProcessMode] = useState(item?.process_mode || "client");
+  const [processMode, setProcessMode] = useState(proxyProviderMode(item?.process_mode || "client") || "client");
   const [proxy, setProxy] = useState(item?.proxy || "");
   const [sizeLimit, setSizeLimit] = useState(item?.size_limit || 0);
-  const [header, setHeader] = useState(item?.header || "");
   const [healthEnabled, setHealthEnabled] = useState(item?.health_check_enabled ?? true);
   const [healthURL, setHealthURL] = useState(item?.health_check_url || "https://cp.cloudflare.com/generate_204");
   const [healthInterval, setHealthInterval] = useState(item?.health_check_interval || 300);
@@ -1241,9 +1262,8 @@ function ProxyProviderDialog({ item, subscriptions, onClose, onComplete }: { ite
   const [filter, setFilter] = useState(item?.filter || "");
   const [excludeFilter, setExcludeFilter] = useState(item?.exclude_filter || "");
   const [excludeType, setExcludeType] = useState(item?.exclude_type || "");
-  const [geoIPFilter, setGeoIPFilter] = useState(item?.geo_ip_filter || "");
-  const [override, setOverride] = useState(item?.override || "");
   const [advanced, setAdvanced] = useState(false);
+  const [legacyResetConfirmed, setLegacyResetConfirmed] = useState(legacyUnsupportedFields.length === 0);
   const [filterResult, setFilterResult] = useState("");
   const [working, setWorking] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -1252,11 +1272,11 @@ function ProxyProviderDialog({ item, subscriptions, onClose, onComplete }: { ite
   const payload = () => ({
     external_subscription_id: subscriptionID,
     name: name.trim(),
-    type,
+    type: "http",
     interval,
     proxy: proxy.trim(),
     size_limit: sizeLimit,
-    header,
+    header: "",
     health_check_enabled: healthEnabled,
     health_check_url: healthURL.trim(),
     health_check_interval: healthInterval,
@@ -1266,8 +1286,8 @@ function ProxyProviderDialog({ item, subscriptions, onClose, onComplete }: { ite
     filter: filter.trim(),
     exclude_filter: excludeFilter.trim(),
     exclude_type: excludeType.trim(),
-    geo_ip_filter: geoIPFilter.trim(),
-    override,
+    geo_ip_filter: "",
+    override: "",
     process_mode: processMode,
   });
 
@@ -1279,7 +1299,7 @@ function ProxyProviderDialog({ item, subscriptions, onClose, onComplete }: { ite
         subscription_id: subscriptionID,
         filter: filter.trim(),
         exclude_filter: excludeFilter.trim(),
-        geo_ip_filter: geoIPFilter.trim(),
+        geo_ip_filter: "",
       });
       setFilterResult(result.has_matches ? `匹配 ${result.match_count ?? 0} 个节点` : "没有匹配节点");
     } catch (reason) { setError(fail(reason, "过滤条件校验失败")); }
@@ -1290,7 +1310,11 @@ function ProxyProviderDialog({ item, subscriptions, onClose, onComplete }: { ite
     event.preventDefault(); setWorking(true); setError("");
     try {
       if (!subscriptionID) throw new Error("请选择外部订阅");
-      if (interval < 1) throw new Error("更新间隔必须大于 0");
+      if (legacyUnsupportedFields.length && !legacyResetConfirmed) throw new Error("请先确认移除旧版不兼容字段");
+      if (interval < 60 || interval > 604800) throw new Error("更新间隔必须在 60 到 604800 秒之间");
+      if (healthInterval < 60 || healthInterval > 604800) throw new Error("健康检查间隔必须在 60 到 604800 秒之间");
+      if (healthTimeout < 100 || healthTimeout > 60000) throw new Error("健康检查超时必须在 100 到 60000 毫秒之间");
+      if (sizeLimit < 0 || sizeLimit > 52428800) throw new Error("内容大小上限必须在 0 到 52428800 字节之间");
       if (healthEnabled && !healthURL.trim()) throw new Error("启用健康检查时必须填写检测 URL");
       if (item) await api.put(`/api/user/proxy-provider-configs?id=${item.id}`, payload());
       else await api.post("/api/user/proxy-provider-configs", payload());
@@ -1299,14 +1323,18 @@ function ProxyProviderDialog({ item, subscriptions, onClose, onComplete }: { ite
     finally { setWorking(false); }
   };
 
-  return <Dialog title={item ? "编辑 Proxy Provider" : "创建 Proxy Provider"} description="字段与后端 ProxyProviderConfigDTO 一一对应" onClose={onClose} wide><form className="cw-form" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}
+  return <Dialog title={item ? "编辑 Proxy Provider" : "创建 Proxy Provider"} description="从外部订阅生成可复用的 Mihomo 节点来源" onClose={onClose} dismissible={!working} wide><form className="cw-form" onSubmit={submit} aria-busy={working}>{error ? <ErrorState message={error} /> : null}
     {subscriptions.length === 0 ? <ErrorState message="尚无外部订阅，必须先在“外部订阅”页添加来源。" /> : null}
-    <div className="cw-form-grid"><Field label="Provider 名称"><input required value={name} onChange={(event) => setName(event.target.value)} placeholder="airport-hk" /></Field><Field label="外部订阅"><select required value={subscriptionID} onChange={(event) => setSubscriptionID(Number(event.target.value))}><option value={0}>请选择</option>{subscriptions.map((subscription) => <option value={subscription.id} key={subscription.id}>{subscription.name}</option>)}</select></Field><Field label="Provider 类型"><select value={type} onChange={(event) => setType(event.target.value)}><option value="http">HTTP</option><option value="file">File</option><option value="inline">Inline</option></select></Field><Field label="处理模式"><select value={processMode} onChange={(event) => setProcessMode(event.target.value)}><option value="client">客户端 Provider</option><option value="server">服务端处理</option></select></Field><Field label="更新间隔（秒）"><input type="number" min="1" value={interval} onChange={(event) => setInterval(Number(event.target.value))} /></Field><Field label="拉取代理" hint="可填代理组名称或 DIRECT"><input value={proxy} onChange={(event) => setProxy(event.target.value)} placeholder="DIRECT" /></Field></div>
-    <div className="cw-form-section"><strong>健康检查</strong><Toggle checked={healthEnabled} onChange={setHealthEnabled} label="启用 Provider 健康检查" />{healthEnabled ? <><Field label="检测 URL"><input required type="url" value={healthURL} onChange={(event) => setHealthURL(event.target.value)} /></Field><div className="cw-form-grid"><Field label="检查间隔（秒）"><input type="number" min="1" value={healthInterval} onChange={(event) => setHealthInterval(Number(event.target.value))} /></Field><Field label="超时（毫秒）"><input type="number" min="1" value={healthTimeout} onChange={(event) => setHealthTimeout(Number(event.target.value))} /></Field><Field label="预期 HTTP 状态"><input type="number" min="100" max="599" value={expectedStatus} onChange={(event) => setExpectedStatus(Number(event.target.value))} /></Field><div className="cw-toggle-field"><Toggle checked={healthLazy} onChange={setHealthLazy} label="Lazy 检测" /></div></div></> : null}</div>
-    <div className="cw-form-section"><strong>节点过滤</strong><div className="cw-form-grid"><Field label="包含名称（正则）"><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="香港|HK" /></Field><Field label="排除名称（正则）"><input value={excludeFilter} onChange={(event) => setExcludeFilter(event.target.value)} placeholder="测试|到期" /></Field><Field label="排除协议类型"><input value={excludeType} onChange={(event) => setExcludeType(event.target.value)} placeholder="ss|vmess" /></Field><Field label="GeoIP 国家代码"><input value={geoIPFilter} onChange={(event) => setGeoIPFilter(event.target.value)} placeholder="HK,JP,SG" /></Field></div><div className="cw-toolbar"><Button type="button" variant="secondary" onClick={() => void checkFilter()} disabled={checking || !subscriptionID}>{checking ? <Spinner label="正在检查" /> : "检查匹配"}</Button>{filterResult ? <Badge tone={filterResult.startsWith("匹配") ? "good" : "warn"}>{filterResult}</Badge> : null}</div></div>
+    <fieldset className="cw-lock-fields" disabled={working}>
+    {legacyUnsupportedFields.length ? <div className="cw-help" role="alert"><Info size={16} /><span>此旧配置包含当前运行时不支持的字段：{legacyUnsupportedFields.join("、")}。保存前必须确认移除这些字段。</span></div> : null}
+    {legacyUnsupportedFields.length ? <Toggle checked={legacyResetConfirmed} onChange={setLegacyResetConfirmed} label="确认移除旧版不兼容字段" /> : null}
+    <div className="cw-form-grid"><Field label="Provider 名称"><input required value={name} onChange={(event) => setName(event.target.value)} placeholder="airport-hk" /></Field><Field label="外部订阅"><select required value={subscriptionID} onChange={(event) => setSubscriptionID(Number(event.target.value))}><option value={0}>请选择</option>{subscriptions.map((subscription) => <option value={subscription.id} key={subscription.id}>{subscription.name}</option>)}</select></Field><Field label="Provider 类型" hint="Arcway 通过受保护的 HTTP 端点提供节点内容"><select aria-label="Provider 类型" value="http" disabled><option value="http">HTTP</option></select></Field><Field label="处理模式" hint={processMode === "server" ? "Arcway 在生成订阅时拉取并展开节点" : "Mihomo 从 Arcway 的受保护端点按需拉取节点"}><select aria-label="处理模式" value={processMode} onChange={(event) => { const mode = proxyProviderMode(event.target.value); if (mode) setProcessMode(mode); }}><option value="client">Mihomo 拉取（客户端）</option><option value="server">Arcway 展开（服务端）</option></select></Field><Field label="更新间隔（秒）"><input type="number" min="60" max="604800" value={interval} onChange={(event) => setInterval(Number(event.target.value))} /></Field><Field label="拉取代理" hint="可填代理组名称或 DIRECT"><input value={proxy} onChange={(event) => setProxy(event.target.value)} placeholder="DIRECT" /></Field></div>
+    <div className="cw-form-section"><strong>节点连通性检查</strong><Toggle checked={healthEnabled} onChange={setHealthEnabled} label="由 Mihomo 定时测试 Provider 节点连通性" />{healthEnabled ? <><Field label="节点测试 URL"><input required type="url" value={healthURL} onChange={(event) => setHealthURL(event.target.value)} /></Field><div className="cw-form-grid"><Field label="检查间隔（秒）"><input type="number" min="60" max="604800" value={healthInterval} onChange={(event) => setHealthInterval(Number(event.target.value))} /></Field><Field label="超时（毫秒）"><input type="number" min="100" max="60000" value={healthTimeout} onChange={(event) => setHealthTimeout(Number(event.target.value))} /></Field><Field label="预期 HTTP 状态"><input type="number" min="100" max="599" value={expectedStatus} onChange={(event) => setExpectedStatus(Number(event.target.value))} /></Field><div className="cw-toggle-field"><Toggle checked={healthLazy} onChange={setHealthLazy} label="Lazy 检测" /></div></div><div className="cw-help"><Info size={16} /><span>该 URL 由 Mihomo 通过各节点请求，用于判断连通性和延迟；Arcway 不会用它测试外部订阅地址。</span></div></> : null}</div>
+    <div className="cw-form-section"><strong>节点过滤</strong><div className="cw-form-grid"><Field label="包含名称（正则）"><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="香港|HK" /></Field><Field label="排除名称（正则）"><input value={excludeFilter} onChange={(event) => setExcludeFilter(event.target.value)} placeholder="测试|到期" /></Field><Field label="排除协议类型（正则）"><input value={excludeType} onChange={(event) => setExcludeType(event.target.value)} placeholder="ss|vmess" /></Field></div><div className="cw-toolbar"><Button type="button" variant="secondary" onClick={() => void checkFilter()} disabled={checking || !subscriptionID}>{checking ? <Spinner label="正在检查" /> : "检查匹配"}</Button>{filterResult ? <Badge tone={filterResult.startsWith("匹配") ? "good" : "warn"}>{filterResult}</Badge> : null}</div></div>
     <Button type="button" variant="ghost" onClick={() => setAdvanced((value) => !value)}><Settings2 size={16} />{advanced ? "收起高级字段" : "展开高级字段"}</Button>
-    {advanced ? <div className="cw-form-section"><strong>高级原始字段</strong><div className="cw-form-grid"><Field label="内容大小上限"><input type="number" min="0" value={sizeLimit} onChange={(event) => setSizeLimit(Number(event.target.value))} /></Field><Field label="请求头原文" hint="后端当前按字符串原样保存"><textarea value={header} onChange={(event) => setHeader(event.target.value)} placeholder={'{"User-Agent":"mihomo"}'} /></Field></div><Field label="Override 原文" hint="后端 DTO 仅提供一个原始字符串字段，不把接口、mark、前后缀或节点替换拆成可验证字段"><textarea className="cw-dialog-code cw-dialog-code-short" value={override} onChange={(event) => setOverride(event.target.value)} spellCheck={false} /></Field><div className="cw-help"><Info size={16} /><span>当前后端没有独立的 interface-name、routing-mark、节点前后缀、替换或链式字段，也没有应用这些字段的 handler；前端不会生成看似可配置但实际不生效的控件。</span></div></div> : null}
-    <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose}>取消</Button><Button type="submit" disabled={working || subscriptions.length === 0}>{working ? <Spinner label="正在保存" /> : "保存 Provider"}</Button></div>
+    {advanced ? <div className="cw-form-section"><strong>高级限制</strong><Field label="内容大小上限（字节）" hint="0 表示使用 Arcway 全局安全上限"><input type="number" min="0" max="52428800" value={sizeLimit} onChange={(event) => setSizeLimit(Number(event.target.value))} /></Field><div className="cw-help"><Info size={16} /><span>上游 User-Agent 请在外部订阅中设置；运行时 Provider 不接受任意请求头或未定义的 Override 原文。</span></div></div> : null}
+    <div className="dialog-actions"><Button type="button" variant="secondary" disabled={working} onClick={onClose}>取消</Button><Button type="submit" disabled={working || checking || subscriptions.length === 0 || (legacyUnsupportedFields.length > 0 && !legacyResetConfirmed)}>{working ? <Spinner label="正在保存" /> : "保存 Provider"}</Button></div>
+    </fieldset>
   </form></Dialog>;
 }
 
@@ -1413,6 +1441,9 @@ function VisualTemplateDialog({ onClose, onComplete }: { onClose: () => void; on
     return defaultVisualDraft();
   });
   const [nodes, setNodes] = useState<NodeItem[]>([]);
+  const [providers, setProviders] = useState<ProxyProviderConfig[]>([]);
+  const [providersLoaded, setProvidersLoaded] = useState(false);
+  const [providerLoadFailed, setProviderLoadFailed] = useState(false);
   const [regions, setRegions] = useState<{ name: string; filter: string }[]>([]);
   const [region, setRegion] = useState("");
   const [tab, setTab] = useState<"design" | "yaml" | "json">("design");
@@ -1425,6 +1456,7 @@ function VisualTemplateDialog({ onClose, onComplete }: { onClose: () => void; on
       const results = await Promise.allSettled([
         api.get<{ nodes?: NodeItem[] }>("/api/admin/nodes"),
         api.get<{ region_filters?: unknown }>("/api/admin/template-v3/region-filters"),
+        api.get<ProxyProviderConfig[]>("/api/user/proxy-provider-configs"),
       ]);
       if (results[0].status === "fulfilled") setNodes(results[0].value.nodes ?? []);
       if (results[1].status === "fulfilled") {
@@ -1442,8 +1474,15 @@ function VisualTemplateDialog({ onClose, onComplete }: { onClose: () => void; on
           }));
         }
       }
-      const failures = results.filter((result) => result.status === "rejected").length;
-      if (failures) setLoadWarning(`${failures} 项节点 / 地区预设数据加载失败，仍可使用占位来源手动设计。`);
+      if (results[2].status === "fulfilled") {
+        setProviders(Array.isArray(results[2].value) ? results[2].value : []);
+      } else {
+        setProviderLoadFailed(true);
+      }
+      setProvidersLoaded(true);
+      const labels = ["节点", "地区预设", "Proxy Provider"];
+      const failures = results.flatMap((result, index) => result.status === "rejected" ? [labels[index]] : []);
+      if (failures.length) setLoadWarning(`${failures.join("、")}加载失败；未加载的数据不会出现在来源选项中。`);
     };
     void loadOptions();
   }, []);
@@ -1455,6 +1494,21 @@ function VisualTemplateDialog({ onClose, onComplete }: { onClose: () => void; on
   const outputObject = useMemo(() => visualTemplateObject(draft), [draft]);
   const yaml = useMemo(() => `${structuredYAML(outputObject)}\n`, [outputObject]);
   const json = useMemo(() => `${JSON.stringify(outputObject, null, 2)}\n`, [outputObject]);
+  const availableProviders = useMemo(() => {
+    const unique = new Map<string, ProxyProviderConfig>();
+    for (const provider of providers) {
+      const name = provider.name.trim();
+      if (!name || !proxyProviderMode(provider.process_mode) || unique.has(name)) continue;
+      unique.set(name, provider);
+    }
+    return [...unique.values()];
+  }, [providers]);
+  const referencedProviderNames = useMemo(() => [...new Set(draft.groups.flatMap((group) => group.sources.filter((source) => source.kind === "provider").map((source) => source.value.trim()).filter(Boolean)))], [draft.groups]);
+  const missingProviderNames = useMemo(() => {
+    if (!providersLoaded || providerLoadFailed) return [];
+    const available = new Set(availableProviders.map((provider) => provider.name.trim()));
+    return referencedProviderNames.filter((name) => !available.has(name));
+  }, [availableProviders, providerLoadFailed, providersLoaded, referencedProviderNames]);
   const updateGroup = (id: string, patch: Partial<VisualProxyGroup>) => setDraft((current) => ({ ...current, groups: current.groups.map((group) => group.id === id ? { ...group, ...patch } : group) }));
   const moveGroup = (index: number, direction: -1 | 1) => setDraft((current) => {
     const target = index + direction;
@@ -1495,8 +1549,10 @@ function VisualTemplateDialog({ onClose, onComplete }: { onClose: () => void; on
       const names = draft.groups.map((group) => group.name.trim());
       if (names.some((name) => !name)) throw new Error("代理组名称不能为空");
       if (new Set(names).size !== names.length) throw new Error("代理组名称不能重复");
+      if (referencedProviderNames.length && !providersLoaded) throw new Error("Proxy Provider 列表仍在加载，请稍后再保存");
+      if (referencedProviderNames.length && providerLoadFailed) throw new Error("无法验证 Proxy Provider 引用，请刷新页面后重试");
+      if (missingProviderNames.length) throw new Error(`草稿引用的 Proxy Provider 已不存在或不可用：${missingProviderNames.join("、")}`);
       for (const group of draft.groups) {
-        if (group.sources.some((source) => source.kind === "provider")) throw new Error(`代理组“${group.name}”引用了当前生成链路尚不支持的 Proxy Provider，请移除后再保存`);
         if (group.sources.length === 0) throw new Error(`代理组“${group.name}”至少需要一个节点或组来源`);
         if (group.type === "relay" && group.sources.filter((source) => source.kind !== "provider").length < 2) throw new Error(`Relay 组“${group.name}”至少需要两个有序节点来源`);
       }
@@ -1514,31 +1570,35 @@ function VisualTemplateDialog({ onClose, onComplete }: { onClose: () => void; on
     { label: "DIRECT", kind: "builtin" as const, value: "DIRECT" },
     { label: "REJECT", kind: "builtin" as const, value: "REJECT" },
     ...draft.groups.filter((item) => item.id !== group.id && item.name.trim()).map((item) => ({ label: `组 · ${item.name}`, kind: "group" as const, value: item.name.trim() })),
+    ...availableProviders.map((item) => ({ label: `Provider · ${item.name} · ${proxyProviderMode(item.process_mode) === "server" ? "Arcway 展开" : "Mihomo 拉取"}`, kind: "provider" as const, value: item.name.trim() })),
     ...nodes.filter((item) => item.enabled).map((item) => ({ label: `节点 · ${item.node_name}`, kind: "node" as const, value: item.node_name })),
   ];
 
-  return <Dialog title="可视化模板设计" description="结构化维护代理组并生成完整 V3 YAML；不会解析或改写已有 YAML" onClose={onClose} wide>
+  return <Dialog title="可视化模板设计" description="结构化维护代理组并生成完整 V3 YAML；不会解析或改写已有 YAML" onClose={onClose} dismissible={!working} wide>
     <div className="cw-form">
       {error ? <ErrorState message={error} /> : null}
       {loadWarning ? <div className="cw-help"><Info size={16} /><span>{loadWarning}</span></div> : null}
-      {restoredRef.current ? <div className="cw-draft-notice"><span><RefreshCw size={15} />已恢复上次未保存草稿</span><Button variant="ghost" onClick={clearDraft}>清除草稿</Button></div> : null}
+      {missingProviderNames.length ? <div className="cw-help"><Info size={16} /><span>草稿引用的 Proxy Provider 已不存在或不可用：{missingProviderNames.join("、")}。请重新选择来源后再保存。</span></div> : null}
+      <fieldset className="cw-lock-fields" disabled={working}>
+      {restoredRef.current ? <div className="cw-draft-notice"><span><RefreshCw size={15} />已恢复上次未保存草稿</span><Button variant="ghost" disabled={working} onClick={clearDraft}>清除草稿</Button></div> : null}
       <div className="cw-tabs cw-tabs-three" role="tablist" aria-label="可视化模板视图"><button type="button" role="tab" aria-selected={tab === "design"} className={tab === "design" ? "is-active" : ""} onClick={() => setTab("design")}>结构设计</button><button type="button" role="tab" aria-selected={tab === "yaml"} className={tab === "yaml" ? "is-active" : ""} onClick={() => setTab("yaml")}>YAML 预览</button><button type="button" role="tab" aria-selected={tab === "json"} className={tab === "json" ? "is-active" : ""} onClick={() => setTab("json")}>JSON 预览</button></div>
       {tab === "design" ? <>
         <div className="cw-form-grid"><Field label="模板文件名"><input required value={draft.filename} onChange={(event) => setDraft((current) => ({ ...current, filename: event.target.value }))} /></Field><Field label="DNS 模式"><select value={draft.dnsMode} onChange={(event) => setDraft((current) => ({ ...current, dnsMode: event.target.value as VisualTemplateDraft["dnsMode"] }))}><option value="fake-ip">Fake IP</option><option value="redir-host">Redir Host</option><option value="off">不写入 DNS</option></select></Field></div>
         {draft.dnsMode !== "off" ? <div className="cw-form-section"><strong>DNS</strong><div className="cw-form-grid"><Field label="Nameserver（每行一个）"><textarea value={draft.nameservers.join("\n")} onChange={(event) => setDraft((current) => ({ ...current, nameservers: event.target.value.split("\n") }))} /></Field>{draft.dnsMode === "fake-ip" ? <><Field label="Fake IP 范围"><input value={draft.fakeIPRange} onChange={(event) => setDraft((current) => ({ ...current, fakeIPRange: event.target.value }))} /></Field><Field label="Fake IP 排除（每行一个）"><textarea value={draft.fakeIPFilters.join("\n")} onChange={(event) => setDraft((current) => ({ ...current, fakeIPFilters: event.target.value.split("\n") }))} /></Field></> : null}<div className="cw-toggle-field"><Toggle checked={draft.ipv6} onChange={(ipv6) => setDraft((current) => ({ ...current, ipv6 }))} label="DNS IPv6" /></div></div></div> : null}
-        <div className="cw-form-section"><div className="cw-section-title"><div><h2>代理组</h2><p>来源顺序会写入 proxies；可选择节点、内置项或其他代理组。</p></div><div className="cw-toolbar"><select aria-label="地区分组预设" value={region} onChange={(event) => setRegion(event.target.value)}><option value="">地区预设</option>{regions.map((item) => <option value={item.name} key={item.name}>{item.name}</option>)}</select><Button variant="secondary" onClick={addRegionGroup} disabled={!region}>添加地区组</Button><Button onClick={() => setDraft((current) => ({ ...current, groups: [...current.groups, { ...defaultVisualGroup(), name: `PROXY ${current.groups.length + 1}` }] }))}><Plus size={16} />代理组</Button></div></div>
+        <div className="cw-form-section"><div className="cw-section-title"><div><h2>代理组</h2><p>节点、内置项和代理组写入 proxies；Provider 写入 use。</p></div><div className="cw-toolbar"><select aria-label="地区分组预设" value={region} onChange={(event) => setRegion(event.target.value)}><option value="">地区预设</option>{regions.map((item) => <option value={item.name} key={item.name}>{item.name}</option>)}</select><Button variant="secondary" onClick={addRegionGroup} disabled={!region}>添加地区组</Button><Button onClick={() => setDraft((current) => ({ ...current, groups: [...current.groups, { ...defaultVisualGroup(), name: `PROXY ${current.groups.length + 1}` }] }))}><Plus size={16} />代理组</Button></div></div>
           <div className="cw-visual-groups">{draft.groups.map((group, groupIndex) => <Surface className="cw-visual-group" key={group.id}>
             <div className="cw-visual-group-head"><strong>{group.name || "未命名组"}</strong><div className="cw-table-actions"><IconButton label={`上移代理组 ${group.name}`} disabled={groupIndex === 0} onClick={() => moveGroup(groupIndex, -1)}><ArrowUp size={15} /></IconButton><IconButton label={`下移代理组 ${group.name}`} disabled={groupIndex === draft.groups.length - 1} onClick={() => moveGroup(groupIndex, 1)}><ArrowDown size={15} /></IconButton><IconButton label={`删除代理组 ${group.name}`} disabled={draft.groups.length === 1} onClick={() => setDraft((current) => ({ ...current, groups: current.groups.filter((item) => item.id !== group.id) }))}><Trash2 size={15} /></IconButton></div></div>
             <div className="cw-form-grid"><Field label="组名"><input value={group.name} onChange={(event) => updateGroup(group.id, { name: event.target.value })} /></Field><Field label="类型"><select value={group.type} onChange={(event) => updateGroup(group.id, { type: event.target.value as ProxyGroupType })}><option value="select">Select</option><option value="url-test">URL Test</option><option value="fallback">Fallback</option><option value="load-balance">Load Balance</option><option value="relay">Relay</option></select></Field></div>
-            <Field label="添加节点 / 代理组来源"><select aria-label={`添加 ${group.name} 来源`} value="" onChange={(event) => addSource(group, event.target.value)}><option value="">选择来源</option>{sourceOptions(group).map((option) => <option value={JSON.stringify({ kind: option.kind, value: option.value })} key={`${option.kind}:${option.value}`}>{option.label}</option>)}</select></Field>
+            <Field label="添加节点 / Provider / 代理组来源"><select aria-label={`添加 ${group.name} 来源`} value="" onChange={(event) => addSource(group, event.target.value)}><option value="">选择来源</option>{sourceOptions(group).map((option) => <option value={JSON.stringify({ kind: option.kind, value: option.value })} key={`${option.kind}:${option.value}`}>{option.label}</option>)}</select></Field>
             <div className="cw-source-list">{group.sources.map((source, sourceIndex) => <div className="cw-source-row" key={source.id}><Badge tone={source.kind === "provider" ? "info" : "neutral"}>{({ node: "节点", provider: "Provider", group: "代理组", builtin: "内置" } as const)[source.kind]}</Badge><code>{source.value}</code><div className="cw-table-actions"><IconButton label={`上移来源 ${source.value}`} disabled={sourceIndex === 0} onClick={() => moveSource(group, sourceIndex, -1)}><ArrowUp size={14} /></IconButton><IconButton label={`下移来源 ${source.value}`} disabled={sourceIndex === group.sources.length - 1} onClick={() => moveSource(group, sourceIndex, 1)}><ArrowDown size={14} /></IconButton><IconButton label={`移除来源 ${source.value}`} onClick={() => updateGroup(group.id, { sources: group.sources.filter((item) => item.id !== source.id) })}><Trash2 size={14} /></IconButton></div></div>)}</div>
-            {["url-test", "fallback", "load-balance"].includes(group.type) ? <div className="cw-form-grid"><Field label="健康检查 URL"><input type="url" value={group.url} onChange={(event) => updateGroup(group.id, { url: event.target.value })} /></Field><Field label="检查间隔（秒）"><input type="number" min="1" value={group.interval} onChange={(event) => updateGroup(group.id, { interval: Number(event.target.value) })} /></Field>{group.type === "url-test" ? <Field label="容差（毫秒）"><input type="number" min="0" value={group.tolerance} onChange={(event) => updateGroup(group.id, { tolerance: Number(event.target.value) })} /></Field> : null}{group.type === "load-balance" ? <Field label="负载策略"><select value={group.strategy} onChange={(event) => updateGroup(group.id, { strategy: event.target.value })}><option value="consistent-hashing">Consistent Hashing</option><option value="round-robin">Round Robin</option><option value="sticky-sessions">Sticky Sessions</option></select></Field> : null}<div className="cw-toggle-field"><Toggle checked={group.lazy} onChange={(lazy) => updateGroup(group.id, { lazy })} label="Lazy 检测" /></div></div> : null}
+            {["url-test", "fallback", "load-balance"].includes(group.type) ? <div className="cw-form-grid"><Field label="节点测试 URL"><input type="url" value={group.url} onChange={(event) => updateGroup(group.id, { url: event.target.value })} /></Field><Field label="检查间隔（秒）"><input type="number" min="1" value={group.interval} onChange={(event) => updateGroup(group.id, { interval: Number(event.target.value) })} /></Field>{group.type === "url-test" ? <Field label="容差（毫秒）"><input type="number" min="0" value={group.tolerance} onChange={(event) => updateGroup(group.id, { tolerance: Number(event.target.value) })} /></Field> : null}{group.type === "load-balance" ? <Field label="负载策略"><select value={group.strategy} onChange={(event) => updateGroup(group.id, { strategy: event.target.value })}><option value="consistent-hashing">Consistent Hashing</option><option value="round-robin">Round Robin</option><option value="sticky-sessions">Sticky Sessions</option></select></Field> : null}<div className="cw-toggle-field"><Toggle checked={group.lazy} onChange={(lazy) => updateGroup(group.id, { lazy })} label="Lazy 检测" /></div></div> : null}
             <div className="cw-form-grid"><Field label="包含过滤（filter）"><input value={group.filter} onChange={(event) => updateGroup(group.id, { filter: event.target.value })} /></Field><Field label="排除过滤（exclude-filter）"><input value={group.excludeFilter} onChange={(event) => updateGroup(group.id, { excludeFilter: event.target.value })} /></Field><Field label="排除类型（exclude-type）"><input value={group.excludeType} onChange={(event) => updateGroup(group.id, { excludeType: event.target.value })} /></Field><Field label="链式前置组" hint="生成 dialer-proxy-group，由现有订阅 handler 注入到节点"><select value={group.dialerProxyGroup} onChange={(event) => updateGroup(group.id, { dialerProxyGroup: event.target.value })}><option value="">不设置</option>{draft.groups.filter((item) => item.id !== group.id && item.name.trim()).map((item) => <option value={item.name} key={item.id}>{item.name}</option>)}</select></Field></div>
           </Surface>)}</div>
         </div>
         <div className="cw-form-section"><strong>规则</strong><Field label="每行一条 Mihomo 规则"><textarea className="cw-dialog-code cw-dialog-code-short" value={draft.rules.join("\n")} onChange={(event) => setDraft((current) => ({ ...current, rules: event.target.value.split("\n") }))} spellCheck={false} /></Field></div>
       </> : <pre className="cw-preview">{tab === "yaml" ? yaml : json}</pre>}
-      <div className="dialog-actions"><Button variant="secondary" onClick={onClose}>取消</Button><Button variant="ghost" onClick={clearDraft}>恢复默认</Button><Button onClick={() => void save()} disabled={working}>{working ? <Spinner label="正在保存" /> : <><Save size={16} />保存新模板</>}</Button></div>
+      <div className="dialog-actions"><Button variant="secondary" disabled={working} onClick={onClose}>取消</Button><Button variant="ghost" disabled={working} onClick={clearDraft}>恢复默认</Button><Button onClick={() => void save()} disabled={working}>{working ? <Spinner label="正在保存" /> : <><Save size={16} />保存新模板</>}</Button></div>
+      </fieldset>
     </div>
   </Dialog>;
 }

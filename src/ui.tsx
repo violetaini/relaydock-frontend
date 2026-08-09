@@ -133,12 +133,13 @@ export function Dialog({ title, description, children, onClose, medium = false, 
   );
 }
 
-export function ConfirmDialog({ title, description, confirmLabel, tone = "danger", working = false, onCancel, onConfirm }: {
+export function ConfirmDialog({ title, description, confirmLabel, tone = "danger", working = false, error = "", onCancel, onConfirm }: {
   title: string;
   description: string;
   confirmLabel: string;
   tone?: "danger" | "primary";
   working?: boolean;
+  error?: string;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -149,6 +150,7 @@ export function ConfirmDialog({ title, description, confirmLabel, tone = "danger
         <span className="confirm-icon"><TriangleAlert size={22} /></span>
         <p id={bodyDescriptionId}>{description}</p>
       </div>
+      {error ? <ErrorState message={error} /> : null}
       <div className="dialog-actions">
         <Button type="button" variant="secondary" onClick={onCancel} disabled={working}>取消</Button>
         <Button type="button" variant={tone} onClick={onConfirm} disabled={working}>

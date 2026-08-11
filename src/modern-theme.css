@@ -15,6 +15,9 @@
   --accent: #c75135;
   --accent-strong: #a43e27;
   --accent-soft: #fff0eb;
+  --accent-contrast: #140f0d;
+  --accent-strong-contrast: #140f0d;
+  --accent-readable: #a43e27;
   --green: #16805a;
   --green-soft: #e7f5ee;
   --amber: #a26709;
@@ -49,6 +52,9 @@
   --accent: #ef8f70;
   --accent-strong: #ffb097;
   --accent-soft: #422a22;
+  --accent-contrast: #111614;
+  --accent-strong-contrast: #111614;
+  --accent-readable: #ffb097;
   --green: #6ec99a;
   --green-soft: #1b3628;
   --amber: #e2b65e;
@@ -149,13 +155,14 @@
 }
 
 :root[data-style-theme="flat"] .button-primary {
-  color: #fff;
+  color: var(--accent-contrast);
   background: var(--accent);
   border-color: var(--accent);
   box-shadow: 0 4px 10px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 :root[data-style-theme="flat"] .button-primary:hover:not(:disabled) {
+  color: var(--accent-strong-contrast);
   background: var(--accent-strong);
   border-color: var(--accent-strong);
   box-shadow: 0 6px 14px color-mix(in srgb, var(--accent) 25%, transparent);
@@ -172,7 +179,7 @@
 }
 
 :root[data-style-theme="flat"] .icon-button:hover {
-  color: var(--accent-strong);
+  color: var(--accent-readable);
   background: var(--accent-soft);
   border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
 }
@@ -385,7 +392,7 @@
 }
 
 :root[data-style-theme="flat"] .dashboard-period button.is-active {
-  color: var(--accent-strong);
+  color: var(--accent-readable);
   background: var(--surface);
   border-color: var(--border);
   box-shadow: var(--shadow-low);
@@ -453,7 +460,7 @@
 }
 
 :root[data-style-theme="flat"] .dashboard-health-item:hover {
-  color: var(--accent-strong);
+  color: var(--accent-readable);
   background: var(--surface-hover);
 }
 
@@ -557,7 +564,7 @@
 }
 
 :root[data-style-theme="flat"] :is(.cw-tabs, .nw-tabs, .rw-filter) button:is(.is-active, [aria-selected="true"]) {
-  color: var(--accent-strong);
+  color: var(--accent-readable);
   background: var(--surface);
   border-color: var(--border);
   box-shadow: var(--shadow-low);
@@ -565,7 +572,7 @@
 
 :root[data-style-theme="flat"] .nw-filter-group button.is-active,
 :root[data-style-theme="flat"] .nw-tag-choices button.is-active {
-  color: var(--accent-strong);
+  color: var(--accent-readable);
   background: var(--accent-soft);
   border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
 }
@@ -691,7 +698,7 @@
   }
 
   :root[data-style-theme="flat"] .sidebar-brand .brand-mark {
-    color: #fff;
+    color: var(--accent-contrast);
     background: var(--accent);
     box-shadow: 0 4px 10px rgb(0 0 0 / 18%);
   }
@@ -1365,7 +1372,7 @@
   }
   :root[data-style-theme="flat"] .console-layout.layout-top .nav-item:hover { background: var(--surface-muted); }
   :root[data-style-theme="flat"] .console-layout.layout-top .nav-item.is-active {
-    color: var(--accent-strong);
+    color: var(--accent-readable);
     border-color: color-mix(in srgb, var(--accent) 52%, var(--border-strong));
     background: var(--accent-soft);
   }
@@ -1409,7 +1416,7 @@
     border-bottom: 1px solid var(--border);
     box-shadow: none;
   }
-  :root[data-style-theme="flat"] .mobile-topbar-brand { color: var(--accent-strong); }
+  :root[data-style-theme="flat"] .mobile-topbar-brand { color: var(--accent-readable); }
   :root[data-style-theme="flat"] .mobile-topbar-brand .brand-mark,
   :root[data-style-theme="flat"] .topbar .icon-button,
   :root[data-style-theme="flat"] .topbar-avatar {
@@ -1608,7 +1615,7 @@
   }
 
   :root[data-style-theme="flat"] .console-layout.layout-side .sidebar-layout-switch:hover {
-    color: var(--accent-strong);
+    color: var(--accent-readable);
     background: var(--accent-soft);
     transform: translate(-1px, -1px);
     box-shadow: 4px 4px 0 rgb(101 79 70 / 38%);
@@ -1652,7 +1659,7 @@
   }
 
   :root[data-style-theme="flat"] .console-layout.layout-side .nav-item.is-active {
-    color: var(--accent-strong);
+    color: var(--accent-readable);
     border-color: color-mix(in srgb, var(--accent) 52%, var(--border-strong));
     background: var(--accent-soft);
     box-shadow: 3px 3px 0 rgb(201 96 67 / 34%);
@@ -1722,7 +1729,7 @@
     width: 28px;
     height: 28px;
     flex-basis: 28px;
-    color: #fff;
+    color: var(--accent-contrast);
     border: 0;
     border-radius: 0;
     background: var(--accent);
@@ -1754,7 +1761,7 @@
 
   :root[data-style-theme="flat"] .console-layout.layout-side .topbar-actions .icon-button:hover,
   :root[data-style-theme="flat"] .console-layout.layout-side .topbar-account:hover {
-    color: var(--accent-strong);
+    color: var(--accent-readable);
     background: var(--accent-soft);
   }
 

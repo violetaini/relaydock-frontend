@@ -1,7 +1,7 @@
 .sg-layout { min-height: 430px; display: flex; flex-direction: column; }
 .sg-tabs { min-height: 43px; margin: -4px 0 16px; display: flex; align-items: center; gap: 5px; border-bottom: 1px solid var(--border); }
 .sg-tabs > button[role="tab"] { min-height: 42px; padding: 0 13px; display: inline-flex; align-items: center; gap: 7px; color: var(--text-soft); background: transparent; border-bottom: 2px solid transparent; font-size: 12px; font-weight: 700; }
-.sg-tabs > button[role="tab"].is-active { color: var(--accent-strong); border-bottom-color: var(--accent); }
+.sg-tabs > button[role="tab"].is-active { color: var(--accent-readable); border-bottom-color: var(--accent); }
 .sg-tabs > button[role="tab"] span { min-width: 20px; padding: 2px 6px; color: var(--text-faint); background: var(--surface-muted); border: 1px solid var(--border); font-size: 10px; text-align: center; }
 .sg-tabs > .icon-button { margin-left: auto; }
 .sg-center { min-height: 330px; display: flex; align-items: center; justify-content: center; }
@@ -65,7 +65,7 @@
 .sg-protocol-options small { font-size: 10px; }
 .sg-choice { min-height: 40px; padding: 3px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid var(--border-strong); background: var(--surface-muted); }
 .sg-choice button { min-height: 32px; color: var(--text-soft); background: transparent; font-size: 12px; font-weight: 700; }
-.sg-choice button.is-active { color: var(--accent-strong); background: var(--surface); border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border)); }
+.sg-choice button.is-active { color: var(--accent-readable); background: var(--surface); border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border)); }
 
 @media (max-width: 760px) {
   .sg-card-list { grid-template-columns: 1fr; }

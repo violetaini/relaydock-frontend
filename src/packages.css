@@ -15,7 +15,7 @@
 }
 
 .packages-view-switch .icon-button.is-active {
-  color: var(--accent-strong);
+  color: var(--accent-readable);
   border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
   background: var(--accent-soft);
 }

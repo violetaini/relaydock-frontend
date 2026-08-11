@@ -2,7 +2,7 @@
 .cw-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
 .cw-tabs { margin-bottom: 18px; display: inline-flex; align-items: center; gap: 3px; padding: 3px; border: 2px solid var(--border-strong); background: var(--surface-muted); }
 .cw-tabs button { min-height: 36px; padding: 0 15px; display: inline-flex; align-items: center; gap: 7px; border: 0; color: var(--text-soft); background: transparent; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
-.cw-tabs button.is-active { color: #fff; background: var(--text); }
+.cw-tabs button.is-active { color: var(--text-inverse); background: var(--text); }
 .cw-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .cw-subscription-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .cw-stack { display: flex; flex-direction: column; gap: 14px; }
@@ -34,7 +34,7 @@
 .cw-mode { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 2px solid var(--border-strong); }
 .cw-mode button { min-height: 43px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 0; border-right: 1px solid var(--border); color: var(--text-soft); background: var(--surface); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
 .cw-mode button:last-child { border-right: 0; }
-.cw-mode button.is-active { color: #fff; background: var(--text); }
+.cw-mode button.is-active { color: var(--text-inverse); background: var(--text); }
 .cw-rules { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .cw-rule { min-height: 48px; padding: 8px 10px; display: flex; align-items: center; gap: 8px; border: 1px solid var(--border-strong); color: var(--text-soft); background: var(--surface); font: inherit; font-size: 11px; font-weight: 650; text-align: left; cursor: pointer; }
 .cw-rule.is-selected { color: var(--text); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--surface)); box-shadow: inset 3px 0 0 var(--accent); }

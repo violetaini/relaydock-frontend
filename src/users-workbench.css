@@ -1,7 +1,7 @@
 .users-toolbar { margin-bottom: 18px; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
 .segmented-control { min-height: 42px; padding: 3px; display: inline-flex; gap: 3px; border: 1px solid var(--border-strong); background: var(--surface); box-shadow: 3px 3px 0 color-mix(in srgb, var(--border-strong) 72%, transparent); }
 .segmented-control button { min-width: 92px; height: 34px; padding: 0 12px; color: var(--text-soft); background: transparent; font-size: 12px; font-weight: 700; }
-.segmented-control button.is-active { color: var(--accent-strong); background: var(--accent-soft); }
+.segmented-control button.is-active { color: var(--accent-readable); background: var(--accent-soft); }
 .users-toolbar-right { display: flex; align-items: flex-end; gap: 10px; }
 .compact-field { width: 130px; }
 .compact-field .field-label { display: none; }
@@ -66,13 +66,13 @@
 .subaccount-list code { max-width: 100%; overflow: hidden; text-overflow: ellipsis; color: var(--text-soft); font-size: 10px; white-space: nowrap; }
 .user-settings-dialog { display: flex; flex-direction: column; gap: 14px; }
 .user-settings-summary { min-height: 68px; padding: 12px 14px; display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 11px; border: 1px solid var(--border); background: var(--surface-muted); }
-.user-settings-avatar { width: 42px; height: 42px; display: grid; place-items: center; color: #fff; background: var(--accent); font-size: 17px; font-weight: 800; }
+.user-settings-avatar { width: 42px; height: 42px; display: grid; place-items: center; color: var(--accent-contrast); background: var(--accent); font-size: 17px; font-weight: 800; }
 .user-settings-summary > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .user-settings-summary small { overflow: hidden; color: var(--text-soft); text-overflow: ellipsis; white-space: nowrap; }
 .user-settings-tabs { padding: 7px; display: flex; flex-wrap: wrap; gap: 7px; border: 1px solid var(--border-strong); background: var(--surface-muted); }
 .user-settings-tabs button { min-height: 34px; padding: 0 10px; color: var(--text-soft); border: 1px solid var(--border); background: var(--surface); font-size: 12px; font-weight: 700; }
 .user-settings-tabs button:hover { color: var(--text); background: var(--surface-hover); }
-.user-settings-tabs button.is-active { color: var(--accent-strong); border-color: color-mix(in srgb, var(--accent) 48%, var(--border-strong)); background: var(--accent-soft); }
+.user-settings-tabs button.is-active { color: var(--accent-readable); border-color: color-mix(in srgb, var(--accent) 48%, var(--border-strong)); background: var(--accent-soft); }
 .user-settings-panel { min-width: 0; }
 .user-settings-panel-frame { padding: 14px; border: 1px solid var(--border-strong); background: var(--surface); }
 .user-settings-panel-heading { min-height: 54px; margin-bottom: 16px; padding-bottom: 12px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border); }

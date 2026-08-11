@@ -205,7 +205,7 @@
 .nw-tag-choices button.is-active {
   border-color: color-mix(in srgb, var(--accent) 62%, var(--border-strong));
   background: var(--accent-soft);
-  color: var(--accent-strong);
+  color: var(--accent-readable);
 }
 
 .nw-source-filter {
@@ -621,7 +621,7 @@
 }
 
 .managed-stepper li.is-active > span {
-  color: #fff;
+  color: var(--accent-contrast);
   background: var(--accent);
   border-color: var(--accent);
 }
@@ -658,7 +658,7 @@
   height: 34px;
   flex: 0 0 34px;
   place-items: center;
-  color: var(--accent-strong);
+  color: var(--accent-readable);
   background: var(--accent-soft);
   border-radius: 7px;
 }
@@ -761,7 +761,7 @@
   width: 30px;
   height: 30px;
   place-items: center;
-  color: var(--accent-strong);
+  color: var(--accent-readable);
   background: var(--accent-soft);
   border-radius: 6px;
 }
@@ -981,7 +981,7 @@
 .nw-region-grid button.is-active {
   border-color: color-mix(in srgb, var(--accent) 62%, var(--border-strong));
   background: var(--accent-soft);
-  color: var(--accent-strong);
+  color: var(--accent-readable);
 }
 
 .nw-region-grid button span {
@@ -1020,7 +1020,7 @@
 .nw-tabs button.is-active {
   border-color: color-mix(in srgb, var(--accent) 58%, var(--border-strong));
   background: var(--accent-soft);
-  color: var(--accent-strong);
+  color: var(--accent-readable);
 }
 
 .nw-tabs button:disabled {
@@ -1112,7 +1112,7 @@
   background: var(--accent-soft);
   align-items: center;
   gap: 5px;
-  color: var(--accent-strong);
+  color: var(--accent-readable);
   padding: 3px 6px 3px 8px;
   font-size: 10px;
   font-weight: 700;
@@ -1187,7 +1187,7 @@
 
 .nw-speed-tabs button.is-active {
   background: var(--surface);
-  color: var(--accent-strong);
+  color: var(--accent-readable);
   box-shadow: inset 0 0 0 1px var(--border);
 }
 
@@ -1364,7 +1364,7 @@
 }
 
 .nw-speed-license-consent a {
-  color: var(--accent-strong);
+  color: var(--accent-readable);
 }
 
 .nw-list-toolbar,

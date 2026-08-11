@@ -64,7 +64,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
+  color: var(--accent-contrast);
   background: var(--accent);
   font-size: 17px;
   font-weight: 800;

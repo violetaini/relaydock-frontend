@@ -270,7 +270,7 @@ small { color: var(--text-soft); }
 .surface { border: 1px solid var(--border); border-radius: 7px; background: var(--surface); box-shadow: 0 1px 1px rgb(28 42 37 / 2%); }
 .surface-heading { min-height: 55px; padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; gap: 14px; border-bottom: 1px solid var(--border); }
 .surface-heading h2 { font-size: 14px; }
-.metric-grid { margin-bottom: 18px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.metric-grid { margin-bottom: 18px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-rows: 1fr; gap: 12px; }
 .metric { min-height: 126px; padding: 16px; position: relative; overflow: hidden; display: flex; flex-direction: column; }
 .metric::after { content: ""; position: absolute; right: 0; top: 0; width: 3px; height: 100%; background: var(--border-strong); }
 .metric-good { --metric-color: var(--green); --metric-soft: var(--green-soft); }
@@ -283,8 +283,11 @@ small { color: var(--text-soft); }
 .metric-accent::after { background: var(--accent); }
 .metric-warn::after { background: var(--amber); }
 .metric-bad::after { background: var(--red); }
-.metric-top { display: flex; align-items: center; gap: 8px; color: var(--text-soft); font-size: 11px; font-weight: 650; }
+.metric-top { min-width: 0; display: flex; align-items: center; gap: 8px; color: var(--text-soft); font-size: 11px; font-weight: 650; }
 .metric-icon, .settings-icon { width: 31px; height: 31px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; color: var(--accent); background: var(--accent-soft); }
+.metric-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.metric-copy > span { min-width: 0; color: var(--text); line-height: 1.25; }
+.metric-copy small { min-width: 0; display: block; color: var(--text-soft); font-size: 10px; font-weight: 500; line-height: 1.35; overflow-wrap: anywhere; }
 .metric > strong { margin-top: 16px; font-size: 24px; line-height: 1.1; font-weight: 720; }
 .metric > small { margin-top: 6px; font-size: 10px; }
 
@@ -785,10 +788,12 @@ h2 { font-size: 16px; }
 .surface-heading small { display: block; margin-top: 4px; font-size: 10px; }
 .metric-grid { gap: 16px; margin-bottom: 24px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .metric { min-height: 136px; padding: 20px 22px; }
-.metric-top { justify-content: space-between; color: var(--text); font-size: 13px; font-weight: 720; }
+.metric-top { min-height: 49px; justify-content: flex-start; align-items: flex-start; gap: 11px; color: var(--text); font-size: 13px; font-weight: 720; }
 .metric-icon { width: 32px; height: 32px; flex: 0 0 32px; color: var(--accent); background: transparent; }
+.metric-copy { padding-top: 1px; gap: 3px; }
+.metric-copy small { font-size: 10px; font-weight: 500; line-height: 1.35; }
 .metric > small { order: 2; margin-top: 4px; font-size: 10px; }
-.metric > strong { order: 3; margin-top: 20px; font-size: 28px; line-height: 1.12; }
+.metric > strong { order: 3; margin-top: 14px; font-size: 28px; line-height: 1.12; }
 .speed-summary { display: flex; flex-direction: column; gap: 3px; font-size: 18px; }
 .metric-progress { width: 100%; height: 6px; margin-top: 10px; overflow: hidden; background: var(--metric-soft, var(--surface-muted)); border: 1px solid var(--border); }
 .metric-progress > span { display: block; height: 100%; background: var(--metric-color, var(--accent)); transition: width .2s ease; }

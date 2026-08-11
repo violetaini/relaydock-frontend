@@ -629,6 +629,57 @@ test("dashboard uses the upstream desktop canvas and card scale", async ({ page 
   await expectViewportIntegrity(page, "dashboard upstream scale");
 });
 
+test("pixel dashboard metrics keep labels and details on separate rows", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1240, height: 760 });
+  await page.addInitScript(() => localStorage.setItem("arcway-theme", "dark"));
+  await mockAPI(page);
+  await page.goto("/#/dashboard");
+  await page.evaluate(() => {
+    document.documentElement.dataset.styleTheme = "pixel";
+  });
+
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  const metrics = page.locator(".metric-grid .metric");
+  await expect(metrics).toHaveCount(4);
+  await expect(page.getByText("所有节点的总配额", { exact: true })).toBeVisible();
+
+  for (const viewport of [
+    { name: "desktop", width: 1240, height: 760 },
+    { name: "mobile", width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const geometry = await metrics.evaluateAll((cards) => cards.map((card) => {
+      const copy = card.querySelector<HTMLElement>(".metric-copy");
+      const label = copy?.querySelector<HTMLElement>(":scope > span");
+      const detail = copy?.querySelector<HTMLElement>("small");
+      const value = card.querySelector<HTMLElement>(":scope > strong");
+      if (!copy || !label || !detail || !value) throw new Error("metric hierarchy is incomplete");
+      const cardRect = card.getBoundingClientRect();
+      const labelRect = label.getBoundingClientRect();
+      const detailRect = detail.getBoundingClientRect();
+      const valueRect = value.getBoundingClientRect();
+      return {
+        flexDirection: getComputedStyle(copy).flexDirection,
+        labelBeforeDetail: detailRect.top - labelRect.bottom,
+        detailBeforeValue: valueRect.top - detailRect.bottom,
+        horizontalOverflow: Math.max(copy.scrollWidth - copy.clientWidth, detail.scrollWidth - detail.clientWidth),
+        verticalOverflow: detail.scrollHeight - detail.clientHeight,
+        contained: labelRect.left >= cardRect.left && detailRect.right <= cardRect.right && valueRect.bottom <= cardRect.bottom,
+        height: cardRect.height,
+      };
+    }));
+
+    expect(geometry.every((item) => item.flexDirection === "column"), `${viewport.name}: copy direction`).toBe(true);
+    expect(geometry.every((item) => item.labelBeforeDetail >= 2), `${viewport.name}: label/detail spacing`).toBe(true);
+    expect(geometry.every((item) => item.detailBeforeValue >= 12), `${viewport.name}: detail/value spacing`).toBe(true);
+    expect(geometry.every((item) => item.horizontalOverflow <= 1 && item.verticalOverflow <= 1), `${viewport.name}: text overflow`).toBe(true);
+    expect(geometry.every((item) => item.contained), `${viewport.name}: card containment`).toBe(true);
+    expect(new Set(geometry.map((item) => Math.round(item.height))).size, `${viewport.name}: stable card heights`).toBe(1);
+    await expectViewportIntegrity(page, `pixel dashboard metric hierarchy on ${viewport.name}`);
+    await page.locator(".metric-grid").screenshot({ path: testInfo.outputPath(`pixel-dashboard-metrics-${viewport.name}.png`) });
+  }
+});
+
 test("mobile dashboard keeps the period selector readable", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await mockAPI(page);

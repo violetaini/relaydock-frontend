@@ -10,6 +10,28 @@ vi.hoisted(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe("server grants", () => {
+  it("creates a grant limited to classic AES-GCM Shadowsocks", async () => {
+    vi.spyOn(api, "get").mockImplementation(async (path) => {
+      if (path === "/api/admin/users/alice/server-grants") return { grants: [] };
+      if (path === "/api/admin/users/alice/managed-nodes") return { items: [] };
+      if (path === "/api/admin/remote-servers") return { success: true, servers: [{ id: 3, name: "香港入口", status: "online" }] };
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<ServerGrantsDialog username="alice" notify={vi.fn()} onClose={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "新增授权" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "授权服务器" }), { target: { value: "3" } });
+    expect(screen.queryByRole("checkbox", { name: /AnyTLS/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Shadowsocks Shadowsocks Classic" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存授权" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/users/alice/server-grants", expect.objectContaining({
+      allowed_protocols: ["shadowsocks"],
+      allowed_protocol_profiles: ["shadowsocks-classic"],
+    })));
+  });
+
   it("creates a grant limited to the exact Shadowsocks 2022 combination", async () => {
     vi.spyOn(api, "get").mockImplementation(async (path) => {
       if (path === "/api/admin/users/alice/server-grants") return { grants: [] };
@@ -178,5 +200,67 @@ describe("server grants", () => {
       allowed_protocols: ["shadowsocks"],
       allowed_protocol_profiles: ["shadowsocks-2022"],
     })));
+  });
+
+  it("preserves a hidden stale AnyTLS restriction when editing unrelated fields", async () => {
+    const grant = {
+      id: 7, username: "alice", server_id: 3, server_name: "香港入口", server_status: "online",
+      enabled: true, starts_at: "2026-07-01T00:00:00Z", expires_at: null, max_active_nodes: 0,
+      speed_limit_mbps: 0, connection_limit: 0, traffic_limit_bytes: 0, billing_mode: "download",
+      reset_policy: "none", reset_day: 1, allowed_protocols: ["anytls"],
+      allowed_protocol_profiles: ["anytls"], version: 4,
+      state: "active", offer_count: 1, active_node_count: 0, used_uplink_bytes: 0,
+      used_downlink_bytes: 0, billed_bytes: 0,
+    };
+    vi.spyOn(api, "get").mockImplementation(async (path) => {
+      if (path === "/api/admin/users/alice/server-grants") return { grants: [grant] };
+      if (path === "/api/admin/users/alice/managed-nodes") return { items: [] };
+      if (path === "/api/admin/remote-servers") return { success: true, servers: [{ id: 3, name: "香港入口", status: "online" }] };
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
+    render(<ServerGrantsDialog username="alice" notify={vi.fn()} onClose={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 香港入口 授权" }));
+    expect(screen.queryByRole("checkbox", { name: /AnyTLS/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "全部协议组合" })).not.toBeChecked();
+    fireEvent.change(screen.getByRole("spinbutton", { name: /^限速/ }), { target: { value: "20" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存授权" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/users/alice/server-grants/7", expect.objectContaining({
+      speed_limit_mbps: 20,
+      allowed_protocols: ["anytls"],
+      allowed_protocol_profiles: ["anytls"],
+      version: 4,
+    })));
+  });
+
+  it("does not turn a stale AnyTLS restriction into unrestricted access after clearing a visible selection", async () => {
+    const grant = {
+      id: 7, username: "alice", server_id: 3, server_name: "香港入口", server_status: "online",
+      enabled: true, starts_at: "2026-07-01T00:00:00Z", expires_at: null, max_active_nodes: 0,
+      speed_limit_mbps: 0, connection_limit: 0, traffic_limit_bytes: 0, billing_mode: "download",
+      reset_policy: "none", reset_day: 1, allowed_protocols: ["anytls"],
+      allowed_protocol_profiles: ["anytls"], version: 4,
+      state: "active", offer_count: 1, active_node_count: 0, used_uplink_bytes: 0,
+      used_downlink_bytes: 0, billed_bytes: 0,
+    };
+    vi.spyOn(api, "get").mockImplementation(async (path) => {
+      if (path === "/api/admin/users/alice/server-grants") return { grants: [grant] };
+      if (path === "/api/admin/users/alice/managed-nodes") return { items: [] };
+      if (path === "/api/admin/remote-servers") return { success: true, servers: [{ id: 3, name: "香港入口", status: "online" }] };
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
+    render(<ServerGrantsDialog username="alice" notify={vi.fn()} onClose={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 香港入口 授权" }));
+    const classic = screen.getByRole("checkbox", { name: "Shadowsocks Shadowsocks Classic" });
+    fireEvent.click(classic);
+    fireEvent.click(classic);
+    fireEvent.click(screen.getByRole("button", { name: "保存授权" }));
+
+    expect(screen.getByText(/请选择至少一个协议组合/)).toBeInTheDocument();
+    expect(put).not.toHaveBeenCalled();
   });
 });

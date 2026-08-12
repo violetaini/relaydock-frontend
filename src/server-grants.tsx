@@ -59,8 +59,8 @@ export interface ServerGrant {
   billing_mode: ManagedBillingMode;
   reset_policy: "none" | "monthly";
   reset_day: number;
-  allowed_protocols?: ManagedGrantProtocol[];
-  allowed_protocol_profiles?: ManagedGrantProtocolProfile[];
+  allowed_protocols?: string[];
+  allowed_protocol_profiles?: string[];
   version: number;
   state: string;
   offer_count: number;
@@ -106,9 +106,10 @@ interface GrantFormValue {
   billing: ManagedBillingMode;
   resetPolicy: "none" | "monthly";
   resetDay: string;
-  allowedProtocols: ManagedGrantProtocol[];
-  allowedProtocolProfiles: ManagedGrantProtocolProfile[];
+  allowedProtocols: string[];
+  allowedProtocolProfiles: string[];
   protocolProfilesExplicit: boolean;
+  protocolScopeTouched: boolean;
 }
 
 const stateMeta: Record<string, { label: string; tone: "good" | "warn" | "bad" | "neutral" | "info" }> = {
@@ -188,6 +189,7 @@ function formFromGrant(grant?: ServerGrant): GrantFormValue {
     allowedProtocols,
     allowedProtocolProfiles: explicitProfiles.length ? explicitProfiles : profilesForFamilies(allowedProtocols),
     protocolProfilesExplicit: explicitProfiles.length > 0,
+    protocolScopeTouched: false,
   };
 }
 
@@ -207,8 +209,12 @@ function payloadFromForm(form: GrantFormValue, version = 1) {
     billing_mode: form.billing,
     reset_policy: form.resetPolicy,
     reset_day: form.resetPolicy === "monthly" ? Math.min(28, Math.max(1, Math.floor(Number(form.resetDay) || 1))) : 1,
-    allowed_protocols: form.protocolProfilesExplicit ? familiesForProfiles(selectedProfiles) : form.allowedProtocols,
-    allowed_protocol_profiles: form.protocolProfilesExplicit ? selectedProfiles : [],
+    allowed_protocols: form.protocolScopeTouched
+      ? form.protocolProfilesExplicit ? familiesForProfiles(selectedProfiles) : []
+      : form.allowedProtocols,
+    allowed_protocol_profiles: form.protocolScopeTouched
+      ? form.protocolProfilesExplicit ? selectedProfiles : []
+      : form.protocolProfilesExplicit ? form.allowedProtocolProfiles : [],
     version,
   };
 }
@@ -233,18 +239,24 @@ function grantPayload(grant: ServerGrant, patch: Partial<ReturnType<typeof paylo
   };
 }
 
-function effectiveProtocolProfiles(protocols: ManagedGrantProtocol[] = [], profiles: ManagedGrantProtocolProfile[] = []): Set<ManagedGrantProtocolProfile> {
+function effectiveProtocolProfiles(protocols: string[] = [], profiles: string[] = []): Set<string> {
   if (profiles.length) return new Set(profiles);
-  if (protocols.length) return new Set(profilesForFamilies(protocols));
+  if (protocols.length) {
+    const knownProfiles = profilesForFamilies(protocols);
+    const knownFamilies = new Set(managedGrantProtocolGroups.map((group) => group.value));
+    const opaqueFamilies = protocols.filter((protocol) => !knownFamilies.has(protocol as ManagedGrantProtocol)).map((protocol) => `family:${protocol}`);
+    return new Set([...knownProfiles, ...opaqueFamilies]);
+  }
   return new Set(managedGrantProtocolProfiles.map((profile) => profile.value));
 }
 
 function protocolScopeNarrows(
-  currentProtocols: ManagedGrantProtocol[] = [],
-  currentProfiles: ManagedGrantProtocolProfile[] = [],
-  nextProtocols: ManagedGrantProtocol[],
-  nextProfiles: ManagedGrantProtocolProfile[],
+  currentProtocols: string[] = [],
+  currentProfiles: string[] = [],
+  nextProtocols: string[],
+  nextProfiles: string[],
 ): boolean {
+  if (nextProtocols.length === 0 && nextProfiles.length === 0) return false;
   const current = effectiveProtocolProfiles(currentProtocols, currentProfiles);
   const next = effectiveProtocolProfiles(nextProtocols, nextProfiles);
   return [...current].some((profile) => !next.has(profile));
@@ -415,26 +427,32 @@ function GrantEditorDialog({ username, grant, servers, onClose, onSaved }: { use
   const base = `/api/admin/users/${encodeURIComponent(username)}/server-grants`;
 
   const toggleProtocolProfile = (profile: ManagedGrantProtocolProfile) => {
-    const nextProfiles = form.allowedProtocolProfiles.length === 0
+    const currentProfiles = managedGrantProtocolProfiles
+      .filter((option) => form.allowedProtocolProfiles.includes(option.value))
+      .map((option) => option.value);
+    const nextProfiles = currentProfiles.length === 0
       ? [profile]
-      : form.allowedProtocolProfiles.includes(profile)
-        ? form.allowedProtocolProfiles.filter((item) => item !== profile)
-        : [...form.allowedProtocolProfiles, profile];
+      : currentProfiles.includes(profile)
+        ? currentProfiles.filter((item) => item !== profile)
+        : [...currentProfiles, profile];
     setError(nextProfiles.length === 0 ? "请选择至少一个协议组合，或选择“全部组合”" : "");
-    setForm({ ...form, allowedProtocolProfiles: nextProfiles, protocolProfilesExplicit: true });
+    setForm({ ...form, allowedProtocolProfiles: nextProfiles, protocolProfilesExplicit: true, protocolScopeTouched: true });
   };
 
   const toggleProtocolFamily = (protocol: ManagedGrantProtocol) => {
     const familyProfiles = managedGrantProtocolGroups.find((group) => group.value === protocol)?.profiles.map((profile) => profile.value) ?? [];
-    const selected = new Set(form.allowedProtocolProfiles);
-    const entireFamilySelected = form.allowedProtocolProfiles.length > 0 && familyProfiles.every((profile) => selected.has(profile));
-    const nextProfiles = form.allowedProtocolProfiles.length === 0
+    const currentProfiles = managedGrantProtocolProfiles
+      .filter((profile) => form.allowedProtocolProfiles.includes(profile.value))
+      .map((profile) => profile.value);
+    const selected = new Set(currentProfiles);
+    const entireFamilySelected = currentProfiles.length > 0 && familyProfiles.every((profile) => selected.has(profile));
+    const nextProfiles = currentProfiles.length === 0
       ? familyProfiles
       : entireFamilySelected
-        ? form.allowedProtocolProfiles.filter((profile) => !familyProfiles.includes(profile))
-        : [...form.allowedProtocolProfiles, ...familyProfiles.filter((profile) => !selected.has(profile))];
+        ? currentProfiles.filter((profile) => !familyProfiles.includes(profile))
+        : [...currentProfiles, ...familyProfiles.filter((profile) => !selected.has(profile))];
     setError(nextProfiles.length === 0 ? "请选择至少一个协议组合，或选择“全部组合”" : "");
-    setForm({ ...form, allowedProtocolProfiles: nextProfiles, protocolProfilesExplicit: true });
+    setForm({ ...form, allowedProtocolProfiles: nextProfiles, protocolProfilesExplicit: true, protocolScopeTouched: true });
   };
 
   const save = async (payload: ReturnType<typeof payloadFromForm>) => {
@@ -457,7 +475,8 @@ function GrantEditorDialog({ username, grant, servers, onClose, onSaved }: { use
     if (!form.serverID) return setError("请选择服务器");
     if (!form.startsAt) return setError("请选择生效时间");
     if (form.expiresAt && new Date(form.expiresAt) <= new Date(form.startsAt)) return setError("到期时间必须晚于生效时间");
-    if (form.protocolProfilesExplicit && form.allowedProtocolProfiles.length === 0) return setError("请选择至少一个协议组合，或选择“全部组合”");
+    const selectedProfiles = managedGrantProtocolProfiles.filter((profile) => form.allowedProtocolProfiles.includes(profile.value));
+    if (form.protocolScopeTouched && form.protocolProfilesExplicit && selectedProfiles.length === 0) return setError("请选择至少一个协议组合，或选择“全部组合”");
     const payload = payloadFromForm(form, grant?.version ?? 1);
     if (grant && protocolScopeNarrows(
       grant.allowed_protocols ?? [],
@@ -490,7 +509,7 @@ function GrantEditorDialog({ username, grant, servers, onClose, onSaved }: { use
         <legend>允许使用的协议组合</legend>
         <p>可精确到传输与加密组合；选择“全部组合”表示不限制。收窄范围会立即停用未选组合的已有节点。</p>
         <label className={`sg-protocol-all ${allProtocolProfilesAllowed ? "is-selected" : ""}`}>
-          <input type="checkbox" aria-label="全部协议组合" checked={allProtocolProfilesAllowed} onChange={() => { setError(""); setForm({ ...form, allowedProtocols: [], allowedProtocolProfiles: [], protocolProfilesExplicit: false }); }} />
+          <input type="checkbox" aria-label="全部协议组合" checked={allProtocolProfilesAllowed} onChange={() => { setError(""); setForm({ ...form, allowedProtocols: [], allowedProtocolProfiles: [], protocolProfilesExplicit: false, protocolScopeTouched: true }); }} />
           <span><strong>全部组合</strong><small>不限制协议、传输或加密方式</small></span>
         </label>
         <div className="sg-protocol-groups" aria-label="允许创建的协议组合">

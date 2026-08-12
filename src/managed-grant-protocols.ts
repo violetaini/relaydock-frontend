@@ -6,7 +6,6 @@ export type ManagedGrantProtocol =
   | "hysteria"
   | "socks"
   | "http"
-  | "anytls"
   | "snell";
 
 export type ManagedGrantProtocolProfile =
@@ -24,11 +23,11 @@ export type ManagedGrantProtocolProfile =
   | "trojan-reality"
   | "trojan-grpc-tls"
   | "trojan-wss"
+  | "shadowsocks-classic"
   | "shadowsocks-2022"
   | "hysteria2"
   | "socks5"
   | "http"
-  | "anytls"
   | "snell";
 
 export interface ManagedGrantProtocolProfileOption {
@@ -81,6 +80,7 @@ export const managedGrantProtocolGroups: ManagedGrantProtocolGroup[] = [
     value: "shadowsocks",
     label: "Shadowsocks",
     profiles: [
+      { value: "shadowsocks-classic", family: "shadowsocks", label: "Shadowsocks Classic", detail: "AES-128/256-GCM · 多用户" },
       { value: "shadowsocks-2022", family: "shadowsocks", label: "Shadowsocks 2022", detail: "BLAKE3 AES-128/256-GCM · 多用户" },
     ],
   },
@@ -99,11 +99,6 @@ export const managedGrantProtocolGroups: ManagedGrantProtocolGroup[] = [
     label: "HTTP",
     profiles: [{ value: "http", family: "http", label: "HTTP Proxy", detail: "TCP · 用户名密码" }],
   },
-  {
-    value: "anytls",
-    label: "AnyTLS",
-    profiles: [{ value: "anytls", family: "anytls", label: "AnyTLS", detail: "TCP · TLS" }],
-  },
 ];
 
 export const managedGrantProtocolOptions = managedGrantProtocolGroups.map(({ value, label }) => ({ value, label }));
@@ -117,14 +112,14 @@ export function managedGrantProtocolProfileLabel(profile: string): string {
   return managedGrantProtocolProfiles.find((option) => option.value === profile)?.label ?? profile;
 }
 
-export function profilesForFamilies(families: ManagedGrantProtocol[]): ManagedGrantProtocolProfile[] {
+export function profilesForFamilies(families: readonly string[]): ManagedGrantProtocolProfile[] {
   const allowedFamilies = new Set(families);
   return managedGrantProtocolProfiles
     .filter((profile) => allowedFamilies.has(profile.family))
     .map((profile) => profile.value);
 }
 
-export function familiesForProfiles(profiles: ManagedGrantProtocolProfile[]): ManagedGrantProtocol[] {
+export function familiesForProfiles(profiles: readonly string[]): ManagedGrantProtocol[] {
   const selectedProfiles = new Set(profiles);
   return managedGrantProtocolGroups
     .filter((group) => group.profiles.some((profile) => selectedProfiles.has(profile.value)))

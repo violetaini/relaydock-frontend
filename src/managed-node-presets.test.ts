@@ -335,7 +335,7 @@ describe("managed node protocol presets", () => {
     });
   });
 
-  it.each(["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"] as const)("builds classic single-password Shadowsocks for %s", (cipher) => {
+  it.each(["aes-128-gcm", "aes-256-gcm"] as const)("builds classic multi-user Shadowsocks for %s", (cipher) => {
     const request = buildManagedInboundRequest({
       ...newManagedInboundDraft(),
       name: "Classic SS",
@@ -346,14 +346,41 @@ describe("managed node protocol presets", () => {
     });
     expect(request.inbound).toMatchObject({
       protocol: "shadowsocks",
-      settings: { method: cipher, password: "classic-password", email: "admin", network: "tcp,udp" },
+      settings: {
+        clients: [{ method: cipher, password: "classic-password", email: "admin", level: 0 }],
+        network: "tcp,udp",
+      },
     });
-    expect(request.inbound.settings).not.toHaveProperty("clients");
-    expect(managedInboundSupportsPublishing({ protocol: "shadowsocks", ssCipher: cipher })).toBe(false);
+    expect(request.inbound.settings).not.toHaveProperty("method");
+    expect(request.inbound.settings).not.toHaveProperty("password");
+    expect(managedInboundSupportsPublishing({ protocol: "shadowsocks", ssCipher: cipher })).toBe(true);
   });
 
-  it("keeps Shadowsocks 2022 eligible for isolated user publishing", () => {
+  it("keeps legacy classic ChaCha20 Shadowsocks shared and non-publishable", () => {
+    const request = buildManagedInboundRequest({
+      ...newManagedInboundDraft(),
+      name: "Legacy Classic SS",
+      tag: "ss-classic-chacha",
+      protocol: "shadowsocks",
+      ssCipher: "chacha20-ietf-poly1305",
+      password: "classic-password",
+    });
+    expect(request.inbound).toMatchObject({
+      protocol: "shadowsocks",
+      settings: {
+        method: "chacha20-ietf-poly1305",
+        password: "classic-password",
+        email: "admin",
+        network: "tcp,udp",
+      },
+    });
+    expect(request.inbound.settings).not.toHaveProperty("clients");
+    expect(managedInboundSupportsPublishing({ protocol: "shadowsocks", ssCipher: "chacha20-ietf-poly1305" })).toBe(false);
+  });
+
+  it("keeps Shadowsocks 2022 and classic AES eligible for isolated user publishing", () => {
     expect(managedInboundSupportsPublishing({ protocol: "shadowsocks", ssCipher: "2022-blake3-aes-128-gcm" })).toBe(true);
+    expect(managedInboundSupportsPublishing({ protocol: "shadowsocks", ssCipher: "aes-128-gcm" })).toBe(true);
     expect(managedInboundSupportsPublishing({ protocol: "vmess-ws", ssCipher: "aes-128-gcm" })).toBe(true);
   });
 

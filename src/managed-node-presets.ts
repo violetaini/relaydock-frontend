@@ -105,7 +105,7 @@ export const managedProtocolOptions: Array<{
   { value: "trojan-reality", family: "trojan", familyLabel: "Trojan", label: "Trojan TCP Reality", detail: "RAW/TCP · Reality · 无需证书" },
   { value: "trojan-grpc-tls", family: "trojan", familyLabel: "Trojan", label: "Trojan gRPC TLS", detail: "gRPC · 托管 TLS 证书 · ALPN h2", requiresCertificate: true },
   { value: "trojan-wss", family: "trojan", familyLabel: "Trojan", label: "Trojan WSS", detail: "WebSocket · Nginx TLS · 节点域名" },
-  { value: "shadowsocks", family: "shadowsocks", familyLabel: "Shadowsocks", label: "Shadowsocks", detail: "经典 AEAD 或 2022 多用户" },
+  { value: "shadowsocks", family: "shadowsocks", familyLabel: "Shadowsocks", label: "Shadowsocks", detail: "经典 AES-GCM 或 2022 · 多用户" },
   { value: "hysteria2", family: "hysteria2", familyLabel: "Hysteria2", label: "Hysteria2", detail: "UDP · TLS · Hysteria2", requiresCertificate: true },
   { value: "socks5", family: "socks5", familyLabel: "SOCKS5", label: "SOCKS5", detail: "TCP + UDP · 用户名密码" },
   { value: "http", family: "http", familyLabel: "HTTP", label: "HTTP Proxy", detail: "TCP · 用户名密码" },
@@ -137,9 +137,15 @@ export function isShadowsocks2022Cipher(cipher: ShadowsocksCipher): boolean {
   return cipher.startsWith("2022-");
 }
 
+export function isShadowsocksClassicMultiUserCipher(cipher: ShadowsocksCipher): boolean {
+  return cipher === "aes-128-gcm" || cipher === "aes-256-gcm";
+}
+
 export function managedInboundSupportsPublishing(draft: Pick<ManagedInboundDraft, "protocol" | "ssCipher">): boolean {
   if (draft.protocol === "anydoor" || draft.protocol === "wireguard") return false;
-  return draft.protocol !== "shadowsocks" || isShadowsocks2022Cipher(draft.ssCipher);
+  return draft.protocol !== "shadowsocks"
+    || isShadowsocks2022Cipher(draft.ssCipher)
+    || isShadowsocksClassicMultiUserCipher(draft.ssCipher);
 }
 
 function randomBytes(length: number): Uint8Array {
@@ -522,6 +528,18 @@ export function buildManagedInboundRequest(draft: ManagedInboundDraft): ManagedI
       break;
     case "shadowsocks": {
       if (!isShadowsocks2022Cipher(draft.ssCipher)) {
+        if (isShadowsocksClassicMultiUserCipher(draft.ssCipher)) {
+          inbound = baseInbound(draft, "shadowsocks", {
+            clients: [{
+              method: draft.ssCipher,
+              password: requirePassword(draft.password),
+              email: "admin",
+              level: 0,
+            }],
+            network: "tcp,udp",
+          });
+          break;
+        }
         inbound = baseInbound(draft, "shadowsocks", {
           method: draft.ssCipher,
           password: requirePassword(draft.password),

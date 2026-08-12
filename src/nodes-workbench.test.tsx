@@ -289,9 +289,9 @@ describe("managed offer protocol guard", () => {
     })));
   });
 
-  it("keeps classic Shadowsocks unavailable in the generic node editor", async () => {
+  it("keeps unverified imported classic Shadowsocks unavailable even with a legacy config marker", async () => {
     const classic = node(7, "Classic SS", "ss");
-    const config = { name: "Classic SS", type: "ss", server: "edge.example.com", port: 8388, cipher: "aes-128-gcm", password: "shared" };
+    const config = { name: "Classic SS", type: "ss", server: "edge.example.com", port: 8388, cipher: "aes-128-gcm", password: "shared", "x-arcway-managed-users": true };
     classic.clash_config = JSON.stringify(config);
     classic.parsed_config = JSON.stringify(config);
     const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
@@ -306,6 +306,30 @@ describe("managed offer protocol guard", () => {
 
     await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/nodes/7", expect.objectContaining({ protocol: "ss" })));
     expect(post).not.toHaveBeenCalledWith("/api/admin/managed-node-offers", expect.anything());
+  });
+
+  it("allows unrelated edits to a verified managed classic AES node", async () => {
+    const classic = node(8, "Managed Classic SS", "ss");
+    const config = { name: "Managed Classic SS", type: "ss", server: "edge.example.com", port: 8388, cipher: "aes-256-gcm", password: "admin-password" };
+    classic.clash_config = JSON.stringify(config);
+    classic.parsed_config = JSON.stringify(config);
+    classic.managed_multi_user = true;
+    const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
+    render(<NodeEditor
+      node={classic}
+      offer={{ id: 12, node_id: 8, server_id: 3, inbound_tag: "in-8", enabled: true, sort_order: 0 }}
+      onClose={vi.fn()}
+      onComplete={vi.fn()}
+    />);
+
+    const selfService = screen.getByRole("switch", { name: "允许获授权用户自助开通" });
+    expect(selfService).toBeChecked();
+    expect(selfService).not.toBeDisabled();
+    fireEvent.change(screen.getByRole("textbox", { name: "节点名称" }), { target: { value: "Managed Classic SS 2" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存节点" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/nodes/8", expect.objectContaining({ node_name: "Managed Classic SS 2" })));
+    expect(put).toHaveBeenCalledWith("/api/admin/managed-node-offers/12", { enabled: true, sort_order: 0 });
   });
 });
 
@@ -1210,7 +1234,7 @@ describe("managed server node creation", () => {
     expect((preview as HTMLTextAreaElement).value).not.toContain('"headers"');
   });
 
-  it("turns off self-service publishing when classic Shadowsocks is selected", async () => {
+  it("publishes managed classic AES but turns publishing off for shared classic ChaCha20", async () => {
     const existing = node(1, "香港 A");
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
       if (path === "/api/admin/nodes") return { nodes: [existing] } as T;
@@ -1240,9 +1264,12 @@ describe("managed server node creation", () => {
     fireEvent.click(publish);
     expect(publish).toBeChecked();
     fireEvent.change(screen.getByRole("combobox", { name: "Shadowsocks 加密方式" }), { target: { value: "aes-128-gcm" } });
+    expect(publish).toBeChecked();
+    expect(publish).not.toBeDisabled();
+    fireEvent.change(screen.getByRole("combobox", { name: "Shadowsocks 加密方式" }), { target: { value: "chacha20-ietf-poly1305" } });
     expect(publish).not.toBeChecked();
     expect(publish).toBeDisabled();
-    expect(screen.getByText(/经典 Shadowsocks 只有一组共享密码/)).toBeInTheDocument();
+    expect(screen.getByText(/经典 ChaCha20 Shadowsocks 只有一组共享密码/)).toBeInTheDocument();
   });
 });
 

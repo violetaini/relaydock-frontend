@@ -61,6 +61,7 @@ import {
   isManagedRealityProtocol,
   isManagedUUIDProtocol,
   isManagedWSSProtocol,
+  isShadowsocksClassicMultiUserCipher,
   isShadowsocks2022Cipher,
   managedInboundSupportsPublishing,
   managedProtocolOptions,
@@ -107,6 +108,7 @@ export interface WorkbenchNode {
   protocol: string;
   parsed_config: string;
   clash_config: string;
+  managed_multi_user?: boolean;
   enabled: boolean;
   tag: string;
   tags?: string[];
@@ -389,14 +391,15 @@ export function nodeDuplicateIdentity(node: WorkbenchNode): string {
   return JSON.stringify(stableJSONValue(config));
 }
 
-function managedSelfServiceConfigSupported(protocol: string, rawConfig: string): boolean {
+function managedSelfServiceConfigSupported(protocol: string, rawConfig: string, managedMultiUser = false): boolean {
   const normalizedProtocol = nodeProtocolKey(protocol);
   if (normalizedProtocol === "wireguard") return false;
   if (normalizedProtocol !== "ss") return true;
   try {
     const config = JSON.parse(rawConfig || "{}");
     const cipher = String(config?.cipher || config?.method || "").trim().toLowerCase();
-    return cipher.startsWith("2022-");
+    return cipher.startsWith("2022-")
+      || ((cipher === "aes-128-gcm" || cipher === "aes-256-gcm") && managedMultiUser);
   } catch {
     return false;
   }
@@ -1212,7 +1215,8 @@ export function NodeEditor({ node, offer, availableTags = [], onClose, onComplet
   const [error, setError] = useState("");
   const tunnelNode = isTunnelNode(node);
   const protocolOptions = form.protocol && !protocols.includes(form.protocol.toLowerCase()) ? [form.protocol, ...protocols] : protocols;
-  const selfServiceProtocolReady = !tunnelNode && managedSelfServiceConfigSupported(form.protocol, form.config);
+  const managedMultiUser = node?.managed_multi_user === true;
+  const selfServiceProtocolReady = !tunnelNode && managedSelfServiceConfigSupported(form.protocol, form.config, managedMultiUser);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setWorking(true);
@@ -1227,7 +1231,7 @@ export function NodeEditor({ node, offer, availableTags = [], onClose, onComplet
       if (!config.name || !config.type || !config.server || !config.port) throw new Error("名称、协议、服务器地址和端口均为必填项");
       if (config.port < 1 || config.port > 65535) throw new Error("端口必须在 1-65535 之间");
       if (form.selfService && tunnelNode) throw new Error("Tunnel 转发节点不能发布到用户自助目录");
-      if (form.selfService && !managedSelfServiceConfigSupported(form.protocol, JSON.stringify(config))) throw new Error(nodeProtocolKey(form.protocol) === "wireguard" ? "WireGuard 暂不支持按用户自助开通；管理员创建的普通节点仍可分配到套餐和订阅" : "经典 Shadowsocks 使用共享密码，不能发布到用户自助目录；请改用 Shadowsocks 2022");
+      if (form.selfService && !managedSelfServiceConfigSupported(form.protocol, JSON.stringify(config), managedMultiUser)) throw new Error(nodeProtocolKey(form.protocol) === "wireguard" ? "WireGuard 暂不支持按用户自助开通；管理员创建的普通节点仍可分配到套餐和订阅" : "导入或旧版经典 Shadowsocks 无法确认多用户入站结构，不能直接发布；请从服务器创建经典 AES-GCM 节点，或改用 Shadowsocks 2022");
       const configJSON = JSON.stringify(config);
       const payload = {
         raw_url: form.rawURL.trim(),
@@ -1394,14 +1398,14 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
   const isTunnel = draft.protocol === "anydoor";
   const isWireGuard = draft.protocol === "wireguard";
   const wireGuardEndpoint = selectedServer?.domain?.trim() || selectedServer?.ip_address?.trim() || selectedServer?.ip_address_v6?.trim() || "";
-  const isClassicShadowsocks = draft.protocol === "shadowsocks" && !isShadowsocks2022Cipher(draft.ssCipher);
+  const isLegacySharedShadowsocks = draft.protocol === "shadowsocks" && !managedInboundSupportsPublishing(draft);
   const canPublish = selectedServer?.xray_mode === "embedded" && managedInboundSupportsPublishing(draft);
   const publishDisabledReason = isTunnel
     ? "任意门是端口转发入站，不提供独立用户凭据，不能发布到用户目录。"
     : isWireGuard
     ? "WireGuard 暂不支持普通用户自助开通，管理员创建后仍会作为正常节点使用。"
-    : isClassicShadowsocks
-    ? "经典 Shadowsocks 只有一组共享密码，不能安全下发独立用户凭据；请使用 SS2022 后再发布。"
+    : isLegacySharedShadowsocks
+    ? "经典 ChaCha20 Shadowsocks 只有一组共享密码，不能安全下发独立用户凭据；请使用经典 AES-GCM 或 SS2022。"
     : "该服务器为外置 Xray 模式，只能创建管理员节点，不能安全提供多用户凭据。";
 
   useEffect(() => {
@@ -1580,13 +1584,14 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
 
   const chooseSSCipher = (cipher: ManagedInboundDraft["ssCipher"]) => {
     const is2022 = isShadowsocks2022Cipher(cipher);
+    const supportsPublishing = is2022 || isShadowsocksClassicMultiUserCipher(cipher);
     const keyLength = cipher === "2022-blake3-aes-128-gcm" ? 16 : 32;
     setDraft((current) => ({
       ...current,
       ssCipher: cipher,
       password: randomBase64(is2022 ? keyLength : 32),
       ssUserPassword: is2022 ? randomBase64(keyLength) : current.ssUserPassword,
-      publish: is2022 ? current.publish : false,
+      publish: supportsPublishing ? current.publish : false,
     }));
   };
 
@@ -1714,7 +1719,7 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
         {isGRPC ? <Field label="gRPC Service Name" hint="客户端必须填写相同值；无需以 / 开头"><input value={draft.wsPath} onChange={(event) => setDraft({ ...draft, wsPath: event.target.value })} placeholder="grpc-service" /></Field> : null}
         {isWSS ? <div className="form-grid"><Field label="TLS 节点域名" hint="由服务器域名和 Nginx 提供 TLS"><input readOnly value={draft.domain} /></Field><Field label="WebSocket 路径"><input value={draft.wsPath} onChange={(event) => setDraft({ ...draft, wsPath: event.target.value })} /></Field></div> : isPlainWS ? <div className="form-grid"><Field label="WebSocket Host（可选）" hint="留空即可直接使用服务器 IP 或节点地址"><input value={draft.domain} onChange={(event) => setDraft({ ...draft, domain: event.target.value })} placeholder="可留空" /></Field><Field label="WebSocket 路径"><input value={draft.wsPath} onChange={(event) => setDraft({ ...draft, wsPath: event.target.value })} /></Field></div> : null}
         {draft.protocol === "vless-ws" ? <div className="nw-inline-note"><Shield size={16} /><span>VLESS WS 未启用传输加密，适合受信或私有链路；公网优先使用 Reality 或 WSS。</span></div> : null}
-        {draft.protocol === "shadowsocks" ? <><Field label="加密方式"><select aria-label="Shadowsocks 加密方式" value={draft.ssCipher} onChange={(event) => chooseSSCipher(event.target.value as ManagedInboundDraft["ssCipher"])}><optgroup label="经典 AEAD"><option value="aes-128-gcm">AES-128-GCM</option><option value="aes-256-gcm">AES-256-GCM</option><option value="chacha20-ietf-poly1305">ChaCha20-IETF-Poly1305</option></optgroup><optgroup label="Shadowsocks 2022（多用户）"><option value="2022-blake3-aes-128-gcm">2022 BLAKE3 AES-128-GCM</option><option value="2022-blake3-aes-256-gcm">2022 BLAKE3 AES-256-GCM</option></optgroup></select></Field>{isShadowsocks2022Cipher(draft.ssCipher) ? <div className="form-grid"><Field label="服务端主密钥" hint="切换加密方式时自动生成"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value.trim() })} /></Field><Field label="初始用户密钥" hint="管理员节点凭据"><input value={draft.ssUserPassword} onChange={(event) => setDraft({ ...draft, ssUserPassword: event.target.value.trim() })} /></Field></div> : <Field label="节点密码" hint="经典 Shadowsocks 使用一组共享密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field>}</> : null}
+        {draft.protocol === "shadowsocks" ? <><Field label="加密方式"><select aria-label="Shadowsocks 加密方式" value={draft.ssCipher} onChange={(event) => chooseSSCipher(event.target.value as ManagedInboundDraft["ssCipher"])}><optgroup label="经典 AEAD"><option value="aes-128-gcm">AES-128-GCM（多用户）</option><option value="aes-256-gcm">AES-256-GCM（多用户）</option><option value="chacha20-ietf-poly1305">ChaCha20-IETF-Poly1305（共享密码）</option></optgroup><optgroup label="Shadowsocks 2022（多用户）"><option value="2022-blake3-aes-128-gcm">2022 BLAKE3 AES-128-GCM</option><option value="2022-blake3-aes-256-gcm">2022 BLAKE3 AES-256-GCM</option></optgroup></select></Field>{isShadowsocks2022Cipher(draft.ssCipher) ? <div className="form-grid"><Field label="服务端主密钥" hint="切换加密方式时自动生成"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value.trim() })} /></Field><Field label="初始用户密钥" hint="管理员节点凭据"><input value={draft.ssUserPassword} onChange={(event) => setDraft({ ...draft, ssUserPassword: event.target.value.trim() })} /></Field></div> : isShadowsocksClassicMultiUserCipher(draft.ssCipher) ? <Field label="初始用户密码" hint="管理员节点凭据；后续用户使用独立密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field> : <Field label="节点共享密码" hint="旧式共享凭据，不能发布到用户自助目录"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field>}</> : null}
         {draft.protocol === "socks5" || draft.protocol === "http" ? <div className="form-grid"><Field label="初始用户名"><input value={draft.accountUsername} onChange={(event) => setDraft({ ...draft, accountUsername: event.target.value.trim() })} /></Field><Field label="初始密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field></div> : null}
         {selectedProtocol?.requiresCertificate ? <>{isManagedUUIDProtocol(draft.protocol) ? <Field label="托管证书"><select value={draft.certificateId} onChange={(event) => { const certificate = validCertificates.find((item) => String(item.id) === event.target.value); setDraft({ ...draft, certificateId: event.target.value, domain: managedTLSHostnameForCertificate(certificate, selectedServer, draft.domain) }); }}><option value="">请选择证书</option>{validCertificates.map((item) => <option value={item.id} key={item.id}>{item.domain}</option>)}</select></Field> : <div className="form-grid"><Field label="认证密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field><Field label="托管证书"><select value={draft.certificateId} onChange={(event) => { const certificate = validCertificates.find((item) => String(item.id) === event.target.value); setDraft({ ...draft, certificateId: event.target.value, domain: managedTLSHostnameForCertificate(certificate, selectedServer, draft.domain) }); }}><option value="">请选择证书</option>{validCertificates.map((item) => <option value={item.id} key={item.id}>{item.domain}</option>)}</select></Field></div>}<Field label="TLS SNI"><input value={draft.domain} onChange={(event) => setDraft({ ...draft, domain: event.target.value })} placeholder="edge.example.com" /></Field><Toggle checked={draft.skipCertVerify} onChange={(skipCertVerify) => setDraft({ ...draft, skipCertVerify })} label="客户端跳过证书校验" /></> : null}
         {!isTunnel ? <div className="managed-publish-panel"><Toggle checked={draft.publish && canPublish} disabled={!canPublish} onChange={(publish) => setDraft({ ...draft, publish })} label="创建后发布到用户自助目录" />{draft.publish && canPublish ? <Field label="目录排序" hint="数值越小越靠前"><input type="number" min="0" value={draft.sortOrder} onChange={(event) => setDraft({ ...draft, sortOrder: event.target.value })} /></Field> : <small>{canPublish ? "稍后也可以在节点编辑中发布。" : publishDisabledReason}</small>}</div> : null}

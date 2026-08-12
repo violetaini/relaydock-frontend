@@ -954,7 +954,19 @@ for (const scenario of [
     await expect(address).toContainText("198.51.100.14");
     await expect(address).toContainText("1/2");
     if (scenario.viewport.width <= 390) {
-      await expect.poll(() => address.locator(".service-address-viewport").evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+      const addressFit = await address.evaluate((element) => {
+        const viewport = element.querySelector<HTMLElement>(".service-address-viewport");
+        const value = element.querySelector<HTMLElement>(".service-address-value");
+        if (!viewport || !value) throw new Error("service address hierarchy is incomplete");
+        const viewportRect = viewport.getBoundingClientRect();
+        const valueRect = value.getBoundingClientRect();
+        return {
+          scrollOverflow: viewport.scrollWidth - viewport.clientWidth,
+          clippedRight: valueRect.right - viewportRect.right,
+        };
+      });
+      expect(addressFit.scrollOverflow).toBeLessThanOrEqual(1);
+      expect(addressFit.clippedRight).toBeLessThanOrEqual(1);
     }
     await expect(page.locator(".service-card").first().locator(".service-agent-version")).toContainText("v0.3.4");
     await expect(firstCard.locator(".service-runtime-controls").locator(".service-address")).toHaveCount(1);
@@ -989,6 +1001,48 @@ for (const scenario of [
     await page.screenshot({ path: testInfo.outputPath(`service-${scenario.name}.png`), fullPage: true });
   });
 }
+
+test("three-column service cards keep flags and complete IP addresses visible", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.addInitScript(() => localStorage.setItem("arcway-theme", "dark"));
+  const threeColumnServers = [
+    ...servers,
+    { ...servers[0], id: 3, name: "Japan Oracle", country_code: "JP", ip_address: "192.0.2.123", ip_address_v6: "2001:db8:200::123" },
+  ];
+  await mockAPI(page, traffic, undefined, {
+    "/api/admin/remote-servers": { success: true, servers: threeColumnServers },
+  });
+  await page.goto("/#/servers");
+  await page.evaluate(() => { document.documentElement.dataset.styleTheme = "pixel"; });
+
+  const cards = page.locator(".service-card");
+  await expect(cards).toHaveCount(3);
+  for (const card of await cards.all()) {
+    await expect(card.locator(".service-country img")).toHaveAttribute("src", /\.svg(?:\?|$)/);
+    const layout = await card.evaluate((element) => {
+      const address = element.querySelector<HTMLElement>(".service-address");
+      const viewport = element.querySelector<HTMLElement>(".service-address-viewport");
+      const value = element.querySelector<HTMLElement>(".service-address-value");
+      const transport = element.querySelector<HTMLElement>(".service-transport");
+      if (!address || !viewport || !value || !transport) throw new Error("service runtime controls are incomplete");
+      const addressRect = address.getBoundingClientRect();
+      const viewportRect = viewport.getBoundingClientRect();
+      const valueRect = value.getBoundingClientRect();
+      const transportRect = transport.getBoundingClientRect();
+      return {
+        addressAboveControls: addressRect.bottom <= transportRect.top + 1,
+        scrollOverflow: viewport.scrollWidth - viewport.clientWidth,
+        clippedRight: valueRect.right - viewportRect.right,
+      };
+    });
+    expect(layout.addressAboveControls).toBe(true);
+    expect(layout.scrollOverflow).toBeLessThanOrEqual(1);
+    expect(layout.clippedRight).toBeLessThanOrEqual(1);
+  }
+
+  await expectViewportIntegrity(page, "three-column service card flags and addresses");
+  await page.screenshot({ path: testInfo.outputPath("service-three-column-addresses.png"), fullPage: true });
+});
 
 for (const viewport of [
   { name: "desktop", width: 1440, height: 900, theme: "dark" },

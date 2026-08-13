@@ -653,18 +653,25 @@ test("pixel dashboard metrics keep labels and details on separate rows", async (
       const label = copy?.querySelector<HTMLElement>(":scope > span");
       const detail = copy?.querySelector<HTMLElement>("small");
       const value = card.querySelector<HTMLElement>(":scope > strong");
-      if (!copy || !label || !detail || !value) throw new Error("metric hierarchy is incomplete");
+      const icon = card.querySelector<SVGElement>(".metric-icon svg");
+      const progress = card.querySelector<HTMLElement>(":scope > .metric-progress");
+      if (!copy || !label || !detail || !value || !icon) throw new Error("metric hierarchy is incomplete");
       const cardRect = card.getBoundingClientRect();
       const labelRect = label.getBoundingClientRect();
       const detailRect = detail.getBoundingClientRect();
       const valueRect = value.getBoundingClientRect();
+      const iconRect = icon.getBoundingClientRect();
+      const progressRect = progress?.getBoundingClientRect();
       return {
         flexDirection: getComputedStyle(copy).flexDirection,
         labelBeforeDetail: detailRect.top - labelRect.bottom,
         detailBeforeValue: valueRect.top - detailRect.bottom,
+        readingAlignment: Math.abs(valueRect.left - iconRect.left),
+        progressAfterValue: progressRect ? progressRect.top - valueRect.bottom : null,
+        progressOrder: progress ? getComputedStyle(progress).order : null,
         horizontalOverflow: Math.max(copy.scrollWidth - copy.clientWidth, detail.scrollWidth - detail.clientWidth),
         verticalOverflow: detail.scrollHeight - detail.clientHeight,
-        contained: labelRect.left >= cardRect.left && detailRect.right <= cardRect.right && valueRect.bottom <= cardRect.bottom,
+        contained: labelRect.left >= cardRect.left && detailRect.right <= cardRect.right && (progressRect?.bottom ?? valueRect.bottom) <= cardRect.bottom,
         height: cardRect.height,
       };
     }));
@@ -672,6 +679,9 @@ test("pixel dashboard metrics keep labels and details on separate rows", async (
     expect(geometry.every((item) => item.flexDirection === "column"), `${viewport.name}: copy direction`).toBe(true);
     expect(geometry.every((item) => item.labelBeforeDetail >= 2), `${viewport.name}: label/detail spacing`).toBe(true);
     expect(geometry.every((item) => item.detailBeforeValue >= 12), `${viewport.name}: detail/value spacing`).toBe(true);
+    expect(geometry.every((item) => item.readingAlignment <= 1), `${viewport.name}: value/icon alignment`).toBe(true);
+    expect(geometry.every((item) => item.progressAfterValue == null || item.progressAfterValue >= 8), `${viewport.name}: progress placement`).toBe(true);
+    expect(geometry.every((item) => item.progressOrder == null || item.progressOrder === "4"), `${viewport.name}: progress order`).toBe(true);
     expect(geometry.every((item) => item.horizontalOverflow <= 1 && item.verticalOverflow <= 1), `${viewport.name}: text overflow`).toBe(true);
     expect(geometry.every((item) => item.contained), `${viewport.name}: card containment`).toBe(true);
     expect(new Set(geometry.map((item) => Math.round(item.height))).size, `${viewport.name}: stable card heights`).toBe(1);
@@ -680,37 +690,76 @@ test("pixel dashboard metrics keep labels and details on separate rows", async (
   }
 });
 
-test("mobile dashboard keeps the period selector readable", async ({ page }) => {
+test("dashboard period selector stays integrated and readable", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await mockAPI(page);
   await page.goto("/#/dashboard");
   await expect(page.locator(".dashboard-period button")).toHaveCount(3);
 
+  for (const styleTheme of ["pixel", "flat"]) {
+    await page.evaluate((theme) => { document.documentElement.dataset.styleTheme = theme; }, styleTheme);
+    const measurements = await page.evaluate(() => {
+      const tools = document.querySelector<HTMLElement>(".dashboard-chart-tools");
+      const period = document.querySelector<HTMLElement>(".dashboard-period");
+      const floatingTools = document.querySelector<HTMLElement>(".floating-tools");
+      const buttons = [...document.querySelectorAll<HTMLElement>(".dashboard-period button")];
+      if (!tools || !period || !floatingTools || buttons.length !== 3) throw new Error("dashboard period controls are missing");
+      const periodStyle = getComputedStyle(period);
+      return {
+        toolsDisplay: getComputedStyle(tools).display,
+        floatingToolsDisplay: getComputedStyle(floatingTools).display,
+        gridColumnStart: periodStyle.gridColumnStart,
+        gridColumnEnd: periodStyle.gridColumnEnd,
+        background: periodStyle.backgroundColor,
+        labels: buttons.map((button) => button.textContent?.trim()),
+        whiteSpace: buttons.map((button) => getComputedStyle(button).whiteSpace),
+        overflows: buttons.map((button) => button.scrollWidth - button.clientWidth),
+        rows: new Set(buttons.map((button) => Math.round(button.getBoundingClientRect().top))).size,
+      };
+    });
+
+    expect(measurements.toolsDisplay, styleTheme).toBe("grid");
+    expect(measurements.floatingToolsDisplay, styleTheme).toBe("none");
+    expect(measurements.gridColumnStart, styleTheme).toBe("1");
+    expect(measurements.gridColumnEnd, styleTheme).toBe("-1");
+    expect(measurements.background, styleTheme).toBe("rgba(0, 0, 0, 0)");
+    expect(measurements.labels, styleTheme).toEqual(["今天", "本周", "本月"]);
+    expect(measurements.whiteSpace, styleTheme).toEqual(["nowrap", "nowrap", "nowrap"]);
+    expect(measurements.overflows.every((overflow) => overflow <= 1), styleTheme).toBe(true);
+    expect(measurements.rows, styleTheme).toBe(1);
+    await expectViewportIntegrity(page, `${styleTheme} mobile dashboard period selector`);
+    await page.locator(".dashboard-chart-heading").screenshot({ path: testInfo.outputPath(`${styleTheme}-dashboard-period-mobile.png`) });
+  }
+});
+
+test("pixel desktop period selector blends into the chart heading", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1240, height: 760 });
+  await page.addInitScript(() => localStorage.setItem("arcway-theme", "dark"));
+  await mockAPI(page);
+  await page.goto("/#/dashboard");
+  await page.evaluate(() => { document.documentElement.dataset.styleTheme = "pixel"; });
+
   const measurements = await page.evaluate(() => {
-    const tools = document.querySelector<HTMLElement>(".dashboard-chart-tools");
+    const heading = document.querySelector<HTMLElement>(".dashboard-chart-heading");
     const period = document.querySelector<HTMLElement>(".dashboard-period");
     const buttons = [...document.querySelectorAll<HTMLElement>(".dashboard-period button")];
-    if (!tools || !period || buttons.length !== 3) throw new Error("dashboard period controls are missing");
-    const periodStyle = getComputedStyle(period);
+    if (!heading || !period || buttons.length !== 3) throw new Error("dashboard period controls are missing");
+    const headingRect = heading.getBoundingClientRect();
+    const periodRect = period.getBoundingClientRect();
     return {
-      toolsDisplay: getComputedStyle(tools).display,
-      gridColumnStart: periodStyle.gridColumnStart,
-      gridColumnEnd: periodStyle.gridColumnEnd,
-      labels: buttons.map((button) => button.textContent?.trim()),
-      whiteSpace: buttons.map((button) => getComputedStyle(button).whiteSpace),
-      overflows: buttons.map((button) => button.scrollWidth - button.clientWidth),
-      rows: new Set(buttons.map((button) => Math.round(button.getBoundingClientRect().top))).size,
+      contained: periodRect.left >= headingRect.left && periodRect.right <= headingRect.right && periodRect.top >= headingRect.top && periodRect.bottom <= headingRect.bottom,
+      periodBackground: getComputedStyle(period).backgroundColor,
+      buttonRows: new Set(buttons.map((button) => Math.round(button.getBoundingClientRect().top))).size,
+      buttonOverflows: buttons.map((button) => button.scrollWidth - button.clientWidth),
     };
   });
 
-  expect(measurements.toolsDisplay).toBe("grid");
-  expect(measurements.gridColumnStart).toBe("1");
-  expect(measurements.gridColumnEnd).toBe("-1");
-  expect(measurements.labels).toEqual(["今天", "本周", "本月"]);
-  expect(measurements.whiteSpace).toEqual(["nowrap", "nowrap", "nowrap"]);
-  expect(measurements.overflows.every((overflow) => overflow <= 1)).toBe(true);
-  expect(measurements.rows).toBe(1);
-  await expectViewportIntegrity(page, "mobile dashboard period selector");
+  expect(measurements.contained).toBe(true);
+  expect(measurements.periodBackground).toBe("rgba(0, 0, 0, 0)");
+  expect(measurements.buttonRows).toBe(1);
+  expect(measurements.buttonOverflows.every((overflow) => overflow <= 1)).toBe(true);
+  await expectViewportIntegrity(page, "pixel desktop dashboard period selector");
+  await page.locator(".dashboard-chart-heading").screenshot({ path: testInfo.outputPath("pixel-dashboard-period-desktop.png") });
 });
 
 test("mobile probe return uses a matched home control", async ({ page }) => {

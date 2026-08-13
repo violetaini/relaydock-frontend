@@ -250,6 +250,7 @@
 :root[data-style-theme="flat"] .metric {
   --metric-color: var(--accent);
   --metric-soft: var(--accent-soft);
+  --metric-reading-offset: 8px;
   min-height: 126px;
   padding: 17px 18px 16px;
   box-shadow: var(--shadow);
@@ -317,16 +318,18 @@
 }
 
 :root[data-style-theme="flat"] .metric-progress {
-  height: 5px;
-  margin-top: 10px;
+  width: auto;
+  height: 7px;
+  margin: 9px 0 0 var(--metric-reading-offset);
   border: 0;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--metric-color) 14%, var(--surface-muted));
+  background: color-mix(in srgb, var(--border) 72%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 5%, transparent);
 }
 
 :root[data-style-theme="flat"] .metric-progress > span {
   border-radius: inherit;
-  box-shadow: 0 1px 3px color-mix(in srgb, var(--metric-color) 25%, transparent);
+  box-shadow: none;
 }
 
 :root[data-style-theme="flat"] .speed-summary {
@@ -366,36 +369,56 @@
 }
 
 :root[data-style-theme="flat"] .dashboard-period {
-  padding: 3px;
+  padding: 0 2px;
   display: inline-flex;
-  gap: 2px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--surface-muted);
+  gap: 0;
+  border: 0;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
 }
 
 :root[data-style-theme="flat"] .dashboard-period button {
-  min-width: 52px;
-  height: 30px;
-  padding: 0 10px;
-  border: 1px solid transparent;
-  border-radius: 5px;
+  min-width: 50px;
+  height: 32px;
+  padding: 0 9px;
+  position: relative;
+  border: 0;
+  border-radius: 4px;
   color: var(--text-soft);
   background: transparent;
   font-size: 11px;
   font-weight: 680;
 }
 
+:root[data-style-theme="flat"] .dashboard-period button::after {
+  content: "";
+  position: absolute;
+  right: 10px;
+  bottom: 1px;
+  left: 10px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--accent);
+  opacity: 0;
+  transform: scaleX(.45);
+  transition: opacity .15s ease, transform .15s ease;
+}
+
 :root[data-style-theme="flat"] .dashboard-period button:hover {
   color: var(--text);
-  background: var(--surface-hover);
+  background: color-mix(in srgb, var(--surface-hover) 64%, transparent);
 }
 
 :root[data-style-theme="flat"] .dashboard-period button.is-active {
   color: var(--accent-readable);
-  background: var(--surface);
-  border-color: var(--border);
-  box-shadow: var(--shadow-low);
+  background: color-mix(in srgb, var(--accent-soft) 55%, transparent);
+  box-shadow: none;
+}
+
+:root[data-style-theme="flat"] .dashboard-period button.is-active::after {
+  opacity: 1;
+  transform: scaleX(1);
 }
 
 :root[data-style-theme="flat"] .dashboard-chart .bar-chart {
@@ -909,6 +932,7 @@
   }
 
   :root[data-style-theme="flat"] .metric {
+    --metric-reading-offset: 7px;
     min-height: 116px;
     padding: 14px 12px 13px;
   }
@@ -971,6 +995,9 @@
 
   :root[data-style-theme="flat"] .dashboard-period {
     flex: 1;
+    padding: 4px 0 0;
+    border-top: 1px solid var(--border);
+    border-left: 0;
   }
 
   :root[data-style-theme="flat"] .dashboard-period button {
@@ -1887,6 +1914,10 @@
 @media (max-width: 760px) {
   :root[data-style-theme="flat"] .dashboard-health-items {
     grid-template-columns: 1fr;
+  }
+
+  :root[data-style-theme="flat"] .floating-tools {
+    display: none;
   }
 }
 

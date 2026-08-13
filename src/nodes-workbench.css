@@ -326,6 +326,10 @@
   gap: 9px;
 }
 
+.nw-node-primary > .badge:last-child {
+  flex: 0 0 auto;
+}
+
 .nw-node-primary > span:not(.badge) {
   display: flex;
   min-width: 0;

@@ -34,6 +34,15 @@ const packageItem: PackageItem = {
     limit_duration: 300,
   }],
   template_filename: "default.yaml",
+  server_grants: [{
+    server_id: 3, max_active_nodes: 2, speed_limit_mbps: 50, connection_limit: 0,
+    traffic_limit_bytes: 10 * 1024 ** 3, billing_mode: "download", reset_policy: "none",
+    reset_day: 1, allowed_protocols: [], allowed_protocol_profiles: [],
+  }],
+  forwarding_grants: [{
+    tunnel_id: 7, max_active_forwards: 1, per_forward_speed_mbps: 0,
+    per_forward_connection_limit: 0, traffic_limit_bytes: 0, billing_mode_override: null,
+  }],
 };
 
 const nodes: NodeItem[] = [
@@ -45,6 +54,9 @@ function mockLoads() {
   return vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
     if (path === "/api/admin/packages") return { packages: [packageItem] } as T;
     if (path === "/api/admin/nodes") return { nodes } as T;
+    if (path === "/api/admin/remote-servers") return { servers: [{ id: 3, name: "香港入口", status: "online" }] } as T;
+    if (path === "/api/admin/tunnel-templates") return { tunnels: [{ id: 7, name: "香港转发", state: "active" }] } as T;
+    if (path === "/api/admin/rule-templates") return { templates: ["default.yaml"] } as T;
     throw new Error(`unexpected GET ${path}`);
   });
 }
@@ -76,6 +88,8 @@ describe("package management", () => {
       node_device_limits: { "2": 1 },
       auto_speed_rules: packageItem.auto_speed_rules,
       template_filename: "default.yaml",
+      server_grants: packageItem.server_grants,
+      forwarding_grants: packageItem.forwarding_grants,
     })));
     expect(notify).toHaveBeenCalledWith("套餐已更新，节点关联正在同步");
   });

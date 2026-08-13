@@ -10,10 +10,22 @@ import {
   Plus,
   RefreshCw,
   Route,
+  Network,
+  Server,
   Trash2,
 } from "lucide-react";
 import { api } from "./api";
-import type { AutoSpeedLimitRule, NodeItem, NodeListResponse, PackageItem } from "./types";
+import type {
+  AutoSpeedLimitRule,
+  NodeItem,
+  NodeListResponse,
+  PackageForwardingGrant,
+  PackageItem,
+  PackageServerGrant,
+  RemoteServer,
+  ServerListResponse,
+} from "./types";
+import type { TunnelTemplate } from "./forwarding-management";
 import {
   Badge,
   Button,
@@ -69,6 +81,8 @@ interface PackageFormState {
   nodeSpeedLimits: Record<string, string>;
   nodeDeviceLimits: Record<string, string>;
   autoSpeedRules: AutoSpeedLimitRule[];
+  serverGrants: PackageServerGrant[];
+  forwardingGrants: PackageForwardingGrant[];
 }
 
 type PendingAction = { kind: "delete-package"; item: PackageItem };
@@ -101,6 +115,8 @@ function initialPackageForm(item?: PackageItem): PackageFormState {
     nodeSpeedLimits: Object.fromEntries(Object.entries(item?.node_speed_limits ?? {}).map(([key, value]) => [key, String(value)])),
     nodeDeviceLimits: Object.fromEntries(Object.entries(item?.node_device_limits ?? {}).map(([key, value]) => [key, String(value)])),
     autoSpeedRules: [...(item?.auto_speed_rules ?? [])],
+    serverGrants: [...(item?.server_grants ?? [])],
+    forwardingGrants: [...(item?.forwarding_grants ?? [])],
   };
 }
 
@@ -127,6 +143,8 @@ function packagePayload(form: PackageFormState, original?: PackageItem): Record<
     auto_speed_rules: form.autoSpeedRules,
     traffic_mode: form.trafficMode,
     template_filename: form.templateFilename,
+    server_grants: form.serverGrants,
+    forwarding_grants: form.forwardingGrants,
   };
   if (original) payload.id = original.id;
   return payload;
@@ -135,6 +153,8 @@ function packagePayload(form: PackageFormState, original?: PackageItem): Record<
 export function PackagesPage({ notify }: PackagesPageProps) {
   const [packages, setPackages] = useState<PackageItem[]>([]);
   const [nodes, setNodes] = useState<NodeItem[]>([]);
+  const [servers, setServers] = useState<RemoteServer[]>([]);
+  const [tunnels, setTunnels] = useState<TunnelTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [editor, setEditor] = useState<PackageItem | "create" | null>(null);
@@ -146,12 +166,16 @@ export function PackagesPage({ notify }: PackagesPageProps) {
     setLoading(true);
     setError("");
     try {
-      const [packageResult, nodeResult] = await Promise.all([
+      const [packageResult, nodeResult, serverResult, tunnelResult] = await Promise.all([
         api.get<PackageListResponse>("/api/admin/packages"),
         api.get<NodeListResponse & ApiEnvelope>("/api/admin/nodes"),
+        api.get<ServerListResponse | RemoteServer[]>("/api/admin/remote-servers"),
+        api.get<{ tunnels?: TunnelTemplate[] } | TunnelTemplate[]>("/api/admin/tunnel-templates"),
       ]);
       setPackages(assertSuccessful(packageResult, "套餐列表加载失败").packages ?? []);
       setNodes(assertSuccessful(nodeResult, "节点列表加载失败").nodes ?? []);
+      setServers(Array.isArray(serverResult) ? serverResult : serverResult.servers ?? []);
+      setTunnels(Array.isArray(tunnelResult) ? tunnelResult : tunnelResult.tunnels ?? []);
     } catch (reason) {
       setError(errorMessage(reason, "套餐数据加载失败"));
     } finally {
@@ -192,7 +216,7 @@ export function PackagesPage({ notify }: PackagesPageProps) {
     <>
       <PageHeader
         title="套餐模板管理"
-        description="管理流量套餐模板，可在用户管理中为用户分配套餐"
+        description="把固定节点、自助节点和转发线路组合成可批量授权的制式模板"
         actions={(
           <>
             <div className="packages-view-switch" role="group" aria-label="套餐视图">
@@ -216,7 +240,7 @@ export function PackagesPage({ notify }: PackagesPageProps) {
                 <EmptyState
                   icon={<PackageIcon size={24} />}
                   title="暂无套餐"
-                  description="创建套餐后可配置流量、限速并关联节点"
+                  description="创建套餐后可组合节点、服务器自助开通和转发线路授权"
                   action={<Button onClick={() => setEditor("create")}><Plus size={16} />创建套餐</Button>}
                 />
               </Surface>
@@ -244,6 +268,8 @@ export function PackagesPage({ notify }: PackagesPageProps) {
                     <span><Gauge size={15} />{item.speed_limit_mbps ? `${item.speed_limit_mbps} Mbps` : "不限速"}</span>
                     <span><CircleUserRound size={15} />{item.device_limit ? `${item.device_limit} 台` : "设备不限"}</span>
                     <span title={names.join("、")}><Route size={15} />{itemNodes.length} 个节点</span>
+                    <span><Server size={15} />{item.server_grants?.length ?? 0} 台服务器</span>
+                    <span><Network size={15} />{item.forwarding_grants?.length ?? 0} 条线路</span>
                     <span><CalendarDays size={15} />{item.is_reset ? `每月 ${item.reset_day} 日重置` : "周期重置"}</span>
                   </div>
                 </Surface>
@@ -256,7 +282,7 @@ export function PackagesPage({ notify }: PackagesPageProps) {
                 <td><Badge tone={item.traffic_mode === "twoway" ? "info" : "neutral"}>{item.traffic_mode === "twoway" ? "双向计费" : "单向计费"}</Badge></td>
                 <td><strong>{item.traffic_limit_gb} GB</strong><small className="cell-note">{item.cycle_days} 天 · {item.is_reset ? `每月 ${item.reset_day} 日重置` : "周期重置"}</small></td>
                 <td><strong>{item.speed_limit_mbps ? `${item.speed_limit_mbps} Mbps` : "不限速"}</strong><small className="cell-note">{item.device_limit ? `${item.device_limit} 台设备` : "设备不限"}</small></td>
-                <td><strong title={names.join("、")}>{itemNodes.length} 个节点</strong><small className="cell-note">{names.slice(0, 2).join("、") || "未关联"}</small></td>
+                <td><strong title={names.join("、")}>{itemNodes.length} 节点 · {item.server_grants?.length ?? 0} 服务器 · {item.forwarding_grants?.length ?? 0} 线路</strong><small className="cell-note">{names.slice(0, 2).join("、") || "未关联固定节点"}</small></td>
                 <td><div className="packages-list-actions"><IconButton label={`编辑 ${item.name}`} onClick={() => setEditor(item)}><Pencil size={16} /></IconButton><IconButton label={`删除 ${item.name}`} onClick={() => setPendingAction({ kind: "delete-package", item })}><Trash2 size={16} /></IconButton></div></td>
               </tr>;
             })}</tbody></table></div></Surface>}
@@ -267,6 +293,8 @@ export function PackagesPage({ notify }: PackagesPageProps) {
         <PackageEditorDialog
           item={editor === "create" ? undefined : editor}
           nodes={nodes}
+          servers={servers}
+          tunnels={tunnels}
           onClose={() => setEditor(null)}
           onComplete={completePackageMutation}
         />
@@ -286,9 +314,11 @@ export function PackagesPage({ notify }: PackagesPageProps) {
   );
 }
 
-function PackageEditorDialog({ item, nodes, onClose, onComplete }: {
+function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplete }: {
   item?: PackageItem;
   nodes: NodeItem[];
+  servers: RemoteServer[];
+  tunnels: TunnelTemplate[];
   onClose: () => void;
   onComplete: (message: string) => void;
 }) {
@@ -336,6 +366,62 @@ function PackageEditorDialog({ item, nodes, onClose, onComplete }: {
       }
       return { ...current, nodes: Array.from(new Set([...current.nodes, ...visibleIDs])) };
     });
+  };
+
+  const toggleServer = (serverID: number) => {
+    setForm((current) => {
+      const exists = current.serverGrants.some((grant) => grant.server_id === serverID);
+      return {
+        ...current,
+        serverGrants: exists
+          ? current.serverGrants.filter((grant) => grant.server_id !== serverID)
+          : [...current.serverGrants, {
+            server_id: serverID,
+            max_active_nodes: 0,
+            speed_limit_mbps: 0,
+            connection_limit: 0,
+            traffic_limit_bytes: 0,
+            billing_mode: "download",
+            reset_policy: "none",
+            reset_day: 1,
+            allowed_protocols: [],
+            allowed_protocol_profiles: [],
+          }],
+      };
+    });
+  };
+
+  const updateServerGrant = (serverID: number, patch: Partial<PackageServerGrant>) => {
+    setForm((current) => ({
+      ...current,
+      serverGrants: current.serverGrants.map((grant) => grant.server_id === serverID ? { ...grant, ...patch } : grant),
+    }));
+  };
+
+  const toggleTunnel = (tunnelID: number) => {
+    setForm((current) => {
+      const exists = current.forwardingGrants.some((grant) => grant.tunnel_id === tunnelID);
+      return {
+        ...current,
+        forwardingGrants: exists
+          ? current.forwardingGrants.filter((grant) => grant.tunnel_id !== tunnelID)
+          : [...current.forwardingGrants, {
+            tunnel_id: tunnelID,
+            max_active_forwards: 1,
+            per_forward_speed_mbps: 0,
+            per_forward_connection_limit: 0,
+            traffic_limit_bytes: 0,
+            billing_mode_override: null,
+          }],
+      };
+    });
+  };
+
+  const updateForwardingGrant = (tunnelID: number, patch: Partial<PackageForwardingGrant>) => {
+    setForm((current) => ({
+      ...current,
+      forwardingGrants: current.forwardingGrants.map((grant) => grant.tunnel_id === tunnelID ? { ...grant, ...patch } : grant),
+    }));
   };
 
   const addAutoRule = () => {
@@ -386,7 +472,7 @@ function PackageEditorDialog({ item, nodes, onClose, onComplete }: {
   return (
     <Dialog
       title={item ? `编辑 ${item.name}` : "创建套餐"}
-      description="套餐参数会应用到所有绑定用户"
+      description="套餐是批量授权模板；应用后生成账号的实际节点、服务器和转发授权"
       onClose={() => !working && onClose()}
       wide
     >
@@ -403,7 +489,7 @@ function PackageEditorDialog({ item, nodes, onClose, onComplete }: {
         </div>
         <Field label="套餐说明"><textarea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></Field>
         <div className="form-grid">
-          <Field label="流量限额（GB）"><input required type="number" min="0.01" step="0.01" value={form.trafficLimitGB} onChange={(event) => setForm({ ...form, trafficLimitGB: event.target.value })} /></Field>
+          <Field label="流量限额（GB）" hint="0 表示不限流量"><input required type="number" min="0" step="0.01" value={form.trafficLimitGB} onChange={(event) => setForm({ ...form, trafficLimitGB: event.target.value })} /></Field>
           <Field label="套餐周期（天）"><input required type="number" min="1" step="1" value={form.cycleDays} onChange={(event) => setForm({ ...form, cycleDays: event.target.value })} /></Field>
           <Field label="全局限速（Mbps）" hint="0 表示不限速"><input type="number" min="0" step="0.1" value={form.speedLimitMbps} onChange={(event) => setForm({ ...form, speedLimitMbps: event.target.value })} /></Field>
           <Field label="设备数量" hint="0 表示不限设备"><input type="number" min="0" step="1" value={form.deviceLimit} onChange={(event) => setForm({ ...form, deviceLimit: event.target.value })} /></Field>
@@ -460,6 +546,38 @@ function PackageEditorDialog({ item, nodes, onClose, onComplete }: {
           {visibleNodes.length === 0 && unavailableIDs.length === 0 ? (
             <div><span className="muted">{nodes.length === 0 ? "当前没有可关联的节点" : "没有匹配的节点"}</span></div>
           ) : null}
+        </div>
+
+        <div className="surface-heading package-subheading"><div><h2>自助节点授权（{form.serverGrants.length}）</h2><small>允许账号在指定服务器发布目录中开通自己的节点凭据</small></div></div>
+        <div className="package-entitlement-list">
+          {servers.length === 0 ? <span className="muted">暂无可授权服务器</span> : servers.map((server) => {
+            const grant = form.serverGrants.find((itemGrant) => itemGrant.server_id === server.id);
+            return <div key={server.id} className={grant ? "is-selected" : ""}>
+              <label className="checkbox-row"><input type="checkbox" checked={Boolean(grant)} onChange={() => toggleServer(server.id)} /><span><strong>{server.name}</strong><small>{server.status || "未知状态"}</small></span></label>
+              {grant ? <div className="package-entitlement-fields">
+                <Field label="节点名额" hint="0 表示不限"><input aria-label={`${server.name} 节点名额`} type="number" min="0" value={grant.max_active_nodes} onChange={(event) => updateServerGrant(server.id, { max_active_nodes: Number(event.target.value) })} /></Field>
+                <Field label="授权流量 GB" hint="0 表示不限"><input aria-label={`${server.name} 授权流量`} type="number" min="0" step="0.01" value={grant.traffic_limit_bytes / 1024 ** 3} onChange={(event) => updateServerGrant(server.id, { traffic_limit_bytes: Math.round(Number(event.target.value) * 1024 ** 3) })} /></Field>
+                <Field label="限速 Mbps" hint="0 表示不限"><input aria-label={`${server.name} 授权限速`} type="number" min="0" step="0.1" value={grant.speed_limit_mbps} onChange={(event) => updateServerGrant(server.id, { speed_limit_mbps: Number(event.target.value) })} /></Field>
+                <Field label="流量计算"><select aria-label={`${server.name} 流量计算`} value={grant.billing_mode} onChange={(event) => updateServerGrant(server.id, { billing_mode: event.target.value as PackageServerGrant["billing_mode"] })}><option value="download">仅下载</option><option value="both">双向</option></select></Field>
+              </div> : null}
+            </div>;
+          })}
+        </div>
+
+        <div className="surface-heading package-subheading"><div><h2>转发线路授权（{form.forwardingGrants.length}）</h2><small>允许账号在选定线路模板上创建转发规则</small></div></div>
+        <div className="package-entitlement-list">
+          {tunnels.length === 0 ? <span className="muted">暂无可授权转发线路</span> : tunnels.map((tunnel) => {
+            const tunnelID = Number(tunnel.id);
+            const grant = form.forwardingGrants.find((itemGrant) => itemGrant.tunnel_id === tunnelID);
+            return <div key={String(tunnel.id)} className={grant ? "is-selected" : ""}>
+              <label className="checkbox-row"><input type="checkbox" checked={Boolean(grant)} onChange={() => toggleTunnel(tunnelID)} /><span><strong>{tunnel.name}</strong><small>{tunnel.description || `${tunnel.hops?.length ?? 0} 跳线路`}</small></span></label>
+              {grant ? <div className="package-entitlement-fields package-entitlement-fields-forward">
+                <Field label="转发名额"><input aria-label={`${tunnel.name} 转发名额`} type="number" min="1" value={grant.max_active_forwards} onChange={(event) => updateForwardingGrant(tunnelID, { max_active_forwards: Number(event.target.value) })} /></Field>
+                <Field label="授权流量 GB" hint="0 表示不限"><input aria-label={`${tunnel.name} 授权流量`} type="number" min="0" step="0.01" value={grant.traffic_limit_bytes / 1024 ** 3} onChange={(event) => updateForwardingGrant(tunnelID, { traffic_limit_bytes: Math.round(Number(event.target.value) * 1024 ** 3) })} /></Field>
+                <Field label="流量计算"><select aria-label={`${tunnel.name} 流量计算`} value={grant.billing_mode_override ?? "inherit"} onChange={(event) => updateForwardingGrant(tunnelID, { billing_mode_override: event.target.value === "inherit" ? null : event.target.value as "download" | "both" })}><option value="inherit">继承线路</option><option value="download">仅下载</option><option value="both">双向</option></select></Field>
+              </div> : null}
+            </div>;
+          })}
         </div>
         {showAdvanced ? <>
           <div className="surface-heading package-subheading"><div><h2>节点倍率与覆盖</h2><small>倍率默认 1；限速和设备留空时继承套餐全局值，0 表示显式不限</small></div></div>

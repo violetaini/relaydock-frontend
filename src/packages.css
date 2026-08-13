@@ -47,6 +47,31 @@
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
 }
 
+.package-entitlement-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+}
+
+.package-entitlement-list > div {
+  padding: 11px 12px;
+  display: grid;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.package-entitlement-list > div:last-child { border-bottom: 0; }
+.package-entitlement-list > div.is-selected { background: var(--surface-muted); }
+.package-entitlement-list .checkbox-row > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.package-entitlement-list .checkbox-row small { color: var(--text-soft); }
+.package-entitlement-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
+.package-entitlement-fields-forward { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+@media (max-width: 780px) {
+  .package-entitlement-fields,
+  .package-entitlement-fields-forward { grid-template-columns: 1fr; }
+}
+
 @media (max-width: 560px) {
   .packages-view-switch {
     order: -1;

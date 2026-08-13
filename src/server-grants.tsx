@@ -69,6 +69,8 @@ export interface ServerGrant {
   used_downlink_bytes: number;
   billed_bytes: number;
   last_error?: string;
+  source_type?: "manual" | "package";
+  source_package_id?: number;
 }
 
 export interface ManagedNodeSelection {
@@ -288,7 +290,7 @@ export function ServerGrantsPanel({ username, notify }: { username: string; noti
       setNodes(listFrom<ManagedNodeSelection>(nodePayload, "items"));
       setServers(serverPayload.servers ?? []);
     } catch (reason) {
-      setError(messageOf(reason, "服务器授权加载失败"));
+      setError(messageOf(reason, "自助节点授权加载失败"));
     } finally {
       if (!quiet) setLoading(false);
     }
@@ -300,7 +302,7 @@ export function ServerGrantsPanel({ username, notify }: { username: string; noti
     setWorking(`grant-${grant.id}`);
     try {
       await api.put(`${base}/server-grants/${grant.id}`, grantPayload(grant, { enabled: !grant.enabled }));
-      notify(grant.enabled ? "服务器授权已暂停" : "服务器授权已恢复");
+      notify(grant.enabled ? "自助节点授权已暂停" : "自助节点授权已恢复");
       await load(true);
     } catch (reason) {
       notify(messageOf(reason, "授权状态更新失败"), "error");
@@ -343,17 +345,17 @@ export function ServerGrantsPanel({ username, notify }: { username: string; noti
   return (
     <>
       <div className="sg-layout">
-        <div className="sg-tabs" role="tablist" aria-label="服务器授权视图">
-          <button role="tab" aria-selected={tab === "grants"} className={tab === "grants" ? "is-active" : ""} onClick={() => setTab("grants")}><Server size={16} />服务器授权 <span>{grants.length}</span></button>
+        <div className="sg-tabs" role="tablist" aria-label="自助节点授权视图">
+          <button role="tab" aria-selected={tab === "grants"} className={tab === "grants" ? "is-active" : ""} onClick={() => setTab("grants")}><Server size={16} />自助节点授权 <span>{grants.length}</span></button>
           <button role="tab" aria-selected={tab === "nodes"} className={tab === "nodes" ? "is-active" : ""} onClick={() => setTab("nodes")}><Gauge size={16} />已开通节点 <span>{nodes.length}</span></button>
-          <IconButton label="刷新服务器授权" onClick={() => void load()} disabled={loading}><RefreshCw size={17} /></IconButton>
+          <IconButton label="刷新自助节点授权" onClick={() => void load()} disabled={loading}><RefreshCw size={17} /></IconButton>
         </div>
 
         {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
         {loading ? <div className="sg-center"><Spinner label="正在加载授权" /></div> : tab === "grants" ? (
           <div className="sg-stack">
             <div className="sg-section-actions"><span>每台服务器单独计算有效期和流量</span><Button onClick={() => setEditor("new")} disabled={!availableServers.length}><Plus size={16} />新增授权</Button></div>
-            {!grants.length ? <EmptyState icon={<Server size={23} />} title="尚未授权服务器" description="新增授权后，用户才能看到该服务器的可开通节点" /> : (
+            {!grants.length ? <EmptyState icon={<Server size={23} />} title="尚无自助节点授权" description="新增后，账号才能看到该服务器的可开通节点" /> : (
               <div className="sg-card-list">{grants.map((grant) => <GrantCard key={grant.id} grant={grant} busy={working === `grant-${grant.id}`} onEdit={() => setEditor(grant)} onToggle={() => void updateEnabled(grant)} onRetry={() => void retry(grant.id, "grant")} onRemove={() => setRemoveGrant(grant)} />)}</div>
             )}
           </div>
@@ -379,10 +381,11 @@ export function ServerGrantsDialog({ username, notify, onClose }: { username: st
 
 function GrantCard({ grant, busy, onEdit, onToggle, onRetry, onRemove }: { grant: ServerGrant; busy: boolean; onEdit: () => void; onToggle: () => void; onRetry: () => void; onRemove: () => void }) {
   const state = getStateMeta(grant.state);
+  const packageManaged = grant.source_type === "package";
   const quotaPercent = grant.traffic_limit_bytes > 0 ? Math.min(100, grant.billed_bytes / grant.traffic_limit_bytes * 100) : 0;
   const online = grant.server_status === "connected" || grant.server_status === "online";
   return <article className="sg-grant-card">
-    <div className="sg-grant-head"><span className={`sg-server-state ${online ? "is-online" : ""}`}><Server size={18} /></span><span><strong>{grant.server_name}</strong><small>{online ? "服务器在线" : "服务器离线"} · {grant.offer_count} 个可发布节点</small></span><Badge tone={state.tone}>{state.label}</Badge></div>
+    <div className="sg-grant-head"><span className={`sg-server-state ${online ? "is-online" : ""}`}><Server size={18} /></span><span><strong>{grant.server_name}</strong><small>{online ? "服务器在线" : "服务器离线"} · {grant.offer_count} 个可发布节点{packageManaged ? " · 套餐来源" : ""}</small></span><Badge tone={state.tone}>{state.label}</Badge></div>
     <div className="sg-policy-grid">
       <span><small>有效期</small><strong>{formatDate(grant.expires_at)}</strong></span>
       <span><small>节点名额</small><strong>{grant.active_node_count} / {grant.max_active_nodes || "不限"}</strong></span>
@@ -399,11 +402,7 @@ function GrantCard({ grant, busy, onEdit, onToggle, onRetry, onRemove }: { grant
     {grant.traffic_limit_bytes ? <div className="sg-quota"><span><i style={{ width: `${quotaPercent}%` }} /></span><small>{quotaPercent.toFixed(0)}%</small></div> : null}
     {grant.last_error ? <p className="sg-item-error" title={grant.last_error}>{grant.last_error}</p> : null}
     <div className="sg-card-actions">
-      <IconButton label={`编辑 ${grant.server_name} 授权`} onClick={onEdit} disabled={busy}><Pencil size={16} /></IconButton>
-      <IconButton label={`${grant.enabled ? "暂停" : "恢复"} ${grant.server_name} 授权`} onClick={onToggle} disabled={busy}>{grant.enabled ? <Pause size={16} /> : <Play size={16} />}</IconButton>
-      <IconButton label={`续期 ${grant.server_name} 授权`} onClick={onEdit} disabled={busy}><CalendarClock size={16} /></IconButton>
-      {(grant.state === "error" || grant.last_error) ? <IconButton label={`重试 ${grant.server_name} 同步`} onClick={onRetry} disabled={busy}><RotateCw size={16} /></IconButton> : null}
-      <IconButton label={`撤销 ${grant.server_name} 授权`} onClick={onRemove} disabled={busy}><Trash2 size={16} /></IconButton>
+      {packageManaged ? <Badge tone="info">套餐管理</Badge> : <><IconButton label={`编辑 ${grant.server_name} 授权`} onClick={onEdit} disabled={busy}><Pencil size={16} /></IconButton><IconButton label={`${grant.enabled ? "暂停" : "恢复"} ${grant.server_name} 授权`} onClick={onToggle} disabled={busy}>{grant.enabled ? <Pause size={16} /> : <Play size={16} />}</IconButton><IconButton label={`续期 ${grant.server_name} 授权`} onClick={onEdit} disabled={busy}><CalendarClock size={16} /></IconButton>{(grant.state === "error" || grant.last_error) ? <IconButton label={`重试 ${grant.server_name} 同步`} onClick={onRetry} disabled={busy}><RotateCw size={16} /></IconButton> : null}<IconButton label={`撤销 ${grant.server_name} 授权`} onClick={onRemove} disabled={busy}><Trash2 size={16} /></IconButton></>}
     </div>
   </article>;
 }

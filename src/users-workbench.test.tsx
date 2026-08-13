@@ -155,13 +155,61 @@ describe("users workbench", () => {
     render(<UsersWorkbenchPage notify={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "用户设置 alice" }));
-    fireEvent.click(await screen.findByRole("button", { name: /服务器授权与自建节点/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /自助节点授权/ }));
 
     expect(await screen.findByRole("dialog", { name: "用户设置 · alice" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "服务器授权" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tablist", { name: "服务器授权视图" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "自助节点授权" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tablist", { name: "自助节点授权视图" })).toBeInTheDocument();
     await waitFor(() => expect(get).toHaveBeenCalledWith("/api/admin/users/alice/server-grants"));
     expect(get).toHaveBeenCalledWith("/api/admin/users/alice/managed-nodes");
+  });
+
+  it("manages personalized fixed nodes independently from package templates", async () => {
+    const get = vi.spyOn(api, "get").mockImplementation(async (path) => {
+      if (path === "/api/admin/users") return { users: [alice] };
+      if (path === "/api/admin/packages") return { packages: [] };
+      if (path === "/api/admin/nodes") return { nodes: [
+        { id: 7, node_name: "香港固定入口", protocol: "vless", enabled: true, direct_grant_eligible: true, node_type: "physical", original_server: "HK-01", inbound_tag: "vless-main" },
+      ] };
+      if (path === "/api/admin/users/alice/node-grants") return { items: [] };
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<UsersWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "用户设置 alice" }));
+    fireEvent.click(await screen.findByRole("button", { name: /固定节点授权/ }));
+
+    expect(await screen.findByRole("tab", { name: "固定节点授权" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText(/套餐内的制式节点请在上方“套餐快速授权”中维护/)).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: "候选固定节点" }), { target: { value: "7" } });
+    fireEvent.click(screen.getByRole("button", { name: "授权节点" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/users/alice/node-grants", {
+      node_id: 7,
+      expires_at: null,
+    }));
+    expect(get).toHaveBeenCalledWith("/api/admin/users/alice/node-grants");
+  });
+
+  it("does not offer nodes that the backend has not marked as independently manageable", async () => {
+    vi.spyOn(api, "get").mockImplementation(async (path) => {
+      if (path === "/api/admin/users") return { users: [alice] };
+      if (path === "/api/admin/packages") return { packages: [] };
+      if (path === "/api/admin/nodes") return { nodes: [
+        { id: 7, node_name: "共享导入节点", protocol: "vless", enabled: true, node_type: "physical", original_server: "HK-01", inbound_tag: "vless-main" },
+      ] };
+      if (path === "/api/admin/users/alice/node-grants") return { items: [] };
+      throw new Error(`unexpected GET ${path}`);
+    });
+    render(<UsersWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "用户设置 alice" }));
+    fireEvent.click(await screen.findByRole("button", { name: /固定节点授权/ }));
+
+    expect(await screen.findByRole("combobox", { name: "候选固定节点" })).toHaveValue("");
+    expect(screen.getByRole("option", { name: "暂无可新增的固定节点" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "授权节点" })).toBeDisabled();
   });
 
   it("keeps one user settings dialog and restores its overview after a child setting", async () => {

@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Search,
   Server,
+  Network,
   ShieldCheck,
   SlidersHorizontal,
   Trash2,
@@ -26,6 +27,8 @@ import {
 } from "lucide-react";
 import { api } from "./api";
 import { ServerGrantsPanel } from "./server-grants";
+import { UserForwardingGrantsPanel } from "./forwarding-management";
+import { UserNodeGrantsPanel } from "./node-grants";
 import { TGBotInvitesPanel } from "./tg-bot-invites";
 import { TrafficProgress } from "./traffic-progress";
 import type { NodeItem, NodeListResponse, PackageItem, UserItem } from "./types";
@@ -313,7 +316,7 @@ export function UsersWorkbenchPage({ notify, initialScope = "all" }: { notify: N
   );
 }
 
-type UserSettingsPanel = "overview" | "profile" | "password" | "extend" | "limits" | "server-grants" | "subscriptions" | "subaccounts";
+type UserSettingsPanel = "overview" | "profile" | "password" | "extend" | "limits" | "node-grants" | "server-grants" | "forwarding-grants" | "subscriptions" | "subaccounts";
 
 interface PackageMutationResponse {
   success?: boolean;
@@ -369,6 +372,8 @@ function UserSettingsDialog({
   }, [user.role]);
 
   const selectedPackage = packages.find((item) => item.id === Number(packageID));
+  const today = new Date();
+  const todayValue = new Date(today.getTime() - today.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
 
   const selectPackage = (value: string) => {
     setPackageID(value);
@@ -398,8 +403,12 @@ function UserSettingsDialog({
       setPackageError("请选择套餐");
       return;
     }
-    if (startDate && expireDate && expireDate < startDate) {
-      setPackageError("到期日期不能早于开始日期");
+    if (startDate && startDate > todayValue) {
+      setPackageError("当前仅支持立即生效，开始日期不能晚于今天");
+      return;
+    }
+    if (expireDate && expireDate <= (startDate || todayValue)) {
+      setPackageError("到期日期必须晚于开始日期");
       return;
     }
     if (resetOverrideDirty && resetEnabled && (Number(resetDay) < 1 || Number(resetDay) > 31)) {
@@ -456,7 +465,9 @@ function UserSettingsDialog({
     { id: "profile", label: "资料与短码" },
     ...(user.role !== "admin" ? [
       { id: "password" as const, label: "登录密码" },
-      { id: "server-grants" as const, label: "服务器授权" },
+      { id: "node-grants" as const, label: "固定节点授权" },
+      { id: "server-grants" as const, label: "自助节点授权" },
+      { id: "forwarding-grants" as const, label: "转发授权" },
       { id: "limits" as const, label: "流量与限额" },
       { id: "subscriptions" as const, label: "订阅分配" },
       { id: "subaccounts" as const, label: "节点子账号" },
@@ -487,8 +498,12 @@ function UserSettingsDialog({
         return <UserSettingsPanelFrame title="续期套餐" description={`当前到期日：${user.package_end_date || "未设置"}；仅延长有效期，不重置流量`} onBack={() => setActivePanel("overview")}><ExtendSettingsPanel user={user} onBack={() => setActivePanel("overview")} onComplete={completePanel} /></UserSettingsPanelFrame>;
       case "limits":
         return <UserSettingsPanelFrame title="流量、限速与设备数" description="总流量仅覆盖套餐额度；服务器授权额度继续独立计算" onBack={() => setActivePanel("overview")}><LimitsSettingsPanel user={user} onBack={() => setActivePanel("overview")} onComplete={completePanel} /></UserSettingsPanelFrame>;
+      case "node-grants":
+        return <UserSettingsPanelFrame title="固定节点授权" description="个性化授予账号现有节点的订阅访问权；套餐来源的授权在此只读展示" onBack={() => setActivePanel("overview")}><UserNodeGrantsPanel username={user.username} notify={notify} /></UserSettingsPanelFrame>;
       case "server-grants":
-        return <UserSettingsPanelFrame title="服务器授权与自建节点" description="授权用户在指定服务器的发布节点上开通自己的凭据" onBack={() => setActivePanel("overview")}><ServerGrantsPanel username={user.username} notify={notify} /></UserSettingsPanelFrame>;
+        return <UserSettingsPanelFrame title="自助节点授权" description="个性化授予账号在指定服务器发布目录中开通节点的资格" onBack={() => setActivePanel("overview")}><ServerGrantsPanel username={user.username} notify={notify} /></UserSettingsPanelFrame>;
+      case "forwarding-grants":
+        return <UserSettingsPanelFrame title="转发线路授权" description="个性化授予账号使用指定转发线路的资格和额度" onBack={() => setActivePanel("overview")}><UserForwardingGrantsPanel username={user.username} notify={notify} /></UserSettingsPanelFrame>;
       case "subscriptions":
         return <UserSettingsPanelFrame title="订阅文件分配" description="选择后，该用户可在自己的订阅链接中访问这些订阅文件" onBack={() => setActivePanel("overview")}><SubscriptionsSettingsPanel user={user} onBack={() => setActivePanel("overview")} onComplete={completePanel} /></UserSettingsPanelFrame>;
       case "subaccounts":
@@ -497,11 +512,11 @@ function UserSettingsDialog({
         return <>
           {user.role !== "admin" ? (
             <section className="user-settings-section">
-              <div className="user-settings-section-heading"><div><h2>套餐与有效期</h2><p>分配套餐后，节点凭据和订阅会按套餐同步</p></div><PackageIcon size={19} /></div>
+              <div className="user-settings-section-heading"><div><h2>套餐快速授权</h2><p>一次应用固定节点、自助节点和转发线路的制式授权集合</p></div><PackageIcon size={19} /></div>
               {packageError ? <ErrorState message={packageError} /> : null}
               {packageLoading ? <div className="user-settings-loading"><Spinner label="正在加载套餐" /></div> : <form className="user-package-form" onSubmit={(event) => void assignPackage(event)}>
-                <Field label="套餐"><select aria-label="用户套餐" required value={packageID} onChange={(event) => selectPackage(event.target.value)}><option value="">请选择套餐</option>{packages.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.traffic_limit_gb} GB / {item.cycle_days} 天 · {item.is_reset ? `每月 ${item.reset_day} 日重置` : "按周期重置"}</option>)}</select></Field>
-                <Field label="开始日期" hint="留空表示今天"><input type="date" aria-label="套餐开始日期" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></Field>
+                <Field label="套餐模板"><select aria-label="用户套餐" required value={packageID} onChange={(event) => selectPackage(event.target.value)}><option value="">请选择套餐模板</option>{packages.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.nodes?.length ?? 0} 节点 / {item.server_grants?.length ?? 0} 服务器 / {item.forwarding_grants?.length ?? 0} 线路</option>)}</select></Field>
+                <Field label="开始日期" hint="留空表示今天；暂不支持预约生效"><input type="date" aria-label="套餐开始日期" max={todayValue} value={startDate} onChange={(event) => setStartDate(event.target.value)} /></Field>
                 <Field label="到期日期" hint={`留空表示开始后 ${selectedPackage?.cycle_days ?? 30} 天`}><input type="date" aria-label="套餐到期日期" value={expireDate} onChange={(event) => setExpireDate(event.target.value)} /></Field>
                 <div className="user-package-reset"><div><Toggle checked={resetEnabled} onChange={(value) => { setResetEnabled(value); setResetOverrideDirty(true); }} label="按自然月重置该用户流量" /><small>{resetOverrideDirty ? "已使用用户级策略，不再跟随套餐默认值" : selectedPackage?.is_reset ? `默认每月 ${selectedPackage.reset_day} 日重置` : "默认按套餐周期重置"}</small></div><Field label="重置日" hint="每月 1 到 31 日"><input aria-label="套餐流量重置日" type="number" min="1" max="31" step="1" disabled={!resetEnabled} value={resetDay} onChange={(event) => { setResetDay(event.target.value); setResetOverrideDirty(true); }} /></Field></div>
                 <div className="user-package-actions"><Button type="submit" disabled={packageWorking || !packageID}>{packageWorking ? <Spinner label="正在下发" /> : <><PackageIcon size={16} />{user.package_id ? "更新套餐" : "分配套餐"}</>}</Button>{user.package_id ? <Button type="button" variant="ghost" onClick={() => setConfirmUnassign(true)} disabled={packageWorking}>解绑套餐</Button> : null}</div>
@@ -517,8 +532,10 @@ function UserSettingsDialog({
           </section>
 
           {user.role !== "admin" ? <section className="user-settings-section">
-            <div className="user-settings-section-heading"><div><h2>节点与订阅</h2><p>所有授权和下发内容统一从用户设置进入</p></div><Server size={18} /></div>
-            {action("server-grants", "服务器授权与自建节点", <Server size={17} />)}
+            <div className="user-settings-section-heading"><div><h2>个性化授权</h2><p>套餐不是必需项，可直接为账号配置各个单项</p></div><Server size={18} /></div>
+            {action("node-grants", "固定节点授权", <ShieldCheck size={17} />)}
+            {action("server-grants", "自助节点授权", <Server size={17} />)}
+            {action("forwarding-grants", "转发线路授权", <Network size={17} />)}
             {action("limits", "流量、限速与设备数", <Gauge size={17} />)}
             {action("subscriptions", "订阅文件分配", <Link2 size={17} />)}
             {action("subaccounts", "查看节点子账号", <UserCog size={17} />)}

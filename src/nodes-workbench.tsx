@@ -109,6 +109,7 @@ export interface WorkbenchNode {
   parsed_config: string;
   clash_config: string;
   managed_multi_user?: boolean;
+  credential_state?: "ready" | "pending";
   enabled: boolean;
   tag: string;
   tags?: string[];
@@ -991,7 +992,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
           return <tr key={node.id} className={selected.has(node.id) ? "is-selected" : ""}>
             <td className="nw-cell-check"><input aria-label={`选择 ${node.node_name}`} type="checkbox" checked={selected.has(node.id)} onChange={() => toggleSelection(node.id)} /></td>
             {sort === "custom" ? <td className="nw-order-col nw-cell-order" data-label="顺序"><span>{orderIndex + 1}</span><IconButton label={`上移 ${node.node_name}`} disabled={orderIndex <= 0} onClick={() => moveManualNode(node.id, -1)}><ArrowUp size={14} /></IconButton><IconButton label={`下移 ${node.node_name}`} disabled={orderIndex < 0 || orderIndex >= manualOrder.length - 1} onClick={() => moveManualNode(node.id, 1)}><ArrowDown size={14} /></IconButton></td> : null}
-            <td className="nw-cell-primary"><div className="nw-node-primary"><Badge tone="info">{displayedNodeProtocol(node).toUpperCase() || "UNKNOWN"}</Badge><span><strong>{node.node_name}</strong><small>#{node.id}{isTunnelNode(node) ? ` · 目标协议 ${node.protocol.toUpperCase()}` : node.node_type === "routed" ? " · 路由出站" : ""}{node.relay_orig_server ? " · 已中转" : ""}</small></span></div></td>
+            <td className="nw-cell-primary"><div className="nw-node-primary"><Badge tone="info">{displayedNodeProtocol(node).toUpperCase() || "UNKNOWN"}</Badge><span><strong>{node.node_name}</strong><small>#{node.id}{isTunnelNode(node) ? ` · 目标协议 ${node.protocol.toUpperCase()}` : node.node_type === "routed" ? " · 路由出站" : ""}{node.relay_orig_server ? " · 已中转" : ""}</small></span>{node.credential_state === "pending" ? <Badge tone="warn">凭据待下发</Badge> : null}</div></td>
             <td className="nw-cell-owner"><div className="nw-node-tags">{offer?.enabled ? <Badge tone="good">自助发布</Badge> : null}{nodeTags(node).length ? nodeTags(node).slice(0, 3).map((item) => <Badge key={item}>{item}</Badge>) : <span className="muted">未分类</span>}</div><small className="cell-note">{node.original_server || node.created_by || "外部导入"}{node.inbound_tag ? ` · ${node.inbound_tag}` : ""}</small></td>
             <td className="nw-cell-address" data-label="服务器"><code className="nw-address">{address.host || "-"}:{address.port || "-"}</code>{node.relay_orig_server ? <small className="cell-note">原站 {node.relay_orig_server}:{node.relay_orig_port || "-"}</small> : node.original_domain ? <small className="cell-note">原域名 {node.original_domain}</small> : null}</td>
             <td className="nw-cell-latency" data-label="连通性"><button className={`nw-result-button ${ping?.success ? "is-good" : ping?.error ? "is-bad" : ""}`} disabled={ping?.loading} title={tcpingResultTitle(ping)} onClick={() => void pingOne(node)}>{ping?.loading ? <Spinner label="" /> : <Zap size={14} />}{tcpingResultLabel(ping)}</button></td>
@@ -1094,6 +1095,7 @@ function NodeActions({ node, isAdmin, userRouted, onEdit, onConfig, onQRCode, on
   const canCreateRoute = node.node_type !== "routed" && Boolean(node.original_server && node.inbound_tag) && (isAdmin || userQuotaAvailable);
   const canDeleteUserRoute = !isAdmin && node.node_type === "routed" && node.routed_owner === "user";
   const isManaged = nodeSource(node) === "managed";
+  const credentialPending = node.credential_state === "pending";
 
   const positionMenu = useCallback(() => {
     const trigger = triggerWrapRef.current?.querySelector("button");
@@ -1171,8 +1173,8 @@ function NodeActions({ node, isAdmin, userRouted, onEdit, onConfig, onQRCode, on
       style={{ top: menuPosition.top, left: menuPosition.left, maxHeight: menuPosition.maxHeight }}
       onKeyDown={onMenuKeyDown}
     >
-      <button role="menuitem" onClick={() => choose(onQRCode)}><QrCode size={15} />二维码导入</button>
-      <button role="menuitem" onClick={() => choose(onTempSub)}><Link2 size={15} />临时订阅</button>
+      <button role="menuitem" disabled={credentialPending} onClick={() => choose(onQRCode)}><QrCode size={15} />二维码导入</button>
+      <button role="menuitem" disabled={credentialPending} onClick={() => choose(onTempSub)}><Link2 size={15} />临时订阅</button>
       {isAdmin && isManaged && nodeAddress(node).host && nodeAddress(node).port ? <button role="menuitem" onClick={() => choose(onAnyDoor)}><Cable size={15} />任意门转发</button> : null}
       {isAdmin && isManaged ? <button role="menuitem" onClick={() => choose(onRelay)}><Shuffle size={15} />{node.relay_orig_server ? "修改中转" : "设置中转"}</button> : null}
       {isAdmin && isManaged && node.relay_orig_server ? <button role="menuitem" onClick={() => choose(onCancelRelay)}><RotateCcw size={15} />取消中转</button> : null}
@@ -1187,7 +1189,7 @@ function NodeActions({ node, isAdmin, userRouted, onEdit, onConfig, onQRCode, on
   ) : null;
 
   return <div className="nw-row-actions">
-    <IconButton label={`查看 ${node.node_name} 配置`} onClick={onConfig}><Eye size={16} /></IconButton>
+    <IconButton label={credentialPending ? `${node.node_name} 凭据待下发` : `查看 ${node.node_name} 配置`} disabled={credentialPending} onClick={onConfig}><Eye size={16} /></IconButton>
     {isAdmin ? <IconButton label={`编辑 ${node.node_name}`} onClick={onEdit}><Edit3 size={16} /></IconButton> : null}
     <div ref={triggerWrapRef} className="nw-row-menu">
       <IconButton label={`更多 ${node.node_name} 操作`} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)}><MoreHorizontal size={17} /></IconButton>

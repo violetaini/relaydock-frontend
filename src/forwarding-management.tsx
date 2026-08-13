@@ -47,7 +47,7 @@ type AdminLoadSection = "general" | "templates" | "servers" | "users" | "forward
 // The current Agent cannot enforce limits on raw tunnel inbounds yet.
 const INBOUND_LIMITER_V1 = false;
 
-interface TunnelHop {
+export interface TunnelHop {
   id?: ResourceID;
   position?: number;
   server_id: number;
@@ -78,6 +78,49 @@ export interface TunnelTemplate {
   updated_at?: string;
 }
 
+export function UserForwardingGrantsPanel({ username, notify }: { username: string; notify: Notify }) {
+  const [templates, setTemplates] = useState<TunnelTemplate[]>([]);
+  const [grants, setGrants] = useState<TunnelGrant[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [editing, setEditing] = useState<TunnelGrant | undefined>();
+  const [creating, setCreating] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [templatePayload, grantPayload] = await Promise.all([
+        api.get<unknown>("/api/admin/tunnel-templates"),
+        api.get<unknown>(`/api/admin/users/${encodeURIComponent(username)}/tunnel-grants`),
+      ]);
+      setTemplates(extractList<TunnelTemplate>(templatePayload, "tunnels", "templates"));
+      setGrants(extractList<TunnelGrant>(grantPayload, "grants", "tunnel_grants"));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "转发授权加载失败");
+    } finally {
+      setLoading(false);
+    }
+  }, [username]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  return <div className="fm-panel">
+    <div className="fm-toolbar"><div><strong>个性化转发授权</strong><span>不依赖套餐，可按账号单独授予线路和额度。</span></div><Button onClick={() => setCreating(true)}><Plus size={16} />新增授权</Button></div>
+    {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
+    {loading ? <div className="fm-center"><Spinner label="正在加载转发授权" /></div> : <GrantPanel grants={grants} templates={templates} onCreate={() => setCreating(true)} onEdit={setEditing} onAction={async (grant, action) => {
+      await api.post(`/api/admin/users/${encodeURIComponent(username)}/tunnel-grants/${encodeURIComponent(resourceID(grant))}/${action}`, {}, { idempotencyKey: idempotencyKey() });
+      notify(action === "suspend" ? "转发授权已暂停" : "转发授权已恢复");
+      await load();
+    }} onDelete={async (grant) => {
+      await api.delete(`/api/admin/users/${encodeURIComponent(username)}/tunnel-grants/${encodeURIComponent(resourceID(grant))}`, undefined, { idempotencyKey: idempotencyKey() });
+      notify("转发授权已撤销");
+      await load();
+    }} />}
+    {creating || editing ? <GrantDialog grant={editing} users={[{ username } as UserItem]} templates={templates} onClose={() => { setCreating(false); setEditing(undefined); }} onComplete={async () => { setCreating(false); setEditing(undefined); notify(editing ? "转发授权已更新" : "转发授权已创建"); await load(); }} /> : null}
+  </div>;
+}
+
 export interface TunnelGrant {
   id: ResourceID;
   public_id?: string;
@@ -105,6 +148,8 @@ export interface TunnelGrant {
   reset_policy?: string;
   reset_day?: number;
   version?: number;
+  source_type?: "manual" | "package";
+  source_package_id?: number;
 }
 
 interface ForwardEndpoint {
@@ -701,7 +746,8 @@ function GrantPanel({ grants, templates, onCreate, onEdit, onAction, onDelete }:
   return <div className="fm-panel"><div className="fm-toolbar"><div><strong>用户隧道授权</strong><span>授权仅提供路线使用权，不开放服务器管理权限。</span></div><Button onClick={onCreate}><Plus size={16} />新增授权</Button></div>{grants.length === 0 ? <EmptyState icon={<UserRound size={25} />} title="暂无隧道授权" description="先建立隧道模板，再为用户设置期限与资源上限" action={<Button onClick={onCreate}><Plus size={16} />新增第一份授权</Button>} /> : <Surface className="table-surface fm-table-surface"><div className="table-wrap"><table className="fm-table"><thead><tr><th>用户 / 隧道</th><th>有效期</th><th>转发限制</th><th>流量</th><th>状态</th><th aria-label="操作" /></tr></thead><tbody>{grants.map((grant) => {
     const id = resourceID(grant);
     const state = grant.effective_state || grant.state || (grant.enabled === false ? "suspended" : "active");
-    return <tr key={`${grant.username}-${String(id)}`}><td className="fm-primary-cell"><strong>{grant.username}</strong><small>{tunnelName(grant, templates)}</small></td><td><span>{displayDate(grant.expires_at)}</span><small className="fm-cell-note">{grant.starts_at ? `${displayDate(grant.starts_at)} 起` : "立即生效"}</small></td><td><span>{grantActiveForwards(grant)}/{grant.max_active_forwards} 条启用</span><small className="fm-cell-note">{grant.per_forward_speed_mbps ? `${grant.per_forward_speed_mbps} Mbps` : "不限速"} · {grant.per_forward_connection_limit ? `${grant.per_forward_connection_limit} 连接` : "不限连接"}</small></td><td><span>{formatBytes(grantUsedBytes(grant))} / {grant.traffic_limit_bytes ? formatBytes(grant.traffic_limit_bytes) : "不限"}</span><small className="fm-cell-note">当前版本不自动重置</small></td><td><Badge tone={stateTone(state)}>{stateLabel(state)}</Badge></td><td><div className="fm-row-actions"><IconButton label={`编辑 ${grant.username} 的隧道授权`} onClick={() => onEdit(grant)}><Gauge size={16} /></IconButton>{state === "active" ? <IconButton label={`暂停 ${grant.username} 的隧道授权`} disabled={sameID(workingID, id)} onClick={() => void change(grant, "suspend")}><CirclePause size={16} /></IconButton> : <IconButton label={`恢复 ${grant.username} 的隧道授权`} disabled={sameID(workingID, id)} onClick={() => void change(grant, "resume")}><CirclePlay size={16} /></IconButton>}<IconButton label={`撤销 ${grant.username} 的隧道授权`} onClick={() => onDelete(grant)}><Trash2 size={16} /></IconButton></div></td></tr>;
+    const packageManaged = grant.source_type === "package";
+    return <tr key={`${grant.username}-${String(id)}`}><td className="fm-primary-cell"><strong>{grant.username}</strong><small>{tunnelName(grant, templates)}{packageManaged ? " · 套餐来源" : ""}</small></td><td><span>{displayDate(grant.expires_at)}</span><small className="fm-cell-note">{grant.starts_at ? `${displayDate(grant.starts_at)} 起` : "立即生效"}</small></td><td><span>{grantActiveForwards(grant)}/{grant.max_active_forwards} 条启用</span><small className="fm-cell-note">{grant.per_forward_speed_mbps ? `${grant.per_forward_speed_mbps} Mbps` : "不限速"} · {grant.per_forward_connection_limit ? `${grant.per_forward_connection_limit} 连接` : "不限连接"}</small></td><td><span>{formatBytes(grantUsedBytes(grant))} / {grant.traffic_limit_bytes ? formatBytes(grant.traffic_limit_bytes) : "不限"}</span><small className="fm-cell-note">当前版本不自动重置</small></td><td><Badge tone={stateTone(state)}>{stateLabel(state)}</Badge></td><td><div className="fm-row-actions">{packageManaged ? <Badge tone="info">套餐管理</Badge> : <><IconButton label={`编辑 ${grant.username} 的隧道授权`} onClick={() => onEdit(grant)}><Gauge size={16} /></IconButton>{state === "active" ? <IconButton label={`暂停 ${grant.username} 的隧道授权`} disabled={sameID(workingID, id)} onClick={() => void change(grant, "suspend")}><CirclePause size={16} /></IconButton> : <IconButton label={`恢复 ${grant.username} 的隧道授权`} disabled={sameID(workingID, id)} onClick={() => void change(grant, "resume")}><CirclePlay size={16} /></IconButton>}<IconButton label={`撤销 ${grant.username} 的隧道授权`} onClick={() => onDelete(grant)}><Trash2 size={16} /></IconButton></>}</div></td></tr>;
   })}</tbody></table></div></Surface>}</div>;
 }
 

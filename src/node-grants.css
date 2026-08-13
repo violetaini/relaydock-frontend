@@ -1,0 +1,23 @@
+.ng-layout { min-height: 360px; display: flex; flex-direction: column; gap: 14px; }
+.ng-toolbar, .ng-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ng-toolbar > div, .ng-section-heading > div { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.ng-toolbar strong, .ng-section-heading h3 { color: var(--text); font-size: 13px; }
+.ng-toolbar span, .ng-section-heading p { color: var(--text-soft); font-size: 10px; line-height: 1.45; }
+.ng-center { min-height: 280px; display: grid; place-items: center; }
+.ng-create { padding: 12px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, .48fr) auto; align-items: end; gap: 11px; border: 1px solid var(--border-strong); background: var(--surface-muted); }
+.ng-create .button { min-height: 36px; white-space: nowrap; }
+.ng-section { overflow: hidden; border: 1px solid var(--border); background: var(--surface); }
+.ng-section-heading { min-height: 58px; padding: 11px 12px; border-bottom: 1px solid var(--border); background: var(--surface-muted); }
+.ng-package-section { border-color: var(--border-strong); }
+.ng-list { display: flex; flex-direction: column; }
+.ng-row { min-width: 0; min-height: 70px; padding: 10px 12px; display: grid; grid-template-columns: 34px minmax(0, 1fr) auto auto; align-items: center; gap: 10px; border-bottom: 1px solid var(--border); }
+.ng-row:last-child { border-bottom: 0; }
+.ng-node-icon { width: 34px; height: 34px; display: grid; place-items: center; color: var(--accent-readable); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border)); }
+.ng-node-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.ng-node-main strong, .ng-node-main small, .ng-node-main em { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ng-node-main strong { font-size: 12px; }
+.ng-node-main small, .ng-node-main span { color: var(--text-soft); font-size: 9px; }
+.ng-node-main span { display: inline-flex; align-items: center; gap: 4px; }
+.ng-node-main em { color: var(--red); font-size: 9px; font-style: normal; }
+.ng-actions { display: flex; align-items: center; gap: 3px; color: var(--text-faint); }
+@media (max-width: 680px) { .ng-create { grid-template-columns: 1fr; } .ng-create .button { width: 100%; } .ng-row { grid-template-columns: 34px minmax(0, 1fr) auto; } .ng-row > .badge { grid-column: 2; justify-self: start; } .ng-actions { grid-column: 3; grid-row: 1; } }

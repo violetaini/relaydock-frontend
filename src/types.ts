@@ -73,6 +73,8 @@ export interface NodeItem {
   raw_url: string;
   clash_config: string;
   parsed_config: string;
+  managed_multi_user?: boolean;
+  direct_grant_eligible?: boolean;
   enabled: boolean;
   tag: string;
   tags?: string[];
@@ -114,6 +116,8 @@ export interface PackageItem {
   is_reset: boolean;
   reset_day: number;
   nodes: number[];
+  server_grants?: PackageServerGrant[];
+  forwarding_grants?: PackageForwardingGrant[];
   speed_limit_mbps: number;
   device_limit: number;
   short_code: string;
@@ -125,6 +129,28 @@ export interface PackageItem {
   template_filename?: string;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface PackageServerGrant {
+  server_id: number;
+  max_active_nodes: number;
+  speed_limit_mbps: number;
+  connection_limit: number;
+  traffic_limit_bytes: number;
+  billing_mode: "download" | "both";
+  reset_policy: "none" | "monthly";
+  reset_day: number;
+  allowed_protocols: string[];
+  allowed_protocol_profiles: string[];
+}
+
+export interface PackageForwardingGrant {
+  tunnel_id: number;
+  max_active_forwards: number;
+  per_forward_speed_mbps: number;
+  per_forward_connection_limit: number;
+  traffic_limit_bytes: number;
+  billing_mode_override?: "download" | "both" | null;
 }
 
 export interface AutoSpeedLimitRule {

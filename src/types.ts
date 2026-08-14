@@ -97,6 +97,7 @@ export interface UserItem {
   remark: string;
   package_id?: number;
   package_name?: string;
+  authorization_mode?: "package" | "custom";
   traffic_used: number;
   traffic_limit: number;
   traffic_limit_gb?: number;
@@ -105,6 +106,8 @@ export interface UserItem {
   speed_limit_mbps: number;
   device_limit: number;
   package_end_date?: string;
+  is_reset?: boolean;
+  reset_day?: number;
 }
 
 export interface PackageItem {

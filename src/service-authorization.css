@@ -1,0 +1,46 @@
+.service-auth-panel { display: flex; flex-direction: column; gap: 14px; }
+.service-auth-mode { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.service-auth-mode > button { min-height: 72px; padding: 12px 14px; display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: center; gap: 10px; color: var(--text-soft); text-align: left; border: 1px solid var(--border-strong); background: var(--surface-muted); }
+.service-auth-mode > button > svg { color: var(--text-faint); }
+.service-auth-mode > button span { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.service-auth-mode > button strong { color: var(--text); font-size: 13px; }
+.service-auth-mode > button small { color: var(--text-soft); font-size: 10px; line-height: 1.45; }
+.service-auth-mode > button.is-active { color: var(--accent-readable); border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); background: var(--accent-soft); }
+.service-auth-mode > button.is-active > svg { color: var(--accent); }
+.service-auth-package { border: 1px solid var(--border-strong); background: var(--surface); }
+.service-auth-loading { min-height: 112px; display: grid; place-items: center; }
+.service-auth-custom { display: flex; flex-direction: column; gap: 18px; }
+.service-auth-custom > section { padding-top: 14px; border-top: 1px solid var(--border-strong); }
+.service-auth-custom-heading { margin-bottom: 10px; display: flex; align-items: center; gap: 9px; }
+.service-auth-custom-heading > svg { flex: 0 0 auto; color: var(--accent); }
+.service-auth-custom-heading > span { display: flex; flex-direction: column; gap: 3px; }
+.service-auth-custom-heading strong { font-size: 13px; }
+.service-auth-custom-heading small { color: var(--text-soft); font-size: 10px; }
+.batch-service-auth { display: flex; flex-direction: column; gap: 14px; }
+.batch-service-users { min-height: 38px; padding: 8px 10px; display: flex; align-items: center; gap: 8px; color: var(--text-soft); border: 1px solid var(--border); background: var(--surface-muted); }
+.batch-service-users span { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.batch-service-package { display: grid; grid-template-columns: 1.2fr repeat(2, minmax(150px, .8fr)); gap: 10px; }
+.batch-service-reset { grid-column: 1 / -1; padding: 10px; display: flex; align-items: end; gap: 14px; border: 1px solid var(--border); background: var(--surface-muted); }
+.batch-service-reset .field { width: 130px; }
+.batch-service-custom { display: flex; flex-direction: column; gap: 12px; }
+.batch-service-custom > p { color: var(--text-soft); font-size: 11px; line-height: 1.55; }
+.batch-resource-list { padding: 10px; border: 1px solid var(--border-strong); }
+.batch-resource-list legend { padding: 0 6px; color: var(--text); font-size: 11px; font-weight: 750; }
+.batch-resource-list > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.batch-resource-list label { min-height: 46px; padding: 7px 9px; display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: center; gap: 8px; border: 1px solid var(--border); background: var(--surface-muted); }
+.batch-resource-list label.is-selected { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); background: var(--accent-soft); }
+.batch-resource-list label span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.batch-resource-list label strong,
+.batch-resource-list label small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.batch-resource-list label strong { font-size: 11px; }
+.batch-resource-list label small,
+.batch-resource-list > small { color: var(--text-soft); font-size: 9px; }
+.batch-policy-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+@media (max-width: 780px) {
+  .service-auth-mode,
+  .batch-service-package,
+  .batch-resource-list > div,
+  .batch-policy-grid { grid-template-columns: 1fr; }
+  .batch-service-reset { grid-column: auto; align-items: stretch; flex-direction: column; }
+  .batch-service-reset .field { width: 100%; }
+}

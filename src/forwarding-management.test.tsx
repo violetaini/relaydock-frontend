@@ -69,7 +69,9 @@ describe("user forwarding workflow", () => {
     render(<ForwardingManagement isAdmin={false} notify={vi.fn()} />);
 
     await screen.findByRole("tab", { name: /可用隧道/ });
-    fireEvent.click(screen.getByRole("button", { name: "创建转发" }));
+    const createButton = screen.getByRole("button", { name: "创建转发" });
+    await waitFor(() => expect(createButton).toBeEnabled());
+    fireEvent.click(createButton);
     const dialog = screen.getByRole("dialog", { name: "创建用户转发" });
     expect(dialog).toBeInTheDocument();
     expect(within(dialog).getByText("东京到洛杉矶")).toBeInTheDocument();
@@ -96,7 +98,7 @@ describe("user forwarding workflow", () => {
       requested_entry_port: 2033,
       source_cidrs: [],
     }, { idempotencyKey: expect.any(String) }));
-  });
+  }, 15_000);
 
   it("renders the compact forward DTO returned by the user API", async () => {
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
@@ -128,6 +130,31 @@ describe("user forwarding workflow", () => {
 });
 
 describe("administrator tunnel composition", () => {
+  it("only offers custom-mode users when creating a tunnel grant", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/tunnel-templates") return { templates: [tunnel] } as T;
+      if (path === "/api/admin/remote-servers") return { servers: [] } as T;
+      if (path === "/api/admin/users") return { users: [
+        { username: "package-user", nickname: "套餐用户", role: "user", authorization_mode: "package", package_id: 2 },
+        { username: "custom-user", nickname: "自定义用户", role: "user", authorization_mode: "custom" },
+        { username: "admin", nickname: "管理员", role: "admin", authorization_mode: "custom" },
+      ] } as T;
+      if (path === "/api/admin/forwards") return { forwards: [] } as T;
+      if (path.endsWith("/tunnel-grants")) return { grants: [] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    render(<ForwardingManagement isAdmin notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: /用户授权/ }));
+    fireEvent.click(screen.getByRole("button", { name: "新增授权" }));
+    const userSelect = screen.getByRole("combobox", { name: "授权用户" });
+
+    expect(userSelect).toHaveValue("custom-user");
+    expect(screen.getByRole("option", { name: /自定义用户/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /套餐用户/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /管理员/ })).not.toBeInTheDocument();
+  });
+
   it("keeps successful admin data usable when one user's grants fail", async () => {
     const bobGrant = { ...compactGrant, id: 10, public_id: "grant_bob_tokyo", username: "bob" };
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {

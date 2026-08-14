@@ -151,7 +151,7 @@ export function UserNodeGrantsPanel({ username, notify }: { username: string; no
       </form>
 
       <section className="ng-section" aria-label="手工固定节点授权">
-        <div className="ng-section-heading"><div><h3>手工授权</h3><p>可单独撤销；套餐内的制式节点请在上方“套餐快速授权”中维护。</p></div><Badge tone="info">{manualGrants.length}</Badge></div>
+        <div className="ng-section-heading"><div><h3>手工授权</h3><p>可单独撤销；套餐内的制式节点由“套餐授权”统一维护。</p></div><Badge tone="info">{manualGrants.length}</Badge></div>
         {!manualGrants.length ? <EmptyState icon={<ShieldCheck size={23} />} title="暂无手工固定节点授权" description="从上方候选节点中选择后即可下发给该账号。" /> : <div className="ng-list">{manualGrants.map((item) => <NodeGrantRow key={item.id} item={item} busy={working} onRevoke={revoke} onRetry={retry} />)}</div>}
       </section>
     </>}</div>;

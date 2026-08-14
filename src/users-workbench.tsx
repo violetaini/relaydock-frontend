@@ -14,8 +14,6 @@ import {
   Plus,
   RefreshCw,
   Search,
-  Server,
-  Network,
   ShieldCheck,
   SlidersHorizontal,
   Trash2,
@@ -26,12 +24,10 @@ import {
   Users,
 } from "lucide-react";
 import { api } from "./api";
-import { ServerGrantsPanel } from "./server-grants";
-import { UserForwardingGrantsPanel } from "./forwarding-management";
-import { UserNodeGrantsPanel } from "./node-grants";
+import { BatchServiceAuthorizationDialog, ServiceAuthorizationPanel } from "./service-authorization";
 import { TGBotInvitesPanel } from "./tg-bot-invites";
 import { TrafficProgress } from "./traffic-progress";
-import type { NodeItem, NodeListResponse, PackageItem, UserItem } from "./types";
+import type { NodeItem, NodeListResponse, UserItem } from "./types";
 import {
   Badge,
   Button,
@@ -117,11 +113,6 @@ function expiryState(value?: string): ExpiryState {
   return { label: `剩余 ${days} 天`, tone: "good", sortValue: days };
 }
 
-function normalizeResetDay(value?: number) {
-  const day = Math.floor(Number(value) || 1);
-  return Math.min(31, Math.max(1, day));
-}
-
 export function UsersWorkbenchPage({ notify, initialScope = "all" }: { notify: Notify; initialScope?: UsersScope }) {
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [loading, setLoading] = useState(true);
@@ -132,6 +123,8 @@ export function UsersWorkbenchPage({ notify, initialScope = "all" }: { notify: N
   const [editor, setEditor] = useState<Editor | null>(null);
   const [pendingDelete, setPendingDelete] = useState<ManagedUser | null>(null);
   const [workingUser, setWorkingUser] = useState("");
+  const [selectedUsernames, setSelectedUsernames] = useState<string[]>([]);
+  const [showBatchAuthorization, setShowBatchAuthorization] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -140,6 +133,8 @@ export function UsersWorkbenchPage({ notify, initialScope = "all" }: { notify: N
       const response = await api.get<{ users?: ManagedUser[] }>("/api/admin/users");
       const nextUsers = response.users ?? [];
       setUsers(nextUsers);
+      const selectable = new Set(nextUsers.filter((user) => user.role !== "admin").map((user) => user.username));
+      setSelectedUsernames((current) => current.filter((username) => selectable.has(username)));
       return nextUsers;
     } catch (reason) {
       setError(messageOf(reason, "用户列表加载失败"));
@@ -176,6 +171,19 @@ export function UsersWorkbenchPage({ notify, initialScope = "all" }: { notify: N
   const regularUsers = users.filter((user) => user.role !== "admin");
   const activeCount = regularUsers.filter((user) => user.is_active).length;
   const overLimit = regularUsers.filter((user) => user.is_over_limit).length;
+  const visibleRegularUsers = filtered.filter((user) => user.role !== "admin");
+  const allVisibleSelected = visibleRegularUsers.length > 0 && visibleRegularUsers.every((user) => selectedUsernames.includes(user.username));
+
+  const toggleSelected = (username: string) => setSelectedUsernames((current) => current.includes(username)
+    ? current.filter((value) => value !== username)
+    : [...current, username]);
+
+  const toggleAllVisible = () => setSelectedUsernames((current) => {
+    const visible = visibleRegularUsers.map((user) => user.username);
+    return allVisibleSelected
+      ? current.filter((username) => !visible.includes(username))
+      : Array.from(new Set([...current, ...visible]));
+  });
 
   const toggleStatus = async (user: ManagedUser) => {
     setWorkingUser(user.username);
@@ -246,7 +254,7 @@ export function UsersWorkbenchPage({ notify, initialScope = "all" }: { notify: N
       <PageHeader
         title="用户管理"
         description={scope === "invites" ? "管理 Telegram Bot 注册与账号绑定邀请码" : `${regularUsers.length} 位普通用户 · ${activeCount} 位启用 · ${overLimit} 位超出流量`}
-        actions={scope === "invites" ? undefined : <><IconButton label="刷新用户" onClick={() => void load()} disabled={loading}><RefreshCw size={18} /></IconButton><Button onClick={() => setEditor({ kind: "create" })}><Plus size={17} />新建用户</Button></>}
+        actions={scope === "invites" ? undefined : <><Button variant="secondary" disabled={!selectedUsernames.length} onClick={() => setShowBatchAuthorization(true)}><ShieldCheck size={17} />批量服务授权{selectedUsernames.length ? ` (${selectedUsernames.length})` : ""}</Button><IconButton label="刷新用户" onClick={() => void load()} disabled={loading}><RefreshCw size={18} /></IconButton><Button onClick={() => setEditor({ kind: "create" })}><Plus size={17} />新建用户</Button></>}
       />
       {scope !== "invites" && error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
       <div className="users-toolbar">
@@ -264,7 +272,7 @@ export function UsersWorkbenchPage({ notify, initialScope = "all" }: { notify: N
         {loading ? <div className="center-state"><Spinner label="正在加载用户" /></div> : filtered.length === 0 ? <EmptyState icon={<Users size={24} />} title={users.length ? "没有匹配的用户" : "暂无用户"} /> : (
           <div className="table-wrap">
             <table>
-              <thead><tr><th>用户</th><th>套餐</th><th>流量用量</th><th>到期</th><th>启用</th><th aria-label="操作">操作</th></tr></thead>
+              <thead><tr><th className="user-select-cell"><input type="checkbox" aria-label="选择当前用户" checked={allVisibleSelected} disabled={!visibleRegularUsers.length} onChange={toggleAllVisible} /></th><th>用户</th><th>服务授权</th><th>流量用量</th><th>到期</th><th>启用</th><th aria-label="操作">操作</th></tr></thead>
               <tbody>{filtered.map((user) => {
                 const isAdmin = user.role === "admin";
                 const effectiveSpeed = user.speed_limit_override ?? user.speed_limit_mbps;
@@ -273,6 +281,7 @@ export function UsersWorkbenchPage({ notify, initialScope = "all" }: { notify: N
                 const identityDetail = [user.nickname && user.nickname !== user.username ? user.username : "", user.email].filter(Boolean).join(" · ") || "未填写邮箱";
                 const rowWorking = workingUser === user.username;
                 return <tr key={user.username}>
+                  <td className="user-select-cell" data-label="选择">{isAdmin ? null : <input type="checkbox" aria-label={`选择用户 ${user.username}`} checked={selectedUsernames.includes(user.username)} onChange={() => toggleSelected(user.username)} />}</td>
                   <td data-label="用户">
                     <div className="user-list-identity">
                       <strong>{user.nickname || user.username}</strong>
@@ -280,8 +289,10 @@ export function UsersWorkbenchPage({ notify, initialScope = "all" }: { notify: N
                       {user.remark ? <small className="user-remark" title={user.remark}>{user.remark}</small> : null}
                     </div>
                   </td>
-                  <td data-label="套餐">
-                    {isAdmin ? <Badge tone="info">管理员</Badge> : <span className={`user-package-chip ${user.package_name ? "" : "is-empty"}`}><PackageIcon size={14} />{user.package_name || "未绑定"}</span>}
+                  <td data-label="服务授权">
+                    {isAdmin ? <Badge tone="info">管理员</Badge> : (user.authorization_mode ?? (user.package_id ? "package" : "custom")) === "package"
+                      ? <span className="user-package-chip"><PackageIcon size={14} />套餐 · {user.package_name || `#${user.package_id}`}</span>
+                      : <span className="user-package-chip is-custom"><ShieldCheck size={14} />自定义</span>}
                   </td>
                   <td data-label="流量用量">
                     <TrafficProgress compact used={user.traffic_used} limit={user.traffic_limit} label={`${user.username} 流量使用率`} />
@@ -312,18 +323,12 @@ export function UsersWorkbenchPage({ notify, initialScope = "all" }: { notify: N
       {editor?.kind === "create" ? <CreateUserDialog notify={notify} onClose={() => setEditor(null)} onComplete={completed} /> : null}
       {editor?.kind === "manage" ? <UserSettingsDialog user={editor.user} notify={notify} working={workingUser === editor.user.username} onClose={() => setEditor(null)} onComplete={(message, tone) => completedInSettings(editor.user.username, message, tone)} onToggleStatus={async () => { await toggleStatus(editor.user); setEditor(null); }} onDelete={() => { setEditor(null); setPendingDelete(editor.user); }} /> : null}
       {pendingDelete ? <ConfirmDialog title="删除用户" description={`确认删除 ${pendingDelete.username}？该用户在所有节点上的客户端、私有路由、订阅关联和登录数据都会清理，此操作无法撤销。`} confirmLabel="确认删除" working={workingUser === pendingDelete.username} onCancel={() => setPendingDelete(null)} onConfirm={() => void remove()} /> : null}
+      {showBatchAuthorization ? <BatchServiceAuthorizationDialog usernames={selectedUsernames} onClose={() => setShowBatchAuthorization(false)} onComplete={async (message, tone, failedUsernames = []) => { setShowBatchAuthorization(false); notify(message, tone); await load(); setSelectedUsernames(failedUsernames); }} /> : null}
     </>
   );
 }
 
-type UserSettingsPanel = "overview" | "profile" | "password" | "extend" | "limits" | "node-grants" | "server-grants" | "forwarding-grants" | "subscriptions" | "subaccounts";
-
-interface PackageMutationResponse {
-  success?: boolean;
-  message?: string;
-  error?: string;
-  warnings?: string[];
-}
+type UserSettingsPanel = "overview" | "profile" | "password" | "extend" | "limits" | "services" | "subscriptions" | "subaccounts";
 
 function UserSettingsDialog({
   user,
@@ -343,115 +348,10 @@ function UserSettingsDialog({
   onDelete: () => void;
 }) {
   const [activePanel, setActivePanel] = useState<UserSettingsPanel>("overview");
-  const [packages, setPackages] = useState<PackageItem[]>([]);
-  const [packageID, setPackageID] = useState(String(user.package_id ?? ""));
-  const [startDate, setStartDate] = useState("");
-  const [expireDate, setExpireDate] = useState(user.package_end_date ?? "");
-  const [resetEnabled, setResetEnabled] = useState(Boolean(user.is_reset));
-  const [resetDay, setResetDay] = useState(String(normalizeResetDay(user.reset_day)));
-  const [resetOverrideDirty, setResetOverrideDirty] = useState(Boolean(user.package_id));
-  const [packageLoading, setPackageLoading] = useState(user.role !== "admin");
-  const [packageWorking, setPackageWorking] = useState(false);
-  const [packageError, setPackageError] = useState("");
-  const [confirmUnassign, setConfirmUnassign] = useState(false);
-
-  useEffect(() => {
-    setPackageID(String(user.package_id ?? ""));
-    setExpireDate(user.package_end_date ?? "");
-    setResetEnabled(Boolean(user.is_reset));
-    setResetDay(String(normalizeResetDay(user.reset_day)));
-    setResetOverrideDirty(Boolean(user.package_id));
-  }, [user.is_reset, user.package_end_date, user.package_id, user.reset_day]);
-
-  useEffect(() => {
-    if (user.role === "admin") return;
-    api.get<{ packages?: PackageItem[] }>("/api/admin/packages")
-      .then((response) => setPackages(response.packages ?? []))
-      .catch((reason) => setPackageError(messageOf(reason, "套餐列表加载失败")))
-      .finally(() => setPackageLoading(false));
-  }, [user.role]);
-
-  const selectedPackage = packages.find((item) => item.id === Number(packageID));
-  const today = new Date();
-  const todayValue = new Date(today.getTime() - today.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
-
-  const selectPackage = (value: string) => {
-    setPackageID(value);
-    const nextPackage = packages.find((item) => item.id === Number(value));
-    if (!nextPackage) return;
-    if (Number(value) === user.package_id) {
-      setResetEnabled(Boolean(user.is_reset));
-      setResetDay(String(normalizeResetDay(user.reset_day)));
-      setResetOverrideDirty(true);
-      return;
-    }
-    setResetEnabled(nextPackage.is_reset);
-    setResetDay(String(normalizeResetDay(nextPackage.reset_day)));
-    // A new package should initially follow its own billing policy. Editing either
-    // setting below intentionally turns it into a user-specific override.
-    setResetOverrideDirty(false);
-  };
 
   const completePanel = async (message: string, tone?: "success" | "error") => {
     setActivePanel("overview");
     await onComplete(message, tone);
-  };
-
-  const assignPackage = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!packageID) {
-      setPackageError("请选择套餐");
-      return;
-    }
-    if (startDate && startDate > todayValue) {
-      setPackageError("当前仅支持立即生效，开始日期不能晚于今天");
-      return;
-    }
-    if (expireDate && expireDate <= (startDate || todayValue)) {
-      setPackageError("到期日期必须晚于开始日期");
-      return;
-    }
-    if (resetOverrideDirty && resetEnabled && (Number(resetDay) < 1 || Number(resetDay) > 31)) {
-      setPackageError("重置日必须在 1 到 31 之间");
-      return;
-    }
-    setPackageWorking(true);
-    setPackageError("");
-    try {
-      const response = await api.post<PackageMutationResponse>("/api/admin/packages/assign", {
-        username: user.username,
-        package_id: Number(packageID),
-        ...(startDate ? { start_date: startDate } : {}),
-        ...(expireDate ? { expire_date: expireDate } : {}),
-        ...(resetOverrideDirty ? { is_reset: resetEnabled, ...(resetEnabled ? { reset_day: Number(resetDay) } : {}) } : {}),
-      });
-      if (response.success === false) throw new Error(response.error || response.message || "套餐分配失败");
-      const result = `已为 ${user.username} ${user.package_id ? "更新" : "分配"}“${selectedPackage?.name ?? "套餐"}”`;
-      if (response.warnings?.length) {
-        await completePanel(`${result}；${response.warnings.length} 项节点下发失败，请到服务管理检查`, "error");
-      } else {
-        await completePanel(result);
-      }
-    } catch (reason) {
-      setPackageError(messageOf(reason, "套餐分配失败"));
-    } finally {
-      setPackageWorking(false);
-    }
-  };
-
-  const unassignPackage = async () => {
-    setPackageWorking(true);
-    setPackageError("");
-    try {
-      const response = await api.post<PackageMutationResponse>("/api/admin/packages/unassign", { username: user.username });
-      if (response.success === false) throw new Error(response.error || response.message || "解绑套餐失败");
-      setConfirmUnassign(false);
-      await completePanel(`已解绑 ${user.username} 的套餐`);
-    } catch (reason) {
-      setPackageError(messageOf(reason, "解绑套餐失败"));
-    } finally {
-      setPackageWorking(false);
-    }
   };
 
   const action = (kind: UserSettingsPanel, label: string, icon: ReactNode) => (
@@ -465,9 +365,7 @@ function UserSettingsDialog({
     { id: "profile", label: "资料与短码" },
     ...(user.role !== "admin" ? [
       { id: "password" as const, label: "登录密码" },
-      { id: "node-grants" as const, label: "固定节点授权" },
-      { id: "server-grants" as const, label: "自助节点授权" },
-      { id: "forwarding-grants" as const, label: "转发授权" },
+      { id: "services" as const, label: "服务授权" },
       { id: "limits" as const, label: "流量与限额" },
       { id: "subscriptions" as const, label: "订阅分配" },
       { id: "subaccounts" as const, label: "节点子账号" },
@@ -498,33 +396,14 @@ function UserSettingsDialog({
         return <UserSettingsPanelFrame title="续期套餐" description={`当前到期日：${user.package_end_date || "未设置"}；仅延长有效期，不重置流量`} onBack={() => setActivePanel("overview")}><ExtendSettingsPanel user={user} onBack={() => setActivePanel("overview")} onComplete={completePanel} /></UserSettingsPanelFrame>;
       case "limits":
         return <UserSettingsPanelFrame title="流量、限速与设备数" description="总流量仅覆盖套餐额度；服务器授权额度继续独立计算" onBack={() => setActivePanel("overview")}><LimitsSettingsPanel user={user} onBack={() => setActivePanel("overview")} onComplete={completePanel} /></UserSettingsPanelFrame>;
-      case "node-grants":
-        return <UserSettingsPanelFrame title="固定节点授权" description="个性化授予账号现有节点的订阅访问权；套餐来源的授权在此只读展示" onBack={() => setActivePanel("overview")}><UserNodeGrantsPanel username={user.username} notify={notify} /></UserSettingsPanelFrame>;
-      case "server-grants":
-        return <UserSettingsPanelFrame title="自助节点授权" description="个性化授予账号在指定服务器发布目录中开通节点的资格" onBack={() => setActivePanel("overview")}><ServerGrantsPanel username={user.username} notify={notify} /></UserSettingsPanelFrame>;
-      case "forwarding-grants":
-        return <UserSettingsPanelFrame title="转发线路授权" description="个性化授予账号使用指定转发线路的资格和额度" onBack={() => setActivePanel("overview")}><UserForwardingGrantsPanel username={user.username} notify={notify} /></UserSettingsPanelFrame>;
+      case "services":
+        return <UserSettingsPanelFrame title="服务授权" description="套餐授权与自定义授权互斥；先选择方式，再配置对应服务" onBack={() => setActivePanel("overview")}><ServiceAuthorizationPanel user={user} notify={notify} onChanged={onComplete} onOpenExtend={() => setActivePanel("extend")} /></UserSettingsPanelFrame>;
       case "subscriptions":
         return <UserSettingsPanelFrame title="订阅文件分配" description="选择后，该用户可在自己的订阅链接中访问这些订阅文件" onBack={() => setActivePanel("overview")}><SubscriptionsSettingsPanel user={user} onBack={() => setActivePanel("overview")} onComplete={completePanel} /></UserSettingsPanelFrame>;
       case "subaccounts":
         return <UserSettingsPanelFrame title="节点子账号" description="查看已下发到入站和私有路由的凭据标识" onBack={() => setActivePanel("overview")}><SubaccountsSettingsPanel user={user} /></UserSettingsPanelFrame>;
       default:
         return <>
-          {user.role !== "admin" ? (
-            <section className="user-settings-section">
-              <div className="user-settings-section-heading"><div><h2>套餐快速授权</h2><p>一次应用固定节点、自助节点和转发线路的制式授权集合</p></div><PackageIcon size={19} /></div>
-              {packageError ? <ErrorState message={packageError} /> : null}
-              {packageLoading ? <div className="user-settings-loading"><Spinner label="正在加载套餐" /></div> : <form className="user-package-form" onSubmit={(event) => void assignPackage(event)}>
-                <Field label="套餐模板"><select aria-label="用户套餐" required value={packageID} onChange={(event) => selectPackage(event.target.value)}><option value="">请选择套餐模板</option>{packages.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.nodes?.length ?? 0} 节点 / {item.server_grants?.length ?? 0} 服务器 / {item.forwarding_grants?.length ?? 0} 线路</option>)}</select></Field>
-                <Field label="开始日期" hint="留空表示今天；暂不支持预约生效"><input type="date" aria-label="套餐开始日期" max={todayValue} value={startDate} onChange={(event) => setStartDate(event.target.value)} /></Field>
-                <Field label="到期日期" hint={`留空表示开始后 ${selectedPackage?.cycle_days ?? 30} 天`}><input type="date" aria-label="套餐到期日期" value={expireDate} onChange={(event) => setExpireDate(event.target.value)} /></Field>
-                <div className="user-package-reset"><div><Toggle checked={resetEnabled} onChange={(value) => { setResetEnabled(value); setResetOverrideDirty(true); }} label="按自然月重置该用户流量" /><small>{resetOverrideDirty ? "已使用用户级策略，不再跟随套餐默认值" : selectedPackage?.is_reset ? `默认每月 ${selectedPackage.reset_day} 日重置` : "默认按套餐周期重置"}</small></div><Field label="重置日" hint="每月 1 到 31 日"><input aria-label="套餐流量重置日" type="number" min="1" max="31" step="1" disabled={!resetEnabled} value={resetDay} onChange={(event) => { setResetDay(event.target.value); setResetOverrideDirty(true); }} /></Field></div>
-                <div className="user-package-actions"><Button type="submit" disabled={packageWorking || !packageID}>{packageWorking ? <Spinner label="正在下发" /> : <><PackageIcon size={16} />{user.package_id ? "更新套餐" : "分配套餐"}</>}</Button>{user.package_id ? <Button type="button" variant="ghost" onClick={() => setConfirmUnassign(true)} disabled={packageWorking}>解绑套餐</Button> : null}</div>
-              </form>}
-              {user.package_id ? <div className="user-package-current"><span>当前套餐：<strong>{user.package_name || `套餐 #${user.package_id}`}</strong></span><span>{user.package_end_date ? `到期 ${user.package_end_date}` : "未设置到期日"}</span><Button type="button" variant="ghost" onClick={() => setActivePanel("extend")}><CalendarPlus size={15} />续期</Button></div> : null}
-            </section>
-          ) : null}
-
           <section className="user-settings-section">
             <div className="user-settings-section-heading"><div><h2>账号资料</h2><p>集中编辑可公开显示的用户信息</p></div><Pencil size={18} /></div>
             {action("profile", "资料、备注与订阅短码", <Pencil size={17} />)}
@@ -532,10 +411,8 @@ function UserSettingsDialog({
           </section>
 
           {user.role !== "admin" ? <section className="user-settings-section">
-            <div className="user-settings-section-heading"><div><h2>个性化授权</h2><p>套餐不是必需项，可直接为账号配置各个单项</p></div><Server size={18} /></div>
-            {action("node-grants", "固定节点授权", <ShieldCheck size={17} />)}
-            {action("server-grants", "自助节点授权", <Server size={17} />)}
-            {action("forwarding-grants", "转发线路授权", <Network size={17} />)}
+            <div className="user-settings-section-heading"><div><h2>权限与服务</h2><p>统一管理授权方式、额度和订阅输出</p></div><ShieldCheck size={18} /></div>
+            {action("services", "服务授权", <ShieldCheck size={17} />)}
             {action("limits", "流量、限速与设备数", <Gauge size={17} />)}
             {action("subscriptions", "订阅文件分配", <Link2 size={17} />)}
             {action("subaccounts", "查看节点子账号", <UserCog size={17} />)}
@@ -550,7 +427,7 @@ function UserSettingsDialog({
   })();
 
   return (
-    <Dialog title={`用户设置 · ${user.username}`} description="用户资料、套餐、节点权限和订阅都从这里管理" onClose={onClose} wide>
+    <Dialog title={`用户设置 · ${user.username}`} description="用户资料、服务授权、限额和订阅都从这里管理" onClose={onClose} wide>
       <div className="user-settings-dialog">
         <div className="user-settings-summary">
           <span className="user-settings-avatar">{(user.nickname || user.username).slice(0, 1).toUpperCase()}</span>
@@ -564,7 +441,6 @@ function UserSettingsDialog({
           {panel}
         </section>
       </div>
-      {confirmUnassign ? <ConfirmDialog title="解绑用户套餐" description={`确认解绑 ${user.username} 的“${user.package_name || "当前套餐"}”？系统会同步清理该套餐下发的节点凭据和订阅关联。`} confirmLabel="确认解绑" working={packageWorking} onCancel={() => setConfirmUnassign(false)} onConfirm={() => void unassignPackage()} /> : null}
     </Dialog>
   );
 }

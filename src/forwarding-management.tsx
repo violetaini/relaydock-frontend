@@ -21,6 +21,8 @@ import {
   X,
   Zap,
 } from "lucide-react";
+import { forwardingBillingModeLabel, normalizeForwardingBillingMode } from "./forwarding-billing";
+import type { ForwardingBillingMode } from "./types";
 import { api } from "./api";
 import type { NodeItem, RemoteServer, ServerListResponse, UserItem } from "./types";
 import {
@@ -63,7 +65,7 @@ export interface TunnelTemplate {
   description?: string;
   state: string;
   network?: string;
-  billing_mode?: string;
+  billing_mode?: ForwardingBillingMode;
   traffic_multiplier_milli?: number;
   max_total_forwards?: number;
   active_forwards?: number;
@@ -144,7 +146,7 @@ export interface TunnelGrant {
   traffic_limit_bytes?: number;
   traffic_used_bytes?: number;
   used_bytes?: number;
-  billing_mode_override?: string | null;
+  billing_mode_override?: ForwardingBillingMode | null;
   reset_policy?: string;
   reset_day?: number;
   version?: number;
@@ -227,14 +229,14 @@ interface GrantDraft {
   speedMbps: string;
   connectionLimit: string;
   trafficGB: string;
-  billingMode: string;
+  billingMode: ForwardingBillingMode;
 }
 
 interface TemplateDraft {
   name: string;
   description: string;
   serverIDs: number[];
-  billingMode: "download" | "both";
+  billingMode: ForwardingBillingMode;
   multiplier: string;
   maxForwards: string;
   portStart: string;
@@ -445,11 +447,12 @@ function defaultGrantDraft(users: UserItem[], templates: TunnelTemplate[]): Gran
     speedMbps: "0",
     connectionLimit: "0",
     trafficGB: "0",
-    billingMode: "inherit",
+    billingMode: normalizeForwardingBillingMode(templates[0]?.billing_mode),
   };
 }
 
-function grantDraftFrom(grant: TunnelGrant): GrantDraft {
+function grantDraftFrom(grant: TunnelGrant, templates: TunnelTemplate[]): GrantDraft {
+  const template = tunnelForGrant(grant, templates);
   return {
     username: grant.username,
     tunnelID: grant.tunnel ? String(resourceID(grant.tunnel)) : grant.tunnel_id === undefined ? "" : String(grant.tunnel_id),
@@ -459,7 +462,7 @@ function grantDraftFrom(grant: TunnelGrant): GrantDraft {
     speedMbps: String(grant.per_forward_speed_mbps ?? 0),
     connectionLimit: String(grant.per_forward_connection_limit ?? 0),
     trafficGB: String((Number(grant.traffic_limit_bytes || 0) / 1024 ** 3) || 0),
-    billingMode: grant.billing_mode_override || "inherit",
+    billingMode: normalizeForwardingBillingMode(grant.billing_mode_override, template?.billing_mode),
   };
 }
 
@@ -652,7 +655,7 @@ function TemplatePanel({ templates, servers, onCreate, onState, onDelete }: {
     {templates.length === 0 ? <EmptyState icon={<Route size={25} />} title="暂无隧道模板" description="先选择 1 至 8 台在线受管服务器创建路线" action={<Button onClick={onCreate}><Plus size={16} />创建第一条隧道</Button>} /> : <Surface className="table-surface fm-table-surface"><div className="table-wrap"><table className="fm-table"><thead><tr><th>隧道</th><th>服务器路线</th><th>策略</th><th>使用情况</th><th>状态</th><th aria-label="操作" /></tr></thead><tbody>{templates.map((template) => {
       const hops = routeHops(template, servers);
       const id = resourceID(template);
-      return <tr key={String(id)}><td className="fm-primary-cell"><strong>{template.name}</strong><small>{template.description || `#${id}`}</small></td><td><RouteLine hops={hops.map((hop) => ({ name: hop.name, tone: hop.status && ["online", "connected"].includes(hop.status) ? "good" : undefined }))} /><small className="fm-cell-note">{hops.length} 跳 · TCP + UDP</small></td><td><span>{template.billing_mode === "download" ? "仅下载" : "双向计费"}</span><small className="fm-cell-note">{((template.traffic_multiplier_milli ?? 1000) / 1000).toFixed(2)} 倍 · {template.port_range_start || "-"}–{template.port_range_end || "-"}</small></td><td><span>{template.active_forwards ?? 0}/{template.max_total_forwards || "不限"} 条转发</span><small className="fm-cell-note">{template.grant_count ?? 0} 份授权</small></td><td><Badge tone={stateTone(template.state)}>{stateLabel(template.state)}</Badge></td><td><div className="fm-row-actions">{template.state !== "active" ? <IconButton label={`恢复 ${template.name}`} disabled={sameID(workingID, id)} onClick={() => void changeState(template, "active")}><CirclePlay size={16} /></IconButton> : <IconButton label={`停止 ${template.name} 新建`} disabled={sameID(workingID, id)} onClick={() => void changeState(template, "draining")}><CirclePause size={16} /></IconButton>}<IconButton label={`紧急停用 ${template.name}`} disabled={template.state === "suspended" || sameID(workingID, id)} onClick={() => void changeState(template, "suspended")}><Zap size={16} /></IconButton><IconButton label={`删除 ${template.name}`} onClick={() => onDelete(template)}><Trash2 size={16} /></IconButton></div></td></tr>;
+      return <tr key={String(id)}><td className="fm-primary-cell"><strong>{template.name}</strong><small>{template.description || `#${id}`}</small></td><td><RouteLine hops={hops.map((hop) => ({ name: hop.name, tone: hop.status && ["online", "connected"].includes(hop.status) ? "good" : undefined }))} /><small className="fm-cell-note">{hops.length} 跳 · TCP + UDP</small></td><td><span>{forwardingBillingModeLabel(template.billing_mode)}</span><small className="fm-cell-note">{((template.traffic_multiplier_milli ?? 1000) / 1000).toFixed(2)} 倍 · {template.port_range_start || "-"}–{template.port_range_end || "-"}</small></td><td><span>{template.active_forwards ?? 0}/{template.max_total_forwards || "不限"} 条转发</span><small className="fm-cell-note">{template.grant_count ?? 0} 份授权</small></td><td><Badge tone={stateTone(template.state)}>{stateLabel(template.state)}</Badge></td><td><div className="fm-row-actions">{template.state !== "active" ? <IconButton label={`恢复 ${template.name}`} disabled={sameID(workingID, id)} onClick={() => void changeState(template, "active")}><CirclePlay size={16} /></IconButton> : <IconButton label={`停止 ${template.name} 新建`} disabled={sameID(workingID, id)} onClick={() => void changeState(template, "draining")}><CirclePause size={16} /></IconButton>}<IconButton label={`紧急停用 ${template.name}`} disabled={template.state === "suspended" || sameID(workingID, id)} onClick={() => void changeState(template, "suspended")}><Zap size={16} /></IconButton><IconButton label={`删除 ${template.name}`} onClick={() => onDelete(template)}><Trash2 size={16} /></IconButton></div></td></tr>;
     })}</tbody></table></div></Surface>}
   </div>;
 }
@@ -722,7 +725,7 @@ function TemplateDialog({ servers, onClose, onComplete }: { servers: RemoteServe
       <fieldset className="fm-route-editor"><legend>服务器路线</legend><div className="fm-route-add"><Field label="添加受管服务器"><select value={nextServer} onChange={(event) => setNextServer(event.target.value)} disabled={!available.length || draft.serverIDs.length >= 8}><option value="">选择服务器</option>{available.map((server) => <option key={server.id} value={server.id}>{server.name} · {isServerOnline(server) ? "在线" : "离线"}</option>)}</select></Field><Button type="button" variant="secondary" onClick={addServer} disabled={!nextServer || draft.serverIDs.length >= 8}><Plus size={16} />加入路线</Button></div>
         {selectedServers.length ? <ol className="fm-route-editor-list">{selectedServers.map((server, index) => <li key={server.id}><span className="fm-hop-index">{index + 1}</span><span><strong>{server.name}</strong><small>{index === 0 ? "入口服务器" : index === selectedServers.length - 1 ? "出口服务器" : `中转第 ${index} 跳`} · {isServerOnline(server) ? "Agent 在线" : "Agent 离线"}</small></span><div><IconButton type="button" label={`上移 ${server.name}`} disabled={index === 0} onClick={() => moveServer(index, -1)}><ArrowUp size={15} /></IconButton><IconButton type="button" label={`下移 ${server.name}`} disabled={index === selectedServers.length - 1} onClick={() => moveServer(index, 1)}><ArrowDown size={15} /></IconButton><IconButton type="button" label={`移除 ${server.name}`} onClick={() => update("serverIDs", draft.serverIDs.filter((id) => id !== server.id))}><X size={15} /></IconButton></div></li>)}</ol> : <EmptyState icon={<Server size={22} />} title="尚未选择服务器" description="第一台为用户入口，最后一台连接目标节点" />}
       </fieldset>
-      <div className="fm-form-grid fm-form-grid-four"><Field label="计费方向"><select value={draft.billingMode} onChange={(event) => update("billingMode", event.target.value as TemplateDraft["billingMode"])}><option value="both">上传 + 下载</option><option value="download">仅下载</option></select></Field><Field label="流量倍率"><input type="number" min="0.01" step="0.01" value={draft.multiplier} onChange={(event) => update("multiplier", event.target.value)} /></Field><Field label="最大总转发数" hint="0 表示不限"><input type="number" min="0" value={draft.maxForwards} onChange={(event) => update("maxForwards", event.target.value)} /></Field><Field label="网络类型"><select value="tcp_udp" disabled><option value="tcp_udp">TCP + UDP</option></select></Field></div>
+      <div className="fm-form-grid fm-form-grid-four"><Field label="计费方向"><select value={draft.billingMode} onChange={(event) => update("billingMode", event.target.value as TemplateDraft["billingMode"])}><option value="both">双向</option><option value="upload">仅算上行</option><option value="download">仅算下行</option></select></Field><Field label="流量倍率"><input type="number" min="0.01" step="0.01" value={draft.multiplier} onChange={(event) => update("multiplier", event.target.value)} /></Field><Field label="最大总转发数" hint="0 表示不限"><input type="number" min="0" value={draft.maxForwards} onChange={(event) => update("maxForwards", event.target.value)} /></Field><Field label="网络类型"><select value="tcp_udp" disabled><option value="tcp_udp">TCP + UDP</option></select></Field></div>
       <div className="fm-form-grid"><Field label="端口范围起点" hint="仅限制可选端口，不会预占整段范围"><input type="number" min="1024" max="65535" value={draft.portStart} onChange={(event) => update("portStart", event.target.value)} /></Field><Field label="端口范围终点" hint="未被实际转发使用的端口仍可用于节点"><input type="number" min="1024" max="65535" value={draft.portEnd} onChange={(event) => update("portEnd", event.target.value)} /></Field></div>
       {preflight ? <div className={`fm-preflight ${preflight.success === false || preflight.ready === false ? "is-bad" : "is-good"}`}><ShieldCheck size={18} /><span><strong>{preflight.success === false || preflight.ready === false ? "预检未通过" : "路线预检通过"}</strong><small>{preflight.message || "服务器、TCP/UDP 能力与端口范围均可用"}</small>{preflight.warnings?.map((warning) => <small key={warning}>{warning}</small>)}</span></div> : null}
       <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose} disabled={Boolean(working)}>取消</Button><Button type="button" variant="secondary" disabled={!valid || Boolean(working)} onClick={() => void runPreflight()}>{working === "preflight" ? <Spinner label="正在预检" /> : <><Zap size={16} />预检路线</>}</Button><Button type="submit" disabled={!valid || !preflight || preflight.success === false || preflight.ready === false || Boolean(working)}>{working === "create" ? <Spinner label="正在创建" /> : <><Check size={16} />创建隧道</>}</Button></div>
@@ -752,7 +755,7 @@ function GrantPanel({ grants, templates, onCreate, onEdit, onAction, onDelete }:
 }
 
 function GrantDialog({ grant, users, templates, onClose, onComplete }: { grant?: TunnelGrant; users: UserItem[]; templates: TunnelTemplate[]; onClose: () => void; onComplete: () => Promise<void> }) {
-  const [draft, setDraft] = useState<GrantDraft>(() => grant ? grantDraftFrom(grant) : defaultGrantDraft(users, templates));
+  const [draft, setDraft] = useState<GrantDraft>(() => grant ? grantDraftFrom(grant, templates) : defaultGrantDraft(users, templates));
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
   const eligibleUsers = users.filter((user) => user.role !== "admin" || user.username === draft.username);
@@ -771,7 +774,7 @@ function GrantDialog({ grant, users, templates, onClose, onComplete }: { grant?:
       per_forward_speed_mbps: INBOUND_LIMITER_V1 ? Number(draft.speedMbps) : 0,
       per_forward_connection_limit: INBOUND_LIMITER_V1 ? Number(draft.connectionLimit) : 0,
       traffic_limit_bytes: Math.round(Number(draft.trafficGB) * 1024 ** 3),
-      billing_mode_override: draft.billingMode === "inherit" ? null : draft.billingMode,
+      billing_mode_override: draft.billingMode,
       allow_custom_public_target: false,
       ...(grant ? { version: grant.version ?? 1 } : {}),
     };
@@ -783,7 +786,7 @@ function GrantDialog({ grant, users, templates, onClose, onComplete }: { grant?:
     } catch (reason) { setError(reason instanceof Error ? reason.message : "隧道授权保存失败"); setWorking(false); }
   };
   const update = <K extends keyof GrantDraft>(key: K, value: GrantDraft[K]) => setDraft((current) => ({ ...current, [key]: value }));
-  return <Dialog title={grant ? "编辑隧道授权" : "新增隧道授权"} description="限制对单个用户生效，不会改变隧道模板或服务器权限。" onClose={onClose} wide dismissible={!working}><form className="fm-form" onSubmit={(event) => void submit(event)}>{error ? <ErrorState message={error} /> : null}<div className="fm-form-grid"><Field label="授权用户"><select value={draft.username} disabled={Boolean(grant)} onChange={(event) => update("username", event.target.value)}><option value="">选择用户</option>{eligibleUsers.map((user) => <option key={user.username} value={user.username}>{user.nickname || user.username} ({user.username})</option>)}</select></Field><Field label="隧道模板"><select value={draft.tunnelID} disabled={Boolean(grant)} onChange={(event) => update("tunnelID", event.target.value)}><option value="">选择隧道</option>{activeTemplates.map((template) => <option key={String(resourceID(template))} value={String(resourceID(template))}>{template.name}</option>)}</select></Field></div><div className="fm-form-grid"><Field label="生效时间"><input type="datetime-local" value={draft.startsAt} onChange={(event) => update("startsAt", event.target.value)} /></Field><Field label="到期时间" hint="留空表示长期"><input type="datetime-local" value={draft.expiresAt} onChange={(event) => update("expiresAt", event.target.value)} /></Field></div><div className="fm-form-grid fm-form-grid-four"><Field label="最大启用转发"><input type="number" min="1" value={draft.maxForwards} onChange={(event) => update("maxForwards", event.target.value)} /></Field><Field label="每转发限速 Mbps" hint="当前节点组件暂不支持"><input type="number" min="0" step="0.1" value={INBOUND_LIMITER_V1 ? draft.speedMbps : "0"} disabled={!INBOUND_LIMITER_V1} onChange={(event) => update("speedMbps", event.target.value)} /></Field><Field label="每转发连接数" hint="当前节点组件暂不支持"><input type="number" min="0" value={INBOUND_LIMITER_V1 ? draft.connectionLimit : "0"} disabled={!INBOUND_LIMITER_V1} onChange={(event) => update("connectionLimit", event.target.value)} /></Field><Field label="授权总流量 GB" hint="0 表示不限"><input type="number" min="0" step="0.1" value={draft.trafficGB} onChange={(event) => update("trafficGB", event.target.value)} /></Field></div><div className="fm-form-grid"><Field label="计费方向"><select value={draft.billingMode} onChange={(event) => update("billingMode", event.target.value)}><option value="inherit">继承隧道</option><option value="both">上传 + 下载</option><option value="download">仅下载</option></select></Field><Field label="流量重置" hint="当前版本暂不支持"><select value="none" disabled><option value="none">不自动重置</option></select></Field></div><div className="fm-capability-note"><ShieldCheck size={17} /><span>转发同时支持 TCP 与 UDP，可自动选取共同端口或由用户在模板范围内指定端口。当前 Agent 未提供限速组件，限速和连接数固定为不限。</span></div><div className="dialog-actions"><Button type="button" variant="secondary" disabled={working} onClick={onClose}>取消</Button><Button type="submit" disabled={!valid || working}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />保存授权</>}</Button></div></form></Dialog>;
+  return <Dialog title={grant ? "编辑隧道授权" : "新增隧道授权"} description="限制对单个用户生效，不会改变隧道模板或服务器权限。" onClose={onClose} wide dismissible={!working}><form className="fm-form" onSubmit={(event) => void submit(event)}>{error ? <ErrorState message={error} /> : null}<div className="fm-form-grid"><Field label="授权用户"><select value={draft.username} disabled={Boolean(grant)} onChange={(event) => update("username", event.target.value)}><option value="">选择用户</option>{eligibleUsers.map((user) => <option key={user.username} value={user.username}>{user.nickname || user.username} ({user.username})</option>)}</select></Field><Field label="隧道模板"><select value={draft.tunnelID} disabled={Boolean(grant)} onChange={(event) => update("tunnelID", event.target.value)}><option value="">选择隧道</option>{activeTemplates.map((template) => <option key={String(resourceID(template))} value={String(resourceID(template))}>{template.name}</option>)}</select></Field></div><div className="fm-form-grid"><Field label="生效时间"><input type="datetime-local" value={draft.startsAt} onChange={(event) => update("startsAt", event.target.value)} /></Field><Field label="到期时间" hint="留空表示长期"><input type="datetime-local" value={draft.expiresAt} onChange={(event) => update("expiresAt", event.target.value)} /></Field></div><div className="fm-form-grid fm-form-grid-four"><Field label="最大启用转发"><input type="number" min="1" value={draft.maxForwards} onChange={(event) => update("maxForwards", event.target.value)} /></Field><Field label="每转发限速 Mbps" hint="当前节点组件暂不支持"><input type="number" min="0" step="0.1" value={INBOUND_LIMITER_V1 ? draft.speedMbps : "0"} disabled={!INBOUND_LIMITER_V1} onChange={(event) => update("speedMbps", event.target.value)} /></Field><Field label="每转发连接数" hint="当前节点组件暂不支持"><input type="number" min="0" value={INBOUND_LIMITER_V1 ? draft.connectionLimit : "0"} disabled={!INBOUND_LIMITER_V1} onChange={(event) => update("connectionLimit", event.target.value)} /></Field><Field label="授权总流量 GB" hint="0 表示不限"><input type="number" min="0" step="0.1" value={draft.trafficGB} onChange={(event) => update("trafficGB", event.target.value)} /></Field></div><div className="fm-form-grid"><Field label="计费方向"><select value={draft.billingMode} onChange={(event) => update("billingMode", event.target.value as ForwardingBillingMode)}><option value="both">双向</option><option value="upload">仅算上行</option><option value="download">仅算下行</option></select></Field><Field label="流量重置" hint="当前版本暂不支持"><select value="none" disabled><option value="none">不自动重置</option></select></Field></div><div className="fm-capability-note"><ShieldCheck size={17} /><span>转发同时支持 TCP 与 UDP，可自动选取共同端口或由用户在模板范围内指定端口。当前 Agent 未提供限速组件，限速和连接数固定为不限。</span></div><div className="dialog-actions"><Button type="button" variant="secondary" disabled={working} onClick={onClose}>取消</Button><Button type="submit" disabled={!valid || working}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />保存授权</>}</Button></div></form></Dialog>;
 }
 
 function ForwardTable({ forwards, templates, admin = false, onAction, onDelete, onCopy }: {

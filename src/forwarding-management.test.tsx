@@ -190,12 +190,20 @@ describe("administrator tunnel composition", () => {
     fireEvent.click(screen.getByRole("button", { name: "上移 洛杉矶出口" }));
     fireEvent.change(screen.getByRole("spinbutton", { name: /端口范围起点/ }), { target: { value: "2033" } });
     fireEvent.change(screen.getByRole("spinbutton", { name: /端口范围终点/ }), { target: { value: "2033" } });
+    const templateBilling = within(screen.getByRole("dialog", { name: "创建隧道模板" })).getByRole("combobox", { name: "计费方向" });
+    expect(Array.from(templateBilling.querySelectorAll("option"), (option) => option.textContent)).toEqual([
+      "双向",
+      "仅算上行",
+      "仅算下行",
+    ]);
+    fireEvent.change(templateBilling, { target: { value: "upload" } });
     fireEvent.click(screen.getByRole("button", { name: "预检路线" }));
 
     expect(await screen.findByText("路线预检通过")).toBeInTheDocument();
     fireEvent.click(within(screen.getByRole("dialog", { name: "创建隧道模板" })).getByRole("button", { name: "创建隧道" }));
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/tunnel-templates", expect.objectContaining({
       name: "东京反向链路",
+      billing_mode: "upload",
       port_range_start: 2033,
       port_range_end: 2033,
       server_ids: [12, 11],
@@ -223,14 +231,57 @@ describe("administrator tunnel composition", () => {
     expect(within(dialog).getByRole("spinbutton", { name: /^每转发限速 Mbps/ })).toBeDisabled();
     expect(within(dialog).getByRole("spinbutton", { name: /^每转发连接数/ })).toBeDisabled();
     expect(within(dialog).getAllByText("当前节点组件暂不支持")).toHaveLength(2);
+    const billing = within(dialog).getByRole("combobox", { name: "计费方向" });
+    expect(billing).toHaveValue("both");
+    expect(Array.from(billing.querySelectorAll("option"), (option) => option.textContent)).toEqual([
+      "双向",
+      "仅算上行",
+      "仅算下行",
+    ]);
+    expect(within(dialog).queryByText("继承隧道")).not.toBeInTheDocument();
+    fireEvent.change(billing, { target: { value: "upload" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "保存授权" }));
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/users/alice/tunnel-grants", expect.objectContaining({
       per_forward_speed_mbps: 0,
       per_forward_connection_limit: 0,
+      billing_mode_override: "upload",
     }), { idempotencyKey: expect.any(String) }));
     const grantBody = post.mock.calls.find(([path]) => path === "/api/admin/users/alice/tunnel-grants")?.[1] as Record<string, unknown>;
     expect(grantBody).not.toHaveProperty("reset_policy");
     expect(grantBody).not.toHaveProperty("allow_manual_entry_port");
+  });
+
+  it("materializes a legacy null billing mode from its linked tunnel", async () => {
+    const legacyGrant = {
+      ...compactGrant,
+      tunnel_id: 7,
+      billing_mode_override: null,
+      version: 3,
+    };
+    const uploadTunnel = { ...tunnel, billing_mode: "upload" };
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/tunnel-templates") return { templates: [uploadTunnel] } as T;
+      if (path === "/api/admin/remote-servers") return { servers: [] } as T;
+      if (path === "/api/admin/users") return { users: [{ username: "alice", nickname: "Alice", role: "user" }] } as T;
+      if (path === "/api/admin/forwards") return { forwards: [] } as T;
+      if (path === "/api/admin/users/alice/tunnel-grants") return { grants: [legacyGrant] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const put = vi.spyOn(api, "put").mockResolvedValue({ grant: legacyGrant });
+    render(<ForwardingManagement isAdmin notify={vi.fn()} />);
+
+    expect(await screen.findByText("仅算上行")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("tab", { name: /用户授权/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 alice 的隧道授权" }));
+    const dialog = screen.getByRole("dialog", { name: "编辑隧道授权" });
+    expect(within(dialog).getByRole("combobox", { name: "计费方向" })).toHaveValue("upload");
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存授权" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith(
+      "/api/admin/users/alice/tunnel-grants/grant_alice_tokyo",
+      expect.objectContaining({ billing_mode_override: "upload", version: 3 }),
+      { idempotencyKey: expect.any(String) },
+    ));
   });
 });

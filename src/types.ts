@@ -144,13 +144,15 @@ export interface PackageServerGrant {
   allowed_protocol_profiles: string[];
 }
 
+export type ForwardingBillingMode = "both" | "upload" | "download";
+
 export interface PackageForwardingGrant {
   tunnel_id: number;
   max_active_forwards: number;
   per_forward_speed_mbps: number;
   per_forward_connection_limit: number;
   traffic_limit_bytes: number;
-  billing_mode_override?: "download" | "both" | null;
+  billing_mode_override?: ForwardingBillingMode | null;
 }
 
 export interface AutoSpeedLimitRule {

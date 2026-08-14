@@ -17,6 +17,7 @@ import {
 import { api } from "./api";
 import type {
   AutoSpeedLimitRule,
+  ForwardingBillingMode,
   NodeItem,
   NodeListResponse,
   PackageForwardingGrant,
@@ -26,6 +27,7 @@ import type {
   ServerListResponse,
 } from "./types";
 import type { TunnelTemplate } from "./forwarding-management";
+import { normalizeForwardingBillingMode } from "./forwarding-billing";
 import {
   Badge,
   Button,
@@ -98,7 +100,7 @@ function errorMessage(reason: unknown, fallback: string): string {
   return reason instanceof Error && reason.message ? reason.message : fallback;
 }
 
-function initialPackageForm(item?: PackageItem): PackageFormState {
+function initialPackageForm(item: PackageItem | undefined, tunnels: TunnelTemplate[]): PackageFormState {
   return {
     name: item?.name ?? "",
     description: item?.description ?? "",
@@ -116,7 +118,13 @@ function initialPackageForm(item?: PackageItem): PackageFormState {
     nodeDeviceLimits: Object.fromEntries(Object.entries(item?.node_device_limits ?? {}).map(([key, value]) => [key, String(value)])),
     autoSpeedRules: [...(item?.auto_speed_rules ?? [])],
     serverGrants: [...(item?.server_grants ?? [])],
-    forwardingGrants: [...(item?.forwarding_grants ?? [])],
+    forwardingGrants: (item?.forwarding_grants ?? []).map((grant) => {
+      const tunnel = tunnels.find((candidate) => Number(candidate.id) === grant.tunnel_id);
+      return {
+        ...grant,
+        billing_mode_override: normalizeForwardingBillingMode(grant.billing_mode_override, tunnel?.billing_mode),
+      };
+    }),
   };
 }
 
@@ -144,7 +152,10 @@ function packagePayload(form: PackageFormState, original?: PackageItem): Record<
     traffic_mode: form.trafficMode,
     template_filename: form.templateFilename,
     server_grants: form.serverGrants,
-    forwarding_grants: form.forwardingGrants,
+    forwarding_grants: form.forwardingGrants.map((grant) => ({
+      ...grant,
+      billing_mode_override: normalizeForwardingBillingMode(grant.billing_mode_override),
+    })),
   };
   if (original) payload.id = original.id;
   return payload;
@@ -322,7 +333,7 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
   onClose: () => void;
   onComplete: (message: string) => void;
 }) {
-  const [form, setForm] = useState<PackageFormState>(() => initialPackageForm(item));
+  const [form, setForm] = useState<PackageFormState>(() => initialPackageForm(item, tunnels));
   const [nodeSearch, setNodeSearch] = useState("");
   const [templates, setTemplates] = useState<string[]>([]);
   const [showAdvanced, setShowAdvanced] = useState(Boolean(
@@ -411,7 +422,9 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
             per_forward_speed_mbps: 0,
             per_forward_connection_limit: 0,
             traffic_limit_bytes: 0,
-            billing_mode_override: null,
+            billing_mode_override: normalizeForwardingBillingMode(
+              tunnels.find((tunnel) => Number(tunnel.id) === tunnelID)?.billing_mode,
+            ),
           }],
       };
     });
@@ -574,7 +587,7 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
               {grant ? <div className="package-entitlement-fields package-entitlement-fields-forward">
                 <Field label="转发名额"><input aria-label={`${tunnel.name} 转发名额`} type="number" min="1" value={grant.max_active_forwards} onChange={(event) => updateForwardingGrant(tunnelID, { max_active_forwards: Number(event.target.value) })} /></Field>
                 <Field label="授权流量 GB" hint="0 表示不限"><input aria-label={`${tunnel.name} 授权流量`} type="number" min="0" step="0.01" value={grant.traffic_limit_bytes / 1024 ** 3} onChange={(event) => updateForwardingGrant(tunnelID, { traffic_limit_bytes: Math.round(Number(event.target.value) * 1024 ** 3) })} /></Field>
-                <Field label="流量计算"><select aria-label={`${tunnel.name} 流量计算`} value={grant.billing_mode_override ?? "inherit"} onChange={(event) => updateForwardingGrant(tunnelID, { billing_mode_override: event.target.value === "inherit" ? null : event.target.value as "download" | "both" })}><option value="inherit">继承线路</option><option value="download">仅下载</option><option value="both">双向</option></select></Field>
+                <Field label="流量计算"><select aria-label={`${tunnel.name} 流量计算`} value={normalizeForwardingBillingMode(grant.billing_mode_override, tunnel.billing_mode)} onChange={(event) => updateForwardingGrant(tunnelID, { billing_mode_override: event.target.value as ForwardingBillingMode })}><option value="both">双向</option><option value="upload">仅算上行</option><option value="download">仅算下行</option></select></Field>
               </div> : null}
             </div>;
           })}

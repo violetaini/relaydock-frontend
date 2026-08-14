@@ -55,7 +55,7 @@ function mockLoads() {
     if (path === "/api/admin/packages") return { packages: [packageItem] } as T;
     if (path === "/api/admin/nodes") return { nodes } as T;
     if (path === "/api/admin/remote-servers") return { servers: [{ id: 3, name: "香港入口", status: "online" }] } as T;
-    if (path === "/api/admin/tunnel-templates") return { tunnels: [{ id: 7, name: "香港转发", state: "active" }] } as T;
+    if (path === "/api/admin/tunnel-templates") return { tunnels: [{ id: 7, name: "香港转发", state: "active", billing_mode: "upload" }] } as T;
     if (path === "/api/admin/rule-templates") return { templates: ["default.yaml"] } as T;
     throw new Error(`unexpected GET ${path}`);
   });
@@ -89,9 +89,38 @@ describe("package management", () => {
       auto_speed_rules: packageItem.auto_speed_rules,
       template_filename: "default.yaml",
       server_grants: packageItem.server_grants,
-      forwarding_grants: packageItem.forwarding_grants,
+      forwarding_grants: [expect.objectContaining({
+        tunnel_id: 7,
+        billing_mode_override: "upload",
+      })],
     })));
     expect(notify).toHaveBeenCalledWith("套餐已更新，节点关联正在同步");
+  });
+
+  it("replaces inherited forwarding billing with three explicit directions", async () => {
+    mockLoads();
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<PackagesPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 标准套餐" }));
+    const billing = screen.getByRole("combobox", { name: "香港转发 流量计算" });
+    expect(billing).toHaveValue("upload");
+    expect(Array.from(billing.querySelectorAll("option"), (option) => option.textContent)).toEqual([
+      "双向",
+      "仅算上行",
+      "仅算下行",
+    ]);
+    expect(screen.queryByText("继承线路")).not.toBeInTheDocument();
+
+    fireEvent.change(billing, { target: { value: "download" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/packages/update", expect.objectContaining({
+      forwarding_grants: [expect.objectContaining({
+        tunnel_id: 7,
+        billing_mode_override: "download",
+      })],
+    })));
   });
 
   it("keeps user assignment out of the package workbench", async () => {

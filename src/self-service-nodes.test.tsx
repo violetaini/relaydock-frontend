@@ -25,6 +25,17 @@ const nestedCatalog = {
 };
 
 describe("self-service nodes", () => {
+  it("distinguishes an empty selection from an authorized catalog and opens the catalog", async () => {
+    vi.spyOn(api, "get").mockResolvedValue(nestedCatalog);
+    const onBrowseCatalog = vi.fn();
+    render(<SelfServiceNodes view="mine" notify={vi.fn()} onBrowseCatalog={onBrowseCatalog} />);
+
+    expect(await screen.findByText("0 个已开通 · 1 个可开通")).toBeInTheDocument();
+    expect(screen.getByText("套餐已授权 1 个可开通节点，请进入目录选择。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "查看 1 个可开通节点" }));
+    expect(onBrowseCatalog).toHaveBeenCalledOnce();
+  });
+
   it("normalizes the nested catalog and submits only the offer id", async () => {
     vi.spyOn(api, "get").mockResolvedValue(nestedCatalog);
     const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });

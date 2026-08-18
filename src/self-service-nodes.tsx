@@ -240,10 +240,11 @@ function policyText(speed = 0, connections = 0, billing: ManagedBillingMode = "d
   return `${speed ? `${speed} Mbps` : "不限速"} · ${connections ? `${connections} 并发` : "并发不限"} · ${billing === "both" ? "上下行计费" : "下行计费"}`;
 }
 
-export function SelfServiceNodes({ view, notify, onChanged }: {
+export function SelfServiceNodes({ view, notify, onChanged, onBrowseCatalog }: {
   view: "mine" | "catalog";
   notify: Notify;
   onChanged?: () => void | Promise<void>;
+  onBrowseCatalog?: () => void;
 }) {
   const [grants, setGrants] = useState<UserManagedGrant[]>([]);
   const [selected, setSelected] = useState<UserManagedSelection[]>([]);
@@ -335,6 +336,8 @@ export function SelfServiceNodes({ view, notify, onChanged }: {
   };
 
   const serverOptions = useMemo(() => Array.from(new Map(catalog.map((item) => [item.server_id, item.server_name])).entries()), [catalog]);
+  const activeSelectionCount = useMemo(() => selected.filter((item) => item.state === "active").length, [selected]);
+  const availableCatalogCount = useMemo(() => catalog.filter((item) => item.can_create && !item.selected).length, [catalog]);
   const visibleCatalog = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return catalog.filter((item) => {
@@ -348,8 +351,13 @@ export function SelfServiceNodes({ view, notify, onChanged }: {
 
   return <section className={`ssn-panel ssn-${view}`} aria-label={view === "mine" ? "我的自助节点" : "可开通节点"}>
     {view === "mine" ? <>
-      <div className="ssn-heading"><div><strong>自助开通节点</strong><small>{selected.length} 个记录 · {selected.filter((item) => item.state === "active").length} 个可用</small></div><IconButton label="刷新自助节点" onClick={() => void load()}><RefreshCw size={17} /></IconButton></div>
-      {!selected.length ? <Surface><EmptyState icon={<Unplug size={23} />} title="尚未开通自助节点" /></Surface> : <div className="ssn-selection-list">{selected.map((item) => <SelectionRow key={item.id} item={item} busy={working === `selection-${item.id}`} onRetry={() => void retry(item)} onRemove={() => setPendingRemove(item)} />)}</div>}
+      <div className="ssn-heading"><div><strong>自助开通节点</strong><small>{activeSelectionCount} 个已开通 · {availableCatalogCount} 个可开通</small></div><IconButton label="刷新自助节点" onClick={() => void load()}><RefreshCw size={17} /></IconButton></div>
+      {!selected.length ? <Surface><EmptyState
+        icon={<Unplug size={23} />}
+        title="尚未开通自助节点"
+        description={availableCatalogCount > 0 ? `套餐已授权 ${availableCatalogCount} 个可开通节点，请进入目录选择。` : grants.length > 0 ? "授权服务器当前没有可开通的发布项。" : "当前账号没有自助节点授权。"}
+        action={availableCatalogCount > 0 && onBrowseCatalog ? <Button onClick={onBrowseCatalog}><Plus size={16} />查看 {availableCatalogCount} 个可开通节点</Button> : undefined}
+      /></Surface> : <div className="ssn-selection-list">{selected.map((item) => <SelectionRow key={item.id} item={item} busy={working === `selection-${item.id}`} onRetry={() => void retry(item)} onRemove={() => setPendingRemove(item)} />)}</div>}
     </> : <>
       <div className="ssn-catalog-toolbar">
         <div className="search-box ssn-search"><Search size={17} /><input aria-label="搜索可开通节点" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="节点、服务器或协议" /></div>

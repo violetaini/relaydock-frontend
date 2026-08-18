@@ -923,7 +923,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       {!isAdmin ? <div className="nw-user-views segmented-control" role="tablist" aria-label="用户节点视图"><button role="tab" aria-selected={userView === "mine"} className={userView === "mine" ? "is-active" : ""} onClick={() => setUserView("mine")}><Route size={15} />我的节点</button><button role="tab" aria-selected={userView === "catalog"} className={userView === "catalog" ? "is-active" : ""} onClick={() => setUserView("catalog")}><Plus size={15} />可开通节点</button><button role="tab" aria-selected={false} onClick={() => { location.hash = "/forwarding"; }}><Network size={15} />转发管理</button></div> : null}
 
       {!isAdmin && userView === "catalog" ? <SelfServiceNodes view="catalog" notify={notify} onChanged={() => load(true)} /> : <>
-      {!isAdmin ? <SelfServiceNodes view="mine" notify={notify} onChanged={() => load(true)} /> : null}
+      {!isAdmin ? <SelfServiceNodes view="mine" notify={notify} onChanged={() => load(true)} onBrowseCatalog={() => setUserView("catalog")} /> : null}
       {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
       <Surface className="nw-command-surface">
         <div className="nw-command-row">

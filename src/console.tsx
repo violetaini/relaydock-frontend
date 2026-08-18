@@ -134,13 +134,14 @@ const permissionKey: Partial<Record<PageKey, string>> = {
   subscriptions: "subscription",
   generator: "generator",
   nodes: "nodes",
+  forwarding: "forwarding",
   templates: "templates",
   subscribeFiles: "subscribe-files",
   customRules: "custom-rules",
 };
 
 function pageAllowed(page: PageKey, isAdmin: boolean, permissions: string[] | null): boolean {
-  if (isAdmin || page === "dashboard" || page === "forwarding" || page === "traffic" || page === "account") return true;
+  if (isAdmin || page === "dashboard" || page === "traffic" || page === "account") return true;
   const key = permissionKey[page];
   return Boolean(key && permissions?.includes(key));
 }
@@ -321,7 +322,7 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: P
             {pageAllowed("subscriptions", profile.is_admin, userPages) ? <NavItem active={page === "subscriptions"} icon={<Link2 size={18} />} label="订阅链接" onClick={() => navigate("subscriptions")} /> : null}
             {pageAllowed("generator", profile.is_admin, userPages) ? <NavItem active={page === "generator"} icon={<Wrench size={18} />} label="生成订阅" onClick={() => navigate("generator")} /> : null}
             {pageAllowed("nodes", profile.is_admin, userPages) ? <NavItem active={page === "nodes"} icon={<Route size={18} />} label="节点管理" onClick={() => navigate("nodes")} /> : null}
-            <NavItem active={page === "forwarding"} icon={<Network size={18} />} label="转发管理" onClick={() => navigate("forwarding")} />
+            {pageAllowed("forwarding", profile.is_admin, userPages) ? <NavItem active={page === "forwarding"} icon={<Network size={18} />} label="转发管理" onClick={() => navigate("forwarding")} /> : null}
             <NavItem active={page === "traffic"} icon={<Gauge size={18} />} label="流量明细" onClick={() => navigate("traffic")} />
             {profile.is_admin ? <>
               <NavItem active={page === "servers"} icon={<Server size={18} />} label="服务管理" onClick={() => navigate("servers")} />
@@ -376,7 +377,7 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: P
           {page === "generator" && pageAllowed(page, profile.is_admin, userPages) ? <SubscriptionGeneratorPage notify={notify} /> : null}
           {page === "servers" && profile.is_admin ? <ServicesWorkbenchPage notify={notify} /> : null}
           {page === "nodes" && pageAllowed(page, profile.is_admin, userPages) ? <NodesWorkbench isAdmin={profile.is_admin} notify={notify} /> : null}
-          {page === "forwarding" ? <ForwardingManagement isAdmin={profile.is_admin} notify={notify} /> : null}
+          {page === "forwarding" && pageAllowed(page, profile.is_admin, userPages) ? <ForwardingManagement isAdmin={profile.is_admin} notify={notify} /> : null}
           {page === "traffic" ? <TrafficWorkbenchPage profile={profile} /> : null}
           {page === "users" && profile.is_admin ? <UsersWorkbenchPage notify={notify} initialScope={usersScope} /> : null}
           {page === "packages" && profile.is_admin ? <PackagesPage notify={notify} /> : null}

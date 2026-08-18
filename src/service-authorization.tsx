@@ -237,6 +237,7 @@ export function ServiceAuthorizationPanel({
 }) {
   const currentMode: AuthorizationMode =
     user.authorization_mode ?? (user.package_id ? "package" : "custom");
+  const packageMode = currentMode === "package";
   const [mode, setMode] = useState<AuthorizationMode | null>(currentMode);
   const [packages, setPackages] = useState<PackageItem[]>([]);
   const [packageID, setPackageID] = useState(String(user.package_id ?? ""));
@@ -379,15 +380,24 @@ export function ServiceAuthorizationPanel({
 
   return (
     <div className="service-auth-panel">
-      <ModeSelector
-        value={mode}
-        disabled={working}
-        onChange={(nextMode) => {
-          setError("");
-          if (nextMode === "custom" && user.package_id) setConfirmCustom(true);
-          else setMode(nextMode);
-        }}
-      />
+      {packageMode ? (
+        <div className="service-auth-current-mode" aria-label="当前授权方式">
+          <PackageIcon size={20} />
+          <span>
+            <strong>当前使用套餐授权</strong>
+            <small>节点、服务器和转发线路由当前套餐统一维护</small>
+          </span>
+        </div>
+      ) : (
+        <ModeSelector
+          value={mode}
+          disabled={working}
+          onChange={(nextMode) => {
+            setError("");
+            setMode(nextMode);
+          }}
+        />
+      )}
       {packageLoadError ? (
         <ErrorState
           message={packageLoadError}
@@ -495,20 +505,10 @@ export function ServiceAuthorizationPanel({
                     </>
                   )}
                 </Button>
-                {user.package_id ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    onClick={() => setConfirmCustom(true)}
-                    disabled={working}
-                  >
-                    改为自定义授权
-                  </Button>
-                ) : null}
               </div>
             </form>
           )}
-          {user.package_id ? (
+          {packageMode ? (
             <div className="user-package-current">
               <span>
                 当前套餐：
@@ -527,9 +527,25 @@ export function ServiceAuthorizationPanel({
               </Button>
             </div>
           ) : null}
+          {packageMode ? (
+            <div className="service-auth-package-switch">
+              <span>
+                <strong>需要改用独立服务授权？</strong>
+                <small>切换会解除当前套餐，并以空的自定义授权重新开始。</small>
+              </span>
+              <Button
+                type="button"
+                variant="danger"
+                onClick={() => setConfirmCustom(true)}
+                disabled={working}
+              >
+                解除套餐并切换为自定义授权
+              </Button>
+            </div>
+          ) : null}
         </section>
       ) : null}
-      {mode === "custom" && !user.package_id ? (
+      {mode === "custom" && !packageMode ? (
         <div className="service-auth-custom" aria-label="自定义服务授权">
           <section>
             <div className="service-auth-custom-heading">
@@ -568,9 +584,9 @@ export function ServiceAuthorizationPanel({
       ) : null}
       {confirmCustom ? (
         <ConfirmDialog
-          title="切换为自定义授权"
-          description={`将解绑 ${user.username} 当前套餐，并以空的自定义授权开始；当前服务授权会被统一替换。`}
-          confirmLabel="确认切换"
+          title="解除套餐并切换为自定义授权"
+          description={`将解除 ${user.username} 的当前套餐，并以空的自定义授权开始；当前服务授权会被统一替换。`}
+          confirmLabel="解除套餐并切换"
           working={working}
           onCancel={() => setConfirmCustom(false)}
           onConfirm={() => void switchToCustom()}

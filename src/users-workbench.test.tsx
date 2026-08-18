@@ -432,11 +432,14 @@ describe("users workbench", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "用户设置 alice" }));
     fireEvent.click(screen.getByRole("tab", { name: "服务授权" }));
-    fireEvent.click(await screen.findByRole("button", { name: "改为自定义授权" }));
+    expect(await screen.findByLabelText("当前授权方式")).toHaveTextContent("当前使用套餐授权");
+    expect(screen.queryByRole("radiogroup", { name: "服务授权方式" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /自定义授权/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "解除套餐并切换为自定义授权" }));
 
-    expect(screen.getByRole("dialog", { name: "切换为自定义授权" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "解除套餐并切换为自定义授权" })).toBeInTheDocument();
     expect(put).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "确认切换" }));
+    fireEvent.click(screen.getByRole("button", { name: "解除套餐并切换" }));
     await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/users/alice/service-authorization", {
       mode: "custom",
       custom: { fixed_node_grants: [], server_grants: [], forwarding_grants: [] },

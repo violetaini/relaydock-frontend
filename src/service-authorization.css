@@ -7,8 +7,18 @@
 .service-auth-mode > button small { color: var(--text-soft); font-size: 10px; line-height: 1.45; }
 .service-auth-mode > button.is-active { color: var(--accent-readable); border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); background: var(--accent-soft); }
 .service-auth-mode > button.is-active > svg { color: var(--accent); }
+.service-auth-current-mode { min-height: 64px; padding: 12px 14px; display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: center; gap: 10px; color: var(--accent-readable); border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border)); background: var(--accent-soft); }
+.service-auth-current-mode > svg { color: var(--accent); }
+.service-auth-current-mode > span,
+.service-auth-package-switch > span { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.service-auth-current-mode strong,
+.service-auth-package-switch strong { color: var(--text); font-size: 13px; }
+.service-auth-current-mode small,
+.service-auth-package-switch small { color: var(--text-soft); font-size: 10px; line-height: 1.45; }
 .service-auth-package { border: 1px solid var(--border-strong); background: var(--surface); }
 .service-auth-loading { min-height: 112px; display: grid; place-items: center; }
+.service-auth-package-switch { min-height: 64px; padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 14px; border-top: 1px solid var(--border); background: var(--surface-muted); }
+.service-auth-package-switch .button { flex: 0 0 auto; max-width: 100%; white-space: normal; }
 .service-auth-custom { display: flex; flex-direction: column; gap: 18px; }
 .service-auth-custom > section { padding-top: 14px; border-top: 1px solid var(--border-strong); }
 .service-auth-custom-heading { margin-bottom: 10px; display: flex; align-items: center; gap: 9px; }
@@ -43,4 +53,5 @@
   .batch-policy-grid { grid-template-columns: 1fr; }
   .batch-service-reset { grid-column: auto; align-items: stretch; flex-direction: column; }
   .batch-service-reset .field { width: 100%; }
+  .service-auth-package-switch { align-items: stretch; flex-direction: column; }
 }

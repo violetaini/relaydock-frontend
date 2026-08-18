@@ -74,6 +74,7 @@ import {
   type ManagedProtocol,
   type ManagedProtocolFamily,
 } from "./managed-node-presets";
+import type { ManagedGrantProtocol, ManagedGrantProtocolProfile } from "./managed-grant-protocols";
 import { generateWireGuardKeyPair } from "./xray-inbound-presets";
 import { SelfServiceNodes } from "./self-service-nodes";
 import type { RemoteServer, ServerListResponse } from "./types";
@@ -362,6 +363,40 @@ interface ManagedInboundInventoryResponse {
   }>;
 }
 
+interface UserManagedCreationGrant {
+  id: number;
+  state: string;
+  expires_at?: string | null;
+  max_active_nodes?: number;
+  active_node_count?: number;
+  speed_limit_mbps?: number;
+  connection_limit?: number;
+  traffic_limit_bytes?: number;
+  billing_mode?: string;
+  allowed_protocols?: ManagedGrantProtocol[];
+  allowed_protocol_profiles?: ManagedGrantProtocolProfile[];
+}
+
+interface UserManagedCreationServer extends RemoteServer {
+  grant: UserManagedCreationGrant;
+  inbound_error?: string;
+}
+
+interface UserManagedCreationContext {
+  servers?: UserManagedCreationServer[];
+  certificates?: ManagedCertificate[];
+  creations?: UserManagedCreation[];
+}
+
+interface UserManagedCreation {
+  id: number;
+  grant_id?: number;
+  node_id?: number;
+  node_name?: string;
+  server_id?: number;
+  inbound_tag?: string;
+}
+
 function readConfig(node: WorkbenchNode): Record<string, unknown> {
   for (const raw of [node.clash_config, node.parsed_config]) {
     if (!raw?.trim()) continue;
@@ -550,6 +585,8 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
   const [tcping, setTCPing] = useState<Record<number, TCPingResult>>({});
   const [userConfig, setUserConfig] = useState<UserNodeConfig | null>(null);
   const [userRouted, setUserRouted] = useState<UserRoutedOutboundStatus | null>(null);
+  const [userCreationContext, setUserCreationContext] = useState<UserManagedCreationContext | null>(null);
+  const [userCreationError, setUserCreationError] = useState("");
   const [manualOrder, setManualOrder] = useState<number[]>([]);
   const [orderDirty, setOrderDirty] = useState(false);
   const [savingOrder, setSavingOrder] = useState(false);
@@ -576,8 +613,9 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
     const requestID = ++loadRequestRef.current;
     if (!quiet) setLoading(true);
     setError("");
+    if (!isAdmin) setUserCreationError("");
     try {
-      const [nodeResponse, speedResponse, configResponse, routedResponse, offerResponse] = await Promise.all([
+      const [nodeResponse, speedResponse, configResponse, routedResponse, offerResponse, creationResponse] = await Promise.all([
         api.get<{ nodes?: WorkbenchNode[] }>("/api/admin/nodes"),
         isAdmin
           ? api.get<{ results?: SpeedResult[] | null }>("/api/admin/speedtest/results?latest=1").catch(() => ({ results: [] }))
@@ -587,6 +625,11 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
         isAdmin
           ? api.get<{ offers?: ManagedNodeOffer[] } | ManagedNodeOffer[]>("/api/admin/managed-node-offers").catch(() => ({ offers: [] }))
           : Promise.resolve({ offers: [] as ManagedNodeOffer[] }),
+        isAdmin
+          ? Promise.resolve({ context: null, error: "" })
+          : api.get<UserManagedCreationContext>("/api/user/managed-node-creation")
+            .then((context) => ({ context, error: "" }))
+            .catch((reason) => ({ context: null, error: reasonMessage(reason, "服务器创建授权加载失败") })),
       ]);
       if (requestID !== loadRequestRef.current) return;
       const list = nodeResponse.nodes ?? [];
@@ -594,6 +637,8 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       setOffers(Array.isArray(offerResponse) ? offerResponse : offerResponse.offers ?? []);
       setUserConfig(configResponse);
       setUserRouted(routedResponse);
+      setUserCreationContext(creationResponse.context);
+      setUserCreationError(creationResponse.error);
       setManualOrder((current) => reconcileNodeOrder(orderDirtyRef.current ? current : configResponse.node_order, list));
       setLatest(Object.fromEntries((speedResponse.results ?? []).map((item) => [item.node_id, item])));
       setSelected((current) => new Set([...current].filter((id) => list.some((node) => node.id === id))));
@@ -733,6 +778,9 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
   }, [enabledOnly, latest, manualOrder, nodes, protocol, search, sort, source, tag]);
 
   const selectedNodes = useMemo(() => nodes.filter((node) => selected.has(node.id)), [nodes, selected]);
+  const canCreateOnGrantedServer = !isAdmin && Boolean(userCreationContext?.servers?.some((server) => userCreationGrant(server)?.state === "active"));
+  const userCreationByNodeID = useMemo(() => new Map((userCreationContext?.creations ?? []).flatMap((creation) =>
+    creation.node_id && creation.node_id > 0 ? [[creation.node_id, creation] as const] : [])), [userCreationContext]);
   const allVisibleSelected = visible.length > 0 && visible.every((node) => selected.has(node.id));
   const toggleSelection = (id: number) => setSelected((current) => {
     const next = new Set(current);
@@ -800,6 +848,17 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
     run: async () => {
       await api.delete(`/api/user/routed-outbound?id=${encodeURIComponent(node.id)}`);
       notify("私有路由出站已删除");
+      await load(true);
+    },
+  });
+
+  const removeUserManagedCreation = (node: WorkbenchNode, creation: UserManagedCreation) => setPending({
+    title: "删除服务器节点",
+    description: `将删除“${node.node_name}”，并从授权服务器清理对应入站。此操作无法撤销。`,
+    confirmLabel: "确认删除",
+    run: async () => {
+      await api.delete(`/api/user/managed-node-creation/${creation.id}`);
+      notify("服务器节点已删除");
       await load(true);
     },
   });
@@ -916,11 +975,13 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
           <IconButton label="刷新节点数据" onClick={() => void load()} disabled={loading}><RefreshCw size={18} /></IconButton>
           <Button variant="secondary" onClick={() => { location.hash = "/forwarding"; }}><Network size={17} />转发管理</Button>
           <Button variant="secondary" onClick={() => setDialog({ kind: "import" })}><Upload size={17} />导入已有节点</Button>
-          {isAdmin ? <Button onClick={() => setDialog({ kind: "managed-create" })}><Server size={17} />在服务器创建</Button> : null}
+          {isAdmin || canCreateOnGrantedServer ? <Button onClick={() => setDialog({ kind: "managed-create" })}><Server size={17} />在服务器创建</Button> : null}
         </> : undefined}
       />
 
       {!isAdmin ? <div className="nw-user-views segmented-control" role="tablist" aria-label="用户节点视图"><button role="tab" aria-selected={userView === "mine"} className={userView === "mine" ? "is-active" : ""} onClick={() => setUserView("mine")}><Route size={15} />我的节点</button><button role="tab" aria-selected={userView === "catalog"} className={userView === "catalog" ? "is-active" : ""} onClick={() => setUserView("catalog")}><Plus size={15} />可开通节点</button><button role="tab" aria-selected={false} onClick={() => { location.hash = "/forwarding"; }}><Network size={15} />转发管理</button></div> : null}
+
+      {!isAdmin && userCreationError ? <ErrorState message={`${userCreationError}；服务器创建入口暂不可用，不能据此判断账号没有授权。`} onRetry={() => void load()} /> : null}
 
       {!isAdmin && userView === "catalog" ? <SelfServiceNodes view="catalog" notify={notify} onChanged={() => load(true)} /> : <>
       {!isAdmin ? <SelfServiceNodes view="mine" notify={notify} onChanged={() => load(true)} onBrowseCatalog={() => setUserView("catalog")} /> : null}
@@ -983,7 +1044,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       </div> : null}
 
       <Surface className="table-surface nw-node-surface">
-        {loading ? <div className="center-state"><Spinner label="正在加载节点" /></div> : visible.length === 0 ? <EmptyState icon={<Route size={24} />} title={nodes.length ? "没有匹配的节点" : "暂无节点"} description={nodes.length ? "调整筛选条件后重试" : "从受管服务器创建节点，或导入已经建好的外部节点"} action={!nodes.length ? <Button onClick={() => isAdmin ? setDialog({ kind: "managed-create" }) : setDialog({ kind: "import" })}>{isAdmin ? <Server size={16} /> : <Upload size={16} />}{isAdmin ? "在服务器创建" : "导入节点"}</Button> : undefined} /> : <div className="table-wrap"><table className="nw-node-table"><thead><tr><th className="nw-check-col"><input aria-label="选择当前结果" type="checkbox" checked={allVisibleSelected} onChange={toggleVisible} /></th>{sort === "custom" ? <th className="nw-order-col">顺序</th> : null}<th>协议 / 节点</th><th>标签与归属</th><th>服务器地址</th><th>连通性</th><th>测速结果</th><th>状态</th><th aria-label="操作" /></tr></thead><tbody>{visible.map((node) => {
+        {loading ? <div className="center-state"><Spinner label="正在加载节点" /></div> : visible.length === 0 ? <EmptyState icon={<Route size={24} />} title={nodes.length ? "没有匹配的节点" : "暂无节点"} description={nodes.length ? "调整筛选条件后重试" : "从受管服务器创建节点，或导入已经建好的外部节点"} action={!nodes.length ? <Button onClick={() => isAdmin || canCreateOnGrantedServer ? setDialog({ kind: "managed-create" }) : setDialog({ kind: "import" })}>{isAdmin || canCreateOnGrantedServer ? <Server size={16} /> : <Upload size={16} />}{isAdmin || canCreateOnGrantedServer ? "在服务器创建" : "导入节点"}</Button> : undefined} /> : <div className="table-wrap"><table className="nw-node-table"><thead><tr><th className="nw-check-col"><input aria-label="选择当前结果" type="checkbox" checked={allVisibleSelected} onChange={toggleVisible} /></th>{sort === "custom" ? <th className="nw-order-col">顺序</th> : null}<th>协议 / 节点</th><th>标签与归属</th><th>服务器地址</th><th>连通性</th><th>测速结果</th><th>状态</th><th aria-label="操作" /></tr></thead><tbody>{visible.map((node) => {
           const address = nodeAddress(node);
           const ping = tcping[node.id];
           const speed = latest[node.id];
@@ -998,13 +1059,13 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
             <td className="nw-cell-latency" data-label="连通性"><button className={`nw-result-button ${ping?.success ? "is-good" : ping?.error ? "is-bad" : ""}`} disabled={ping?.loading} title={tcpingResultTitle(ping)} onClick={() => void pingOne(node)}>{ping?.loading ? <Spinner label="" /> : <Zap size={14} />}{tcpingResultLabel(ping)}</button></td>
             <td className="nw-cell-speed" data-label="测速">{isAdmin ? <button className="nw-speed-cell" title={speed?.error || "打开节点测速"} onClick={() => setDialog({ kind: "speed", nodeIDs: [node.id] })}><Badge tone={speedTone(speed)}>{resultLabel(speed)}</Badge>{speed?.egress_ip ? <small>{speed.egress_ip}</small> : null}</button> : <Badge tone="neutral">管理员功能</Badge>}</td>
             <td className="nw-cell-status" data-label="状态">{isAdmin ? <button className="nw-status-button" title={`点击${node.enabled ? "停用" : "启用"}`} onClick={() => void update(node, { enabled: !node.enabled }, node.enabled ? "节点已停用" : "节点已启用")}><span className={node.enabled ? "is-on" : ""} />{node.enabled ? "启用" : "停用"}</button> : <Badge tone={node.enabled ? "good" : "neutral"}>{node.enabled ? "启用" : "停用"}</Badge>}</td>
-            <td className="nw-cell-actions"><NodeActions node={node} isAdmin={isAdmin} userRouted={userRouted} onEdit={() => setDialog({ kind: "edit", node })} onConfig={() => setDialog({ kind: "config", node })} onQRCode={() => setDialog({ kind: "qr", node })} onRelay={() => setDialog({ kind: "relay", node })} onAnyDoor={() => setDialog({ kind: "anydoor", node })} onCancelRelay={() => cancelRelay(node)} onChain={() => setDialog({ kind: "chain", node })} onResolve={() => setDialog({ kind: "resolve", node })} onRegion={() => setDialog({ kind: "region", node })} onRestore={() => restoreDomain(node)} onRoute={() => setDialog({ kind: "route", node })} onTempSub={() => setDialog({ kind: "temp-sub", nodes: [node] })} onDelete={() => isAdmin ? removeNode(node) : removeUserRouted(node)} /></td>
+            <td className="nw-cell-actions"><NodeActions node={node} isAdmin={isAdmin} userRouted={userRouted} userManagedCreation={userCreationByNodeID.get(node.id)} onEdit={() => setDialog({ kind: "edit", node })} onConfig={() => setDialog({ kind: "config", node })} onQRCode={() => setDialog({ kind: "qr", node })} onRelay={() => setDialog({ kind: "relay", node })} onAnyDoor={() => setDialog({ kind: "anydoor", node })} onCancelRelay={() => cancelRelay(node)} onChain={() => setDialog({ kind: "chain", node })} onResolve={() => setDialog({ kind: "resolve", node })} onRegion={() => setDialog({ kind: "region", node })} onRestore={() => restoreDomain(node)} onRoute={() => setDialog({ kind: "route", node })} onTempSub={() => setDialog({ kind: "temp-sub", nodes: [node] })} onDelete={() => { const creation = userCreationByNodeID.get(node.id); if (isAdmin) removeNode(node); else if (creation) removeUserManagedCreation(node, creation); else removeUserRouted(node); }} /></td>
           </tr>;
         })}</tbody></table></div>}
       </Surface>
       </>}
 
-      {dialog?.kind === "managed-create" ? <ManagedNodeWizard nodes={nodes} onClose={closeDialog} onComplete={async (message, tone) => { closeDialog(); if (tone) notify(message, tone); else notify(message); await load(true); }} /> : null}
+      {dialog?.kind === "managed-create" ? <ManagedNodeWizard nodes={nodes} isAdmin={isAdmin} userContext={userCreationContext ?? undefined} onClose={closeDialog} onComplete={async (message, tone) => { closeDialog(); if (tone) notify(message, tone); else notify(message); await load(true); }} /> : null}
       {dialog?.kind === "edit" ? <NodeEditor node={dialog.node} offer={offers.find((item) => item.node_id === dialog.node.id)} availableTags={knownTags} onClose={closeDialog} onComplete={async (message) => { closeDialog(); notify(message); await load(true); }} /> : null}
       {dialog?.kind === "config" ? <ConfigDialog node={dialog.node} editable={isAdmin} onClose={closeDialog} onComplete={async () => { closeDialog(); notify("节点配置已更新"); await load(true); }} /> : null}
       {dialog?.kind === "import" ? <ImportDialog onClose={closeDialog} onComplete={async (count) => { closeDialog(); notify(`已导入 ${count} 个节点`); await load(true); }} /> : null}
@@ -1067,10 +1128,11 @@ function DuplicateNodesDialog({ groups, onClose, onDelete }: { groups: Duplicate
   );
 }
 
-function NodeActions({ node, isAdmin, userRouted, onEdit, onConfig, onQRCode, onRelay, onAnyDoor, onCancelRelay, onChain, onResolve, onRegion, onRestore, onRoute, onTempSub, onDelete }: {
+function NodeActions({ node, isAdmin, userRouted, userManagedCreation, onEdit, onConfig, onQRCode, onRelay, onAnyDoor, onCancelRelay, onChain, onResolve, onRegion, onRestore, onRoute, onTempSub, onDelete }: {
   node: WorkbenchNode;
   isAdmin: boolean;
   userRouted: UserRoutedOutboundStatus | null;
+  userManagedCreation?: UserManagedCreation;
   onEdit: () => void;
   onConfig: () => void;
   onQRCode: () => void;
@@ -1094,6 +1156,7 @@ function NodeActions({ node, isAdmin, userRouted, onEdit, onConfig, onQRCode, on
     && (userRouted?.daily.max ?? 0) > (userRouted?.daily.used ?? 0);
   const canCreateRoute = node.node_type !== "routed" && Boolean(node.original_server && node.inbound_tag) && (isAdmin || userQuotaAvailable);
   const canDeleteUserRoute = !isAdmin && node.node_type === "routed" && node.routed_owner === "user";
+  const canDeleteUserManagedCreation = !isAdmin && Boolean(userManagedCreation);
   const isManaged = nodeSource(node) === "managed";
   const credentialPending = node.credential_state === "pending";
 
@@ -1183,7 +1246,7 @@ function NodeActions({ node, isAdmin, userRouted, onEdit, onConfig, onQRCode, on
       {isAdmin ? <button role="menuitem" onClick={() => choose(onRegion)}><MapPin size={15} />地区 Emoji</button> : null}
       {isAdmin && node.original_domain ? <button role="menuitem" onClick={() => choose(onRestore)}><Globe2 size={15} />恢复原域名</button> : null}
       {canCreateRoute ? <button role="menuitem" onClick={() => choose(onRoute)}><Route size={15} />{isAdmin ? "创建路由出站" : "创建私有路由出站"}</button> : null}
-      {isAdmin || canDeleteUserRoute ? <button role="menuitem" className="is-danger" onClick={() => choose(onDelete)}><Trash2 size={15} />{canDeleteUserRoute ? "删除私有路由出站" : "删除节点"}</button> : null}
+      {isAdmin || canDeleteUserRoute || canDeleteUserManagedCreation ? <button role="menuitem" className="is-danger" onClick={() => choose(onDelete)}><Trash2 size={15} />{canDeleteUserRoute ? "删除私有路由出站" : canDeleteUserManagedCreation ? "删除服务器节点" : "删除节点"}</button> : null}
     </div>,
     document.body,
   ) : null;
@@ -1338,6 +1401,62 @@ function protocolLabel(value: ManagedProtocol): string {
 
 const managedProtocolFamilies = Array.from(new Map(managedProtocolOptions.map((item) => [item.family, item.familyLabel])).entries());
 
+const managedProtocolGrantScopes: Partial<Record<ManagedProtocol, { family: ManagedGrantProtocol; profile: ManagedGrantProtocolProfile }>> = {
+  "vless-reality": { family: "vless", profile: "vless-reality" },
+  "vless-tls": { family: "vless", profile: "vless-tcp-tls" },
+  "vless-grpc-tls": { family: "vless", profile: "vless-grpc-tls" },
+  "vless-wss": { family: "vless", profile: "vless-wss" },
+  "vless-ws": { family: "vless", profile: "vless-ws" },
+  vmess: { family: "vmess", profile: "vmess-tcp-none" },
+  "vmess-tls": { family: "vmess", profile: "vmess-tcp-tls" },
+  "vmess-grpc-tls": { family: "vmess", profile: "vmess-grpc-tls" },
+  "vmess-wss": { family: "vmess", profile: "vmess-wss" },
+  "vmess-ws": { family: "vmess", profile: "vmess-ws" },
+  trojan: { family: "trojan", profile: "trojan-tcp-tls" },
+  "trojan-reality": { family: "trojan", profile: "trojan-reality" },
+  "trojan-grpc-tls": { family: "trojan", profile: "trojan-grpc-tls" },
+  "trojan-wss": { family: "trojan", profile: "trojan-wss" },
+  hysteria2: { family: "hysteria", profile: "hysteria2" },
+  socks5: { family: "socks", profile: "socks5" },
+  http: { family: "http", profile: "http" },
+};
+
+export function managedGrantAllowsProtocol(grant: UserManagedCreationGrant | undefined, protocol: ManagedProtocol, ssCipher?: ManagedInboundDraft["ssCipher"]): boolean {
+  if (!grant) return false;
+  if (protocol === "wireguard" || protocol === "anydoor") return false;
+  if (protocol === "shadowsocks" && ssCipher === "chacha20-ietf-poly1305") return false;
+  const scopes = protocol === "shadowsocks"
+    ? (ssCipher
+      ? [{
+          family: "shadowsocks" as const,
+          profile: (ssCipher.startsWith("2022-") ? "shadowsocks-2022" : "shadowsocks-classic") as ManagedGrantProtocolProfile,
+        }]
+      : [
+          { family: "shadowsocks" as const, profile: "shadowsocks-classic" as const },
+          { family: "shadowsocks" as const, profile: "shadowsocks-2022" as const },
+        ])
+    : managedProtocolGrantScopes[protocol] ? [managedProtocolGrantScopes[protocol]!] : [];
+  if (!scopes.length) return false;
+  const families = grant.allowed_protocols ?? [];
+  const profiles = grant.allowed_protocol_profiles ?? [];
+  return scopes.some(({ family, profile }) =>
+    (families.length === 0 || families.includes(family)) && (profiles.length === 0 || profiles.includes(profile)));
+}
+
+function userCreationGrant(server: RemoteServer | undefined): UserManagedCreationGrant | undefined {
+  return server && "grant" in server ? (server as UserManagedCreationServer).grant : undefined;
+}
+
+function serverCreateReady(server: RemoteServer, isAdmin: boolean): boolean {
+  if (!serverReady(server)) return false;
+  if (isAdmin) return true;
+  if (server.xray_mode !== "embedded") return false;
+  if ((server as UserManagedCreationServer).inbound_error) return false;
+  const grant = userCreationGrant(server);
+  if (!grant || grant.state !== "active") return false;
+  return !grant.max_active_nodes || (grant.active_node_count ?? 0) < grant.max_active_nodes;
+}
+
 function availableInboundPort(server: RemoteServer | undefined, protocol: ManagedProtocol): string {
   // WSS is multiplexed by the server's Nginx listener; its public port remains 443.
   if (isManagedWSSProtocol(protocol)) return "443";
@@ -1357,7 +1476,32 @@ function availableInboundPort(server: RemoteServer | undefined, protocol: Manage
   return "443";
 }
 
-function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNode[]; onClose: () => void; onComplete: (message: string, tone?: "success" | "error") => void }) {
+function managedInboundPreview(draft: ManagedInboundDraft, isAdmin: boolean): Record<string, unknown> {
+  const inbound = draft.protocol === "wireguard" ? buildManagedWireGuardInbound(draft) : buildManagedInboundRequest(draft).inbound;
+  if (isAdmin) return inbound;
+  const preview = JSON.parse(JSON.stringify(inbound)) as Record<string, unknown>;
+  const settings = preview.settings && typeof preview.settings === "object" && !Array.isArray(preview.settings)
+    ? preview.settings as Record<string, unknown>
+    : undefined;
+  if (!settings) return preview;
+  for (const key of ["clients", "users", "accounts"]) {
+    const entries = settings[key];
+    if (!Array.isArray(entries)) continue;
+    settings[key] = entries.map((entry) => {
+      const source = entry && typeof entry === "object" && !Array.isArray(entry) ? entry as Record<string, unknown> : {};
+      return {
+        credential: "创建后由服务端自动生成",
+        ...Object.fromEntries(["flow", "level", "version"].filter((field) => source[field] !== undefined).map((field) => [field, source[field]])),
+      };
+    });
+  }
+  for (const key of ["password", "user", "pass", "auth"]) {
+    if (settings[key] !== undefined) settings[key] = "创建后由服务端自动生成";
+  }
+  return preview;
+}
+
+function ManagedNodeWizard({ nodes, isAdmin, userContext, onClose, onComplete }: { nodes: WorkbenchNode[]; isAdmin: boolean; userContext?: UserManagedCreationContext; onClose: () => void; onComplete: (message: string, tone?: "success" | "error") => void }) {
   const wizardRef = useRef<HTMLDivElement>(null);
   const inventoryRequestRef = useRef(0);
   const realityDomainsRequestRef = useRef(0);
@@ -1378,10 +1522,15 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
   const [wireGuardCreated, setWireGuardCreated] = useState<WireGuardCreatedState | null>(null);
   const [error, setError] = useState("");
   const selectedServer = servers.find((server) => String(server.id) === serverID);
-  const readyServers = servers.filter(serverReady);
+  const selectedGrant = userCreationGrant(selectedServer);
+  const readyServers = servers.filter((server) => serverCreateReady(server, isAdmin));
+  const allowedProtocolOptions = isAdmin
+    ? managedProtocolOptions
+    : managedProtocolOptions.filter((item) => managedGrantAllowsProtocol(selectedGrant, item.value));
   const selectedProtocol = managedProtocolOptions.find((item) => item.value === draft.protocol);
   const selectedFamily = selectedProtocol?.family ?? "vless";
-  const familyProtocols = managedProtocolOptions.filter((item) => item.family === selectedFamily);
+  const familyProtocols = allowedProtocolOptions.filter((item) => item.family === selectedFamily);
+  const allowedProtocolFamilies = Array.from(new Map(allowedProtocolOptions.map((item) => [item.family, item.familyLabel])).entries());
   const forwardingCandidates = nodes.filter((node) => {
     const address = nodeAddress(node);
     return nodeSource(node) === "managed" && Boolean(address.host && address.port);
@@ -1401,7 +1550,7 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
   const isWireGuard = draft.protocol === "wireguard";
   const wireGuardEndpoint = selectedServer?.domain?.trim() || selectedServer?.ip_address?.trim() || selectedServer?.ip_address_v6?.trim() || "";
   const isLegacySharedShadowsocks = draft.protocol === "shadowsocks" && !managedInboundSupportsPublishing(draft);
-  const canPublish = selectedServer?.xray_mode === "embedded" && managedInboundSupportsPublishing(draft);
+  const canPublish = isAdmin && selectedServer?.xray_mode === "embedded" && managedInboundSupportsPublishing(draft);
   const publishDisabledReason = isTunnel
     ? "任意门是端口转发入站，不提供独立用户凭据，不能发布到用户目录。"
     : isWireGuard
@@ -1419,12 +1568,12 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
     setKeyWorking(true);
     setError("");
     try {
-      const response = await api.post<X25519Response>("/api/admin/xray/generate-x25519");
+      const response = await api.post<X25519Response>(isAdmin ? "/api/admin/xray/generate-x25519" : "/api/user/managed-node-creation/x25519");
       if (!response.privateKey || !response.publicKey) throw new Error(response.error || "服务端未返回完整的 X25519 密钥对");
       setDraft((current) => ({ ...current, privateKey: response.privateKey ?? "", publicKey: response.publicKey ?? "" }));
     } catch (reason) { setError(reasonMessage(reason, "Reality 密钥生成失败")); }
     finally { setKeyWorking(false); }
-  }, []);
+  }, [isAdmin]);
 
   const generateWireGuardKeys = useCallback(async () => {
     const generation = ++wireGuardKeyGenerationRef.current;
@@ -1456,7 +1605,8 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
     realityDomainsRequestRef.current = requestID;
     setDomainWorking(true);
     try {
-      const response = await api.get<{ domains?: RealityDomainProbe[] }>(`/api/admin/remote/reality-domains?server_id=${id}`);
+      const endpoint = isAdmin ? "/api/admin/remote/reality-domains" : "/api/user/managed-node-creation/reality-domains";
+      const response = await api.get<{ domains?: RealityDomainProbe[] }>(`${endpoint}?server_id=${id}`);
       if (realityDomainsRequestRef.current !== requestID) return;
       const domains = response.domains ?? [];
       setRealityDomains(domains);
@@ -1465,13 +1615,19 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
     } finally {
       if (realityDomainsRequestRef.current === requestID) setDomainWorking(false);
     }
-  }, []);
+  }, [isAdmin]);
 
   const loadInboundInventory = useCallback(async (server: RemoteServer) => {
     const requestID = inventoryRequestRef.current + 1;
     inventoryRequestRef.current = requestID;
     setInventoryWorking(true);
     setInventoryServerID("");
+    if (!isAdmin) {
+      setDraft((current) => ({ ...current, port: availableInboundPort(server, current.protocol) }));
+      setInventoryServerID(String(server.id));
+      setInventoryWorking(false);
+      return;
+    }
     try {
       const response = await api.get<ManagedInboundInventoryResponse>(`/api/admin/remote/inbounds?server_id=${server.id}`);
       if (inventoryRequestRef.current !== requestID) return;
@@ -1491,24 +1647,43 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
     } finally {
       if (inventoryRequestRef.current === requestID) setInventoryWorking(false);
     }
-  }, []);
+  }, [isAdmin]);
 
   const chooseServer = useCallback((server: RemoteServer) => {
     setError("");
     setServerID(String(server.id));
-    setDraft((current) => ({
-      ...current,
-      domain: isManagedWSSProtocol(current.protocol)
-        ? server.domain?.trim() || ""
-        : isManagedRealityProtocol(current.protocol)
-          ? ""
-          : current.domain,
-    }));
+    setDraft((current) => {
+      const currentAllowed = isAdmin || managedGrantAllowsProtocol(userCreationGrant(server), current.protocol, current.protocol === "shadowsocks" ? current.ssCipher : undefined);
+      const firstAllowed = managedProtocolOptions.find((item) => managedGrantAllowsProtocol(userCreationGrant(server), item.value));
+      const protocol = currentAllowed ? current.protocol : firstAllowed?.value ?? current.protocol;
+      const defaults = currentAllowed ? {} : protocolDefaults(protocol);
+      const next = { ...current, ...defaults, protocol };
+      if (!isAdmin && protocol === "shadowsocks" && !managedGrantAllowsProtocol(userCreationGrant(server), protocol, next.ssCipher)) {
+        next.ssCipher = "aes-128-gcm";
+      }
+      return {
+        ...next,
+        domain: isManagedWSSProtocol(protocol)
+          ? server.domain?.trim() || ""
+          : isManagedRealityProtocol(protocol)
+            ? ""
+            : next.domain,
+      };
+    });
     void loadInboundInventory(server);
-  }, [loadInboundInventory]);
+  }, [isAdmin, loadInboundInventory]);
 
   useEffect(() => {
     let active = true;
+    if (!isAdmin) {
+      const nextServers = (userContext?.servers ?? []).filter((server) => userCreationGrant(server)?.state === "active");
+      setServers(nextServers);
+      setCertificates(userContext?.certificates ?? []);
+      const preferred = nextServers.find((server) => serverCreateReady(server, false));
+      if (preferred) chooseServer(preferred);
+      setLoading(false);
+      return () => { active = false; };
+    }
     Promise.all([
       api.get<ServerListResponse>("/api/admin/remote-servers"),
       api.get<{ certificates?: ManagedCertificate[] }>("/api/admin/certificates").catch(() => ({ certificates: [] })),
@@ -1521,7 +1696,7 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
       if (preferred) chooseServer(preferred);
     }).catch((reason) => active && setError(reasonMessage(reason, "创建资源加载失败"))).finally(() => active && setLoading(false));
     return () => { active = false; };
-  }, [chooseServer]);
+  }, [chooseServer, isAdmin, userContext]);
 
   useEffect(() => {
     if (!serverID || !isManagedRealityProtocol(draft.protocol)) return;
@@ -1546,11 +1721,16 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
   }, [draft.protocol, draft.publish, draft.ssCipher, selectedServer]);
 
   const chooseProtocol = (protocol: ManagedProtocol) => {
+    if (!isAdmin && !managedGrantAllowsProtocol(selectedGrant, protocol)) {
+      setError("当前服务器授权不允许创建该协议组合");
+      return;
+    }
     const defaults = protocolDefaults(protocol);
     setDraft((current) => {
       const forwardNode = forwardingCandidates.find((node) => String(node.id) === current.forwardNodeId) ?? forwardingCandidates[0];
       const forwardAddress = forwardNode ? nodeAddress(forwardNode) : { host: "", port: 0 };
-      const ssCipher = defaults.ssCipher ?? current.ssCipher;
+      let ssCipher = defaults.ssCipher ?? current.ssCipher;
+      if (!isAdmin && protocol === "shadowsocks" && !managedGrantAllowsProtocol(selectedGrant, protocol, ssCipher)) ssCipher = "aes-128-gcm";
       const ssKeyLength = ssCipher === "2022-blake3-aes-128-gcm" ? 16 : 32;
       const next = {
         ...current,
@@ -1585,6 +1765,11 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
   };
 
   const chooseSSCipher = (cipher: ManagedInboundDraft["ssCipher"]) => {
+    if (!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", cipher)) {
+      setError("当前服务器授权不允许该 Shadowsocks 组合");
+      return;
+    }
+    setError("");
     const is2022 = isShadowsocks2022Cipher(cipher);
     const supportsPublishing = is2022 || isShadowsocksClassicMultiUserCipher(cipher);
     const keyLength = cipher === "2022-blake3-aes-128-gcm" ? 16 : 32;
@@ -1602,12 +1787,13 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
     try {
       if (step === 1) {
         if (!selectedServer) throw new Error("请选择目标服务器");
-        if (!serverReady(selectedServer)) throw new Error("目标服务器或 Xray 当前不在线");
+        if (!serverCreateReady(selectedServer, isAdmin)) throw new Error(isAdmin ? "目标服务器或 Xray 当前不在线" : "目标服务器当前不可创建，可能已离线或节点名额已满");
         if (inventoryServerID !== serverID) throw new Error("服务器入站端口尚未读取完成，请稍后重试");
         setStep(2);
         return;
       }
       if (step === 2) {
+        if (!isAdmin && !managedGrantAllowsProtocol(selectedGrant, draft.protocol, draft.protocol === "shadowsocks" ? draft.ssCipher : undefined)) throw new Error("当前服务器授权不允许创建该协议组合");
         if (isWSS && !selectedServer?.domain?.trim()) throw new Error(`${protocolLabel(draft.protocol)} 需要先在服务器设置节点域名`);
         if (isWSS && matchingWSSCertificates.length === 0) throw new Error(`${protocolLabel(draft.protocol)} 需要一张覆盖节点域名且未过期的托管证书`);
         if (isReality && (!draft.privateKey || !draft.publicKey)) throw new Error("Reality 密钥尚未生成完成");
@@ -1631,6 +1817,9 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
     setWorking(true);
     setError("");
     try {
+      if (!isAdmin && !managedGrantAllowsProtocol(selectedGrant, draft.protocol, draft.protocol === "shadowsocks" ? draft.ssCipher : undefined)) {
+        throw new Error("当前服务器授权不允许创建该协议组合");
+      }
       if (isWireGuard) {
         const inbound = buildManagedWireGuardInbound(draft);
         const clientConfig = buildManagedWireGuardClientConfig(draft, wireGuardEndpoint);
@@ -1650,7 +1839,8 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
       }
       const payload = buildManagedInboundRequest(draft);
       const willPublish = draft.publish && canPublish;
-      const response = await api.post<ManagedCreateResponse>(`/api/admin/managed-nodes/create?server_id=${selectedServer.id}`, payload);
+      const createEndpoint = isAdmin ? "/api/admin/managed-nodes/create" : "/api/user/managed-node-creation";
+      const response = await api.post<ManagedCreateResponse>(`${createEndpoint}?server_id=${selectedServer.id}`, payload);
       if (isTunnel && response.success !== true) throw new Error(response.error || response.message || "任意门转发创建失败：服务端未确认事务成功");
       if (isTunnel && (response.runtime_warning?.trim() || response.warning?.trim())) throw new Error(response.runtime_warning?.trim() || response.message?.trim() || response.warning?.trim() || "任意门转发创建失败");
       const nodeID = response.node_id ?? response.node?.id;
@@ -1667,8 +1857,8 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
           return;
         }
       }
-      onComplete(isTunnel ? "任意门转发已创建" : willPublish ? "受管节点已创建并发布给用户" : "受管节点已创建");
-    } catch (reason) { setError(reasonMessage(reason, isTunnel ? "任意门转发创建失败" : isWireGuard ? "WireGuard 节点创建失败" : "受管节点创建失败")); }
+      onComplete(isTunnel ? "任意门转发已创建" : willPublish ? "受管节点已创建并发布给用户" : isAdmin ? "受管节点已创建" : "节点已在授权服务器创建");
+    } catch (reason) { setError(reasonMessage(reason, isTunnel ? "任意门转发创建失败" : isWireGuard ? "WireGuard 节点创建失败" : isAdmin ? "受管节点创建失败" : "节点创建失败")); }
     finally { setWorking(false); }
   };
 
@@ -1683,7 +1873,7 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
     </Dialog>;
   }
 
-  return <Dialog title="在服务器创建节点" description="选择受管服务器后创建真实入站和可用的订阅节点。" onClose={onClose} wide dismissible={!working}>
+  return <Dialog title="在服务器创建节点" description={isAdmin ? "选择受管服务器后创建真实入站和可用的订阅节点。" : "在已授权服务器创建自己的节点；服务器、协议和额度由授权范围限制。"} onClose={onClose} wide dismissible={!working}>
     <div className="managed-node-wizard" ref={wizardRef}>
       <ol className="managed-stepper" aria-label="创建进度">
         {["服务器", "协议", "配置", "确认"].map((label, index) => <li key={label} className={step === index + 1 ? "is-active" : step > index + 1 ? "is-done" : ""}><span>{step > index + 1 ? <Check size={14} /> : index + 1}</span><strong>{label}</strong></li>)}
@@ -1692,45 +1882,49 @@ function ManagedNodeWizard({ nodes, onClose, onComplete }: { nodes: WorkbenchNod
       {loading ? <div className="center-state"><Spinner label="正在读取服务器与证书" /></div> : step === 1 ? <section className="managed-wizard-step">
         <div className="managed-step-heading"><span><Server size={19} /></span><div><h3>选择运行节点的服务器</h3><p>地址由服务器配置自动生成，不需要手工填写 IP 或域名。</p></div></div>
         {servers.length ? <div className="managed-server-grid">{servers.map((server) => {
-          const ready = serverReady(server);
+          const ready = serverCreateReady(server, isAdmin);
+          const grant = userCreationGrant(server);
+          const full = !isAdmin && Boolean(grant?.max_active_nodes) && (grant?.active_node_count ?? 0) >= (grant?.max_active_nodes ?? 0);
+          const inventoryFailed = !isAdmin && Boolean((server as UserManagedCreationServer).inbound_error);
           return <button key={server.id} type="button" aria-pressed={serverID === String(server.id)} className={serverID === String(server.id) ? "is-selected" : ""} disabled={!ready} onClick={() => chooseServer(server)}>
-            <span className={`managed-server-icon ${ready ? "is-online" : ""}`}><Server size={18} /></span><span><strong>{server.name}</strong><small>{server.domain || server.ip_address || "地址待上报"}</small></span><Badge tone={ready ? "good" : "bad"}>{serverID === String(server.id) && inventoryWorking ? "读取配置" : ready ? "Xray 在线" : "不可创建"}</Badge>
+            <span className={`managed-server-icon ${ready ? "is-online" : ""}`}><Server size={18} /></span><span><strong>{server.name}</strong><small>{server.domain || server.ip_address || "地址待上报"}</small></span><Badge tone={ready ? "good" : "bad"}>{serverID === String(server.id) && inventoryWorking ? "读取配置" : ready ? "可创建" : inventoryFailed ? "读取入站失败" : full ? "名额已满" : "不可创建"}</Badge>
           </button>;
-        })}</div> : <EmptyState icon={<Server size={23} />} title="还没有受管服务器" description="先在服务器管理添加并安装 Agent。" />}
-        {!readyServers.length && servers.length ? <div className="nw-inline-note"><Activity size={16} /><span>当前没有 Xray 在线的服务器，恢复在线后才能继续。</span></div> : null}
+        })}</div> : <EmptyState icon={<Server size={23} />} title={isAdmin ? "还没有受管服务器" : "当前没有可创建节点的服务器授权"} description={isAdmin ? "先在服务器管理添加并安装 Agent。" : "请联系管理员授权服务器、协议和节点名额。"} />}
+        {!readyServers.length && servers.length ? <div className="nw-inline-note"><Activity size={16} /><span>{isAdmin ? "当前没有 Xray 在线的服务器，恢复在线后才能继续。" : "授权服务器当前离线、使用外置 Xray、未运行 Xray 或节点名额已满。"}</span></div> : null}
       </section> : step === 2 ? <section className="managed-wizard-step">
         <div className="managed-step-heading"><span><Network size={19} /></span><div><h3>选择协议与安全组合</h3><p>仅显示当前 Agent 可安全创建的协议组合。</p></div></div>
-        <div className="form-grid"><Field label="协议"><select aria-label="节点协议" value={selectedFamily} onChange={(event) => { const family = event.target.value as ManagedProtocolFamily; const first = managedProtocolOptions.find((item) => item.family === family); if (first) chooseProtocol(first.value); }}>{managedProtocolFamilies.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field><Field label="传输与安全预设"><select aria-label="节点传输与安全预设" value={draft.protocol} onChange={(event) => chooseProtocol(event.target.value as ManagedProtocol)}>{familyProtocols.map((option) => { const wssOption = isManagedWSSProtocol(option.value); const disabled = wssOption && !wssReady; const reason = !selectedServer?.domain?.trim() ? "服务器未配置域名" : "缺少匹配的有效证书"; return <option key={option.value} value={option.value} disabled={disabled}>{option.label}{disabled ? `（${reason}）` : ""}</option>; })}</select></Field></div>
+        {allowedProtocolOptions.length ? <div className="form-grid"><Field label="协议"><select aria-label="节点协议" value={selectedFamily} onChange={(event) => { const family = event.target.value as ManagedProtocolFamily; const first = allowedProtocolOptions.find((item) => item.family === family); if (first) chooseProtocol(first.value); }}>{(isAdmin ? managedProtocolFamilies : allowedProtocolFamilies).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field><Field label="传输与安全预设"><select aria-label="节点传输与安全预设" value={draft.protocol} onChange={(event) => chooseProtocol(event.target.value as ManagedProtocol)}>{familyProtocols.map((option) => { const wssOption = isManagedWSSProtocol(option.value); const disabled = wssOption && !wssReady; const reason = !selectedServer?.domain?.trim() ? "服务器未配置域名" : "缺少匹配的有效证书"; return <option key={option.value} value={option.value} disabled={disabled}>{option.label}{disabled ? `（${reason}）` : ""}</option>; })}</select></Field></div> : <ErrorState message="当前授权没有可由面板创建的协议组合，请联系管理员调整授权。" />}
         <div className="managed-import-only"><span><Shield size={16} /></span><div><strong>{selectedProtocol?.label}</strong><small>{selectedProtocol?.detail}</small></div></div>
         <div className="managed-import-only"><span><Upload size={16} /></span><div><strong>TUIC、AnyTLS 与外部节点</strong><small>已有节点统一使用“导入已有节点”，仅用于订阅、测速和用户分配。</small></div></div>
       </section> : step === 3 ? <section className="managed-wizard-step">
         <div className="managed-step-heading"><span><Settings2 size={19} /></span><div><h3>配置 {protocolLabel(draft.protocol)}</h3><p>界面只展示当前协议需要的字段。</p></div></div>
         <div className="form-grid"><Field label="节点名称"><input autoFocus required value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder={`${selectedServer?.name || "节点"} ${protocolLabel(draft.protocol)}`} /></Field><Field label="入站标识（Tag）" hint="Xray 内部唯一标识，同一服务器不可重复"><input required value={draft.tag} onChange={(event) => setDraft({ ...draft, tag: event.target.value })} /></Field></div>
         <div className="form-grid"><Field label="监听端口"><input required type="number" min="1" max="65535" value={draft.port} onChange={(event) => setDraft({ ...draft, port: event.target.value })} /></Field>{isTunnel ? <Field label="转发网络"><input readOnly value="TCP + UDP" /></Field> : isWireGuard ? <Field label="客户端 Endpoint"><input readOnly value={wireGuardEndpoint ? `${wireGuardEndpoint.includes(":") && !wireGuardEndpoint.startsWith("[") ? `[${wireGuardEndpoint}]` : wireGuardEndpoint}:${draft.port}` : "服务器尚未上报可连接地址"} /></Field> : <Field label="客户端地址"><select value={draft.ipVersion} onChange={(event) => setDraft({ ...draft, ipVersion: event.target.value as ManagedInboundDraft["ipVersion"] })}><option value="v4">IPv4</option>{selectedServer?.ipv6_enabled && selectedServer.ip_address_v6 ? <option value="v6">IPv6</option> : null}{selectedServer?.ipv6_enabled && selectedServer.ip_address_v6 ? <option value="both">IPv4 + IPv6</option> : null}</select></Field>}</div>
+        {!isAdmin ? <div className="nw-inline-note"><KeyRound size={16} /><span><strong>节点凭据由服务端自动生成</strong><small>客户端 UUID、密码和代理账号会在提交时替换并绑定当前账号，创建后可在节点配置中查看。</small></span></div> : null}
         {isTunnel ? <><div className="form-grid"><Field label="目标节点"><select value={draft.forwardNodeId} onChange={(event) => chooseForwardNode(event.target.value)}><option value="">请选择已有节点</option>{forwardingCandidates.map((node) => { const address = nodeAddress(node); return <option key={node.id} value={node.id}>{node.node_name} · {address.host}:{address.port}</option>; })}</select></Field><Field label="目标地址"><input readOnly value={draft.targetAddress && draft.targetPort ? `${draft.targetAddress}:${draft.targetPort}` : ""} /></Field></div>{forwardingCandidates.length ? <div className="nw-inline-note"><Cable size={16} /><span><strong>TCP + UDP</strong> · {selectedForwardNode ? <code>{draft.targetAddress}:{draft.targetPort}</code> : "请选择目标节点"}</span></div> : <ErrorState message="当前没有可转发的受管节点，请先在服务器上创建节点" />}</> : null}
         {isWireGuard ? <><div className="form-grid"><Field label="服务端隧道地址"><input aria-label="WireGuard 服务端地址" value={draft.wireGuardServerAddress} onChange={(event) => setDraft({ ...draft, wireGuardServerAddress: event.target.value })} placeholder="10.66.66.1/32" /></Field><Field label="客户端隧道地址"><input aria-label="WireGuard 客户端地址" value={draft.wireGuardClientAddress} onChange={(event) => setDraft({ ...draft, wireGuardClientAddress: event.target.value })} placeholder="10.66.66.2/32" /></Field></div><div className="form-grid three"><Field label="客户端 DNS"><input aria-label="WireGuard 客户端 DNS" value={draft.wireGuardDNS} onChange={(event) => setDraft({ ...draft, wireGuardDNS: event.target.value })} /></Field><Field label="MTU"><input type="number" min="576" max="9000" aria-label="WireGuard MTU" value={draft.wireGuardMTU} onChange={(event) => setDraft({ ...draft, wireGuardMTU: event.target.value })} /></Field><Field label="Keepalive"><input type="number" min="0" max="65535" aria-label="WireGuard Keepalive" value={draft.wireGuardKeepAlive} onChange={(event) => setDraft({ ...draft, wireGuardKeepAlive: event.target.value })} /></Field></div><div className="managed-key-state"><span><KeyRound size={16} /><span><strong>WireGuard 密钥</strong><small>{draft.wireGuardServerPrivateKey && draft.wireGuardClientPrivateKey ? "两组密钥已生成；客户端凭据将加密存储" : "等待在浏览器中生成"}</small></span></span><Button type="button" variant="secondary" disabled={wireGuardKeyWorking} onClick={() => void generateWireGuardKeys()}>{wireGuardKeyWorking ? <Spinner label="正在生成" /> : <><RefreshCw size={15} />重新生成</>}</Button></div></> : null}
-        {draft.protocol === "vless-reality" ? <div className="form-grid"><Field label="客户端 UUID"><div className="nw-copy-field"><input value={draft.uuid} onChange={(event) => setDraft({ ...draft, uuid: event.target.value })} /><IconButton label="重新生成 UUID" onClick={() => setDraft({ ...draft, uuid: createManagedUUID() })}><RefreshCw size={15} /></IconButton></div></Field><Field label="流控"><select aria-label="Reality 流控" value={draft.flow} onChange={(event) => setDraft({ ...draft, flow: event.target.value as ManagedInboundDraft["flow"] })}><option value="xtls-rprx-vision">xtls-rprx-vision（推荐）</option><option value="">无流控</option></select></Field></div> : draft.protocol === "trojan-reality" ? <Field label="认证密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field> : null}
+        {draft.protocol === "vless-reality" ? <div className="form-grid">{isAdmin ? <Field label="客户端 UUID"><div className="nw-copy-field"><input value={draft.uuid} onChange={(event) => setDraft({ ...draft, uuid: event.target.value })} /><IconButton label="重新生成 UUID" onClick={() => setDraft({ ...draft, uuid: createManagedUUID() })}><RefreshCw size={15} /></IconButton></div></Field> : null}<Field label="流控"><select aria-label="Reality 流控" value={draft.flow} onChange={(event) => setDraft({ ...draft, flow: event.target.value as ManagedInboundDraft["flow"] })}><option value="xtls-rprx-vision">xtls-rprx-vision（推荐）</option><option value="">无流控</option></select></Field></div> : draft.protocol === "trojan-reality" && isAdmin ? <Field label="认证密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field> : null}
         {isReality ? <>
           <div className="form-grid"><Field label="伪装目标域名 / SNI" hint="必须明确选择；优先使用同 ASN 且证书覆盖该 SNI 的 TLS 站点"><div className="nw-copy-field"><input list="managed-reality-domains" value={draft.domain} onChange={(event) => setDraft({ ...draft, domain: event.target.value })} placeholder="www.example.com" /><IconButton label="重新探测 Reality 目标域名" disabled={domainWorking} onClick={() => void loadRealityDomains(serverID)}><RefreshCw size={15} /></IconButton></div></Field><Field label="Short ID" hint="2-16 位偶数长度十六进制"><input value={draft.shortId} onChange={(event) => setDraft({ ...draft, shortId: event.target.value })} /></Field></div>
           <datalist id="managed-reality-domains">{realityDomains.map((item) => <option key={item.domain} value={item.domain}>{item.success ? `443 可达 · ${item.latency_ms ?? "-"} ms` : "探测失败"}</option>)}</datalist>
           <div className="managed-key-state"><span><KeyRound size={16} /><span><strong>X25519 密钥</strong><small>{draft.privateKey && draft.publicKey ? "已安全生成" : "等待生成"}</small></span></span><Button type="button" variant="secondary" disabled={keyWorking} onClick={() => void generateRealityKeys()}>{keyWorking ? <Spinner label="正在生成" /> : <><RefreshCw size={15} />重新生成</>}</Button></div>
         </> : null}
-        {draft.protocol === "vless-tls" ? <div className="form-grid"><Field label="客户端 UUID"><div className="nw-copy-field"><input value={draft.uuid} onChange={(event) => setDraft({ ...draft, uuid: event.target.value })} /><IconButton label="重新生成 UUID" onClick={() => setDraft({ ...draft, uuid: createManagedUUID() })}><RefreshCw size={15} /></IconButton></div></Field><Field label="流控"><select aria-label="VLESS TLS 流控" value={draft.flow} onChange={(event) => setDraft({ ...draft, flow: event.target.value as ManagedInboundDraft["flow"] })}><option value="xtls-rprx-vision">XTLS Vision（推荐）</option><option value="">无流控</option></select></Field></div> : draft.protocol === "vless-grpc-tls" || draft.protocol === "vless-ws" || draft.protocol === "vless-wss" ? <Field label="客户端 UUID"><div className="nw-copy-field"><input value={draft.uuid} onChange={(event) => setDraft({ ...draft, uuid: event.target.value })} /><IconButton label="重新生成 UUID" onClick={() => setDraft({ ...draft, uuid: createManagedUUID() })}><RefreshCw size={15} /></IconButton></div></Field> : null}
-        {draft.protocol === "vmess" || draft.protocol === "vmess-tls" || draft.protocol === "vmess-grpc-tls" || draft.protocol === "vmess-ws" || draft.protocol === "vmess-wss" ? <div className="form-grid"><Field label="客户端 UUID"><div className="nw-copy-field"><input value={draft.uuid} onChange={(event) => setDraft({ ...draft, uuid: event.target.value })} /><IconButton label="重新生成 UUID" onClick={() => setDraft({ ...draft, uuid: createManagedUUID() })}><RefreshCw size={15} /></IconButton></div></Field><Field label="客户端加密"><select value={draft.vmessCipher} onChange={(event) => setDraft({ ...draft, vmessCipher: event.target.value as ManagedInboundDraft["vmessCipher"] })}><option value="auto">Auto（推荐）</option><option value="aes-128-gcm">AES-128-GCM</option><option value="chacha20-poly1305">ChaCha20-Poly1305</option></select></Field></div> : null}
-        {draft.protocol === "trojan-wss" ? <Field label="认证密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field> : null}
+        {draft.protocol === "vless-tls" ? <div className="form-grid">{isAdmin ? <Field label="客户端 UUID"><div className="nw-copy-field"><input value={draft.uuid} onChange={(event) => setDraft({ ...draft, uuid: event.target.value })} /><IconButton label="重新生成 UUID" onClick={() => setDraft({ ...draft, uuid: createManagedUUID() })}><RefreshCw size={15} /></IconButton></div></Field> : null}<Field label="流控"><select aria-label="VLESS TLS 流控" value={draft.flow} onChange={(event) => setDraft({ ...draft, flow: event.target.value as ManagedInboundDraft["flow"] })}><option value="xtls-rprx-vision">XTLS Vision（推荐）</option><option value="">无流控</option></select></Field></div> : (draft.protocol === "vless-grpc-tls" || draft.protocol === "vless-ws" || draft.protocol === "vless-wss") && isAdmin ? <Field label="客户端 UUID"><div className="nw-copy-field"><input value={draft.uuid} onChange={(event) => setDraft({ ...draft, uuid: event.target.value })} /><IconButton label="重新生成 UUID" onClick={() => setDraft({ ...draft, uuid: createManagedUUID() })}><RefreshCw size={15} /></IconButton></div></Field> : null}
+        {draft.protocol === "vmess" || draft.protocol === "vmess-tls" || draft.protocol === "vmess-grpc-tls" || draft.protocol === "vmess-ws" || draft.protocol === "vmess-wss" ? <div className="form-grid">{isAdmin ? <Field label="客户端 UUID"><div className="nw-copy-field"><input value={draft.uuid} onChange={(event) => setDraft({ ...draft, uuid: event.target.value })} /><IconButton label="重新生成 UUID" onClick={() => setDraft({ ...draft, uuid: createManagedUUID() })}><RefreshCw size={15} /></IconButton></div></Field> : null}<Field label="客户端加密"><select value={draft.vmessCipher} onChange={(event) => setDraft({ ...draft, vmessCipher: event.target.value as ManagedInboundDraft["vmessCipher"] })}><option value="auto">Auto（推荐）</option><option value="aes-128-gcm">AES-128-GCM</option><option value="chacha20-poly1305">ChaCha20-Poly1305</option></select></Field></div> : null}
+        {draft.protocol === "trojan-wss" && isAdmin ? <Field label="认证密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field> : null}
         {isGRPC ? <Field label="gRPC Service Name" hint="客户端必须填写相同值；无需以 / 开头"><input value={draft.wsPath} onChange={(event) => setDraft({ ...draft, wsPath: event.target.value })} placeholder="grpc-service" /></Field> : null}
         {isWSS ? <div className="form-grid"><Field label="TLS 节点域名" hint="由服务器域名和 Nginx 提供 TLS"><input readOnly value={draft.domain} /></Field><Field label="WebSocket 路径"><input value={draft.wsPath} onChange={(event) => setDraft({ ...draft, wsPath: event.target.value })} /></Field></div> : isPlainWS ? <div className="form-grid"><Field label="WebSocket Host（可选）" hint="留空即可直接使用服务器 IP 或节点地址"><input value={draft.domain} onChange={(event) => setDraft({ ...draft, domain: event.target.value })} placeholder="可留空" /></Field><Field label="WebSocket 路径"><input value={draft.wsPath} onChange={(event) => setDraft({ ...draft, wsPath: event.target.value })} /></Field></div> : null}
         {draft.protocol === "vless-ws" ? <div className="nw-inline-note"><Shield size={16} /><span>VLESS WS 未启用传输加密，适合受信或私有链路；公网优先使用 Reality 或 WSS。</span></div> : null}
-        {draft.protocol === "shadowsocks" ? <><Field label="加密方式"><select aria-label="Shadowsocks 加密方式" value={draft.ssCipher} onChange={(event) => chooseSSCipher(event.target.value as ManagedInboundDraft["ssCipher"])}><optgroup label="经典 AEAD"><option value="aes-128-gcm">AES-128-GCM（多用户）</option><option value="aes-256-gcm">AES-256-GCM（多用户）</option><option value="chacha20-ietf-poly1305">ChaCha20-IETF-Poly1305（共享密码）</option></optgroup><optgroup label="Shadowsocks 2022（多用户）"><option value="2022-blake3-aes-128-gcm">2022 BLAKE3 AES-128-GCM</option><option value="2022-blake3-aes-256-gcm">2022 BLAKE3 AES-256-GCM</option></optgroup></select></Field>{isShadowsocks2022Cipher(draft.ssCipher) ? <div className="form-grid"><Field label="服务端主密钥" hint="切换加密方式时自动生成"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value.trim() })} /></Field><Field label="初始用户密钥" hint="管理员节点凭据"><input value={draft.ssUserPassword} onChange={(event) => setDraft({ ...draft, ssUserPassword: event.target.value.trim() })} /></Field></div> : isShadowsocksClassicMultiUserCipher(draft.ssCipher) ? <Field label="初始用户密码" hint="管理员节点凭据；后续用户使用独立密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field> : <Field label="节点共享密码" hint="旧式共享凭据，不能发布到用户自助目录"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field>}</> : null}
-        {draft.protocol === "socks5" || draft.protocol === "http" ? <div className="form-grid"><Field label="初始用户名"><input value={draft.accountUsername} onChange={(event) => setDraft({ ...draft, accountUsername: event.target.value.trim() })} /></Field><Field label="初始密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field></div> : null}
-        {selectedProtocol?.requiresCertificate ? <>{isManagedUUIDProtocol(draft.protocol) ? <Field label="托管证书"><select value={draft.certificateId} onChange={(event) => { const certificate = validCertificates.find((item) => String(item.id) === event.target.value); setDraft({ ...draft, certificateId: event.target.value, domain: managedTLSHostnameForCertificate(certificate, selectedServer, draft.domain) }); }}><option value="">请选择证书</option>{validCertificates.map((item) => <option value={item.id} key={item.id}>{item.domain}</option>)}</select></Field> : <div className="form-grid"><Field label="认证密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field><Field label="托管证书"><select value={draft.certificateId} onChange={(event) => { const certificate = validCertificates.find((item) => String(item.id) === event.target.value); setDraft({ ...draft, certificateId: event.target.value, domain: managedTLSHostnameForCertificate(certificate, selectedServer, draft.domain) }); }}><option value="">请选择证书</option>{validCertificates.map((item) => <option value={item.id} key={item.id}>{item.domain}</option>)}</select></Field></div>}<Field label="TLS SNI"><input value={draft.domain} onChange={(event) => setDraft({ ...draft, domain: event.target.value })} placeholder="edge.example.com" /></Field><Toggle checked={draft.skipCertVerify} onChange={(skipCertVerify) => setDraft({ ...draft, skipCertVerify })} label="客户端跳过证书校验" /></> : null}
-        {!isTunnel ? <div className="managed-publish-panel"><Toggle checked={draft.publish && canPublish} disabled={!canPublish} onChange={(publish) => setDraft({ ...draft, publish })} label="创建后发布到用户自助目录" />{draft.publish && canPublish ? <Field label="目录排序" hint="数值越小越靠前"><input type="number" min="0" value={draft.sortOrder} onChange={(event) => setDraft({ ...draft, sortOrder: event.target.value })} /></Field> : <small>{canPublish ? "稍后也可以在节点编辑中发布。" : publishDisabledReason}</small>}</div> : null}
+        {draft.protocol === "shadowsocks" ? <><Field label="加密方式"><select aria-label="Shadowsocks 加密方式" value={draft.ssCipher} onChange={(event) => chooseSSCipher(event.target.value as ManagedInboundDraft["ssCipher"])}><optgroup label="经典 AEAD"><option value="aes-128-gcm" disabled={!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", "aes-128-gcm")}>AES-128-GCM（多用户）</option><option value="aes-256-gcm" disabled={!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", "aes-256-gcm")}>AES-256-GCM（多用户）</option><option value="chacha20-ietf-poly1305" disabled={!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", "chacha20-ietf-poly1305")}>ChaCha20-IETF-Poly1305（共享密码）</option></optgroup><optgroup label="Shadowsocks 2022（多用户）"><option value="2022-blake3-aes-128-gcm" disabled={!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", "2022-blake3-aes-128-gcm")}>2022 BLAKE3 AES-128-GCM</option><option value="2022-blake3-aes-256-gcm" disabled={!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", "2022-blake3-aes-256-gcm")}>2022 BLAKE3 AES-256-GCM</option></optgroup></select></Field>{isAdmin ? isShadowsocks2022Cipher(draft.ssCipher) ? <div className="form-grid"><Field label="服务端主密钥" hint="切换加密方式时自动生成"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value.trim() })} /></Field><Field label="初始用户密钥" hint="管理员节点凭据"><input value={draft.ssUserPassword} onChange={(event) => setDraft({ ...draft, ssUserPassword: event.target.value.trim() })} /></Field></div> : isShadowsocksClassicMultiUserCipher(draft.ssCipher) ? <Field label="初始用户密码" hint="管理员节点凭据；后续用户使用独立密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field> : <Field label="节点共享密码" hint="旧式共享凭据，不能发布到用户自助目录"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field> : null}</> : null}
+        {isAdmin && (draft.protocol === "socks5" || draft.protocol === "http") ? <div className="form-grid"><Field label="初始用户名"><input value={draft.accountUsername} onChange={(event) => setDraft({ ...draft, accountUsername: event.target.value.trim() })} /></Field><Field label="初始密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field></div> : null}
+        {selectedProtocol?.requiresCertificate ? <>{isManagedUUIDProtocol(draft.protocol) ? <Field label="托管证书"><select value={draft.certificateId} onChange={(event) => { const certificate = validCertificates.find((item) => String(item.id) === event.target.value); setDraft({ ...draft, certificateId: event.target.value, domain: managedTLSHostnameForCertificate(certificate, selectedServer, draft.domain) }); }}><option value="">请选择证书</option>{validCertificates.map((item) => <option value={item.id} key={item.id}>{item.domain}</option>)}</select></Field> : <div className="form-grid">{isAdmin ? <Field label="认证密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field> : null}<Field label="托管证书"><select value={draft.certificateId} onChange={(event) => { const certificate = validCertificates.find((item) => String(item.id) === event.target.value); setDraft({ ...draft, certificateId: event.target.value, domain: managedTLSHostnameForCertificate(certificate, selectedServer, draft.domain) }); }}><option value="">请选择证书</option>{validCertificates.map((item) => <option value={item.id} key={item.id}>{item.domain}</option>)}</select></Field></div>}<Field label="TLS SNI"><input value={draft.domain} onChange={(event) => setDraft({ ...draft, domain: event.target.value })} placeholder="edge.example.com" /></Field><Toggle checked={draft.skipCertVerify} onChange={(skipCertVerify) => setDraft({ ...draft, skipCertVerify })} label="客户端跳过证书校验" /></> : null}
+        {isAdmin && !isTunnel ? <div className="managed-publish-panel"><Toggle checked={draft.publish && canPublish} disabled={!canPublish} onChange={(publish) => setDraft({ ...draft, publish })} label="创建后发布到用户自助目录" />{draft.publish && canPublish ? <Field label="目录排序" hint="数值越小越靠前"><input type="number" min="0" value={draft.sortOrder} onChange={(event) => setDraft({ ...draft, sortOrder: event.target.value })} /></Field> : <small>{canPublish ? "稍后也可以在节点编辑中发布。" : publishDisabledReason}</small>}</div> : null}
       </section> : <section className="managed-wizard-step">
         <div className="managed-step-heading"><span><ShieldCheck size={19} /></span><div><h3>确认创建</h3><p>创建会写入远程 Xray，并在控制端生成对应节点。</p></div></div>
-        <dl className="managed-review"><div><dt>服务器</dt><dd>{selectedServer?.name}</dd></div><div><dt>节点名称</dt><dd>{draft.name}</dd></div><div><dt>协议</dt><dd>{protocolLabel(draft.protocol)}</dd></div><div><dt>监听</dt><dd>{draft.port} · {isTunnel ? "TCP + UDP" : isWireGuard ? "UDP" : draft.ipVersion.toUpperCase()}</dd></div><div><dt>入站标识（Tag）</dt><dd><code>{draft.tag}</code></dd></div>{isTunnel ? <div><dt>目标节点</dt><dd>{selectedForwardNode?.node_name} · <code>{draft.targetAddress}:{draft.targetPort}</code></dd></div> : <div><dt>用户目录</dt><dd>{draft.publish && canPublish ? "创建后发布" : "暂不发布"}</dd></div>}</dl>
-        <details className="secure-inbound-preview"><summary>查看将提交的 Xray JSON</summary><textarea className="nw-code-editor" aria-label="受管节点 Xray JSON" rows={16} readOnly spellCheck={false} value={JSON.stringify((isWireGuard ? buildManagedWireGuardInbound(draft) : buildManagedInboundRequest(draft).inbound), null, 2)} /></details>
+        <dl className="managed-review"><div><dt>服务器</dt><dd>{selectedServer?.name}</dd></div><div><dt>节点名称</dt><dd>{draft.name}</dd></div><div><dt>协议</dt><dd>{protocolLabel(draft.protocol)}</dd></div><div><dt>监听</dt><dd>{draft.port} · {isTunnel ? "TCP + UDP" : isWireGuard ? "UDP" : draft.ipVersion.toUpperCase()}</dd></div><div><dt>入站标识（Tag）</dt><dd><code>{draft.tag}</code></dd></div>{isTunnel ? <div><dt>目标节点</dt><dd>{selectedForwardNode?.node_name} · <code>{draft.targetAddress}:{draft.targetPort}</code></dd></div> : isAdmin ? <div><dt>用户目录</dt><dd>{draft.publish && canPublish ? "创建后发布" : "暂不发布"}</dd></div> : <div><dt>授权归属</dt><dd>当前账号专用</dd></div>}</dl>
+        <details className="secure-inbound-preview"><summary>{isAdmin ? "查看将提交的 Xray JSON" : "查看入站结构（凭据由服务端替换）"}</summary><textarea className="nw-code-editor" aria-label="受管节点 Xray JSON" rows={16} readOnly spellCheck={false} value={JSON.stringify(managedInboundPreview(draft, isAdmin), null, 2)} /></details>
       </section>}
-      {!loading ? <div className="dialog-actions managed-wizard-actions"><Button type="button" variant="secondary" onClick={step === 1 ? onClose : () => { setError(""); setStep((current) => current - 1); }} disabled={working}><ArrowLeft size={16} />{step === 1 ? "取消" : "上一步"}</Button>{step < 4 ? <Button type="button" onClick={validateStep} disabled={working || (step === 1 && (!readyServers.length || inventoryWorking || inventoryServerID !== serverID)) || keyWorking || wireGuardKeyWorking}>下一步<ArrowRight size={16} /></Button> : <Button type="button" onClick={() => void submit()} disabled={working}>{working ? <Spinner label="正在创建并校验" /> : <><Server size={16} />创建节点</>}</Button>}</div> : null}
+      {!loading ? <div className="dialog-actions managed-wizard-actions"><Button type="button" variant="secondary" onClick={step === 1 ? onClose : () => { setError(""); setStep((current) => current - 1); }} disabled={working}><ArrowLeft size={16} />{step === 1 ? "取消" : "上一步"}</Button>{step < 4 ? <Button type="button" onClick={validateStep} disabled={working || (step === 1 && (!readyServers.length || inventoryWorking || inventoryServerID !== serverID)) || (step === 2 && !allowedProtocolOptions.length) || keyWorking || wireGuardKeyWorking}>下一步<ArrowRight size={16} /></Button> : <Button type="button" onClick={() => void submit()} disabled={working}>{working ? <Spinner label="正在创建并校验" /> : <><Server size={16} />创建节点</>}</Button>}</div> : null}
     </div>
   </Dialog>;
 }

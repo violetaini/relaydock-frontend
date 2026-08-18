@@ -21,6 +21,7 @@ import {
   managedCertificateMatchesServer,
   managedCertificateNameMatchesHost,
   managedTLSHostnameForCertificate,
+  managedGrantAllowsProtocol,
   nodeDuplicateIdentity,
   type WorkbenchNode,
 } from "./nodes-workbench";
@@ -112,6 +113,21 @@ describe("managed certificate hostname coverage", () => {
     expect(managedTLSHostnameForCertificate(wildcard, server, "")).toBe("edge.example.com");
     expect(managedCertificateMatchesServer({ ...valid, remote_server_id: 8, dns_names: ["edge.example.com"] }, server)).toBe(false);
     expect(managedCertificateMatchesServer({ ...valid, dns_names: ["other.example.com", "edge.example.com"] }, server)).toBe(true);
+  });
+});
+
+describe("managed server creation authorization", () => {
+  it("never allows a regular-user shared Shadowsocks cipher", () => {
+    const classicGrant = {
+      id: 17,
+      state: "active",
+      allowed_protocols: ["shadowsocks" as const],
+      allowed_protocol_profiles: ["shadowsocks-classic" as const],
+    };
+
+    expect(managedGrantAllowsProtocol(classicGrant, "shadowsocks", "aes-128-gcm")).toBe(true);
+    expect(managedGrantAllowsProtocol(classicGrant, "shadowsocks", "chacha20-ietf-poly1305")).toBe(false);
+    expect(managedGrantAllowsProtocol(classicGrant, "shadowsocks", "2022-blake3-aes-128-gcm")).toBe(false);
   });
 });
 
@@ -988,11 +1004,14 @@ describe("node workbench permissions", () => {
       if (path === "/api/admin/nodes") return { nodes: [node(1, "香港 A")] } as T;
       if (path === "/api/user/config") return userConfig([1]) as T;
       if (path === "/api/user/routed-outbound") return { items: [], enabled: false, quota: { used: 0, max: 2 }, daily: { used: 0, max: 5 } } as T;
+      if (path === "/api/user/managed-node-creation") return { servers: [], certificates: [], creations: [] } as T;
+      if (path === "/api/user/managed-nodes") return { grants: [], selected: [], catalog: [] } as T;
       throw new Error(`unexpected GET ${path}`);
     });
     render(<NodesWorkbench isAdmin={false} notify={vi.fn()} />);
 
     expect(await screen.findByText("香港 A")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "在服务器创建" })).not.toBeInTheDocument();
     expect(get).not.toHaveBeenCalledWith("/api/admin/speedtest/results?latest=1");
     fireEvent.click(screen.getByRole("button", { name: "工具" }));
     expect(screen.queryByRole("menuitem", { name: "节点测速" })).not.toBeInTheDocument();
@@ -1007,6 +1026,145 @@ describe("node workbench permissions", () => {
     expect(toolbar).not.toHaveTextContent("测速");
     expect(toolbar).toHaveTextContent("延迟");
     expect(toolbar).toHaveTextContent("临时订阅");
+  });
+
+  it("shows a retryable error when the user creation context cannot be loaded", async () => {
+    const get = vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [node(1, "香港 A")] } as T;
+      if (path === "/api/user/config") return userConfig([1]) as T;
+      if (path === "/api/user/routed-outbound") return { items: [], enabled: false, quota: { used: 0, max: 2 }, daily: { used: 0, max: 5 } } as T;
+      if (path === "/api/user/managed-nodes") return { grants: [], selected: [], catalog: [] } as T;
+      if (path === "/api/user/managed-node-creation") throw new Error("创建上下文暂不可用");
+      throw new Error(`unexpected GET ${path}`);
+    });
+    render(<NodesWorkbench isAdmin={false} notify={vi.fn()} />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("创建上下文暂不可用；服务器创建入口暂不可用，不能据此判断账号没有授权");
+    expect(screen.queryByRole("button", { name: "在服务器创建" })).not.toBeInTheDocument();
+    fireEvent.click(within(alert).getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(get.mock.calls.filter(([path]) => path === "/api/user/managed-node-creation")).toHaveLength(2));
+  });
+
+  it("lets an authorized user create only an allowed protocol on a granted server", async () => {
+    const existing = node(1, "已有节点");
+    const grantedServer = {
+      id: 3,
+      name: "获授权香港入口",
+      status: "online",
+      ws_connected: true,
+      xray_running: true,
+      xray_mode: "embedded",
+      ipv6_enabled: false,
+      domain: "edge.example.com",
+      ip_address: "203.0.113.3",
+      current_upload_speed: 0,
+      current_download_speed: 0,
+      traffic_limit: 0,
+      traffic_used: 0,
+      traffic_stats_mode: "both",
+      traffic_source: "xray",
+      connection_mode: "websocket",
+      encrypted: true,
+      inbounds: [{ tag: "existing-ws", protocol: "vless", port: 8080 }],
+      grant: {
+        id: 17,
+        state: "active",
+        max_active_nodes: 2,
+        active_node_count: 0,
+        allowed_protocols: ["vless"],
+        allowed_protocol_profiles: ["vless-ws"],
+      },
+    };
+    const creationContext = {
+      success: true,
+      servers: [
+        grantedServer,
+        { ...grantedServer, id: 4, name: "未授权服务器", grant: undefined },
+        { ...grantedServer, id: 5, name: "外置 Xray 服务器", xray_mode: "external" },
+      ],
+      certificates: [],
+      creations: [],
+    };
+    const get = vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [existing] } as T;
+      if (path === "/api/user/config") return userConfig([1]) as T;
+      if (path === "/api/user/routed-outbound") return { items: [], enabled: false, quota: { used: 0, max: 2 }, daily: { used: 0, max: 5 } } as T;
+      if (path === "/api/user/managed-node-creation") return creationContext as T;
+      if (path === "/api/user/managed-nodes") return { grants: [], selected: [], catalog: [] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/user/managed-node-creation?server_id=3") return { success: true, node_id: 22 } as T;
+      throw new Error(`unexpected POST ${path}`);
+    });
+    const notify = vi.fn();
+    render(<NodesWorkbench isAdmin={false} notify={notify} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "在服务器创建" }));
+    const dialog = screen.getByRole("dialog", { name: "在服务器创建节点" });
+    expect(within(dialog).getByText("获授权香港入口")).toBeInTheDocument();
+    expect(within(dialog).queryByText("未授权服务器")).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: /外置 Xray 服务器/ })).toBeDisabled();
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "下一步" })).not.toBeDisabled());
+    fireEvent.click(within(dialog).getByRole("button", { name: "下一步" }));
+
+    const family = within(dialog).getByRole("combobox", { name: "节点协议" });
+    const preset = within(dialog).getByRole("combobox", { name: "节点传输与安全预设" });
+    expect(within(family).getAllByRole("option").map((option) => option.textContent)).toEqual(["VLESS"]);
+    expect(within(preset).getAllByRole("option").map((option) => option.textContent)).toEqual(["VLESS WS"]);
+    expect(within(dialog).queryByText("WireGuard")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("Tunnel（任意门）")).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "下一步" }));
+
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "节点名称" }), { target: { value: "我的香港 WS" } });
+    expect(within(dialog).getByRole("spinbutton", { name: "监听端口" })).toHaveValue(2082);
+    expect(within(dialog).queryByRole("textbox", { name: "客户端 UUID" })).not.toBeInTheDocument();
+    expect(within(dialog).getByText("节点凭据由服务端自动生成")).toBeInTheDocument();
+    expect(within(dialog).queryByRole("switch", { name: "创建后发布到用户自助目录" })).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "下一步" }));
+    expect(within(dialog).getByText("当前账号专用")).toBeInTheDocument();
+    const preview = within(dialog).getByLabelText("受管节点 Xray JSON") as HTMLTextAreaElement;
+    expect(preview.value).toContain("创建后由服务端自动生成");
+    expect(preview.value).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i);
+    fireEvent.click(within(dialog).getByRole("button", { name: "创建节点" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/user/managed-node-creation?server_id=3", expect.objectContaining({
+      action: "add",
+      node_name: "我的香港 WS",
+      inbound: expect.objectContaining({ protocol: "vless" }),
+    })));
+    expect(get).not.toHaveBeenCalledWith("/api/admin/remote-servers");
+    expect(post.mock.calls.some(([path]) => String(path).startsWith("/api/admin/"))).toBe(false);
+    expect(notify).toHaveBeenCalledWith("节点已在授权服务器创建");
+  });
+
+  it("lets a user delete only a server node linked to their creation record", async () => {
+    const created = node(22, "我的服务器节点");
+    const shared = node(23, "套餐共享节点");
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [created, shared] } as T;
+      if (path === "/api/user/config") return userConfig([22, 23]) as T;
+      if (path === "/api/user/routed-outbound") return { items: [], enabled: false, quota: { used: 0, max: 2 }, daily: { used: 0, max: 5 } } as T;
+      if (path === "/api/user/managed-node-creation") return { servers: [], certificates: [], creations: [{ id: 31, node_id: 22, node_name: created.node_name, server_id: 3 }] } as T;
+      if (path === "/api/user/managed-nodes") return { grants: [], selected: [], catalog: [] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const remove = vi.spyOn(api, "delete").mockResolvedValue({ success: true });
+    const notify = vi.fn();
+    render(<NodesWorkbench isAdmin={false} notify={notify} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "更多 套餐共享节点 操作" }));
+    expect(screen.queryByRole("menuitem", { name: "删除服务器节点" })).not.toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    fireEvent.click(screen.getByRole("button", { name: "更多 我的服务器节点 操作" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "删除服务器节点" }));
+    const confirm = screen.getByRole("dialog", { name: "删除服务器节点" });
+    fireEvent.click(within(confirm).getByRole("button", { name: "确认删除" }));
+
+    await waitFor(() => expect(remove).toHaveBeenCalledWith("/api/user/managed-node-creation/31"));
+    expect(notify).toHaveBeenCalledWith("服务器节点已删除");
   });
 
   it("supports roving keyboard focus in the tools menu and restores the trigger", async () => {

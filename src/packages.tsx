@@ -561,7 +561,7 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
           ) : null}
         </div>
 
-        <div className="surface-heading package-subheading"><div><h2>自助节点授权（{form.serverGrants.length}）</h2><small>允许账号在指定服务器发布目录中开通自己的节点凭据</small></div></div>
+        <div className="surface-heading package-subheading"><div><h2>服务器节点授权（{form.serverGrants.length}）</h2><small>允许账号在指定服务器创建自己的节点，也可开通管理员发布的节点</small></div></div>
         <div className="package-entitlement-list">
           {servers.length === 0 ? <span className="muted">暂无可授权服务器</span> : servers.map((server) => {
             const grant = form.serverGrants.find((itemGrant) => itemGrant.server_id === server.id);

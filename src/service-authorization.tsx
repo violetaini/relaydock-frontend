@@ -562,7 +562,7 @@ export function ServiceAuthorizationPanel({
               <Server size={18} />
               <span>
                 <strong>服务器自助节点</strong>
-                <small>允许账号从服务器发布目录开通节点</small>
+                <small>允许账号在指定服务器创建或开通节点</small>
               </span>
             </div>
             <ServerGrantsPanel username={user.username} notify={notify} />

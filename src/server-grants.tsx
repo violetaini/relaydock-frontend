@@ -355,7 +355,7 @@ export function ServerGrantsPanel({ username, notify }: { username: string; noti
         {loading ? <div className="sg-center"><Spinner label="正在加载授权" /></div> : tab === "grants" ? (
           <div className="sg-stack">
             <div className="sg-section-actions"><span>每台服务器单独计算有效期和流量</span><Button onClick={() => setEditor("new")} disabled={!availableServers.length}><Plus size={16} />新增授权</Button></div>
-            {!grants.length ? <EmptyState icon={<Server size={23} />} title="尚无自助节点授权" description="新增后，账号才能看到该服务器的可开通节点" /> : (
+            {!grants.length ? <EmptyState icon={<Server size={23} />} title="尚无服务器节点授权" description="新增后，账号才能在该服务器创建节点或开通已发布节点" /> : (
               <div className="sg-card-list">{grants.map((grant) => <GrantCard key={grant.id} grant={grant} busy={working === `grant-${grant.id}`} onEdit={() => setEditor(grant)} onToggle={() => void updateEnabled(grant)} onRetry={() => void retry(grant.id, "grant")} onRemove={() => setRemoveGrant(grant)} />)}</div>
             )}
           </div>

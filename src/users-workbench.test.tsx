@@ -446,6 +446,25 @@ describe("users workbench", () => {
     }));
   });
 
+  it("treats a durable package assignment as authoritative over a stale custom mode", async () => {
+    const staleModeUser = { ...alice, authorization_mode: "custom" as const };
+    vi.spyOn(api, "get").mockImplementation(async (path) => {
+      if (path === "/api/admin/users") return { users: [staleModeUser] };
+      if (path === "/api/admin/packages") return { packages: [{ id: 2, name: "标准", traffic_limit_gb: 100, cycle_days: 30 }] };
+      throw new Error(`unexpected GET ${path}`);
+    });
+    render(<UsersWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "用户设置 alice" }));
+    fireEvent.click(screen.getByRole("tab", { name: "服务授权" }));
+
+    expect(await screen.findByLabelText("当前授权方式")).toHaveTextContent("当前使用套餐授权");
+    expect(screen.queryByRole("radiogroup", { name: "服务授权方式" })).not.toBeInTheDocument();
+    expect(screen.queryByText("固定节点授权")).not.toBeInTheDocument();
+    expect(screen.queryByText("服务器授权")).not.toBeInTheDocument();
+    expect(screen.queryByText("转发线路授权")).not.toBeInTheDocument();
+  });
+
   it("batch assigns one package to selected non-admin users", async () => {
     const bob = { ...alice, username: "bob", nickname: "Bob" };
     const admin = { ...alice, username: "admin", nickname: "管理员", role: "admin" };

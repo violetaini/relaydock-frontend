@@ -24,6 +24,7 @@ import {
 import { forwardingBillingModeLabel, normalizeForwardingBillingMode } from "./forwarding-billing";
 import type { ForwardingBillingMode } from "./types";
 import { api } from "./api";
+import { isPackageAuthorization } from "./user-authorization";
 import type { NodeItem, RemoteServer, ServerListResponse, UserItem } from "./types";
 import {
   Badge,
@@ -439,8 +440,7 @@ function defaultTemplateDraft(): TemplateDraft {
 
 function defaultGrantDraft(users: UserItem[], templates: TunnelTemplate[]): GrantDraft {
   const firstCustomUser = users.find((user) => {
-    const authorizationMode = user.authorization_mode ?? (user.package_id ? "package" : "custom");
-    return user.role !== "admin" && authorizationMode === "custom";
+    return user.role !== "admin" && !isPackageAuthorization(user);
   });
   return {
     username: firstCustomUser?.username || "",
@@ -763,13 +763,11 @@ function GrantDialog({ grant, users, templates, onClose, onComplete }: { grant?:
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
   const eligibleUsers = users.filter((user) => {
-    const authorizationMode = user.authorization_mode ?? (user.package_id ? "package" : "custom");
-    return (user.role !== "admin" && authorizationMode === "custom") || (Boolean(grant) && user.username === draft.username);
+    return (user.role !== "admin" && !isPackageAuthorization(user)) || (Boolean(grant) && user.username === draft.username);
   });
   const activeTemplates = templates.filter((template) => template.state === "active" || sameID(resourceID(template), draft.tunnelID));
   const selectedUser = users.find((user) => user.username === draft.username);
-  const selectedAuthorizationMode = selectedUser?.authorization_mode ?? (selectedUser?.package_id ? "package" : "custom");
-  const valid = selectedAuthorizationMode === "custom" && draft.username && draft.tunnelID && draft.startsAt && Number(draft.maxForwards) >= 1 && Number(draft.speedMbps) >= 0 && Number(draft.connectionLimit) >= 0 && Number(draft.trafficGB) >= 0 && (!draft.expiresAt || new Date(draft.expiresAt).getTime() > new Date(draft.startsAt).getTime());
+  const valid = Boolean(selectedUser && !isPackageAuthorization(selectedUser)) && draft.username && draft.tunnelID && draft.startsAt && Number(draft.maxForwards) >= 1 && Number(draft.speedMbps) >= 0 && Number(draft.connectionLimit) >= 0 && Number(draft.trafficGB) >= 0 && (!draft.expiresAt || new Date(draft.expiresAt).getTime() > new Date(draft.startsAt).getTime());
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!valid) return;

@@ -28,6 +28,7 @@ import type {
   RemoteServer,
   UserItem,
 } from "./types";
+import { isPackageAuthorization } from "./user-authorization";
 import {
   Button,
   ConfirmDialog,
@@ -235,8 +236,9 @@ export function ServiceAuthorizationPanel({
   onChanged: (message: string, tone?: NotifyTone) => Promise<void>;
   onOpenExtend: () => void;
 }) {
-  const currentMode: AuthorizationMode =
-    user.authorization_mode ?? (user.package_id ? "package" : "custom");
+  const currentMode: AuthorizationMode = isPackageAuthorization(user)
+    ? "package"
+    : user.authorization_mode ?? "custom";
   const packageMode = currentMode === "package";
   const [mode, setMode] = useState<AuthorizationMode | null>(currentMode);
   const [packages, setPackages] = useState<PackageItem[]>([]);

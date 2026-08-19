@@ -66,10 +66,23 @@
 .package-entitlement-list .checkbox-row small { color: var(--text-soft); }
 .package-entitlement-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
 .package-entitlement-fields-forward { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.package-protocol-fieldset { grid-column: 1 / -1; margin: 2px 0 0; padding: 10px; border: 1px solid var(--border); border-radius: 6px; min-width: 0; }
+.package-protocol-fieldset legend { padding: 0 5px; color: var(--text); font-size: 12px; font-weight: 650; }
+.package-protocol-fieldset small { color: var(--text-soft); font-size: 11px; }
+.package-protocol-all, .package-protocol-group-head, .package-protocol-options label { display: flex; align-items: center; gap: 7px; }
+.package-protocol-all, .package-protocol-group-head { padding: 6px 7px; }
+.package-protocol-all span, .package-protocol-options span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.package-protocol-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-top: 5px; }
+.package-protocol-groups section { border: 1px solid var(--border); border-radius: 5px; padding: 3px; }
+.package-protocol-groups section.is-selected, .package-protocol-all.is-selected { background: var(--surface-muted); }
+.package-protocol-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; padding: 3px; }
+.package-protocol-options label { padding: 5px; border-radius: 4px; }
+.package-protocol-options label.is-selected { background: var(--surface-muted); }
 
 @media (max-width: 780px) {
   .package-entitlement-fields,
-  .package-entitlement-fields-forward { grid-template-columns: 1fr; }
+  .package-entitlement-fields-forward,
+  .package-protocol-groups { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 560px) {

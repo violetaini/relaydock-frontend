@@ -29,6 +29,13 @@ import type {
 import type { TunnelTemplate } from "./forwarding-management";
 import { normalizeForwardingBillingMode } from "./forwarding-billing";
 import {
+  familiesForProfiles,
+  managedGrantProtocolGroups,
+  profilesForFamilies,
+  type ManagedGrantProtocol,
+  type ManagedGrantProtocolProfile,
+} from "./managed-grant-protocols";
+import {
   Badge,
   Button,
   ConfirmDialog,
@@ -409,6 +416,40 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
     }));
   };
 
+  const selectedServerProfiles = (grant: PackageServerGrant): ManagedGrantProtocolProfile[] => {
+    if (grant.allowed_protocol_profiles?.length) return [...grant.allowed_protocol_profiles] as ManagedGrantProtocolProfile[];
+    if (grant.allowed_protocols?.length) return profilesForFamilies(grant.allowed_protocols);
+    return [];
+  };
+
+  const setServerProfiles = (serverID: number, profiles: ManagedGrantProtocolProfile[]) => {
+    updateServerGrant(serverID, {
+      allowed_protocols: familiesForProfiles(profiles),
+      allowed_protocol_profiles: profiles,
+    });
+  };
+
+  const toggleServerProtocolProfile = (serverID: number, profile: ManagedGrantProtocolProfile) => {
+    const grant = form.serverGrants.find((item) => item.server_id === serverID);
+    if (!grant) return;
+    const current = selectedServerProfiles(grant);
+    const next = current.includes(profile) ? current.filter((item) => item !== profile) : [...current, profile];
+    setServerProfiles(serverID, next);
+  };
+
+  const toggleServerProtocolFamily = (serverID: number, family: ManagedGrantProtocol) => {
+    const grant = form.serverGrants.find((item) => item.server_id === serverID);
+    if (!grant) return;
+    const familyProfiles = managedGrantProtocolGroups.find((group) => group.value === family)?.profiles.map((profile) => profile.value) ?? [];
+    const current = selectedServerProfiles(grant);
+    const selected = new Set(current);
+    const allSelected = familyProfiles.length > 0 && familyProfiles.every((profile) => selected.has(profile));
+    const next = allSelected
+      ? current.filter((profile) => !familyProfiles.includes(profile))
+      : [...current, ...familyProfiles.filter((profile) => !selected.has(profile))];
+    setServerProfiles(serverID, next);
+  };
+
   const toggleTunnel = (tunnelID: number) => {
     setForm((current) => {
       const exists = current.forwardingGrants.some((grant) => grant.tunnel_id === tunnelID);
@@ -572,6 +613,34 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
                 <Field label="授权流量 GB" hint="0 表示不限"><input aria-label={`${server.name} 授权流量`} type="number" min="0" step="0.01" value={grant.traffic_limit_bytes / 1024 ** 3} onChange={(event) => updateServerGrant(server.id, { traffic_limit_bytes: Math.round(Number(event.target.value) * 1024 ** 3) })} /></Field>
                 <Field label="限速 Mbps" hint="0 表示不限"><input aria-label={`${server.name} 授权限速`} type="number" min="0" step="0.1" value={grant.speed_limit_mbps} onChange={(event) => updateServerGrant(server.id, { speed_limit_mbps: Number(event.target.value) })} /></Field>
                 <Field label="流量计算"><select aria-label={`${server.name} 流量计算`} value={grant.billing_mode} onChange={(event) => updateServerGrant(server.id, { billing_mode: event.target.value as PackageServerGrant["billing_mode"] })}><option value="download">仅下载</option><option value="both">双向</option></select></Field>
+                <fieldset className="package-protocol-fieldset">
+                  <legend>允许代理协议</legend>
+                  <label className={`package-protocol-all ${!grant.allowed_protocol_profiles?.length && !grant.allowed_protocols?.length ? "is-selected" : ""}`}>
+                    <input type="checkbox" aria-label={`${server.name} 全部协议组合`} checked={!grant.allowed_protocol_profiles?.length && !grant.allowed_protocols?.length} onChange={() => setServerProfiles(server.id, [])} />
+                    <span><strong>全部协议组合</strong><small>不限制协议、传输或加密方式</small></span>
+                  </label>
+                  <div className="package-protocol-groups" aria-label={`${server.name} 允许的协议组合`}>
+                    {managedGrantProtocolGroups.map((group) => {
+                      const selected = new Set(selectedServerProfiles(grant));
+                      const allAllowed = group.profiles.every((profile) => selected.has(profile.value));
+                      return <section key={group.value} className={allAllowed ? "is-selected" : ""}>
+                        <label className="package-protocol-group-head">
+                          <input type="checkbox" aria-label={`${server.name} ${group.label} 全部组合`} checked={allAllowed} onChange={() => toggleServerProtocolFamily(server.id, group.value)} />
+                          <strong>{group.label}</strong><small>全部组合</small>
+                        </label>
+                        <div className="package-protocol-options">
+                          {group.profiles.map((profile) => {
+                            const profileSelected = selected.has(profile.value);
+                            return <label key={profile.value} className={profileSelected ? "is-selected" : ""}>
+                              <input type="checkbox" aria-label={`${server.name} ${group.label} ${profile.label}`} checked={profileSelected} onChange={() => toggleServerProtocolProfile(server.id, profile.value)} />
+                              <span><strong>{profile.label}</strong><small>{profile.detail}</small></span>
+                            </label>;
+                          })}
+                        </div>
+                      </section>;
+                    })}
+                  </div>
+                </fieldset>
               </div> : null}
             </div>;
           })}

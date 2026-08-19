@@ -123,6 +123,25 @@ describe("package management", () => {
     })));
   });
 
+  it("persists a protocol/profile restriction on a package server grant", async () => {
+    mockLoads();
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<PackagesPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 标准套餐" }));
+    const profile = screen.getByRole("checkbox", { name: "香港入口 VLESS WS" });
+    fireEvent.click(profile);
+    fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/packages/update", expect.objectContaining({
+      server_grants: [expect.objectContaining({
+        server_id: 3,
+        allowed_protocols: ["vless"],
+        allowed_protocol_profiles: ["vless-ws"],
+      })],
+    })));
+  });
+
   it("keeps user assignment out of the package workbench", async () => {
     mockLoads();
     render(<PackagesPage notify={vi.fn()} />);

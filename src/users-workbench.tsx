@@ -28,6 +28,7 @@ import { BatchServiceAuthorizationDialog, ServiceAuthorizationPanel } from "./se
 import { TGBotInvitesPanel } from "./tg-bot-invites";
 import { TrafficProgress } from "./traffic-progress";
 import type { NodeItem, NodeListResponse, UserItem } from "./types";
+import { isPackageAuthorization } from "./user-authorization";
 import {
   Badge,
   Button,
@@ -290,7 +291,7 @@ export function UsersWorkbenchPage({ notify, initialScope = "all" }: { notify: N
                     </div>
                   </td>
                   <td data-label="服务授权">
-                    {isAdmin ? <Badge tone="info">管理员</Badge> : (user.authorization_mode ?? (user.package_id ? "package" : "custom")) === "package"
+                    {isAdmin ? <Badge tone="info">管理员</Badge> : isPackageAuthorization(user)
                       ? <span className="user-package-chip"><PackageIcon size={14} />套餐 · {user.package_name || `#${user.package_id}`}</span>
                       : <span className="user-package-chip is-custom"><ShieldCheck size={14} />自定义</span>}
                   </td>

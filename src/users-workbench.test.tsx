@@ -446,6 +446,36 @@ describe("users workbench", () => {
     }));
   });
 
+  it("shows the concrete processing warning when a service authorization succeeds with cleanup work", async () => {
+    vi.spyOn(api, "get").mockImplementation(async (path) => {
+      if (path === "/api/admin/users") return { users: [alice] };
+      if (path === "/api/admin/packages") return { packages: [{ id: 2, name: "标准", traffic_limit_gb: 100, cycle_days: 30 }] };
+      throw new Error(`unexpected GET ${path}`);
+    });
+    vi.spyOn(api, "put").mockResolvedValue({
+      success: true,
+      applied_users: ["alice"],
+      results: [{
+        username: "alice",
+        mode: "custom",
+        status: "applied",
+        warnings: ["套餐订阅文件清理待重试"],
+      }],
+    });
+    const notify = vi.fn();
+    render(<UsersWorkbenchPage notify={notify} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "用户设置 alice" }));
+    fireEvent.click(screen.getByRole("tab", { name: "服务授权" }));
+    fireEvent.click(await screen.findByRole("button", { name: "解除套餐并切换为自定义授权" }));
+    fireEvent.click(screen.getByRole("button", { name: "解除套餐并切换" }));
+
+    await waitFor(() => expect(notify).toHaveBeenCalledWith(
+      "已将 alice 切换为自定义授权；处理警告：套餐订阅文件清理待重试",
+      "error",
+    ));
+  });
+
   it("treats a durable package assignment as authoritative over a stale custom mode", async () => {
     const staleModeUser = { ...alice, authorization_mode: "custom" as const };
     vi.spyOn(api, "get").mockImplementation(async (path) => {

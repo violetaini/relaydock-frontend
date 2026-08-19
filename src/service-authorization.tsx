@@ -68,6 +68,18 @@ interface AuthorizationOutcome {
   failedUsernames: string[];
 }
 
+function warningMessage(warnings: unknown[]) {
+  const details = warnings
+    .filter((warning): warning is string => typeof warning === "string")
+    .map((warning) => warning.trim())
+    .filter(Boolean);
+  if (!warnings.length) return "";
+  if (!details.length) return `${warnings.length} 项处理警告`;
+  const visible = details.slice(0, 2).join("；");
+  const remaining = details.length > 2 ? `；另 ${details.length - 2} 项` : "";
+  return `处理警告：${visible}${remaining}`;
+}
+
 function messageOf(reason: unknown, fallback: string) {
   return reason instanceof Error && reason.message ? reason.message : fallback;
 }
@@ -113,10 +125,8 @@ function authorizationOutcome(
     );
     for (const username of response.applied_users ?? []) applied.add(username);
     const failures = usernames.filter((username) => !applied.has(username));
-    const warningCount = results.reduce(
-      (count, item) => count + (item.warnings?.length ?? 0),
-      0,
-    );
+    const resultWarnings = results.flatMap((item) => item.warnings ?? []);
+    const warningCount = resultWarnings.length;
     const failureDetails = failures.slice(0, 3).map((username) => {
       const result = results.find((item) => item.username === username);
       return `${username}：${result?.error || (result?.status === "rolled_back" ? "已回滚" : result?.status === "rollback_failed" ? "回滚失败" : "应用失败")}`;
@@ -131,7 +141,7 @@ function authorizationOutcome(
     const partial = failures.length
       ? `；${failures.length} 位未应用${failureDetails.length ? `（${failureDetails.join("；")}）` : ""}`
       : "";
-    const warnings = warningCount ? `；${warningCount} 项下发警告` : "";
+    const warnings = warningCount ? `；${warningMessage(resultWarnings)}` : "";
     return {
       message: `${successLabel(applied.size)}${partial}${warnings}`,
       tone: failures.length || warningCount ? "error" : undefined,
@@ -155,9 +165,10 @@ function authorizationOutcome(
       ),
     };
   }
-  const warnings = response.warnings?.length ?? 0;
+  const responseWarnings = response.warnings ?? [];
+  const warnings = warningMessage(responseWarnings);
   return {
-    message: `${successLabel(usernames.length)}${warnings ? `；${warnings} 项下发警告` : ""}`,
+    message: `${successLabel(usernames.length)}${warnings ? `；${warnings}` : ""}`,
     tone: warnings ? "error" : undefined,
     failedUsernames: [],
   };

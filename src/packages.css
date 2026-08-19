@@ -66,9 +66,14 @@
 .package-entitlement-list .checkbox-row small { color: var(--text-soft); }
 .package-entitlement-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
 .package-entitlement-fields-forward { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.package-protocol-fieldset { grid-column: 1 / -1; margin: 2px 0 0; padding: 10px; border: 1px solid var(--border); border-radius: 6px; min-width: 0; }
-.package-protocol-fieldset legend { padding: 0 5px; color: var(--text); font-size: 12px; font-weight: 650; }
-.package-protocol-fieldset small { color: var(--text-soft); font-size: 11px; }
+.package-protocol-disclosure { grid-column: 1 / -1; margin-top: 2px; border: 1px solid var(--border); border-radius: 6px; min-width: 0; overflow: hidden; }
+.package-protocol-summary { width: 100%; min-height: 42px; padding: 8px 10px; border: 0; background: transparent; color: var(--text); display: flex; align-items: center; justify-content: space-between; gap: 12px; text-align: left; cursor: pointer; }
+.package-protocol-summary:hover { background: var(--surface-muted); }
+.package-protocol-summary > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.package-protocol-summary svg { flex: 0 0 auto; transition: transform 160ms ease; }
+.package-protocol-summary[aria-expanded="true"] svg { transform: rotate(180deg); }
+.package-protocol-disclosure small { color: var(--text-soft); font-size: 11px; }
+.package-protocol-content { padding: 4px 7px 8px; border-top: 1px solid var(--border); }
 .package-protocol-all, .package-protocol-group-head, .package-protocol-options label { display: flex; align-items: center; gap: 7px; }
 .package-protocol-all, .package-protocol-group-head { padding: 6px 7px; }
 .package-protocol-all span, .package-protocol-options span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }

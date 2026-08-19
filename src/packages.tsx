@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   CalendarDays,
+  ChevronDown,
   CircleUserRound,
   Gauge,
   Grid2X2,
@@ -348,6 +349,7 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
     Object.keys(item?.node_speed_limits ?? {}).length || Object.keys(item?.node_device_limits ?? {}).length ||
     item?.auto_speed_rules?.length,
   ));
+  const [expandedServerProtocols, setExpandedServerProtocols] = useState<Set<number>>(() => new Set());
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
 
@@ -448,6 +450,15 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
       ? current.filter((profile) => !familyProfiles.includes(profile))
       : [...current, ...familyProfiles.filter((profile) => !selected.has(profile))];
     setServerProfiles(serverID, next);
+  };
+
+  const toggleServerProtocolDisclosure = (serverID: number) => {
+    setExpandedServerProtocols((current) => {
+      const next = new Set(current);
+      if (next.has(serverID)) next.delete(serverID);
+      else next.add(serverID);
+      return next;
+    });
   };
 
   const toggleTunnel = (tunnelID: number) => {
@@ -606,6 +617,10 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
         <div className="package-entitlement-list">
           {servers.length === 0 ? <span className="muted">暂无可授权服务器</span> : servers.map((server) => {
             const grant = form.serverGrants.find((itemGrant) => itemGrant.server_id === server.id);
+            const protocolProfiles = grant ? selectedServerProfiles(grant) : [];
+            const protocolUnrestricted = Boolean(grant && !grant.allowed_protocol_profiles?.length && !grant.allowed_protocols?.length);
+            const protocolExpanded = expandedServerProtocols.has(server.id);
+            const protocolSummary = protocolUnrestricted ? "全部协议组合" : `已选 ${protocolProfiles.length} 个组合`;
             return <div key={server.id} className={grant ? "is-selected" : ""}>
               <label className="checkbox-row"><input type="checkbox" checked={Boolean(grant)} onChange={() => toggleServer(server.id)} /><span><strong>{server.name}</strong><small>{server.status || "未知状态"}</small></span></label>
               {grant ? <div className="package-entitlement-fields">
@@ -613,34 +628,46 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
                 <Field label="授权流量 GB" hint="0 表示不限"><input aria-label={`${server.name} 授权流量`} type="number" min="0" step="0.01" value={grant.traffic_limit_bytes / 1024 ** 3} onChange={(event) => updateServerGrant(server.id, { traffic_limit_bytes: Math.round(Number(event.target.value) * 1024 ** 3) })} /></Field>
                 <Field label="限速 Mbps" hint="0 表示不限"><input aria-label={`${server.name} 授权限速`} type="number" min="0" step="0.1" value={grant.speed_limit_mbps} onChange={(event) => updateServerGrant(server.id, { speed_limit_mbps: Number(event.target.value) })} /></Field>
                 <Field label="流量计算"><select aria-label={`${server.name} 流量计算`} value={grant.billing_mode} onChange={(event) => updateServerGrant(server.id, { billing_mode: event.target.value as PackageServerGrant["billing_mode"] })}><option value="download">仅下载</option><option value="both">双向</option></select></Field>
-                <fieldset className="package-protocol-fieldset">
-                  <legend>允许代理协议</legend>
-                  <label className={`package-protocol-all ${!grant.allowed_protocol_profiles?.length && !grant.allowed_protocols?.length ? "is-selected" : ""}`}>
-                    <input type="checkbox" aria-label={`${server.name} 全部协议组合`} checked={!grant.allowed_protocol_profiles?.length && !grant.allowed_protocols?.length} onChange={() => setServerProfiles(server.id, [])} />
-                    <span><strong>全部协议组合</strong><small>不限制协议、传输或加密方式</small></span>
-                  </label>
-                  <div className="package-protocol-groups" aria-label={`${server.name} 允许的协议组合`}>
-                    {managedGrantProtocolGroups.map((group) => {
-                      const selected = new Set(selectedServerProfiles(grant));
-                      const allAllowed = group.profiles.every((profile) => selected.has(profile.value));
-                      return <section key={group.value} className={allAllowed ? "is-selected" : ""}>
-                        <label className="package-protocol-group-head">
-                          <input type="checkbox" aria-label={`${server.name} ${group.label} 全部组合`} checked={allAllowed} onChange={() => toggleServerProtocolFamily(server.id, group.value)} />
-                          <strong>{group.label}</strong><small>全部组合</small>
-                        </label>
-                        <div className="package-protocol-options">
-                          {group.profiles.map((profile) => {
-                            const profileSelected = selected.has(profile.value);
-                            return <label key={profile.value} className={profileSelected ? "is-selected" : ""}>
-                              <input type="checkbox" aria-label={`${server.name} ${group.label} ${profile.label}`} checked={profileSelected} onChange={() => toggleServerProtocolProfile(server.id, profile.value)} />
-                              <span><strong>{profile.label}</strong><small>{profile.detail}</small></span>
-                            </label>;
-                          })}
-                        </div>
-                      </section>;
-                    })}
-                  </div>
-                </fieldset>
+                <div className="package-protocol-disclosure">
+                  <button
+                    type="button"
+                    className="package-protocol-summary"
+                    aria-label={`${server.name} 代理协议，${protocolSummary}`}
+                    aria-expanded={protocolExpanded}
+                    aria-controls={`package-server-protocols-${server.id}`}
+                    onClick={() => toggleServerProtocolDisclosure(server.id)}
+                  >
+                    <span><strong>代理协议</strong><small>{protocolSummary}</small></span>
+                    <ChevronDown size={17} aria-hidden="true" />
+                  </button>
+                  {protocolExpanded ? <div id={`package-server-protocols-${server.id}`} className="package-protocol-content" role="group" aria-label={`${server.name} 允许的协议组合`}>
+                    <label className={`package-protocol-all ${protocolUnrestricted ? "is-selected" : ""}`}>
+                      <input type="checkbox" aria-label={`${server.name} 全部协议组合`} checked={protocolUnrestricted} onChange={() => setServerProfiles(server.id, [])} />
+                      <span><strong>全部协议组合</strong><small>不限制协议、传输或加密方式</small></span>
+                    </label>
+                    <div className="package-protocol-groups">
+                      {managedGrantProtocolGroups.map((group) => {
+                        const selected = new Set(protocolProfiles);
+                        const allAllowed = group.profiles.every((profile) => selected.has(profile.value));
+                        return <section key={group.value} className={allAllowed ? "is-selected" : ""}>
+                          <label className="package-protocol-group-head">
+                            <input type="checkbox" aria-label={`${server.name} ${group.label} 全部组合`} checked={allAllowed} onChange={() => toggleServerProtocolFamily(server.id, group.value)} />
+                            <strong>{group.label}</strong><small>全部组合</small>
+                          </label>
+                          <div className="package-protocol-options">
+                            {group.profiles.map((profile) => {
+                              const profileSelected = selected.has(profile.value);
+                              return <label key={profile.value} className={profileSelected ? "is-selected" : ""}>
+                                <input type="checkbox" aria-label={`${server.name} ${group.label} ${profile.label}`} checked={profileSelected} onChange={() => toggleServerProtocolProfile(server.id, profile.value)} />
+                                <span><strong>{profile.label}</strong><small>{profile.detail}</small></span>
+                              </label>;
+                            })}
+                          </div>
+                        </section>;
+                      })}
+                    </div>
+                  </div> : null}
+                </div>
               </div> : null}
             </div>;
           })}

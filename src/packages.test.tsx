@@ -129,6 +129,11 @@ describe("package management", () => {
     render(<PackagesPage notify={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "编辑 标准套餐" }));
+    const disclosure = screen.getByRole("button", { name: "香港入口 代理协议，全部协议组合" });
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("checkbox", { name: "香港入口 VLESS WS" })).not.toBeInTheDocument();
+    fireEvent.click(disclosure);
+    expect(disclosure).toHaveAttribute("aria-expanded", "true");
     const profile = screen.getByRole("checkbox", { name: "香港入口 VLESS WS" });
     fireEvent.click(profile);
     fireEvent.click(screen.getByRole("button", { name: "保存更改" }));

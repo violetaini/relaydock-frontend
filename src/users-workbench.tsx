@@ -55,6 +55,7 @@ interface ManagedUser extends UserItem {
   reset_day?: number;
   speed_limit_override?: number | null;
   device_limit_override?: number | null;
+  node_traffic_limit_overrides?: Record<string, number>;
   node_speed_limit_overrides?: Record<string, number>;
   node_device_limit_overrides?: Record<string, number>;
   user_short_code?: string;
@@ -392,7 +393,7 @@ function UserSettingsDialog({
       case "extend":
         return <UserSettingsPanelFrame title="续期套餐" description={`当前到期日：${user.package_end_date || "未设置"}；仅延长有效期，不重置流量`} onBack={() => setActivePanel("overview")}><ExtendSettingsPanel user={user} onBack={() => setActivePanel("overview")} onComplete={completePanel} /></UserSettingsPanelFrame>;
       case "limits":
-        return <UserSettingsPanelFrame title="固定节点限速与设备数" description="固定节点按节点设置；服务器和转发限制在各自授权中维护" onBack={() => setActivePanel("overview")}><LimitsSettingsPanel user={user} onBack={() => setActivePanel("overview")} onComplete={completePanel} /></UserSettingsPanelFrame>;
+        return <UserSettingsPanelFrame title="固定节点流量、限速与设备数" description="固定节点按节点设置；服务器和转发限制在各自授权中维护" onBack={() => setActivePanel("overview")}><LimitsSettingsPanel user={user} onBack={() => setActivePanel("overview")} onComplete={completePanel} /></UserSettingsPanelFrame>;
       case "services":
         return <UserSettingsPanelFrame title="服务授权" description="套餐授权与自定义授权互斥；先选择方式，再配置对应服务" onBack={() => setActivePanel("overview")}><ServiceAuthorizationPanel user={user} notify={notify} onChanged={onComplete} onOpenExtend={() => setActivePanel("extend")} /></UserSettingsPanelFrame>;
       case "subscriptions":
@@ -410,7 +411,7 @@ function UserSettingsDialog({
           {user.role !== "admin" ? <section className="user-settings-section">
             <div className="user-settings-section-heading"><div><h2>权限与服务</h2><p>统一管理授权方式、额度和订阅输出</p></div><ShieldCheck size={18} /></div>
             {action("services", "服务授权", <ShieldCheck size={17} />)}
-            {action("limits", "固定节点限速与设备数", <Gauge size={17} />)}
+            {action("limits", "固定节点流量、限速与设备数", <Gauge size={17} />)}
             {action("subscriptions", "订阅文件分配", <Link2 size={17} />)}
             {action("subaccounts", "查看节点子账号", <UserCog size={17} />)}
           </section> : null}
@@ -503,6 +504,7 @@ function ExtendSettingsPanel({ user, onBack, onComplete }: { user: ManagedUser; 
 function LimitsSettingsPanel({ user, onBack, onComplete }: { user: ManagedUser; onBack: () => void; onComplete: (message: string) => void }) {
   const [nodes, setNodes] = useState<NodeItem[]>([]);
   const [devices, setDevices] = useState(user.device_limit_override == null ? "" : String(user.device_limit_override));
+  const [nodeTraffic, setNodeTraffic] = useState<Record<string, string>>(() => Object.fromEntries(Object.entries(user.node_traffic_limit_overrides ?? {}).map(([key, value]) => [key, String(value)])));
   const [nodeSpeed, setNodeSpeed] = useState<Record<string, string>>(() => Object.fromEntries(Object.entries(user.node_speed_limit_overrides ?? {}).map(([key, value]) => [key, String(value)])));
   const [nodeDevices, setNodeDevices] = useState<Record<string, string>>(() => Object.fromEntries(Object.entries(user.node_device_limit_overrides ?? {}).map(([key, value]) => [key, String(value)])));
   const [working, setWorking] = useState(false); const [error, setError] = useState("");
@@ -519,7 +521,7 @@ function LimitsSettingsPanel({ user, onBack, onComplete }: { user: ManagedUser; 
     try {
       await saveStep("/api/admin/users/traffic-limit", { username: user.username, traffic_limit_override_gb: null }, "旧版总流量设置清理");
       await saveStep("/api/admin/users/limits", { username: user.username, speed_limit_override: null, device_limit_override: devices === "" ? null : Number(devices) }, "设备数");
-      await saveStep("/api/admin/users/node-limits", { username: user.username, node_speed_overrides: numericMap(nodeSpeed), node_device_overrides: numericMap(nodeDevices) }, "节点级限额");
+      await saveStep("/api/admin/users/node-limits", { username: user.username, node_traffic_overrides: numericMap(nodeTraffic), node_speed_overrides: numericMap(nodeSpeed), node_device_overrides: numericMap(nodeDevices) }, "节点级限额");
       onComplete(`${user.username} 的限额已下发`);
     } catch (reason) {
       const suffix = completed.length ? `；已保存：${completed.join("、")}。后续步骤未完成，请关闭后重新打开核对再重试` : "";
@@ -530,7 +532,7 @@ function LimitsSettingsPanel({ user, onBack, onComplete }: { user: ManagedUser; 
     {error ? <ErrorState message={error} /> : null}
     <Field label="用户设备数覆盖" hint={`套餐值 ${user.device_limit || 0}，留空继承`}><input type="number" min="0" step="1" value={devices} onChange={(e) => setDevices(e.target.value)} placeholder="继承套餐" /></Field>
     <div className="surface-heading compact-heading"><div><h2>节点级覆盖</h2><small>0 表示该节点显式不限，留空表示继承</small></div></div>
-    <div className="node-limit-list">{nodes.length === 0 ? <span className="muted">当前没有可配置节点</span> : nodes.map((node) => <div key={node.id}><span><strong>{node.node_name}</strong><small>#{node.id} · {node.protocol}</small></span><Field label="Mbps"><input aria-label={`${node.node_name} 限速`} type="number" min="0" step="0.1" value={nodeSpeed[String(node.id)] ?? ""} onChange={(e) => setNodeSpeed({ ...nodeSpeed, [node.id]: e.target.value })} /></Field><Field label="设备"><input aria-label={`${node.node_name} 设备数`} type="number" min="0" step="1" value={nodeDevices[String(node.id)] ?? ""} onChange={(e) => setNodeDevices({ ...nodeDevices, [node.id]: e.target.value })} /></Field></div>)}</div>
+    <div className="node-limit-list">{nodes.length === 0 ? <span className="muted">当前没有可配置节点</span> : nodes.map((node) => <div key={node.id}><span><strong>{node.node_name}</strong><small>#{node.id} · {node.protocol}</small></span><Field label="流量 GB"><input aria-label={`${node.node_name} 流量额度`} type="number" min="0" step="0.01" value={nodeTraffic[String(node.id)] ?? ""} onChange={(e) => setNodeTraffic({ ...nodeTraffic, [node.id]: e.target.value })} /></Field><Field label="Mbps"><input aria-label={`${node.node_name} 限速`} type="number" min="0" step="0.1" value={nodeSpeed[String(node.id)] ?? ""} onChange={(e) => setNodeSpeed({ ...nodeSpeed, [node.id]: e.target.value })} /></Field><Field label="设备"><input aria-label={`${node.node_name} 设备数`} type="number" min="0" step="1" value={nodeDevices[String(node.id)] ?? ""} onChange={(e) => setNodeDevices({ ...nodeDevices, [node.id]: e.target.value })} /></Field></div>)}</div>
     <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onBack}>返回设置总览</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在下发" /> : <><SlidersHorizontal size={16} />保存并下发</>}</Button></div>
   </form>;
 }

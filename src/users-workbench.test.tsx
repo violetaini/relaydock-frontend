@@ -276,7 +276,7 @@ describe("users workbench", () => {
     render(<UsersWorkbenchPage notify={notify} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "用户设置 alice" }));
-    fireEvent.click(await screen.findByRole("button", { name: /固定节点限速与设备数/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /固定节点流量、限速与设备数/ }));
     expect(screen.queryByRole("spinbutton", { name: /^总流量覆盖（GB）/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("spinbutton", { name: /^用户限速覆盖/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "保存并下发" }));
@@ -295,6 +295,30 @@ describe("users workbench", () => {
     expect(screen.getByRole("dialog", { name: "用户设置 · alice" })).toBeInTheDocument();
   });
 
+  it("saves a per-user fixed-node traffic override with the other node limits", async () => {
+    vi.spyOn(api, "get").mockImplementation(async (path) => {
+      if (path === "/api/admin/users") return { users: [{ ...alice, node_traffic_limit_overrides: { "7": 15 }, node_speed_limit_overrides: { "7": 8 }, node_device_limit_overrides: { "7": 2 } }] };
+      if (path === "/api/admin/packages") return { packages: [] };
+      if (path === "/api/admin/nodes") return { nodes: [{ id: 7, node_name: "香港固定节点", protocol: "vless" }] };
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
+    render(<UsersWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "用户设置 alice" }));
+    fireEvent.click(await screen.findByRole("button", { name: /固定节点流量、限速与设备数/ }));
+    expect(await screen.findByRole("spinbutton", { name: "香港固定节点 流量额度" })).toHaveValue(15);
+    fireEvent.change(screen.getByRole("spinbutton", { name: "香港固定节点 流量额度" }), { target: { value: "25" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存并下发" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/users/node-limits", {
+      username: "alice",
+      node_traffic_overrides: { "7": 25 },
+      node_speed_overrides: { "7": 8 },
+      node_device_overrides: { "7": 2 },
+    }));
+  });
+
   it("reports which limit steps were saved when a later push fails", async () => {
     vi.spyOn(api, "get").mockImplementation(async (path) => {
       if (path === "/api/admin/users") return { users: [alice] };
@@ -309,7 +333,7 @@ describe("users workbench", () => {
     render(<UsersWorkbenchPage notify={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "用户设置 alice" }));
-    fireEvent.click(await screen.findByRole("button", { name: /固定节点限速与设备数/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /固定节点流量、限速与设备数/ }));
     fireEvent.click(screen.getByRole("button", { name: "保存并下发" }));
 
     expect(await screen.findByText(/Agent 暂时不可用.*已保存：旧版总流量设置清理/)).toBeInTheDocument();

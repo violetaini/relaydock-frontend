@@ -54,7 +54,7 @@
 .quick-days { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .compact-heading { min-height: 54px; padding: 11px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .node-limit-list { max-height: 330px; overflow-y: auto; border: 1px solid var(--border); }
-.node-limit-list > div { min-height: 70px; padding: 9px 11px; display: grid; grid-template-columns: minmax(180px, 1fr) 120px 100px; align-items: end; gap: 10px; border-bottom: 1px solid var(--border); }
+.node-limit-list > div { min-height: 70px; padding: 9px 11px; display: grid; grid-template-columns: minmax(160px, 1fr) 120px 110px 90px; align-items: end; gap: 10px; border-bottom: 1px solid var(--border); }
 .node-limit-list > div:last-child { border-bottom: 0; }
 .node-limit-list > div > span { align-self: center; display: flex; flex-direction: column; }
 .node-limit-list > div > span small { margin-top: 4px; }

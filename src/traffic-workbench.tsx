@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import {
   Activity,
-  ArrowDownToLine,
-  ArrowUpFromLine,
   CalendarDays,
   ChevronRight,
   Gauge,
@@ -13,7 +11,6 @@ import {
   Users,
 } from "lucide-react";
 import { api, openDashboardSocket } from "./api";
-import { TrafficProgress } from "./traffic-progress";
 import type { Profile, TrafficSummary } from "./types";
 import {
   Badge,
@@ -328,27 +325,26 @@ export function TrafficWorkbenchPage({ profile }: { profile: Profile }) {
   const maxHistory = Math.max(1, ...history.map((item) => Number(item.used_gb) || 0));
   const activeConnections = Object.values(connections).reduce((total, value) => total + Math.max(0, Number(value) || 0), 0);
   const activeUsers = Object.values(connections).filter((value) => Number(value) > 0).length;
+  const allHistory = summary?.history ?? [];
+  const todayUsed = allHistory.find((item) => item.date === localDateDaysAgo(0))?.used_gb ?? 0;
+  const weekUsed = filterTrafficHistoryByRange(allHistory, "week")
+    .reduce((total, item) => total + Number(item.used_gb || 0), 0);
 
   return (
     <div className="traffic-workbench">
       <PageHeader
         title="流量明细"
-        description={profile.is_admin ? "按用户和节点核对计费流量与实时并发" : "查看当前套餐周期与最近用量"}
+        description={profile.is_admin ? "按用户和节点核对计费流量与实时并发" : "查看当前授权周期与最近用量"}
         actions={<IconButton label="刷新流量数据" onClick={() => void load()} disabled={loading}><RefreshCw size={18} /></IconButton>}
       />
       {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
 
       <div className="metric-grid traffic-workbench-metrics">
-        <TrafficMetric icon={<ArrowUpFromLine size={19} />} label="总流量配额" value={loading ? "--" : `${summary?.metrics.total_limit_gb ?? 0} GB`} detail="当前计费周期" tone="info" />
-        <TrafficMetric icon={<Activity size={19} />} label="已用流量" value={loading ? "--" : `${summary?.metrics.total_used_gb ?? 0} GB`} detail={profile.is_admin && summary?.metrics.unlimited_used_gb ? `另有不限额 ${summary.metrics.unlimited_used_gb} GB` : "按套餐口径统计"} tone="accent" />
-        <TrafficMetric icon={<ArrowDownToLine size={19} />} label="剩余流量" value={loading ? "--" : `${summary?.metrics.total_remaining_gb ?? 0} GB`} detail="不低于 0 GB" tone="good" />
-        <TrafficMetric icon={<Gauge size={19} />} label={profile.is_admin ? "实时连接" : "使用率"} value={loading ? "--" : profile.is_admin ? String(activeConnections) : `${summary?.metrics.usage_percentage ?? 0}%`} detail={profile.is_admin ? `${activeUsers} 个活跃用户` : "当前周期"} tone="warn" />
+        <TrafficMetric icon={<Activity size={19} />} label="本周期用量" value={loading ? "--" : `${summary?.metrics.total_used_gb ?? 0} GB`} detail="累计计费流量" tone="accent" />
+        <TrafficMetric icon={<CalendarDays size={19} />} label="今日用量" value={loading ? "--" : `${todayUsed} GB`} detail="今天 00:00 起" tone="info" />
+        <TrafficMetric icon={<Gauge size={19} />} label="近 7 日用量" value={loading ? "--" : `${weekUsed.toFixed(2)} GB`} detail="每日用量汇总" tone="good" />
+        <TrafficMetric icon={<Network size={19} />} label={profile.is_admin ? "实时连接" : "用量记录"} value={loading ? "--" : profile.is_admin ? String(activeConnections) : String(allHistory.length)} detail={profile.is_admin ? `${activeUsers} 个活跃用户` : "最近 30 日记录天数"} tone="warn" />
       </div>
-
-      {!profile.is_admin ? <Surface className="member-traffic-progress">
-        <div className="member-traffic-progress-heading"><span><Gauge size={18} /></span><span><strong>本期流量</strong><small>当前账号套餐用量</small></span></div>
-        {loading ? <Spinner label="正在汇总流量" /> : <TrafficProgress used={Number(summary?.metrics.total_used_gb || 0) * 1024 ** 3} limit={Number(summary?.metrics.total_limit_gb || 0) * 1024 ** 3} label="本期流量使用率" />}
-      </Surface> : null}
 
       <Surface className="traffic-history-surface">
         <div className="surface-heading">

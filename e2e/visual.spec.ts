@@ -641,7 +641,7 @@ test("pixel dashboard metrics keep labels and details on separate rows", async (
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   const metrics = page.locator(".metric-grid .metric");
   await expect(metrics).toHaveCount(4);
-  await expect(page.getByText("所有节点的总配额", { exact: true })).toBeVisible();
+  await expect(page.getByText("累计计费流量", { exact: true })).toBeVisible();
 
   for (const viewport of [
     { name: "desktop", width: 1240, height: 760 },
@@ -1706,24 +1706,27 @@ test("dashboard accepts an empty traffic history", async ({ page }) => {
   await expect(page.getByText("暂无历史记录")).toBeVisible();
 });
 
-test("dashboard preserves the displayed rate when usage exceeds the limit", async ({ page }) => {
+test("dashboard ignores the removed aggregate usage percentage", async ({ page }) => {
   await mockAPI(page, { ...traffic, metrics: { ...traffic.metrics, usage_percentage: 145.2 } });
   await page.goto("/#/dashboard");
-  await expect(page.getByText("145.2%", { exact: true })).toBeVisible();
-  await expect(page.locator(".metric-progress > span")).toHaveAttribute("style", /width: 100%/);
+  await expect(page.getByText("本周期用量", { exact: true })).toBeVisible();
+  await expect(page.getByText("145.2%", { exact: true })).toHaveCount(0);
+  await expect(page.locator(".metric-progress")).toHaveCount(0);
 });
 
-test("a normal user sees quota progress on the dashboard and traffic page", async ({ page }) => {
+test("a normal user sees usage without an aggregate quota progress bar", async ({ page }) => {
   await mockAPI(page, traffic, undefined, {
     "/api/user/profile": { ...profile, username: "alice", nickname: "Alice", role: "user", is_admin: false },
     "/api/user/permissions": { pages: [] },
   });
 
   await page.goto("/#/dashboard");
-  await expect(page.getByRole("progressbar", { name: "使用率" })).toHaveAttribute("aria-valuetext", "21.6%");
+  await expect(page.getByText("本周期用量", { exact: true })).toBeVisible();
+  await expect(page.getByRole("progressbar")).toHaveCount(0);
 
   await page.goto("/#/traffic");
-  await expect(page.getByRole("progressbar", { name: "本期流量使用率" })).toHaveAttribute("aria-valuetext", "21.6%");
+  await expect(page.getByText("本周期用量", { exact: true })).toBeVisible();
+  await expect(page.getByRole("progressbar")).toHaveCount(0);
   await expect(page.getByRole("tablist", { name: "流量汇总维度" })).toHaveCount(0);
 });
 
@@ -1851,7 +1854,7 @@ for (const viewport of [
     await mockAPI(page);
     await page.goto("/#/dashboard");
     await expect(page.getByRole("heading", { name: "流量信息" })).toBeAttached();
-    await expect(page.getByText("使用率", { exact: true })).toBeVisible();
+    await expect(page.getByText("本周期用量", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: /在线服务器/ })).toBeVisible();
     const hasViewportOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
     expect(hasViewportOverflow).toBe(false);

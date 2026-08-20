@@ -123,12 +123,12 @@ describe("traffic workbench", () => {
     await waitFor(() => expect(resolvers).toHaveLength(2));
     const latest = { ...summary, metrics: { ...summary.metrics, usage_percentage: 44, total_used_gb: 44 } };
     act(() => resolvers[1](latest));
-    expect(await screen.findByText("44%")).toBeInTheDocument();
+    expect(await screen.findByText("44 GB", { exact: true })).toBeInTheDocument();
 
     const stale = { ...summary, metrics: { ...summary.metrics, usage_percentage: 11, total_used_gb: 11 } };
     act(() => resolvers[0](stale));
-    await waitFor(() => expect(screen.getByText("44%")).toBeInTheDocument());
-    expect(screen.queryByText("11%")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("44 GB", { exact: true })).toBeInTheDocument());
+    expect(screen.queryByText("11 GB", { exact: true })).not.toBeInTheDocument();
   });
 
   it("loads the admin summary, user and node aggregates, and live connection contract", async () => {
@@ -153,10 +153,8 @@ describe("traffic workbench", () => {
     const get = vi.spyOn(api, "get").mockResolvedValue(summary);
     render(<TrafficWorkbenchPage profile={member} />);
 
-    expect(await screen.findByText("25%")).toBeInTheDocument();
-    const progress = screen.getByRole("progressbar", { name: "本期流量使用率" });
-    expect(progress).toHaveAttribute("aria-valuenow", "25");
-    expect(progress.closest(".traffic-progress")).toHaveAttribute("data-tone", "good");
+    expect(await screen.findByText("25 GB", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByRole("progressbar", { name: "本期流量使用率" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tablist", { name: "流量汇总维度" })).not.toBeInTheDocument();
     expect(get).toHaveBeenCalledTimes(1);
     expect(get).toHaveBeenCalledWith("/api/traffic/summary");
@@ -193,7 +191,7 @@ describe("traffic workbench", () => {
     vi.spyOn(api, "get").mockResolvedValue(accessibleSummary);
     render(<TrafficWorkbenchPage profile={member} />);
 
-    await screen.findByText("25%");
+    await screen.findByText("25 GB", { exact: true });
     const cycleTab = screen.getByRole("tab", { name: "本周期" });
     const monthTab = screen.getByRole("tab", { name: "近 30 日" });
     expect(cycleTab).toHaveAttribute("tabindex", "0");

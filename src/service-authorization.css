@@ -45,7 +45,7 @@
 .batch-resource-list label strong { font-size: 11px; }
 .batch-resource-list label small,
 .batch-resource-list > small { color: var(--text-soft); font-size: 9px; }
-.batch-policy-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+.batch-policy-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
 @media (max-width: 780px) {
   .service-auth-mode,
   .batch-service-package,

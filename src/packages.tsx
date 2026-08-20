@@ -17,7 +17,6 @@ import {
 } from "lucide-react";
 import { api } from "./api";
 import type {
-  AutoSpeedLimitRule,
   ForwardingBillingMode,
   NodeItem,
   NodeListResponse,
@@ -78,9 +77,7 @@ interface MutationResponse extends ApiEnvelope {
 interface PackageFormState {
   name: string;
   description: string;
-  trafficLimitGB: string;
   cycleDays: string;
-  speedLimitMbps: string;
   deviceLimit: string;
   trafficMode: "oneway" | "twoway";
   isReset: boolean;
@@ -88,9 +85,9 @@ interface PackageFormState {
   nodes: number[];
   templateFilename: string;
   nodeMultipliers: Record<string, string>;
+  nodeTrafficLimits: Record<string, string>;
   nodeSpeedLimits: Record<string, string>;
   nodeDeviceLimits: Record<string, string>;
-  autoSpeedRules: AutoSpeedLimitRule[];
   serverGrants: PackageServerGrant[];
   forwardingGrants: PackageForwardingGrant[];
 }
@@ -112,9 +109,7 @@ function initialPackageForm(item: PackageItem | undefined, tunnels: TunnelTempla
   return {
     name: item?.name ?? "",
     description: item?.description ?? "",
-    trafficLimitGB: String(item?.traffic_limit_gb ?? 100),
     cycleDays: String(item?.cycle_days ?? 30),
-    speedLimitMbps: String(item?.speed_limit_mbps ?? 0),
     deviceLimit: String(item?.device_limit ?? 0),
     trafficMode: item?.traffic_mode === "twoway" ? "twoway" : "oneway",
     isReset: item?.is_reset ?? false,
@@ -122,9 +117,9 @@ function initialPackageForm(item: PackageItem | undefined, tunnels: TunnelTempla
     nodes: [...(item?.nodes ?? [])],
     templateFilename: item?.template_filename ?? "",
     nodeMultipliers: Object.fromEntries(Object.entries(item?.node_multipliers ?? {}).map(([key, value]) => [key, String(value)])),
+    nodeTrafficLimits: Object.fromEntries(Object.entries(item?.node_traffic_limits ?? {}).map(([key, value]) => [key, String(value)])),
     nodeSpeedLimits: Object.fromEntries(Object.entries(item?.node_speed_limits ?? {}).map(([key, value]) => [key, String(value)])),
     nodeDeviceLimits: Object.fromEntries(Object.entries(item?.node_device_limits ?? {}).map(([key, value]) => [key, String(value)])),
-    autoSpeedRules: [...(item?.auto_speed_rules ?? [])],
     serverGrants: [...(item?.server_grants ?? [])],
     forwardingGrants: (item?.forwarding_grants ?? []).map((grant) => {
       const tunnel = tunnels.find((candidate) => Number(candidate.id) === grant.tunnel_id);
@@ -146,17 +141,18 @@ function packagePayload(form: PackageFormState, original?: PackageItem): Record<
   const payload: Record<string, unknown> = {
     name: form.name.trim(),
     description: form.description.trim(),
-    traffic_limit_gb: Number(form.trafficLimitGB),
+    traffic_limit_gb: 0,
     cycle_days: Number(form.cycleDays),
     is_reset: form.isReset,
     reset_day: Number(form.resetDay),
     nodes: form.nodes,
     node_multipliers: numericMap(form.nodeMultipliers),
+    node_traffic_limits: numericMap(form.nodeTrafficLimits),
     node_speed_limits: numericMap(form.nodeSpeedLimits),
     node_device_limits: numericMap(form.nodeDeviceLimits),
-    speed_limit_mbps: Number(form.speedLimitMbps),
+    speed_limit_mbps: 0,
     device_limit: Number(form.deviceLimit),
-    auto_speed_rules: form.autoSpeedRules,
+    auto_speed_rules: [],
     traffic_mode: form.trafficMode,
     template_filename: form.templateFilename,
     server_grants: form.serverGrants,
@@ -270,7 +266,7 @@ export function PackagesPage({ notify }: PackagesPageProps) {
                 <Surface className="package-item" key={item.id}>
                   <div className="package-top">
                     <Badge tone={item.traffic_mode === "twoway" ? "info" : "neutral"}>
-                      {item.traffic_mode === "twoway" ? "双向计费" : "单向计费"}
+                      固定节点{item.traffic_mode === "twoway" ? "双向计费" : "单向计费"}
                     </Badge>
                     <div className="page-actions">
                       <IconButton label={`编辑 ${item.name}`} onClick={() => setEditor(item)}><Pencil size={16} /></IconButton>
@@ -280,27 +276,25 @@ export function PackagesPage({ notify }: PackagesPageProps) {
                   <h2>{item.name}</h2>
                   <p>{item.description || "无套餐说明"}</p>
                   <div className="package-quota">
-                    <strong>{item.traffic_limit_gb}</strong>
-                    <span>GB / {item.cycle_days} 天</span>
+                    <strong>{item.cycle_days}</strong>
+                    <span>天授权周期</span>
                   </div>
                   <div className="package-meta">
-                    <span><Gauge size={15} />{item.speed_limit_mbps ? `${item.speed_limit_mbps} Mbps` : "不限速"}</span>
                     <span><CircleUserRound size={15} />{item.device_limit ? `${item.device_limit} 台` : "设备不限"}</span>
                     <span title={names.join("、")}><Route size={15} />{itemNodes.length} 个节点</span>
                     <span><Server size={15} />{item.server_grants?.length ?? 0} 台服务器</span>
                     <span><Network size={15} />{item.forwarding_grants?.length ?? 0} 条线路</span>
-                    <span><CalendarDays size={15} />{item.is_reset ? `每月 ${item.reset_day} 日重置` : "周期重置"}</span>
+                    <span><CalendarDays size={15} />{item.is_reset ? `固定节点每月 ${item.reset_day} 日重置` : "固定节点按套餐周期重置"}</span>
                   </div>
                 </Surface>
               );
-            })}</div> : <Surface className="table-surface packages-list-surface"><div className="table-wrap"><table><thead><tr><th>套餐</th><th>计费</th><th>流量 / 周期</th><th>速度 / 设备</th><th>节点</th><th aria-label="操作" /></tr></thead><tbody>{packages.map((item) => {
+            })}</div> : <Surface className="table-surface packages-list-surface"><div className="table-wrap"><table><thead><tr><th>套餐</th><th>固定节点计费</th><th>授权周期 / 设备</th><th>资源明细</th><th aria-label="操作" /></tr></thead><tbody>{packages.map((item) => {
               const itemNodes = item.nodes ?? [];
               const names = itemNodes.map((id) => nodes.find((node) => node.id === id)?.node_name ?? `#${id}`);
               return <tr key={item.id}>
                 <td><strong>{item.name}</strong><small className="cell-note">{item.description || "无套餐说明"}</small></td>
                 <td><Badge tone={item.traffic_mode === "twoway" ? "info" : "neutral"}>{item.traffic_mode === "twoway" ? "双向计费" : "单向计费"}</Badge></td>
-                <td><strong>{item.traffic_limit_gb} GB</strong><small className="cell-note">{item.cycle_days} 天 · {item.is_reset ? `每月 ${item.reset_day} 日重置` : "周期重置"}</small></td>
-                <td><strong>{item.speed_limit_mbps ? `${item.speed_limit_mbps} Mbps` : "不限速"}</strong><small className="cell-note">{item.device_limit ? `${item.device_limit} 台设备` : "设备不限"}</small></td>
+                <td><strong>{item.cycle_days} 天</strong><small className="cell-note">{item.is_reset ? `固定节点每月 ${item.reset_day} 日重置` : "固定节点按套餐周期重置"} · {item.device_limit ? `${item.device_limit} 台设备` : "设备不限"}</small></td>
                 <td><strong title={names.join("、")}>{itemNodes.length} 节点 · {item.server_grants?.length ?? 0} 服务器 · {item.forwarding_grants?.length ?? 0} 线路</strong><small className="cell-note">{names.slice(0, 2).join("、") || "未关联固定节点"}</small></td>
                 <td><div className="packages-list-actions"><IconButton label={`编辑 ${item.name}`} onClick={() => setEditor(item)}><Pencil size={16} /></IconButton><IconButton label={`删除 ${item.name}`} onClick={() => setPendingAction({ kind: "delete-package", item })}><Trash2 size={16} /></IconButton></div></td>
               </tr>;
@@ -345,9 +339,9 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
   const [nodeSearch, setNodeSearch] = useState("");
   const [templates, setTemplates] = useState<string[]>([]);
   const [showAdvanced, setShowAdvanced] = useState(Boolean(
-    item?.template_filename || Object.keys(item?.node_multipliers ?? {}).length ||
-    Object.keys(item?.node_speed_limits ?? {}).length || Object.keys(item?.node_device_limits ?? {}).length ||
-    item?.auto_speed_rules?.length,
+    Object.keys(item?.node_multipliers ?? {}).length ||
+    Object.keys(item?.node_traffic_limits ?? {}).length ||
+    Object.keys(item?.node_speed_limits ?? {}).length || Object.keys(item?.node_device_limits ?? {}).length,
   ));
   const [expandedServerProtocols, setExpandedServerProtocols] = useState<Set<number>>(() => new Set());
   const [working, setWorking] = useState(false);
@@ -489,33 +483,10 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
     }));
   };
 
-  const addAutoRule = () => {
-    setForm((current) => ({
-      ...current,
-      autoSpeedRules: [...current.autoSpeedRules, {
-        type: "sustained",
-        threshold_mbps: 100,
-        sustained_seconds: 30,
-        window_seconds: 300,
-        burst_count: 3,
-        limit_mbps: 20,
-        limit_duration: 300,
-      }],
-    }));
-    setShowAdvanced(true);
-  };
-
-  const updateAutoRule = (index: number, patch: Partial<AutoSpeedLimitRule>) => {
-    setForm((current) => ({
-      ...current,
-      autoSpeedRules: current.autoSpeedRules.map((rule, ruleIndex) => ruleIndex === index ? { ...rule, ...patch } : rule),
-    }));
-  };
-
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (form.isReset && (Number(form.resetDay) < 1 || Number(form.resetDay) > 31)) {
-      setError("每月重置日必须在 1 到 31 之间");
+      setError("固定节点流量重置日必须在 1 到 31 之间");
       return;
     }
     setWorking(true);
@@ -545,24 +516,22 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
         {error ? <ErrorState message={error} /> : null}
         <div className="form-grid">
           <Field label="套餐名称"><input required autoFocus value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field>
-          <Field label="计费方式">
+          <Field label="套餐周期（天）" hint="用于计算用户授权到期时间"><input required type="number" min="1" step="1" value={form.cycleDays} onChange={(event) => setForm({ ...form, cycleDays: event.target.value })} /></Field>
+        </div>
+        <Field label="套餐说明"><textarea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></Field>
+        <div className="form-grid">
+          <Field label="固定节点流量计算">
             <select value={form.trafficMode} onChange={(event) => setForm({ ...form, trafficMode: event.target.value as PackageFormState["trafficMode"] })}>
               <option value="oneway">单向计费</option>
               <option value="twoway">双向计费</option>
             </select>
           </Field>
-        </div>
-        <Field label="套餐说明"><textarea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></Field>
-        <div className="form-grid">
-          <Field label="流量限额（GB）" hint="0 表示不限流量"><input required type="number" min="0" step="0.01" value={form.trafficLimitGB} onChange={(event) => setForm({ ...form, trafficLimitGB: event.target.value })} /></Field>
-          <Field label="套餐周期（天）"><input required type="number" min="1" step="1" value={form.cycleDays} onChange={(event) => setForm({ ...form, cycleDays: event.target.value })} /></Field>
-          <Field label="全局限速（Mbps）" hint="0 表示不限速"><input type="number" min="0" step="0.1" value={form.speedLimitMbps} onChange={(event) => setForm({ ...form, speedLimitMbps: event.target.value })} /></Field>
           <Field label="设备数量" hint="0 表示不限设备"><input type="number" min="0" step="1" value={form.deviceLimit} onChange={(event) => setForm({ ...form, deviceLimit: event.target.value })} /></Field>
         </div>
         <div className="form-grid">
-          <Toggle checked={form.isReset} onChange={(value) => setForm({ ...form, isReset: value })} label="按自然月重置流量" />
+          <Toggle checked={form.isReset} onChange={(value) => setForm({ ...form, isReset: value })} label="固定节点流量按自然月重置" />
           {form.isReset ? (
-            <Field label="每月重置日"><input required type="number" min="1" max="31" step="1" value={form.resetDay} onChange={(event) => setForm({ ...form, resetDay: event.target.value })} /></Field>
+            <Field label="固定节点流量重置日" hint="每月 1 到 31 日"><input required aria-label="固定节点流量重置日" type="number" min="1" max="31" step="1" value={form.resetDay} onChange={(event) => setForm({ ...form, resetDay: event.target.value })} /></Field>
           ) : <span />}
         </div>
 
@@ -574,7 +543,7 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
               {templates.map((template) => <option key={template} value={template}>{template}</option>)}
             </select>
           </Field>
-          <div className="package-advanced-toggle"><Button type="button" variant="secondary" onClick={() => setShowAdvanced((value) => !value)}><Gauge size={16} />{showAdvanced ? "收起高级参数" : "展开高级参数"}</Button></div>
+          <div className="package-advanced-toggle"><Button type="button" variant="secondary" onClick={() => setShowAdvanced((value) => !value)}><Gauge size={16} />{showAdvanced ? "收起固定节点明细" : "配置固定节点明细"}</Button></div>
         </div>
 
         <div className="surface-heading">
@@ -682,6 +651,7 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
               <label className="checkbox-row"><input type="checkbox" checked={Boolean(grant)} onChange={() => toggleTunnel(tunnelID)} /><span><strong>{tunnel.name}</strong><small>{tunnel.description || `${tunnel.hops?.length ?? 0} 跳线路`}</small></span></label>
               {grant ? <div className="package-entitlement-fields package-entitlement-fields-forward">
                 <Field label="转发名额"><input aria-label={`${tunnel.name} 转发名额`} type="number" min="1" value={grant.max_active_forwards} onChange={(event) => updateForwardingGrant(tunnelID, { max_active_forwards: Number(event.target.value) })} /></Field>
+                <Field label="单条限速 Mbps" hint="0 表示不限"><input aria-label={`${tunnel.name} 单条转发限速`} type="number" min="0" step="0.1" value={grant.per_forward_speed_mbps} onChange={(event) => updateForwardingGrant(tunnelID, { per_forward_speed_mbps: Number(event.target.value) })} /></Field>
                 <Field label="授权流量 GB" hint="0 表示不限"><input aria-label={`${tunnel.name} 授权流量`} type="number" min="0" step="0.01" value={grant.traffic_limit_bytes / 1024 ** 3} onChange={(event) => updateForwardingGrant(tunnelID, { traffic_limit_bytes: Math.round(Number(event.target.value) * 1024 ** 3) })} /></Field>
                 <Field label="流量计算"><select aria-label={`${tunnel.name} 流量计算`} value={normalizeForwardingBillingMode(grant.billing_mode_override, tunnel.billing_mode)} onChange={(event) => updateForwardingGrant(tunnelID, { billing_mode_override: event.target.value as ForwardingBillingMode })}><option value="both">双向</option><option value="upload">仅算上行</option><option value="download">仅算下行</option></select></Field>
               </div> : null}
@@ -689,32 +659,19 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
           })}
         </div>
         {showAdvanced ? <>
-          <div className="surface-heading package-subheading"><div><h2>节点倍率与覆盖</h2><small>倍率默认 1；限速和设备留空时继承套餐全局值，0 表示显式不限</small></div></div>
+          <div className="surface-heading package-subheading"><div><h2>固定节点明细限制</h2><small>各节点独立计算；流量和限速填 0 表示不限</small></div></div>
           <div className="package-node-overrides">
-            {form.nodes.length === 0 ? <span className="muted">先选择关联节点后配置覆盖项</span> : form.nodes.map((nodeID) => {
+            {form.nodes.length === 0 ? <span className="muted">先选择关联节点后配置明细</span> : form.nodes.map((nodeID) => {
               const node = nodes.find((itemNode) => itemNode.id === nodeID);
               const key = String(nodeID);
               return <div key={nodeID}>
                 <span><strong>{node?.node_name ?? `节点 #${nodeID}`}</strong><small>{node?.protocol || "节点已失联"}</small></span>
                 <Field label="流量倍率"><input aria-label={`${node?.node_name ?? nodeID} 流量倍率`} type="number" min="0" step="0.01" value={form.nodeMultipliers[key] ?? ""} placeholder="1" onChange={(event) => setForm({ ...form, nodeMultipliers: { ...form.nodeMultipliers, [key]: event.target.value } })} /></Field>
-                <Field label="限速 Mbps"><input aria-label={`${node?.node_name ?? nodeID} 限速`} type="number" min="0" step="0.1" value={form.nodeSpeedLimits[key] ?? ""} placeholder="继承" onChange={(event) => setForm({ ...form, nodeSpeedLimits: { ...form.nodeSpeedLimits, [key]: event.target.value } })} /></Field>
-                <Field label="设备数"><input aria-label={`${node?.node_name ?? nodeID} 设备数`} type="number" min="0" step="1" value={form.nodeDeviceLimits[key] ?? ""} placeholder="继承" onChange={(event) => setForm({ ...form, nodeDeviceLimits: { ...form.nodeDeviceLimits, [key]: event.target.value } })} /></Field>
+                <Field label="流量 GB"><input aria-label={`${node?.node_name ?? nodeID} 流量额度`} type="number" min="0" step="0.01" value={form.nodeTrafficLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeTrafficLimits: { ...form.nodeTrafficLimits, [key]: event.target.value } })} /></Field>
+                <Field label="限速 Mbps"><input aria-label={`${node?.node_name ?? nodeID} 限速`} type="number" min="0" step="0.1" value={form.nodeSpeedLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeSpeedLimits: { ...form.nodeSpeedLimits, [key]: event.target.value } })} /></Field>
+                <Field label="设备数"><input aria-label={`${node?.node_name ?? nodeID} 设备数`} type="number" min="0" step="1" value={form.nodeDeviceLimits[key] ?? ""} placeholder="继承套餐设备数" onChange={(event) => setForm({ ...form, nodeDeviceLimits: { ...form.nodeDeviceLimits, [key]: event.target.value } })} /></Field>
               </div>;
             })}
-          </div>
-          <div className="surface-heading package-subheading"><div><h2>自动限速规则（{form.autoSpeedRules.length}）</h2><small>持续高占用或窗口内多次突发后临时降速</small></div><Button type="button" variant="ghost" onClick={addAutoRule}><Plus size={15} />添加规则</Button></div>
-          <div className="auto-rule-list">
-            {form.autoSpeedRules.length === 0 ? <span className="muted">未启用自动限速</span> : form.autoSpeedRules.map((rule, index) => <div key={index}>
-              <div className="auto-rule-head"><Badge tone={rule.type === "burst" ? "warn" : "info"}>{rule.type === "burst" ? "突发" : "持续"}</Badge><IconButton label={`删除自动限速规则 ${index + 1}`} onClick={() => setForm({ ...form, autoSpeedRules: form.autoSpeedRules.filter((_, ruleIndex) => ruleIndex !== index) })}><Trash2 size={15} /></IconButton></div>
-              <div className="auto-rule-fields">
-                <Field label="触发类型"><select value={rule.type} onChange={(event) => updateAutoRule(index, { type: event.target.value })}><option value="sustained">持续高占用</option><option value="burst">多次突发</option></select></Field>
-                <Field label="触发 Mbps"><input type="number" min="0.1" step="0.1" value={rule.threshold_mbps} onChange={(event) => updateAutoRule(index, { threshold_mbps: Number(event.target.value) })} /></Field>
-                <Field label={rule.type === "burst" ? "单次最短秒数" : "持续秒数"}><input type="number" min="1" value={rule.sustained_seconds} onChange={(event) => updateAutoRule(index, { sustained_seconds: Number(event.target.value) })} /></Field>
-                {rule.type === "burst" ? <><Field label="窗口秒数"><input type="number" min="1" value={rule.window_seconds} onChange={(event) => updateAutoRule(index, { window_seconds: Number(event.target.value) })} /></Field><Field label="触发次数"><input type="number" min="1" value={rule.burst_count} onChange={(event) => updateAutoRule(index, { burst_count: Number(event.target.value) })} /></Field></> : null}
-                <Field label="限制 Mbps"><input type="number" min="0.1" step="0.1" value={rule.limit_mbps} onChange={(event) => updateAutoRule(index, { limit_mbps: Number(event.target.value) })} /></Field>
-                <Field label="限制时长（秒）"><input type="number" min="1" value={rule.limit_duration} onChange={(event) => updateAutoRule(index, { limit_duration: Number(event.target.value) })} /></Field>
-              </div>
-            </div>)}
           </div>
         </> : null}
         <div className="dialog-actions">

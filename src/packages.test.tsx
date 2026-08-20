@@ -22,6 +22,7 @@ const packageItem: PackageItem = {
   short_code: "standard",
   traffic_mode: "twoway",
   node_multipliers: { "1": 2, "2": 1.5 },
+  node_traffic_limits: { "1": 40, "2": 30 },
   node_speed_limits: { "1": 80, "2": 60 },
   node_device_limits: { "1": 2, "2": 1 },
   auto_speed_rules: [{
@@ -40,7 +41,7 @@ const packageItem: PackageItem = {
     reset_day: 1, allowed_protocols: [], allowed_protocol_profiles: [],
   }],
   forwarding_grants: [{
-    tunnel_id: 7, max_active_forwards: 1, per_forward_speed_mbps: 0,
+    tunnel_id: 7, max_active_forwards: 1, per_forward_speed_mbps: 20,
     per_forward_connection_limit: 0, traffic_limit_bytes: 0, billing_mode_override: null,
   }],
 };
@@ -67,7 +68,7 @@ afterEach(() => {
 });
 
 describe("package management", () => {
-  it("preserves advanced settings in a complete update payload and prunes removed node overrides", async () => {
+  it("sends detail-only limits and prunes removed node values", async () => {
     mockLoads();
     const post = vi.spyOn(api, "post").mockResolvedValue({ message: "Package updated successfully" });
     const notify = vi.fn();
@@ -80,13 +81,16 @@ describe("package management", () => {
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/packages/update", expect.objectContaining({
       id: 9,
       name: "标准套餐",
+      traffic_limit_gb: 0,
+      speed_limit_mbps: 0,
       is_reset: true,
       reset_day: 8,
       nodes: [2],
       node_multipliers: { "2": 1.5 },
+      node_traffic_limits: { "2": 30 },
       node_speed_limits: { "2": 60 },
       node_device_limits: { "2": 1 },
-      auto_speed_rules: packageItem.auto_speed_rules,
+      auto_speed_rules: [],
       template_filename: "default.yaml",
       server_grants: packageItem.server_grants,
       forwarding_grants: [expect.objectContaining({
@@ -163,12 +167,14 @@ describe("package management", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "编辑 标准套餐" }));
     fireEvent.change(screen.getByRole("spinbutton", { name: "香港 A 流量倍率" }), { target: { value: "3" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "香港 A 流量额度" }), { target: { value: "25" } });
     fireEvent.change(screen.getByRole("spinbutton", { name: "香港 A 限速" }), { target: { value: "55" } });
     fireEvent.change(screen.getByRole("combobox", { name: /订阅规则模板/ }), { target: { value: "default.yaml" } });
     fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/packages/update", expect.objectContaining({
       node_multipliers: { "1": 3, "2": 1.5 },
+      node_traffic_limits: { "1": 25, "2": 30 },
       node_speed_limits: { "1": 55, "2": 60 },
       template_filename: "default.yaml",
     })));
@@ -179,8 +185,33 @@ describe("package management", () => {
     render(<PackagesPage notify={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "列表视图" }));
-    expect(screen.getByRole("columnheader", { name: "流量 / 周期" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "授权周期 / 设备" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "编辑 标准套餐" })).toBeInTheDocument();
+  });
+
+  it("hides package-wide totals and edits the per-forward speed", async () => {
+    mockLoads();
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<PackagesPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 标准套餐" }));
+    expect(screen.queryByRole("spinbutton", { name: "流量限额（GB）" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton", { name: "全局限速（Mbps）" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "按自然月重置流量" })).not.toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "固定节点流量按自然月重置" })).toBeChecked();
+    expect(screen.getByRole("spinbutton", { name: "固定节点流量重置日" })).toHaveValue(8);
+
+    fireEvent.change(screen.getByRole("spinbutton", { name: "香港转发 单条转发限速" }), { target: { value: "35" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/packages/update", expect.objectContaining({
+      traffic_limit_gb: 0,
+      speed_limit_mbps: 0,
+      forwarding_grants: [expect.objectContaining({
+        tunnel_id: 7,
+        per_forward_speed_mbps: 35,
+      })],
+    })));
   });
 
   it("does not delete a package before the confirmation action", async () => {

@@ -329,7 +329,7 @@ export function ServiceAuthorizationPanel({
       resetEnabled &&
       (Number(resetDay) < 1 || Number(resetDay) > 31)
     )
-      return setError("重置日必须在 1 到 31 之间");
+      return setError("固定节点流量重置日必须在 1 到 31 之间");
     setWorking(true);
     setError("");
     try {
@@ -481,19 +481,19 @@ export function ServiceAuthorizationPanel({
                       setResetEnabled(value);
                       setResetOverrideDirty(true);
                     }}
-                    label="按自然月重置该用户流量"
+                    label="固定节点流量按自然月重置"
                   />
                   <small>
                     {resetOverrideDirty
-                      ? "已使用用户级策略，不再跟随套餐默认值"
+                      ? "已使用用户级固定节点流量策略，不再跟随套餐默认值"
                       : selectedPackage?.is_reset
-                        ? `默认每月 ${selectedPackage.reset_day} 日重置`
-                        : "默认按套餐周期重置"}
+                        ? `套餐默认：固定节点流量每月 ${selectedPackage.reset_day} 日重置`
+                        : "套餐默认：固定节点流量按套餐周期重置"}
                   </small>
                 </div>
-                <Field label="重置日" hint="每月 1 到 31 日">
+                <Field label="固定节点流量重置日" hint="每月 1 到 31 日">
                   <input
-                    aria-label="套餐流量重置日"
+                    aria-label="固定节点流量重置日"
                     type="number"
                     min="1"
                     max="31"
@@ -585,7 +585,7 @@ export function ServiceAuthorizationPanel({
               <Network size={18} />
               <span>
                 <strong>转发线路</strong>
-                <small>授权线路、转发名额和独立流量额度</small>
+                <small>授权线路、转发名额、每转发限速和独立流量额度</small>
               </span>
             </div>
             <UserForwardingGrantsPanel
@@ -618,6 +618,7 @@ interface BatchCustomState {
   serverTrafficGB: string;
   serverBilling: ManagedBillingMode;
   forwardingMaxForwards: string;
+  forwardingSpeedMbps: string;
   forwardingTrafficGB: string;
   forwardingBilling: ForwardingBillingMode;
 }
@@ -631,6 +632,7 @@ const initialBatchCustom: BatchCustomState = {
   serverTrafficGB: "0",
   serverBilling: "download",
   forwardingMaxForwards: "1",
+  forwardingSpeedMbps: "0",
   forwardingTrafficGB: "0",
   forwardingBilling: "both",
 };
@@ -743,7 +745,7 @@ export function BatchServiceAuthorizationDialog({
       resetEnabled &&
       (Number(resetDay) < 1 || Number(resetDay) > 31)
     )
-      return setError("重置日必须在 1 到 31 之间");
+      return setError("固定节点流量重置日必须在 1 到 31 之间");
     if (mode === "custom" && Number(custom.forwardingMaxForwards) < 1)
       return setError("转发名额至少为 1");
 
@@ -801,7 +803,10 @@ export function BatchServiceAuthorizationDialog({
                   1,
                   Math.floor(Number(custom.forwardingMaxForwards) || 1),
                 ),
-                per_forward_speed_mbps: 0,
+                per_forward_speed_mbps: Math.max(
+                  0,
+                  Number(custom.forwardingSpeedMbps) || 0,
+                ),
                 per_forward_connection_limit: 0,
                 traffic_limit_bytes: Math.round(
                   Math.max(0, Number(custom.forwardingTrafficGB) || 0) *
@@ -913,12 +918,12 @@ export function BatchServiceAuthorizationDialog({
               <Toggle
                 checked={resetEnabled}
                 onChange={setResetEnabled}
-                label="按自然月重置流量"
+                label="固定节点流量按自然月重置"
               />
               {resetEnabled ? (
-                <Field label="重置日">
+                <Field label="固定节点流量重置日" hint="每月 1 到 31 日">
                   <input
-                    aria-label="批量套餐重置日"
+                    aria-label="批量固定节点流量重置日"
                     type="number"
                     min="1"
                     max="31"
@@ -1036,6 +1041,21 @@ export function BatchServiceAuthorizationDialog({
                       setCustom({
                         ...custom,
                         forwardingMaxForwards: event.target.value,
+                      })
+                    }
+                  />
+                </Field>
+                <Field label="每转发限速 Mbps" hint="0 表示不限">
+                  <input
+                    aria-label="批量每转发限速"
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    value={custom.forwardingSpeedMbps}
+                    onChange={(event) =>
+                      setCustom({
+                        ...custom,
+                        forwardingSpeedMbps: event.target.value,
                       })
                     }
                   />

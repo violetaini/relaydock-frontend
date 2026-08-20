@@ -40,7 +40,6 @@ import {
 import { api, openDashboardSocket } from "./api";
 import { BrandMark, useBranding, type Branding } from "./brand";
 import { requestNavigation } from "./navigation-guard";
-import { trafficProgressState } from "./traffic-progress";
 import { nextThemeMode, normalizeThemeMode, resolveThemeMode, type ThemeMode } from "./theme";
 import { TwoFactorSettings } from "./two-factor";
 import type {
@@ -481,10 +480,6 @@ function DashboardPage({ profile, navigate, canNavigateNodes }: { profile: Profi
   const periodUsed = history.reduce((total, item) => total + item.used_gb, 0);
   const uploadSpeed = servers.reduce((total, server) => total + Number(server.current_upload_speed || 0), 0);
   const downloadSpeed = servers.reduce((total, server) => total + Number(server.current_download_speed || 0), 0);
-  const rawUsagePercent = Number(traffic?.metrics.usage_percentage ?? 0);
-  const usagePercent = Number.isFinite(rawUsagePercent) ? Math.max(0, rawUsagePercent) : 0;
-  const usageState = trafficProgressState(usagePercent, Number(traffic?.metrics.total_limit_gb || 0) > 0 ? 100 : 0);
-  const usageTone = usageState.tone === "neutral" ? "info" : usageState.tone;
   const enabledNodes = nodes.filter((node) => node.enabled).length;
   const renewalEdge = Date.now() + 14 * 86_400_000;
   const renewalAttention = users.filter((user) => {
@@ -520,10 +515,10 @@ function DashboardPage({ profile, navigate, canNavigateNodes }: { profile: Profi
       <h1 className="sr-only">流量信息</h1>
       {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
       <div className="metric-grid">
-        <Metric tone="info" icon={<ArrowUpFromLine size={22} />} label="总流量配额" value={loading ? "--" : `${traffic?.metrics.total_limit_gb ?? 0} GB`} detail="所有节点的总配额" />
-        <Metric tone="accent" icon={<Activity size={22} />} label="已用流量" value={loading ? "--" : `${traffic?.metrics.total_used_gb ?? 0} GB`} detail="所有节点累计消耗" />
-        <Metric tone="good" icon={<Boxes size={22} />} label="剩余流量" value={loading ? "--" : `${traffic?.metrics.total_remaining_gb ?? 0} GB`} detail="仍可分配的余量" />
-        <Metric tone={usageTone} icon={<Gauge size={22} />} label="使用率" value={loading ? "--" : `${usagePercent.toFixed(1)}%`} detail={loading ? "正在汇总流量" : profile.is_admin ? `${realtimeConnected ? "实时" : "最近同步"} ↑ ${formatBytes(uploadSpeed, true)} · ↓ ${formatBytes(downloadSpeed, true)}` : "账户流量汇总"} progress={loading ? undefined : usagePercent} />
+        <Metric tone="accent" icon={<Activity size={22} />} label="本周期用量" value={loading ? "--" : `${traffic?.metrics.total_used_gb ?? 0} GB`} detail="累计计费流量" />
+        <Metric tone="info" icon={<ArrowUpFromLine size={22} />} label={`${periodTabs.find(([value]) => value === period)?.[1] ?? "当前"}用量`} value={loading ? "--" : `${periodUsed.toFixed(1)} GB`} detail={periodDescription} />
+        <Metric tone="good" icon={<Boxes size={22} />} label="可用节点" value={loading ? "--" : `${enabledNodes} / ${nodes.length}`} detail="已启用 / 全部节点" />
+        <Metric tone="info" icon={<Gauge size={22} />} label={profile.is_admin ? "在线服务器" : "数据状态"} value={loading ? "--" : profile.is_admin ? `${online} / ${servers.length}` : "已同步"} detail={loading ? "正在汇总流量" : profile.is_admin ? `${realtimeConnected ? "实时" : "最近同步"} ↑ ${formatBytes(uploadSpeed, true)} · ↓ ${formatBytes(downloadSpeed, true)}` : "可在流量明细查看各节点用量"} />
       </div>
 
       <Surface className={`chart-surface dashboard-chart ${!loading && history.length === 0 ? "is-empty" : ""}`}>

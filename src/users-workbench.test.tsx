@@ -92,15 +92,14 @@ describe("users workbench", () => {
     expect(get).toHaveBeenCalledWith("/api/admin/users");
   });
 
-  it("shows quota progress and keeps common row actions directly available", async () => {
+  it("shows accumulated usage without a removed global quota", async () => {
     const quotaUser = { ...alice, traffic_used: 60 * 1024 ** 3, traffic_limit: 100 * 1024 ** 3 };
     vi.spyOn(api, "get").mockResolvedValue({ users: [quotaUser] });
     const post = vi.spyOn(api, "post").mockResolvedValue({ status: "updated" });
     render(<UsersWorkbenchPage notify={vi.fn()} />);
 
-    const progress = await screen.findByRole("progressbar", { name: "alice 流量使用率" });
-    expect(progress).toHaveAttribute("aria-valuenow", "60");
-    expect(progress.closest(".traffic-progress")).toHaveAttribute("data-tone", "warn");
+    expect(await screen.findByText("60.0 GB", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByRole("progressbar", { name: "alice 流量使用率" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "复制订阅短码 alice" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "用户设置 alice" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "删除用户 alice" })).toHaveClass("is-danger");
@@ -265,9 +264,9 @@ describe("users workbench", () => {
     expect(screen.getByRole("tab", { name: "设置总览" })).toHaveFocus();
   });
 
-  it("saves an explicit unlimited package traffic override without changing server grants", async () => {
+  it("hides and clears legacy package-wide traffic and speed overrides", async () => {
     vi.spyOn(api, "get").mockImplementation(async (path) => {
-      if (path === "/api/admin/users") return { users: [{ ...alice, traffic_limit_override_gb: 12.5 }] };
+      if (path === "/api/admin/users") return { users: [{ ...alice, traffic_limit_override_gb: 12.5, speed_limit_override: 80 }] };
       if (path === "/api/admin/packages") return { packages: [] };
       if (path === "/api/admin/nodes") return { nodes: [] };
       throw new Error(`unexpected GET ${path}`);
@@ -277,16 +276,20 @@ describe("users workbench", () => {
     render(<UsersWorkbenchPage notify={notify} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "用户设置 alice" }));
-    fireEvent.click(await screen.findByRole("button", { name: /流量、限速与设备数/ }));
-    const traffic = screen.getByRole("spinbutton", { name: /^总流量覆盖（GB）/ });
-    expect(traffic).toHaveValue(12.5);
-    fireEvent.change(traffic, { target: { value: "0" } });
+    fireEvent.click(await screen.findByRole("button", { name: /固定节点限速与设备数/ }));
+    expect(screen.queryByRole("spinbutton", { name: /^总流量覆盖（GB）/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton", { name: /^用户限速覆盖/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "保存并下发" }));
 
     await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/users/traffic-limit", {
       username: "alice",
-      traffic_limit_override_gb: 0,
+      traffic_limit_override_gb: null,
     }));
+    expect(put).toHaveBeenCalledWith("/api/admin/users/limits", {
+      username: "alice",
+      speed_limit_override: null,
+      device_limit_override: null,
+    });
     expect(put.mock.calls.some(([path]) => String(path).includes("server-grants"))).toBe(false);
     await waitFor(() => expect(screen.getByRole("tab", { name: "设置总览" })).toHaveAttribute("aria-selected", "true"));
     expect(screen.getByRole("dialog", { name: "用户设置 · alice" })).toBeInTheDocument();
@@ -306,13 +309,13 @@ describe("users workbench", () => {
     render(<UsersWorkbenchPage notify={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "用户设置 alice" }));
-    fireEvent.click(await screen.findByRole("button", { name: /流量、限速与设备数/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /固定节点限速与设备数/ }));
     fireEvent.click(screen.getByRole("button", { name: "保存并下发" }));
 
-    expect(await screen.findByText(/Agent 暂时不可用.*已保存：总流量/)).toBeInTheDocument();
+    expect(await screen.findByText(/Agent 暂时不可用.*已保存：旧版总流量设置清理/)).toBeInTheDocument();
     expect(put).toHaveBeenCalledTimes(2);
     expect(screen.getByRole("dialog", { name: "用户设置 · alice" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "流量与限额" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "节点与设备" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("assigns a package and expiry from the unified user settings", async () => {
@@ -338,7 +341,7 @@ describe("users workbench", () => {
     }));
   });
 
-  it("lets an administrator override the selected package reset policy", async () => {
+  it("lets an administrator override the selected fixed-node reset policy", async () => {
     const unassigned = { ...alice, package_id: undefined, package_name: undefined, package_end_date: undefined };
     vi.spyOn(api, "get").mockImplementation(async (path) => {
       if (path === "/api/admin/users") return { users: [unassigned] };
@@ -352,7 +355,9 @@ describe("users workbench", () => {
     fireEvent.click(screen.getByRole("tab", { name: "服务授权" }));
     fireEvent.click(screen.getByRole("radio", { name: /套餐授权/ }));
     fireEvent.change(await screen.findByRole("combobox", { name: "用户套餐" }), { target: { value: "9" } });
-    fireEvent.click(screen.getByRole("switch", { name: "按自然月重置该用户流量" }));
+    const reset = screen.getByRole("switch", { name: "固定节点流量按自然月重置" });
+    expect(reset).toBeChecked();
+    fireEvent.click(reset);
     fireEvent.click(screen.getByRole("button", { name: "分配套餐" }));
 
     await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/users/alice/service-authorization", {
@@ -548,6 +553,7 @@ describe("users workbench", () => {
     fireEvent.click(await screen.findByRole("checkbox", { name: /香港固定入口/ }));
     fireEvent.click(screen.getByRole("checkbox", { name: /东京服务器/ }));
     fireEvent.click(screen.getByRole("checkbox", { name: /东京中继/ }));
+    fireEvent.change(screen.getByRole("spinbutton", { name: "批量每转发限速" }), { target: { value: "25" } });
     fireEvent.change(screen.getByRole("combobox", { name: "批量转发流量计算" }), { target: { value: "upload" } });
     fireEvent.click(screen.getByRole("button", { name: "应用到 2 位用户" }));
 
@@ -564,7 +570,7 @@ describe("users workbench", () => {
         }],
         forwarding_grants: [{
           tunnel_id: 22, enabled: true, starts_at: expect.any(String), expires_at: null,
-          max_active_forwards: 1, per_forward_speed_mbps: 0, per_forward_connection_limit: 0,
+          max_active_forwards: 1, per_forward_speed_mbps: 25, per_forward_connection_limit: 0,
           traffic_limit_bytes: 0, billing_mode_override: "upload", allow_custom_public_target: false,
         }],
       },

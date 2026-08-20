@@ -83,7 +83,7 @@ function inviteState(invite: TGBotInvite): { label: string; tone: "good" | "warn
 type InvitePendingAction = { kind: "revoke" | "delete"; invite: TGBotInvite };
 
 function packageOptionLabel(item: PackageItem): string {
-  return `${item.name} · ${item.traffic_limit_gb} GB / ${item.cycle_days} 天`;
+  return `${item.name} · ${item.cycle_days} 天`;
 }
 
 function userOptionLabel(item: UserItem): string {

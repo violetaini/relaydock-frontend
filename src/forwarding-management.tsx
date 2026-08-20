@@ -47,9 +47,6 @@ type UserTab = "forwards" | "grants";
 type ResourceID = string | number;
 type AdminLoadSection = "general" | "templates" | "servers" | "users" | "forwards" | "grants";
 
-// The current Agent cannot enforce limits on raw tunnel inbounds yet.
-const INBOUND_LIMITER_V1 = false;
-
 export interface TunnelHop {
   id?: ResourceID;
   position?: number;
@@ -228,7 +225,6 @@ interface GrantDraft {
   expiresAt: string;
   maxForwards: string;
   speedMbps: string;
-  connectionLimit: string;
   trafficGB: string;
   billingMode: ForwardingBillingMode;
 }
@@ -449,7 +445,6 @@ function defaultGrantDraft(users: UserItem[], templates: TunnelTemplate[]): Gran
     expiresAt: futureLocal(30),
     maxForwards: "1",
     speedMbps: "0",
-    connectionLimit: "0",
     trafficGB: "0",
     billingMode: normalizeForwardingBillingMode(templates[0]?.billing_mode),
   };
@@ -464,7 +459,6 @@ function grantDraftFrom(grant: TunnelGrant, templates: TunnelTemplate[]): GrantD
     expiresAt: grant.expires_at ? datetimeLocal(grant.expires_at) : "",
     maxForwards: String(grant.max_active_forwards ?? 1),
     speedMbps: String(grant.per_forward_speed_mbps ?? 0),
-    connectionLimit: String(grant.per_forward_connection_limit ?? 0),
     trafficGB: String((Number(grant.traffic_limit_bytes || 0) / 1024 ** 3) || 0),
     billingMode: normalizeForwardingBillingMode(grant.billing_mode_override, template?.billing_mode),
   };
@@ -767,7 +761,7 @@ function GrantDialog({ grant, users, templates, onClose, onComplete }: { grant?:
   });
   const activeTemplates = templates.filter((template) => template.state === "active" || sameID(resourceID(template), draft.tunnelID));
   const selectedUser = users.find((user) => user.username === draft.username);
-  const valid = Boolean(selectedUser && !isPackageAuthorization(selectedUser)) && draft.username && draft.tunnelID && draft.startsAt && Number(draft.maxForwards) >= 1 && Number(draft.speedMbps) >= 0 && Number(draft.connectionLimit) >= 0 && Number(draft.trafficGB) >= 0 && (!draft.expiresAt || new Date(draft.expiresAt).getTime() > new Date(draft.startsAt).getTime());
+  const valid = Boolean(selectedUser && !isPackageAuthorization(selectedUser)) && draft.username && draft.tunnelID && draft.startsAt && Number(draft.maxForwards) >= 1 && Number(draft.speedMbps) >= 0 && Number(draft.trafficGB) >= 0 && (!draft.expiresAt || new Date(draft.expiresAt).getTime() > new Date(draft.startsAt).getTime());
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!valid) return;
@@ -778,8 +772,8 @@ function GrantDialog({ grant, users, templates, onClose, onComplete }: { grant?:
       starts_at: new Date(draft.startsAt).toISOString(),
       expires_at: draft.expiresAt ? new Date(draft.expiresAt).toISOString() : null,
       max_active_forwards: Number(draft.maxForwards),
-      per_forward_speed_mbps: INBOUND_LIMITER_V1 ? Number(draft.speedMbps) : 0,
-      per_forward_connection_limit: INBOUND_LIMITER_V1 ? Number(draft.connectionLimit) : 0,
+      per_forward_speed_mbps: Number(draft.speedMbps),
+      per_forward_connection_limit: 0,
       traffic_limit_bytes: Math.round(Number(draft.trafficGB) * 1024 ** 3),
       billing_mode_override: draft.billingMode,
       allow_custom_public_target: false,
@@ -793,7 +787,7 @@ function GrantDialog({ grant, users, templates, onClose, onComplete }: { grant?:
     } catch (reason) { setError(reason instanceof Error ? reason.message : "隧道授权保存失败"); setWorking(false); }
   };
   const update = <K extends keyof GrantDraft>(key: K, value: GrantDraft[K]) => setDraft((current) => ({ ...current, [key]: value }));
-  return <Dialog title={grant ? "编辑隧道授权" : "新增隧道授权"} description="限制对单个用户生效，不会改变隧道模板或服务器权限。" onClose={onClose} wide dismissible={!working}><form className="fm-form" onSubmit={(event) => void submit(event)}>{error ? <ErrorState message={error} /> : null}<div className="fm-form-grid"><Field label="授权用户"><select value={draft.username} disabled={Boolean(grant)} onChange={(event) => update("username", event.target.value)}><option value="">选择用户</option>{eligibleUsers.map((user) => <option key={user.username} value={user.username}>{user.nickname || user.username} ({user.username})</option>)}</select></Field><Field label="隧道模板"><select value={draft.tunnelID} disabled={Boolean(grant)} onChange={(event) => update("tunnelID", event.target.value)}><option value="">选择隧道</option>{activeTemplates.map((template) => <option key={String(resourceID(template))} value={String(resourceID(template))}>{template.name}</option>)}</select></Field></div><div className="fm-form-grid"><Field label="生效时间"><input type="datetime-local" value={draft.startsAt} onChange={(event) => update("startsAt", event.target.value)} /></Field><Field label="到期时间" hint="留空表示长期"><input type="datetime-local" value={draft.expiresAt} onChange={(event) => update("expiresAt", event.target.value)} /></Field></div><div className="fm-form-grid fm-form-grid-four"><Field label="最大启用转发"><input type="number" min="1" value={draft.maxForwards} onChange={(event) => update("maxForwards", event.target.value)} /></Field><Field label="每转发限速 Mbps" hint="当前节点组件暂不支持"><input type="number" min="0" step="0.1" value={INBOUND_LIMITER_V1 ? draft.speedMbps : "0"} disabled={!INBOUND_LIMITER_V1} onChange={(event) => update("speedMbps", event.target.value)} /></Field><Field label="每转发连接数" hint="当前节点组件暂不支持"><input type="number" min="0" value={INBOUND_LIMITER_V1 ? draft.connectionLimit : "0"} disabled={!INBOUND_LIMITER_V1} onChange={(event) => update("connectionLimit", event.target.value)} /></Field><Field label="授权总流量 GB" hint="0 表示不限"><input type="number" min="0" step="0.1" value={draft.trafficGB} onChange={(event) => update("trafficGB", event.target.value)} /></Field></div><div className="fm-form-grid"><Field label="计费方向"><select value={draft.billingMode} onChange={(event) => update("billingMode", event.target.value as ForwardingBillingMode)}><option value="both">双向</option><option value="upload">仅算上行</option><option value="download">仅算下行</option></select></Field><Field label="流量重置" hint="当前版本暂不支持"><select value="none" disabled><option value="none">不自动重置</option></select></Field></div><div className="fm-capability-note"><ShieldCheck size={17} /><span>转发同时支持 TCP 与 UDP，可自动选取共同端口或由用户在模板范围内指定端口。当前 Agent 未提供限速组件，限速和连接数固定为不限。</span></div><div className="dialog-actions"><Button type="button" variant="secondary" disabled={working} onClick={onClose}>取消</Button><Button type="submit" disabled={!valid || working}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />保存授权</>}</Button></div></form></Dialog>;
+  return <Dialog title={grant ? "编辑隧道授权" : "新增隧道授权"} description="限制对单个用户生效，不会改变隧道模板或服务器权限。" onClose={onClose} wide dismissible={!working}><form className="fm-form" onSubmit={(event) => void submit(event)}>{error ? <ErrorState message={error} /> : null}<div className="fm-form-grid"><Field label="授权用户"><select value={draft.username} disabled={Boolean(grant)} onChange={(event) => update("username", event.target.value)}><option value="">选择用户</option>{eligibleUsers.map((user) => <option key={user.username} value={user.username}>{user.nickname || user.username} ({user.username})</option>)}</select></Field><Field label="隧道模板"><select value={draft.tunnelID} disabled={Boolean(grant)} onChange={(event) => update("tunnelID", event.target.value)}><option value="">选择隧道</option>{activeTemplates.map((template) => <option key={String(resourceID(template))} value={String(resourceID(template))}>{template.name}</option>)}</select></Field></div><div className="fm-form-grid"><Field label="生效时间"><input type="datetime-local" value={draft.startsAt} onChange={(event) => update("startsAt", event.target.value)} /></Field><Field label="到期时间" hint="留空表示长期"><input type="datetime-local" value={draft.expiresAt} onChange={(event) => update("expiresAt", event.target.value)} /></Field></div><div className="fm-form-grid fm-form-grid-four"><Field label="最大启用转发"><input type="number" min="1" value={draft.maxForwards} onChange={(event) => update("maxForwards", event.target.value)} /></Field><Field label="每转发限速 Mbps" hint="0 表示不限"><input type="number" min="0" step="0.1" value={draft.speedMbps} onChange={(event) => update("speedMbps", event.target.value)} /></Field><Field label="每转发连接数" hint="当前节点组件暂不支持"><input type="number" min="0" value="0" disabled /></Field><Field label="授权总流量 GB" hint="0 表示不限"><input type="number" min="0" step="0.1" value={draft.trafficGB} onChange={(event) => update("trafficGB", event.target.value)} /></Field></div><div className="fm-form-grid"><Field label="计费方向"><select value={draft.billingMode} onChange={(event) => update("billingMode", event.target.value as ForwardingBillingMode)}><option value="both">双向</option><option value="upload">仅算上行</option><option value="download">仅算下行</option></select></Field><Field label="流量重置" hint="当前版本暂不支持"><select value="none" disabled><option value="none">不自动重置</option></select></Field></div><div className="fm-capability-note"><ShieldCheck size={17} /><span>转发同时支持 TCP 与 UDP，可配置每条转发的独立限速，并自动选取共同端口或由用户在模板范围内指定端口。连接数限制当前不可用并固定为不限。</span></div><div className="dialog-actions"><Button type="button" variant="secondary" disabled={working} onClick={onClose}>取消</Button><Button type="submit" disabled={!valid || working}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />保存授权</>}</Button></div></form></Dialog>;
 }
 
 function ForwardTable({ forwards, templates, admin = false, onAction, onDelete, onCopy }: {

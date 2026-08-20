@@ -240,7 +240,7 @@ describe("administrator tunnel composition", () => {
     expect(createBody).not.toHaveProperty("allow_custom_public_target");
   });
 
-  it("keeps limiter-dependent grant controls disabled and submits zero values", async () => {
+  it("submits a per-forward speed limit while keeping connection limits disabled", async () => {
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
       if (path === "/api/admin/tunnel-templates") return { templates: [tunnel] } as T;
       if (path === "/api/admin/remote-servers") return { servers: [] } as T;
@@ -255,9 +255,11 @@ describe("administrator tunnel composition", () => {
     fireEvent.click(await screen.findByRole("tab", { name: /用户授权/ }));
     fireEvent.click(screen.getByRole("button", { name: "新增授权" }));
     const dialog = screen.getByRole("dialog", { name: "新增隧道授权" });
-    expect(within(dialog).getByRole("spinbutton", { name: /^每转发限速 Mbps/ })).toBeDisabled();
+    const speedLimit = within(dialog).getByRole("spinbutton", { name: /^每转发限速 Mbps/ });
+    expect(speedLimit).toBeEnabled();
     expect(within(dialog).getByRole("spinbutton", { name: /^每转发连接数/ })).toBeDisabled();
-    expect(within(dialog).getAllByText("当前节点组件暂不支持")).toHaveLength(2);
+    expect(within(dialog).getAllByText("当前节点组件暂不支持")).toHaveLength(1);
+    expect(within(dialog).getByText(/可配置每条转发的独立限速/)).toBeInTheDocument();
     const billing = within(dialog).getByRole("combobox", { name: "计费方向" });
     expect(billing).toHaveValue("both");
     expect(Array.from(billing.querySelectorAll("option"), (option) => option.textContent)).toEqual([
@@ -266,11 +268,12 @@ describe("administrator tunnel composition", () => {
       "仅算下行",
     ]);
     expect(within(dialog).queryByText("继承隧道")).not.toBeInTheDocument();
+    fireEvent.change(speedLimit, { target: { value: "35" } });
     fireEvent.change(billing, { target: { value: "upload" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "保存授权" }));
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/users/alice/tunnel-grants", expect.objectContaining({
-      per_forward_speed_mbps: 0,
+      per_forward_speed_mbps: 35,
       per_forward_connection_limit: 0,
       billing_mode_override: "upload",
     }), { idempotencyKey: expect.any(String) }));

@@ -126,6 +126,7 @@ export interface PackageItem {
   short_code: string;
   traffic_mode: string;
   node_multipliers?: Record<string, number>;
+  node_traffic_limits?: Record<string, number>;
   node_speed_limits?: Record<string, number>;
   node_device_limits?: Record<string, number>;
   auto_speed_rules?: AutoSpeedLimitRule[];

@@ -79,6 +79,7 @@ describe("TG Bot invite operations", () => {
     expect(await screen.findByText("邀请码由 Arcway 内嵌 Telegram Bot 使用")).toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "创建邀请码" }));
     expect(await screen.findByText("标准月付", { selector: ".cell-note" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "标准月付 · 30 天" })).toBeInTheDocument();
     fireEvent.change(screen.getByRole("combobox", { name: /^注册套餐/ }), { target: { value: "7" } });
     fireEvent.change(screen.getByRole("spinbutton", { name: /^账号有效月数/ }), { target: { value: "3" } });
     fireEvent.change(screen.getByRole("spinbutton", { name: "最大使用次数" }), { target: { value: "5" } });

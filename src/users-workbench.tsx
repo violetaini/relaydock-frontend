@@ -26,7 +26,6 @@ import {
 import { api } from "./api";
 import { BatchServiceAuthorizationDialog, ServiceAuthorizationPanel } from "./service-authorization";
 import { TGBotInvitesPanel } from "./tg-bot-invites";
-import { TrafficProgress } from "./traffic-progress";
 import type { NodeItem, NodeListResponse, UserItem } from "./types";
 import { isPackageAuthorization } from "./user-authorization";
 import {
@@ -171,7 +170,6 @@ export function UsersWorkbenchPage({ notify, initialScope = "all" }: { notify: N
 
   const regularUsers = users.filter((user) => user.role !== "admin");
   const activeCount = regularUsers.filter((user) => user.is_active).length;
-  const overLimit = regularUsers.filter((user) => user.is_over_limit).length;
   const visibleRegularUsers = filtered.filter((user) => user.role !== "admin");
   const allVisibleSelected = visibleRegularUsers.length > 0 && visibleRegularUsers.every((user) => selectedUsernames.includes(user.username));
 
@@ -254,7 +252,7 @@ export function UsersWorkbenchPage({ notify, initialScope = "all" }: { notify: N
     <>
       <PageHeader
         title="用户管理"
-        description={scope === "invites" ? "管理 Telegram Bot 注册与账号绑定邀请码" : `${regularUsers.length} 位普通用户 · ${activeCount} 位启用 · ${overLimit} 位超出流量`}
+        description={scope === "invites" ? "管理 Telegram Bot 注册与账号绑定邀请码" : `${regularUsers.length} 位普通用户 · ${activeCount} 位启用`}
         actions={scope === "invites" ? undefined : <><Button variant="secondary" disabled={!selectedUsernames.length} onClick={() => setShowBatchAuthorization(true)}><ShieldCheck size={17} />批量服务授权{selectedUsernames.length ? ` (${selectedUsernames.length})` : ""}</Button><IconButton label="刷新用户" onClick={() => void load()} disabled={loading}><RefreshCw size={18} /></IconButton><Button onClick={() => setEditor({ kind: "create" })}><Plus size={17} />新建用户</Button></>}
       />
       {scope !== "invites" && error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
@@ -273,10 +271,9 @@ export function UsersWorkbenchPage({ notify, initialScope = "all" }: { notify: N
         {loading ? <div className="center-state"><Spinner label="正在加载用户" /></div> : filtered.length === 0 ? <EmptyState icon={<Users size={24} />} title={users.length ? "没有匹配的用户" : "暂无用户"} /> : (
           <div className="table-wrap">
             <table>
-              <thead><tr><th className="user-select-cell"><input type="checkbox" aria-label="选择当前用户" checked={allVisibleSelected} disabled={!visibleRegularUsers.length} onChange={toggleAllVisible} /></th><th>用户</th><th>服务授权</th><th>流量用量</th><th>到期</th><th>启用</th><th aria-label="操作">操作</th></tr></thead>
+              <thead><tr><th className="user-select-cell"><input type="checkbox" aria-label="选择当前用户" checked={allVisibleSelected} disabled={!visibleRegularUsers.length} onChange={toggleAllVisible} /></th><th>用户</th><th>服务授权</th><th>累计用量</th><th>到期</th><th>启用</th><th aria-label="操作">操作</th></tr></thead>
               <tbody>{filtered.map((user) => {
                 const isAdmin = user.role === "admin";
-                const effectiveSpeed = user.speed_limit_override ?? user.speed_limit_mbps;
                 const effectiveDevices = user.device_limit_override ?? user.device_limit;
                 const expiry = expiryState(user.package_end_date);
                 const identityDetail = [user.nickname && user.nickname !== user.username ? user.username : "", user.email].filter(Boolean).join(" · ") || "未填写邮箱";
@@ -295,16 +292,15 @@ export function UsersWorkbenchPage({ notify, initialScope = "all" }: { notify: N
                       ? <span className="user-package-chip"><PackageIcon size={14} />套餐 · {user.package_name || `#${user.package_id}`}</span>
                       : <span className="user-package-chip is-custom"><ShieldCheck size={14} />自定义</span>}
                   </td>
-                  <td data-label="流量用量">
-                    <TrafficProgress compact used={user.traffic_used} limit={user.traffic_limit} label={`${user.username} 流量使用率`} />
-                    <small className="user-limit-note">{effectiveSpeed ? `${effectiveSpeed} Mbps` : "不限速"} · {effectiveDevices ? `${effectiveDevices} 台设备` : "设备不限"}</small>
+                  <td data-label="累计用量">
+                    <strong>{formatBytes(user.traffic_used)}</strong>
+                    <small className="user-limit-note">{effectiveDevices ? `${effectiveDevices} 台设备` : "设备不限"}</small>
                   </td>
                   <td data-label="到期">
                     <span className="user-expiry"><CalendarDays size={15} /><span><strong>{user.package_end_date || "-"}</strong><small>{user.package_end_date ? expiry.label : "未设置到期日"}</small></span></span>
                   </td>
                   <td data-label="启用">
                     {isAdmin ? <Badge tone="info">管理员</Badge> : <div className="user-status-toggle"><Toggle checked={user.is_active} onChange={() => void toggleStatus(user)} label={`${user.is_active ? "停用" : "启用"}用户 ${user.username}`} disabled={rowWorking} /></div>}
-                    {user.is_over_limit ? <Badge tone="bad">流量超限</Badge> : null}
                   </td>
                   <td data-label="操作">
                     <div className="user-actions">
@@ -367,7 +363,7 @@ function UserSettingsDialog({
     ...(user.role !== "admin" ? [
       { id: "password" as const, label: "登录密码" },
       { id: "services" as const, label: "服务授权" },
-      { id: "limits" as const, label: "流量与限额" },
+      { id: "limits" as const, label: "节点与设备" },
       { id: "subscriptions" as const, label: "订阅分配" },
       { id: "subaccounts" as const, label: "节点子账号" },
     ] : []),
@@ -396,7 +392,7 @@ function UserSettingsDialog({
       case "extend":
         return <UserSettingsPanelFrame title="续期套餐" description={`当前到期日：${user.package_end_date || "未设置"}；仅延长有效期，不重置流量`} onBack={() => setActivePanel("overview")}><ExtendSettingsPanel user={user} onBack={() => setActivePanel("overview")} onComplete={completePanel} /></UserSettingsPanelFrame>;
       case "limits":
-        return <UserSettingsPanelFrame title="流量、限速与设备数" description="总流量仅覆盖套餐额度；服务器授权额度继续独立计算" onBack={() => setActivePanel("overview")}><LimitsSettingsPanel user={user} onBack={() => setActivePanel("overview")} onComplete={completePanel} /></UserSettingsPanelFrame>;
+        return <UserSettingsPanelFrame title="固定节点限速与设备数" description="固定节点按节点设置；服务器和转发限制在各自授权中维护" onBack={() => setActivePanel("overview")}><LimitsSettingsPanel user={user} onBack={() => setActivePanel("overview")} onComplete={completePanel} /></UserSettingsPanelFrame>;
       case "services":
         return <UserSettingsPanelFrame title="服务授权" description="套餐授权与自定义授权互斥；先选择方式，再配置对应服务" onBack={() => setActivePanel("overview")}><ServiceAuthorizationPanel user={user} notify={notify} onChanged={onComplete} onOpenExtend={() => setActivePanel("extend")} /></UserSettingsPanelFrame>;
       case "subscriptions":
@@ -414,7 +410,7 @@ function UserSettingsDialog({
           {user.role !== "admin" ? <section className="user-settings-section">
             <div className="user-settings-section-heading"><div><h2>权限与服务</h2><p>统一管理授权方式、额度和订阅输出</p></div><ShieldCheck size={18} /></div>
             {action("services", "服务授权", <ShieldCheck size={17} />)}
-            {action("limits", "流量、限速与设备数", <Gauge size={17} />)}
+            {action("limits", "固定节点限速与设备数", <Gauge size={17} />)}
             {action("subscriptions", "订阅文件分配", <Link2 size={17} />)}
             {action("subaccounts", "查看节点子账号", <UserCog size={17} />)}
           </section> : null}
@@ -506,8 +502,6 @@ function ExtendSettingsPanel({ user, onBack, onComplete }: { user: ManagedUser; 
 
 function LimitsSettingsPanel({ user, onBack, onComplete }: { user: ManagedUser; onBack: () => void; onComplete: (message: string) => void }) {
   const [nodes, setNodes] = useState<NodeItem[]>([]);
-  const [traffic, setTraffic] = useState(user.traffic_limit_override_gb == null ? "" : String(user.traffic_limit_override_gb));
-  const [speed, setSpeed] = useState(user.speed_limit_override == null ? "" : String(user.speed_limit_override));
   const [devices, setDevices] = useState(user.device_limit_override == null ? "" : String(user.device_limit_override));
   const [nodeSpeed, setNodeSpeed] = useState<Record<string, string>>(() => Object.fromEntries(Object.entries(user.node_speed_limit_overrides ?? {}).map(([key, value]) => [key, String(value)])));
   const [nodeDevices, setNodeDevices] = useState<Record<string, string>>(() => Object.fromEntries(Object.entries(user.node_device_limit_overrides ?? {}).map(([key, value]) => [key, String(value)])));
@@ -523,8 +517,8 @@ function LimitsSettingsPanel({ user, onBack, onComplete }: { user: ManagedUser; 
       completed.push(label);
     };
     try {
-      await saveStep("/api/admin/users/traffic-limit", { username: user.username, traffic_limit_override_gb: traffic === "" ? null : Number(traffic) }, "总流量");
-      await saveStep("/api/admin/users/limits", { username: user.username, speed_limit_override: speed === "" ? null : Number(speed), device_limit_override: devices === "" ? null : Number(devices) }, "用户限速与设备数");
+      await saveStep("/api/admin/users/traffic-limit", { username: user.username, traffic_limit_override_gb: null }, "旧版总流量设置清理");
+      await saveStep("/api/admin/users/limits", { username: user.username, speed_limit_override: null, device_limit_override: devices === "" ? null : Number(devices) }, "设备数");
       await saveStep("/api/admin/users/node-limits", { username: user.username, node_speed_overrides: numericMap(nodeSpeed), node_device_overrides: numericMap(nodeDevices) }, "节点级限额");
       onComplete(`${user.username} 的限额已下发`);
     } catch (reason) {
@@ -534,13 +528,7 @@ function LimitsSettingsPanel({ user, onBack, onComplete }: { user: ManagedUser; 
   };
   return <form className="form-stack" onSubmit={submit}>
     {error ? <ErrorState message={error} /> : null}
-    <Field label="总流量覆盖（GB）" hint={user.package_id ? "留空继承套餐；0 表示当前套餐显式不限流量" : "请先分配套餐；服务器授权额度在授权入口单独设置"}>
-      <input type="number" min="0" step="0.01" value={traffic} onChange={(e) => setTraffic(e.target.value)} placeholder="继承套餐" disabled={!user.package_id} />
-    </Field>
-    <div className="form-grid">
-      <Field label="用户限速覆盖（Mbps）" hint={`套餐值 ${user.speed_limit_mbps || 0}，留空继承`}><input type="number" min="0" step="0.1" value={speed} onChange={(e) => setSpeed(e.target.value)} placeholder="继承套餐" /></Field>
-      <Field label="用户设备数覆盖" hint={`套餐值 ${user.device_limit || 0}，留空继承`}><input type="number" min="0" step="1" value={devices} onChange={(e) => setDevices(e.target.value)} placeholder="继承套餐" /></Field>
-    </div>
+    <Field label="用户设备数覆盖" hint={`套餐值 ${user.device_limit || 0}，留空继承`}><input type="number" min="0" step="1" value={devices} onChange={(e) => setDevices(e.target.value)} placeholder="继承套餐" /></Field>
     <div className="surface-heading compact-heading"><div><h2>节点级覆盖</h2><small>0 表示该节点显式不限，留空表示继承</small></div></div>
     <div className="node-limit-list">{nodes.length === 0 ? <span className="muted">当前没有可配置节点</span> : nodes.map((node) => <div key={node.id}><span><strong>{node.node_name}</strong><small>#{node.id} · {node.protocol}</small></span><Field label="Mbps"><input aria-label={`${node.node_name} 限速`} type="number" min="0" step="0.1" value={nodeSpeed[String(node.id)] ?? ""} onChange={(e) => setNodeSpeed({ ...nodeSpeed, [node.id]: e.target.value })} /></Field><Field label="设备"><input aria-label={`${node.node_name} 设备数`} type="number" min="0" step="1" value={nodeDevices[String(node.id)] ?? ""} onChange={(e) => setNodeDevices({ ...nodeDevices, [node.id]: e.target.value })} /></Field></div>)}</div>
     <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onBack}>返回设置总览</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在下发" /> : <><SlidersHorizontal size={16} />保存并下发</>}</Button></div>

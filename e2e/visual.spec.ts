@@ -490,6 +490,19 @@ test("top navigation keeps probe return with the chrome controls", async ({ page
   await expectViewportIntegrity(page, "desktop top probe return control");
 });
 
+test("pixel node table fits its desktop surface without horizontal scrolling", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockAPI(page);
+  await page.goto("/#/nodes");
+  await page.evaluate(() => { document.documentElement.dataset.styleTheme = "pixel"; });
+
+  const tableViewport = page.locator(".nw-node-table-scroll");
+  await expect(tableViewport).toBeVisible();
+  const horizontalOverflow = await tableViewport.evaluate((element) => element.scrollWidth - element.clientWidth);
+  expect(horizontalOverflow).toBeLessThanOrEqual(1);
+  await expect(page.getByRole("button", { name: "更多 HK Backup 操作" })).toBeVisible();
+});
+
 test("public probe keeps its operational hierarchy across desktop and mobile", async ({ page }, testInfo) => {
   const probe = {
     enabled: true,

@@ -145,6 +145,8 @@ describe("administrator tunnel composition", () => {
     });
     render(<ForwardingManagement isAdmin notify={vi.fn()} />);
 
+    expect(await screen.findByText("不限制")).toBeInTheDocument();
+    expect(screen.queryByText("0/不限 条转发")).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole("tab", { name: /用户授权/ }));
     fireEvent.click(screen.getByRole("button", { name: "新增授权" }));
     const userSelect = screen.getByRole("combobox", { name: "授权用户" });

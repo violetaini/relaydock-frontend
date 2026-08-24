@@ -278,6 +278,12 @@
 
 .nw-node-surface {
   min-height: 320px;
+  display: flex;
+  flex-direction: column;
+}
+
+.nw-node-table-scroll {
+  flex: 1 0 auto;
 }
 
 .nw-node-table {

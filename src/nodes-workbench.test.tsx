@@ -227,6 +227,7 @@ describe("WireGuard nodes", () => {
     render(<NodesWorkbench isAdmin notify={vi.fn()} />);
 
     expect(await screen.findByText("办公室 WireGuard")).toBeInTheDocument();
+    expect(screen.getByRole("table").parentElement).toHaveClass("nw-node-table-scroll");
     expect(screen.getAllByText("WIREGUARD")).toHaveLength(2);
     expect(screen.getByText("203.0.113.10:51820")).toBeInTheDocument();
     const latencyButton = screen.getByRole("button", { name: "测延迟" });

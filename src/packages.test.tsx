@@ -16,6 +16,7 @@ const packageItem: PackageItem = {
   cycle_days: 30,
   is_reset: true,
   reset_day: 8,
+  node_traffic_reset_period: "quarterly",
   nodes: [1, 2],
   speed_limit_mbps: 100,
   device_limit: 3,
@@ -51,9 +52,9 @@ const nodes: NodeItem[] = [
   { id: 2, node_name: "东京 B", protocol: "trojan", raw_url: "", clash_config: "", parsed_config: "", enabled: true, tag: "jp", original_server: "edge-jp", inbound_tag: "in-b", node_type: "physical", updated_at: "" },
 ];
 
-function mockLoads() {
+function mockLoads(packageItems: PackageItem[] = [packageItem]) {
   return vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
-    if (path === "/api/admin/packages") return { packages: [packageItem] } as T;
+    if (path === "/api/admin/packages") return { packages: packageItems } as T;
     if (path === "/api/admin/nodes") return { nodes } as T;
     if (path === "/api/admin/remote-servers") return { servers: [{ id: 3, name: "香港入口", status: "online" }] } as T;
     if (path === "/api/admin/tunnel-templates") return { tunnels: [{ id: 7, name: "香港转发", state: "active", billing_mode: "upload" }] } as T;
@@ -84,6 +85,7 @@ describe("package management", () => {
       traffic_limit_gb: 0,
       speed_limit_mbps: 0,
       is_reset: true,
+      node_traffic_reset_period: "quarterly",
       reset_day: 8,
       nodes: [2],
       node_multipliers: { "2": 1.5 },
@@ -189,6 +191,16 @@ describe("package management", () => {
     expect(screen.getByRole("button", { name: "编辑 标准套餐" })).toBeInTheDocument();
   });
 
+  it("treats a legacy package without a reset period as monthly", async () => {
+    const legacyPackage = { ...packageItem, node_traffic_reset_period: undefined, is_reset: false };
+    mockLoads([legacyPackage]);
+    render(<PackagesPage notify={vi.fn()} />);
+
+    expect(await screen.findByText("固定节点按套餐授权周期重置")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "编辑 标准套餐" }));
+    expect(screen.getByRole("combobox", { name: "固定节点流量重置周期" })).toHaveValue("monthly");
+  });
+
   it("hides package-wide totals and edits the per-forward speed", async () => {
     mockLoads();
     const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
@@ -198,15 +210,18 @@ describe("package management", () => {
     expect(screen.queryByRole("spinbutton", { name: "流量限额（GB）" })).not.toBeInTheDocument();
     expect(screen.queryByRole("spinbutton", { name: "全局限速（Mbps）" })).not.toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: "按自然月重置流量" })).not.toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "固定节点流量按自然月重置" })).toBeChecked();
+    expect(screen.getByRole("combobox", { name: "固定节点流量重置周期" })).toHaveValue("quarterly");
     expect(screen.getByRole("spinbutton", { name: "固定节点流量重置日" })).toHaveValue(8);
 
+    fireEvent.change(screen.getByRole("combobox", { name: "固定节点流量重置周期" }), { target: { value: "yearly" } });
     fireEvent.change(screen.getByRole("spinbutton", { name: "香港转发 单条转发限速" }), { target: { value: "35" } });
     fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/packages/update", expect.objectContaining({
       traffic_limit_gb: 0,
       speed_limit_mbps: 0,
+      is_reset: true,
+      node_traffic_reset_period: "yearly",
       forwarding_grants: [expect.objectContaining({
         tunnel_id: 7,
         per_forward_speed_mbps: 35,

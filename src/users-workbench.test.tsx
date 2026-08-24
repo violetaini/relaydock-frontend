@@ -369,7 +369,7 @@ describe("users workbench", () => {
     const unassigned = { ...alice, package_id: undefined, package_name: undefined, package_end_date: undefined };
     vi.spyOn(api, "get").mockImplementation(async (path) => {
       if (path === "/api/admin/users") return { users: [unassigned] };
-      if (path === "/api/admin/packages") return { packages: [{ id: 9, name: "月付套餐", traffic_limit_gb: 200, cycle_days: 30, is_reset: true, reset_day: 8 }] };
+      if (path === "/api/admin/packages") return { packages: [{ id: 9, name: "月付套餐", traffic_limit_gb: 200, cycle_days: 30, is_reset: true, reset_day: 8, node_traffic_reset_period: "quarterly" }] };
       throw new Error(`unexpected GET ${path}`);
     });
     const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
@@ -379,8 +379,9 @@ describe("users workbench", () => {
     fireEvent.click(screen.getByRole("tab", { name: "服务授权" }));
     fireEvent.click(screen.getByRole("radio", { name: /套餐授权/ }));
     fireEvent.change(await screen.findByRole("combobox", { name: "用户套餐" }), { target: { value: "9" } });
-    const reset = screen.getByRole("switch", { name: "固定节点流量按自然月重置" });
+    const reset = screen.getByRole("switch", { name: "启用固定节点流量定期重置" });
     expect(reset).toBeChecked();
+    expect(screen.getByText("套餐默认：固定节点每个自然季度首月 8 日重置")).toBeInTheDocument();
     fireEvent.click(reset);
     fireEvent.click(screen.getByRole("button", { name: "分配套餐" }));
 

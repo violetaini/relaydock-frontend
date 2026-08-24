@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { api } from "./api";
 import { normalizeForwardingBillingMode } from "./forwarding-billing";
+import { packageNodeTrafficResetSummary } from "./node-traffic-reset";
 import {
   UserForwardingGrantsPanel,
   type TunnelTemplate,
@@ -481,17 +482,17 @@ export function ServiceAuthorizationPanel({
                       setResetEnabled(value);
                       setResetOverrideDirty(true);
                     }}
-                    label="固定节点流量按自然月重置"
+                    label="启用固定节点流量定期重置"
                   />
                   <small>
                     {resetOverrideDirty
-                      ? "已使用用户级固定节点流量策略，不再跟随套餐默认值"
-                      : selectedPackage?.is_reset
-                        ? `套餐默认：固定节点流量每月 ${selectedPackage.reset_day} 日重置`
-                        : "套餐默认：固定节点流量按套餐周期重置"}
+                      ? "已使用用户级开关和重置日；周期仍按套餐设置"
+                      : selectedPackage
+                        ? `套餐默认：${packageNodeTrafficResetSummary(selectedPackage)}`
+                        : "套餐默认：固定节点每月重置"}
                   </small>
                 </div>
-                <Field label="固定节点流量重置日" hint="每月 1 到 31 日">
+                <Field label="固定节点流量重置日" hint="周期起始月 1 到 31 日">
                   <input
                     aria-label="固定节点流量重置日"
                     type="number"
@@ -918,10 +919,10 @@ export function BatchServiceAuthorizationDialog({
               <Toggle
                 checked={resetEnabled}
                 onChange={setResetEnabled}
-                label="固定节点流量按自然月重置"
+                label="启用固定节点流量定期重置"
               />
               {resetEnabled ? (
-                <Field label="固定节点流量重置日" hint="每月 1 到 31 日">
+                <Field label="固定节点流量重置日" hint="周期起始月 1 到 31 日">
                   <input
                     aria-label="批量固定节点流量重置日"
                     type="number"

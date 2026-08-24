@@ -20,6 +20,7 @@ import type {
   ForwardingBillingMode,
   NodeItem,
   NodeListResponse,
+  NodeTrafficResetPeriod,
   PackageForwardingGrant,
   PackageItem,
   PackageServerGrant,
@@ -28,6 +29,10 @@ import type {
 } from "./types";
 import type { TunnelTemplate } from "./forwarding-management";
 import { normalizeForwardingBillingMode } from "./forwarding-billing";
+import {
+  normalizeNodeTrafficResetPeriod,
+  packageNodeTrafficResetSummary,
+} from "./node-traffic-reset";
 import {
   familiesForProfiles,
   managedGrantProtocolGroups,
@@ -47,7 +52,6 @@ import {
   PageHeader,
   Spinner,
   Surface,
-  Toggle,
 } from "./ui";
 import "./packages.css";
 
@@ -80,7 +84,7 @@ interface PackageFormState {
   cycleDays: string;
   deviceLimit: string;
   trafficMode: "oneway" | "twoway";
-  isReset: boolean;
+  nodeTrafficResetPeriod: NodeTrafficResetPeriod;
   resetDay: string;
   nodes: number[];
   templateFilename: string;
@@ -112,7 +116,7 @@ function initialPackageForm(item: PackageItem | undefined, tunnels: TunnelTempla
     cycleDays: String(item?.cycle_days ?? 30),
     deviceLimit: String(item?.device_limit ?? 0),
     trafficMode: item?.traffic_mode === "twoway" ? "twoway" : "oneway",
-    isReset: item?.is_reset ?? false,
+    nodeTrafficResetPeriod: normalizeNodeTrafficResetPeriod(item?.node_traffic_reset_period),
     resetDay: String(item?.reset_day || 1),
     nodes: [...(item?.nodes ?? [])],
     templateFilename: item?.template_filename ?? "",
@@ -143,7 +147,8 @@ function packagePayload(form: PackageFormState, original?: PackageItem): Record<
     description: form.description.trim(),
     traffic_limit_gb: 0,
     cycle_days: Number(form.cycleDays),
-    is_reset: form.isReset,
+    is_reset: true,
+    node_traffic_reset_period: form.nodeTrafficResetPeriod,
     reset_day: Number(form.resetDay),
     nodes: form.nodes,
     node_multipliers: numericMap(form.nodeMultipliers),
@@ -284,7 +289,7 @@ export function PackagesPage({ notify }: PackagesPageProps) {
                     <span title={names.join("、")}><Route size={15} />{itemNodes.length} 个节点</span>
                     <span><Server size={15} />{item.server_grants?.length ?? 0} 台服务器</span>
                     <span><Network size={15} />{item.forwarding_grants?.length ?? 0} 条线路</span>
-                    <span><CalendarDays size={15} />{item.is_reset ? `固定节点每月 ${item.reset_day} 日重置` : "固定节点按套餐周期重置"}</span>
+                    <span><CalendarDays size={15} />{packageNodeTrafficResetSummary(item)}</span>
                   </div>
                 </Surface>
               );
@@ -294,7 +299,7 @@ export function PackagesPage({ notify }: PackagesPageProps) {
               return <tr key={item.id}>
                 <td><strong>{item.name}</strong><small className="cell-note">{item.description || "无套餐说明"}</small></td>
                 <td><Badge tone={item.traffic_mode === "twoway" ? "info" : "neutral"}>{item.traffic_mode === "twoway" ? "双向计费" : "单向计费"}</Badge></td>
-                <td><strong>{item.cycle_days} 天</strong><small className="cell-note">{item.is_reset ? `固定节点每月 ${item.reset_day} 日重置` : "固定节点按套餐周期重置"} · {item.device_limit ? `${item.device_limit} 台设备` : "设备不限"}</small></td>
+                <td><strong>{item.cycle_days} 天</strong><small className="cell-note">{packageNodeTrafficResetSummary(item)} · {item.device_limit ? `${item.device_limit} 台设备` : "设备不限"}</small></td>
                 <td><strong title={names.join("、")}>{itemNodes.length} 节点 · {item.server_grants?.length ?? 0} 服务器 · {item.forwarding_grants?.length ?? 0} 线路</strong><small className="cell-note">{names.slice(0, 2).join("、") || "未关联固定节点"}</small></td>
                 <td><div className="packages-list-actions"><IconButton label={`编辑 ${item.name}`} onClick={() => setEditor(item)}><Pencil size={16} /></IconButton><IconButton label={`删除 ${item.name}`} onClick={() => setPendingAction({ kind: "delete-package", item })}><Trash2 size={16} /></IconButton></div></td>
               </tr>;
@@ -485,7 +490,7 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (form.isReset && (Number(form.resetDay) < 1 || Number(form.resetDay) > 31)) {
+    if (Number(form.resetDay) < 1 || Number(form.resetDay) > 31) {
       setError("固定节点流量重置日必须在 1 到 31 之间");
       return;
     }
@@ -529,10 +534,18 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
           <Field label="设备数量" hint="0 表示不限设备"><input type="number" min="0" step="1" value={form.deviceLimit} onChange={(event) => setForm({ ...form, deviceLimit: event.target.value })} /></Field>
         </div>
         <div className="form-grid">
-          <Toggle checked={form.isReset} onChange={(value) => setForm({ ...form, isReset: value })} label="固定节点流量按自然月重置" />
-          {form.isReset ? (
-            <Field label="固定节点流量重置日" hint="每月 1 到 31 日"><input required aria-label="固定节点流量重置日" type="number" min="1" max="31" step="1" value={form.resetDay} onChange={(event) => setForm({ ...form, resetDay: event.target.value })} /></Field>
-          ) : <span />}
+          <Field label="固定节点流量重置周期">
+            <select
+              aria-label="固定节点流量重置周期"
+              value={form.nodeTrafficResetPeriod}
+              onChange={(event) => setForm({ ...form, nodeTrafficResetPeriod: event.target.value as NodeTrafficResetPeriod })}
+            >
+              <option value="monthly">按月重置</option>
+              <option value="quarterly">按季度重置</option>
+              <option value="yearly">按年重置</option>
+            </select>
+          </Field>
+          <Field label="固定节点流量重置日" hint="月：每月；季度：季度首月；年：1 月"><input required aria-label="固定节点流量重置日" type="number" min="1" max="31" step="1" value={form.resetDay} onChange={(event) => setForm({ ...form, resetDay: event.target.value })} /></Field>
         </div>
 
         <div className="form-grid">

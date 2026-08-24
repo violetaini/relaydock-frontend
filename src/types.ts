@@ -108,7 +108,10 @@ export interface UserItem {
   package_end_date?: string;
   is_reset?: boolean;
   reset_day?: number;
+  node_traffic_reset_period?: NodeTrafficResetPeriod;
 }
+
+export type NodeTrafficResetPeriod = "monthly" | "quarterly" | "yearly";
 
 export interface PackageItem {
   id: number;
@@ -118,6 +121,7 @@ export interface PackageItem {
   cycle_days: number;
   is_reset: boolean;
   reset_day: number;
+  node_traffic_reset_period?: NodeTrafficResetPeriod;
   nodes: number[];
   server_grants?: PackageServerGrant[];
   forwarding_grants?: PackageForwardingGrant[];

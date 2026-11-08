@@ -1,0 +1,23 @@
+.xui-dialog-stack { display: grid; gap: 16px; }
+.xui-tabs { display: flex; gap: 8px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+.xui-tab-btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: var(--radius-sm); border: 1px solid transparent; background: transparent; color: var(--text-soft); font-size: 13px; cursor: pointer; transition: all 0.15s ease; }
+.xui-tab-btn:hover { background: var(--surface-muted); color: var(--text); }
+.xui-tab-btn.is-active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-readable); font-weight: 500; }
+.xui-coexistence-banner { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: var(--radius-md); background: color-mix(in srgb, var(--accent) 8%, var(--surface-muted)); border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border)); font-size: 12px; line-height: 1.5; color: var(--text); }
+.xui-coexistence-banner strong { color: var(--accent-readable); display: block; margin-bottom: 2px; }
+.xui-metric-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 10px; }
+.xui-metric-card { padding: 10px 12px; border-radius: var(--radius-sm); background: var(--surface-muted); border: 1px solid var(--border); display: flex; flex-direction: column; gap: 4px; }
+.xui-metric-card small { font-size: 11px; color: var(--text-soft); }
+.xui-metric-card strong { font-size: 16px; color: var(--text); }
+.xui-protocol-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.xui-inbound-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 12px; }
+.xui-inbound-table th { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); color: var(--text-soft); font-weight: 500; }
+.xui-inbound-table td { padding: 8px; border-bottom: 1px solid var(--border-soft); color: var(--text); vertical-align: middle; }
+.xui-conflict-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: var(--radius-full); font-size: 11px; font-weight: 500; }
+.xui-conflict-badge.has-conflict { background: var(--amber-soft); color: var(--amber); border: 1px solid color-mix(in srgb, var(--amber) 40%, transparent); }
+.xui-conflict-badge.is-safe { background: var(--green-soft); color: var(--green); border: 1px solid color-mix(in srgb, var(--green) 40%, transparent); }
+.xui-upload-dropzone { border: 2px dashed var(--border); border-radius: var(--radius-md); padding: 28px; text-align: center; cursor: pointer; transition: border-color 0.15s ease; background: var(--surface-muted); }
+.xui-upload-dropzone:hover { border-color: var(--accent); }
+.xui-probe-result-box { padding: 14px; border-radius: var(--radius-md); background: var(--surface-muted); border: 1px solid var(--border); display: grid; gap: 8px; font-size: 13px; }
+.xui-success-card { padding: 20px; border-radius: var(--radius-md); background: var(--green-soft); border: 1px solid color-mix(in srgb, var(--green) 30%, var(--border)); text-align: center; display: grid; gap: 10px; }
+.xui-success-card h3 { margin: 0; color: var(--green); font-size: 18px; }

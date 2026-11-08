@@ -1,7 +1,38 @@
-import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
-import { ArrowDown, ArrowRight, ArrowUp, Check, Cpu, Gauge, Grid2X2, HardDrive, KeyRound, List, LockKeyhole, LogIn, MemoryStick, Network, Server, ShieldCheck } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
+import {
+  Activity,
+  ArrowDown,
+  ArrowRight,
+  ArrowUp,
+  Check,
+  CheckCircle2,
+  CircleUserIcon,
+  DollarSign,
+  Cpu,
+  Gauge,
+  Globe,
+  Grid2X2,
+  Grid3X3,
+  HardDrive,
+  KeyRound,
+  Languages,
+  List,
+  LockKeyhole,
+  LogIn,
+  MemoryStick,
+  Moon,
+  Sun,
+  Network,
+  Radio,
+  Search,
+  Server,
+  ShieldCheck,
+  SlidersHorizontal,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { api, ApiError, setToken } from "./api";
-import { BRAND_NAME, BrandMark, useBranding } from "./brand";
+import { BRAND_NAME, BrandMark, brandLogoURL, useBranding } from "./brand";
 import { CountryFlag, normalizeCountryCode } from "./country-flag";
 import type { Session } from "./types";
 import { Button, ErrorState, Field, Spinner, formatBytes } from "./ui";
@@ -244,101 +275,477 @@ function loadAverageDetail(value: string | undefined) {
   return values ? `负载 ${values}` : undefined;
 }
 
-function ProbeMetric({ icon, label, value, progress, detail }: { icon: ReactNode; label: string; value: string; progress?: number; detail?: string }) {
-  return <div className="public-probe-metric">
-    <div className="public-probe-metric-heading"><span>{icon}</span><small>{label}</small><strong>{value}</strong></div>
-    {progress !== undefined ? <span className="public-probe-meter" aria-label={`${label} ${value}`} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}><i style={{ width: `${progress}%` }} /></span> : null}
-    {detail ? <small className="public-probe-metric-detail">{detail}</small> : null}
-  </div>;
+function ProbeMetric({
+  icon,
+  label,
+  value,
+  progress,
+  detail,
+  tone = "default",
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  progress?: number;
+  detail?: string;
+  tone?: "cpu" | "mem" | "disk" | "traffic" | "default";
+}) {
+  let statusClass = "is-normal";
+  if (progress !== undefined) {
+    if (progress >= 90) statusClass = "is-danger";
+    else if (progress >= 75) statusClass = "is-warning";
+  }
+  return (
+    <div className={`public-probe-metric tone-${tone} ${statusClass}`}>
+      <div className="public-probe-metric-heading">
+        <span className="public-probe-metric-icon">{icon}</span>
+        <small className="public-probe-metric-label">{label}</small>
+        <strong className="public-probe-metric-value">{value}</strong>
+      </div>
+      {progress !== undefined ? (
+        <span
+          className="public-probe-meter"
+          aria-label={`${label} ${value}`}
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progress}
+        >
+          <i style={{ width: `${progress}%` }} />
+        </span>
+      ) : null}
+      {detail ? <small className="public-probe-metric-detail">{detail}</small> : null}
+    </div>
+  );
 }
 
-export function PublicProbeScreen({ probe, onLogin, loginLabel = "登录" }: { probe: PublicProbeState; onLogin: () => void; loginLabel?: string }) {
+export function PublicProbeScreen({
+  probe,
+  onLogin,
+  loginLabel = "登录",
+}: {
+  probe: PublicProbeState;
+  onLogin: () => void;
+  loginLabel?: string;
+}) {
   const branding = useBranding();
   const servers = probe.servers ?? [];
   const [layout, setLayout] = useState<"grid" | "list">("grid");
+  const [query, setQuery] = useState("");
+  const [filterStatus, setFilterStatus] = useState<"all" | "online" | "offline">("all");
+  const [sortBy, setSortBy] = useState<"default" | "speed" | "traffic" | "cpu">("default");
+  const [bgKey, setBgKey] = useState(() => Date.now());
+  const [theme, setTheme] = useState<"dark" | "light">(() => {
+    if (typeof document !== "undefined" && document.documentElement.dataset.theme === "light") {
+      return "light";
+    }
+    const saved = typeof localStorage !== "undefined" ? localStorage.getItem("arcway-theme") : null;
+    return saved === "light" ? "light" : "dark";
+  });
+
+  const toggleTheme = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    if (typeof document !== "undefined") {
+      document.documentElement.dataset.theme = next;
+    }
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem("arcway-theme", next);
+    }
+  };
+
+  useEffect(() => {
+    if (typeof document !== "undefined") {
+      document.documentElement.dataset.theme = theme;
+    }
+  }, [theme]);
+
+
   const showCPU = isProbeMetricEnabled(probe, "show_cpu", "metric_cpu", false);
   const showMemory = isProbeMetricEnabled(probe, "show_memory", "metric_mem", false);
   const showDisk = isProbeMetricEnabled(probe, "show_disk", "metric_disk", false);
   const showTraffic = isProbeMetricEnabled(probe, "show_traffic", "metric_traffic", true);
   const showSpeed = isProbeMetricEnabled(probe, "show_speed", "metric_speed", true);
+
   const projectName = branding.name?.trim() || BRAND_NAME;
-  const title = probe.title?.trim() || (projectName === BRAND_NAME ? "服务器状态" : `${projectName} 状态`);
-  const logo = probe.logo?.trim() || branding.logo?.trim();
+  const displayTitle = probe.title?.trim() || (projectName === BRAND_NAME ? "ちちゃんの探針" : `${projectName} 探针`);
+  const logoUrl = probe.logo?.trim() || brandLogoURL(branding);
+
   const onlineCount = servers.filter((server) => server.online).length;
   const totalUpload = servers.reduce((total, server) => total + Math.max(0, Number(server.upload_speed) || 0), 0);
   const totalDownload = servers.reduce((total, server) => total + Math.max(0, Number(server.download_speed) || 0), 0);
   const totalTraffic = servers.reduce((total, server) => total + Math.max(0, Number(server.traffic_used) || 0), 0);
+
+  const filteredServers = useMemo(() => {
+    let list = servers;
+    if (filterStatus === "online") {
+      list = list.filter((s) => s.online);
+    } else if (filterStatus === "offline") {
+      list = list.filter((s) => !s.online);
+    }
+    const q = query.trim().toLowerCase();
+    if (q) {
+      list = list.filter(
+        (s) =>
+          (s.name && s.name.toLowerCase().includes(q)) ||
+          (s.country_code && s.country_code.toLowerCase().includes(q))
+      );
+    }
+    if (sortBy === "speed") {
+      list = [...list].sort((a, b) => {
+        const speedA = (Number(a.download_speed) || 0) + (Number(a.upload_speed) || 0);
+        const speedB = (Number(b.download_speed) || 0) + (Number(b.upload_speed) || 0);
+        return speedB - speedA;
+      });
+    } else if (sortBy === "traffic") {
+      list = [...list].sort((a, b) => (Number(b.traffic_used) || 0) - (Number(a.traffic_used) || 0));
+    } else if (sortBy === "cpu") {
+      list = [...list].sort((a, b) => (Number(b.cpu_pct) || 0) - (Number(a.cpu_pct) || 0));
+    }
+    return list;
+  }, [servers, query, filterStatus, sortBy]);
+
   return (
     <main className="public-probe">
+      <div
+        className="public-probe-bg"
+        style={{ backgroundImage: `url("https://api.chitanda.net/img?t=${bgKey}")` }}
+        aria-hidden="true"
+      />
+      <div className="public-probe-bg-overlay" aria-hidden="true" />
       <header className="public-probe-header">
         <div className="public-probe-header-inner">
-          <div className="public-probe-brand">
-            {logo ? <img src={logo} alt="" referrerPolicy="no-referrer" /> : <BrandMark size={22} />}
-            <span className="public-probe-brand-label">{projectName}</span>
-          </div>
-          <div className="public-probe-live-state" aria-label={`实时状态：${onlineCount} 个节点在线，共 ${servers.length} 个节点`}>
-            <i aria-hidden="true" />
-            <span>LIVE</span>
-            <small>{onlineCount} / {servers.length} ONLINE</small>
-          </div>
-          <div className="public-probe-controls" role="group" aria-label="页面视图">
-            <button type="button" className={`public-probe-view-button ${layout === "grid" ? "is-active" : ""}`} aria-label="网格视图" title="网格视图" aria-pressed={layout === "grid"} onClick={() => setLayout("grid")}><Grid2X2 size={16} /></button>
-            <button type="button" className={`public-probe-view-button ${layout === "list" ? "is-active" : ""}`} aria-label="列表视图" title="列表视图" aria-pressed={layout === "list"} onClick={() => setLayout("list")}><List size={17} /></button>
-            {!probe.block_login ? <button type="button" className="public-probe-login" aria-label={loginLabel} title={loginLabel} onClick={onLogin}><LogIn size={16} /><span className="public-probe-login-label">{loginLabel}</span></button> : null}
+          <a href="/" className="public-probe-brand" title={displayTitle}>
+            <img
+              src={logoUrl}
+              alt="logo"
+              className="public-probe-brand-logo"
+              referrerPolicy="no-referrer"
+            />
+            <h1 className="public-probe-brand-label">{displayTitle}</h1>
+          </a>
+
+          <div className="public-probe-controls" role="group" aria-label="快捷工具栏">
+            <button
+              type="button"
+              className="public-probe-icon-btn"
+              aria-label="快速搜索"
+              title="快速搜索"
+              onClick={() => {
+                const el = document.querySelector<HTMLInputElement>(".public-probe-search-input");
+                if (el) {
+                  el.focus();
+                  el.scrollIntoView({ behavior: "smooth", block: "center" });
+                }
+              }}
+            >
+              <Search size={18} />
+            </button>
+            <button
+              type="button"
+              className={`public-probe-icon-btn ${layout === "grid" ? "is-active" : ""}`}
+              aria-label="网格视图"
+              title="网格视图"
+              aria-pressed={layout === "grid"}
+              onClick={() => setLayout("grid")}
+            >
+              <Grid3X3 size={18} />
+            </button>
+            <button
+              type="button"
+              className={`public-probe-icon-btn ${layout === "list" ? "is-active" : ""}`}
+              aria-label="列表视图"
+              title="列表视图"
+              aria-pressed={layout === "list"}
+              onClick={() => setLayout("list")}
+            >
+              <List size={18} />
+            </button>
+            <button
+              type="button"
+              className="public-probe-icon-btn"
+              aria-label="切换色彩外观"
+              title={theme === "dark" ? "切换为亮色模式" : "切换为暗色模式"}
+              onClick={toggleTheme}
+            >
+              {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
+            <button
+              type="button"
+              className="public-probe-icon-btn"
+              aria-label="随机换壁纸"
+              title="随机换壁纸"
+              onClick={() => setBgKey(Date.now())}
+            >
+              <Sparkles size={18} />
+            </button>
+            {!probe.block_login ? (
+              <button
+                type="button"
+                className="public-probe-icon-btn"
+                aria-label={loginLabel}
+                title={loginLabel}
+                onClick={onLogin}
+              >
+                <CircleUserIcon size={18} />
+              </button>
+            ) : null}
           </div>
         </div>
       </header>
       <section className="public-probe-content">
-        <div className="public-probe-statusline">
-          <div>
-            <span>NETWORK STATUS</span>
-            <h1>{title}</h1>
-          </div>
-          <small>LIVE TELEMETRY</small>
-        </div>
+        
+
         <div className="public-probe-summary" aria-label="服务器总览">
-          <span className="public-probe-summary-cell"><i className="is-online" /><span><small>在线节点</small><strong>{onlineCount} <em>/ {servers.length}</em></strong></span></span>
-          {showSpeed ? <span className="public-probe-summary-cell"><ArrowDown size={14} /><span><small>实时下行</small><strong>{formatBytes(totalDownload, true)}</strong></span></span> : null}
-          {showSpeed ? <span className="public-probe-summary-cell"><ArrowUp size={14} /><span><small>实时上行</small><strong>{formatBytes(totalUpload, true)}</strong></span></span> : null}
-          {showTraffic ? <span className="public-probe-summary-cell"><Gauge size={14} /><span><small>累计流量</small><strong>{formatBytes(totalTraffic)}</strong></span></span> : null}
-        </div>
-        <div className="public-probe-fleet-heading">
-          <div><span>FLEET</span><h2>运行节点</h2></div>
-          <small>{servers.length} NODES</small>
-        </div>
-        {servers.length ? <div className={`public-probe-grid ${layout === "list" ? "is-list" : ""}`}>{servers.map((server, index) => {
-          const used = Math.max(0, Number(server.traffic_used) || 0);
-          const limit = Math.max(0, Number(server.traffic_limit) || 0);
-          const trafficPercent = limit > 0 ? percent(used, limit) : undefined;
-          // A state transition can race a final public frame in transit. Do
-          // not turn that frame into a healthy-looking offline card; the API
-          // also omits these values once an Agent is offline.
-          const cpuPercent = server.online ? percent(server.cpu_pct) : undefined;
-          const memoryPercent = server.online ? percent(server.mem_used, server.mem_total) : undefined;
-          const diskPercent = server.online ? percent(server.disk_used, server.disk_total) : undefined;
-          const visibleMetrics = [
-            showCPU && cpuPercent !== undefined,
-            showMemory && memoryPercent !== undefined,
-            showDisk && diskPercent !== undefined,
-            showTraffic,
-          ].filter(Boolean).length;
-          return <article className={`public-probe-item ${server.online ? "is-online" : "is-offline"}`} key={`${server.name || "service"}-${index}`} style={{ "--public-probe-order": index } as CSSProperties}>
-            <span className="public-probe-card-index" aria-hidden="true">N{String(index + 1).padStart(2, "0")}</span>
-            <header className="public-probe-item-heading">
-              <span className="public-probe-status"><i /><span className="public-probe-country" title={server.country_code || "地区未知"}><CountryFlag countryCode={server.country_code} fallbackSize={15} /></span><strong>{probe.show_name && server.name ? server.name : `服务器 #${index + 1}`}</strong></span>
-              <small>{server.online ? "在线" : "离线"}</small>
-            </header>
-            <div className={`public-probe-metrics public-probe-metrics-${Math.min(4, Math.max(1, visibleMetrics))}`}>
-              {showCPU && cpuPercent !== undefined ? <ProbeMetric icon={<Cpu size={14} />} label="CPU" value={formatPercent(cpuPercent)} progress={cpuPercent} detail={loadAverageDetail(server.loadavg)} /> : null}
-              {showMemory && memoryPercent !== undefined ? <ProbeMetric icon={<MemoryStick size={14} />} label="内存" value={formatPercent(memoryPercent)} progress={memoryPercent} detail={server.mem_used !== undefined && server.mem_total !== undefined ? `${formatBytes(server.mem_used)} / ${formatBytes(server.mem_total)}` : undefined} /> : null}
-              {showDisk && diskPercent !== undefined ? <ProbeMetric icon={<HardDrive size={14} />} label="磁盘" value={formatPercent(diskPercent)} progress={diskPercent} detail={server.disk_used !== undefined && server.disk_total !== undefined ? `${formatBytes(server.disk_used)} / ${formatBytes(server.disk_total)}` : undefined} /> : null}
-              {showTraffic ? <ProbeMetric icon={<Gauge size={14} />} label="流量" value={formatBytes(used)} progress={trafficPercent} detail={limit > 0 ? `配额 ${formatBytes(limit)}` : undefined} /> : null}
+          <div className="public-probe-summary-cell public-probe-summary-card">
+            <div className="public-probe-summary-icon is-online">
+              <Activity size={18} />
             </div>
-            {showSpeed ? <footer className="public-probe-item-footer">
-              <div className="public-probe-speeds"><span className="is-download"><ArrowDown size={15} /><strong>{formatBytes(server.download_speed, true)}</strong></span><span className="is-upload"><ArrowUp size={15} /><strong>{formatBytes(server.upload_speed, true)}</strong></span></div>
-            </footer> : null}
-          </article>;
-        })}</div> : <div className="public-probe-empty"><Server size={24} /><strong>暂无可公开的服务器状态</strong></div>}
+            <div className="public-probe-summary-body">
+              <small>在线节点</small>
+              <strong>{onlineCount} <em>/ {servers.length}</em></strong>
+              <span className="public-probe-summary-chip is-online">
+                <i className="public-probe-pulse-dot" />
+                {servers.length ? Math.round((onlineCount / servers.length) * 100) : 100}% 在线率
+              </span>
+            </div>
+          </div>
+          {showSpeed ? (
+            <div className="public-probe-summary-cell public-probe-summary-card">
+              <div className="public-probe-summary-icon is-download">
+                <ArrowDown size={18} />
+              </div>
+              <div className="public-probe-summary-body">
+                <small>实时下行带宽</small>
+                <strong>{formatBytes(totalDownload, true)}</strong>
+                <span className="public-probe-summary-chip is-download">聚合下行速率</span>
+              </div>
+            </div>
+          ) : null}
+          {showSpeed ? (
+            <div className="public-probe-summary-cell public-probe-summary-card">
+              <div className="public-probe-summary-icon is-upload">
+                <ArrowUp size={18} />
+              </div>
+              <div className="public-probe-summary-body">
+                <small>实时上行带宽</small>
+                <strong>{formatBytes(totalUpload, true)}</strong>
+                <span className="public-probe-summary-chip is-upload">聚合上行速率</span>
+              </div>
+            </div>
+          ) : null}
+          {showTraffic ? (
+            <div className="public-probe-summary-cell public-probe-summary-card">
+              <div className="public-probe-summary-icon is-traffic">
+                <Gauge size={18} />
+              </div>
+              <div className="public-probe-summary-body">
+                <small>累计传输流量</small>
+                <strong>{formatBytes(totalTraffic)}</strong>
+                <span className="public-probe-summary-chip is-traffic">全网历史流量</span>
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="public-probe-fleet-bar">
+          <div className="public-probe-fleet-left">
+            <h2>运行节点</h2>
+            <span className="public-probe-badge-count">{filteredServers.length} / {servers.length} NODES</span>
+          </div>
+          <div className="public-probe-fleet-right">
+            <div className="public-probe-filter-chips">
+              <button
+                type="button"
+                className={`public-probe-chip-btn ${filterStatus === "all" ? "is-active" : ""}`}
+                onClick={() => setFilterStatus("all")}
+              >
+                全部 ({servers.length})
+              </button>
+              <button
+                type="button"
+                className={`public-probe-chip-btn is-online ${filterStatus === "online" ? "is-active" : ""}`}
+                onClick={() => setFilterStatus("online")}
+              >
+                在线 ({onlineCount})
+              </button>
+              {servers.length - onlineCount > 0 ? (
+                <button
+                  type="button"
+                  className={`public-probe-chip-btn is-offline ${filterStatus === "offline" ? "is-active" : ""}`}
+                  onClick={() => setFilterStatus("offline")}
+                >
+                  离线 ({servers.length - onlineCount})
+                </button>
+              ) : null}
+            </div>
+            <div className="public-probe-search-wrap">
+              <Search size={14} className="public-probe-search-icon" />
+              <input
+                type="text"
+                placeholder="搜索节点..."
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                className="public-probe-search-input"
+              />
+              {query ? (
+                <button type="button" className="public-probe-search-clear" onClick={() => setQuery("")}>
+                  <X size={12} />
+                </button>
+              ) : null}
+            </div>
+            <div className="public-probe-sort-wrap">
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as "default" | "speed" | "traffic" | "cpu")}
+                className="public-probe-sort-select"
+                aria-label="节点排序"
+              >
+                <option value="default">默认排序</option>
+                {showSpeed ? <option value="speed">按实时网速</option> : null}
+                {showTraffic ? <option value="traffic">按消耗流量</option> : null}
+                {showCPU ? <option value="cpu">按 CPU 负载</option> : null}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {filteredServers.length ? (
+          <div className={`public-probe-grid ${layout === "list" ? "is-list" : ""}`}>
+            {filteredServers.map((server, index) => {
+              const used = Math.max(0, Number(server.traffic_used) || 0);
+              const limit = Math.max(0, Number(server.traffic_limit) || 0);
+              const trafficPercent = limit > 0 ? percent(used, limit) : undefined;
+              const cpuPercent = server.online ? percent(server.cpu_pct) : undefined;
+              const memoryPercent = server.online ? percent(server.mem_used, server.mem_total) : undefined;
+              const diskPercent = server.online ? percent(server.disk_used, server.disk_total) : undefined;
+              const visibleMetrics = [
+                showCPU && cpuPercent !== undefined,
+                showMemory && memoryPercent !== undefined,
+                showDisk && diskPercent !== undefined,
+                showTraffic,
+              ].filter(Boolean).length;
+              const displayName = probe.show_name && server.name ? server.name : `服务器 #${index + 1}`;
+              const countryTag = server.country_code ? server.country_code.toUpperCase() : undefined;
+
+              return (
+                <article
+                  className={`public-probe-item ${server.online ? "is-online" : "is-offline"}`}
+                  key={`${server.name || "service"}-${index}`}
+                  style={{ "--public-probe-order": index } as CSSProperties}
+                >
+                  <header className="public-probe-item-heading">
+                    <div className="public-probe-header-left">
+                      <span className="public-probe-country" title={server.country_code || "地区未知"}>
+                        <CountryFlag countryCode={server.country_code} fallbackSize={16} />
+                      </span>
+                      {countryTag ? <span className="public-probe-country-tag">{countryTag}</span> : null}
+                      <div className="public-probe-title-group">
+                        <strong className="public-probe-node-name" title={displayName}>{displayName}</strong>
+                      </div>
+                    </div>
+                    <span className={`public-probe-status-pill ${server.online ? "is-online" : "is-offline"}`}>
+                      <i className="public-probe-pulse-dot" />
+                      <span>{server.online ? "在线" : "离线"}</span>
+                    </span>
+                  </header>
+
+                  <div className={`public-probe-metrics public-probe-metrics-${Math.min(4, Math.max(1, visibleMetrics))}`}>
+                    {showCPU && cpuPercent !== undefined ? (
+                      <ProbeMetric
+                        icon={<Cpu size={14} />}
+                        label="CPU"
+                        value={formatPercent(cpuPercent)}
+                        progress={cpuPercent}
+                        detail={loadAverageDetail(server.loadavg)}
+                        tone="cpu"
+                      />
+                    ) : null}
+                    {showMemory && memoryPercent !== undefined ? (
+                      <ProbeMetric
+                        icon={<MemoryStick size={14} />}
+                        label="内存"
+                        value={formatPercent(memoryPercent)}
+                        progress={memoryPercent}
+                        detail={server.mem_used !== undefined && server.mem_total !== undefined ? `${formatBytes(server.mem_used)} / ${formatBytes(server.mem_total)}` : undefined}
+                        tone="mem"
+                      />
+                    ) : null}
+                    {showDisk && diskPercent !== undefined ? (
+                      <ProbeMetric
+                        icon={<HardDrive size={14} />}
+                        label="磁盘"
+                        value={formatPercent(diskPercent)}
+                        progress={diskPercent}
+                        detail={server.disk_used !== undefined && server.disk_total !== undefined ? `${formatBytes(server.disk_used)} / ${formatBytes(server.disk_total)}` : undefined}
+                        tone="disk"
+                      />
+                    ) : null}
+                    {showTraffic ? (
+                      <ProbeMetric
+                        icon={<Gauge size={14} />}
+                        label="流量"
+                        value={formatBytes(used)}
+                        progress={trafficPercent}
+                        detail={limit > 0 ? `配额 ${formatBytes(limit)}` : undefined}
+                        tone="traffic"
+                      />
+                    ) : null}
+                  </div>
+
+                  {showSpeed ? (
+                    <footer className="public-probe-item-footer">
+                      <div className="public-probe-speeds">
+                        <span className="is-download" title="实时下行速率">
+                          <ArrowDown size={14} />
+                          <strong>{formatBytes(server.download_speed, true)}</strong>
+                        </span>
+                        <span className="is-upload" title="实时上行速率">
+                          <ArrowUp size={14} />
+                          <strong>{formatBytes(server.upload_speed, true)}</strong>
+                        </span>
+                      </div>
+                    </footer>
+                  ) : null}
+                </article>
+              );
+            })}
+          </div>
+        ) : !query && filterStatus === "all" ? (
+          <div className={`public-probe-grid ${layout === "list" ? "is-list" : ""}`} aria-label="加载中">
+            {[1, 2, 3, 4].map((i) => (
+              <article key={i} className="public-probe-card is-skeleton" aria-hidden="true">
+                <header className="public-probe-item-header">
+                  <div className="public-probe-identity">
+                    <span className="public-probe-skeleton-dot" />
+                    <span className="public-probe-skeleton-line short" />
+                  </div>
+                  <span className="public-probe-skeleton-pill" />
+                </header>
+                <div className="public-probe-metrics">
+                  <span className="public-probe-skeleton-metric" />
+                  <span className="public-probe-skeleton-metric" />
+                  <span className="public-probe-skeleton-metric" />
+                  <span className="public-probe-skeleton-metric" />
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="public-probe-empty">
+            <Server size={32} />
+            <strong>暂无符合条件的服务器节点</strong>
+            {query || filterStatus !== "all" ? (
+              <button
+                type="button"
+                className="public-probe-reset-btn"
+                onClick={() => { setQuery(""); setFilterStatus("all"); }}
+              >
+                重置筛选条件
+              </button>
+            ) : null}
+          </div>
+        )}
       </section>
     </main>
   );

@@ -739,11 +739,11 @@ export function SubscriptionGeneratorPage({ notify = noNotify }: ContentPageProp
     try {
       const [nodePayload, templatePayload] = await Promise.all([
         api.get<{ nodes?: NodeItem[] }>("/api/admin/nodes"),
-        api.get<{ templates?: RuleTemplateInfo[] }>("/api/admin/template-v3"),
+        api.get<RuleTemplateList>("/api/admin/rule-templates").catch(() => ({ templates: [] })),
       ]);
       const enabled = (nodePayload.nodes ?? []).filter((node) => node.enabled && safeProxy(node));
       setNodes(enabled);
-      const options = templatePayload.templates ?? [];
+      const options = (templatePayload.templates ?? []).map((name) => ({ name, filename: name }));
       setTemplates(options);
       setTemplate((current) => current || options[0]?.filename || "");
     } catch (reason) {
@@ -764,7 +764,7 @@ export function SubscriptionGeneratorPage({ notify = noNotify }: ContentPageProp
     try {
       if (mode === "template") {
         if (!template) throw new Error("请选择规则模板");
-        const result = await api.post<{ content: string }>("/api/admin/template-v3/process", { template_name: template, proxies });
+        const result = await api.post<{ content: string }>("/api/admin/rule-templates/process", { template_name: template, proxies }).catch(() => api.post<{ content: string }>("/api/admin/template-v3/process", { template_name: template, proxies }));
         setOutput(result.content || "");
       } else {
         setOutput(customClashConfig(proxies, selectedRules));

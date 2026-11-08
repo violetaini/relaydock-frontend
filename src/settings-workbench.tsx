@@ -15,6 +15,7 @@ import {
   Gauge,
   ImageUp,
   KeyRound,
+  Layers,
   Link2,
   LockKeyhole,
   Network,
@@ -32,6 +33,7 @@ import {
 import { api, getToken } from "./api";
 import { brandFaviconURL, brandLogoURL, DEFAULT_BRANDING, normalizeBranding, type Branding } from "./brand";
 import { LegacyPanelImportDialog } from "./legacy-panel-import-dialog";
+import { XUIImportDialog } from "./xui-import-dialog";
 import { BackupPanel, DebugLogsPanel } from "./system-maintenance-panels";
 import { TwoFactorSettings } from "./two-factor";
 import type { RemoteServer, ServerListResponse } from "./types";
@@ -665,6 +667,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
   const [apiToken, setApiToken] = useState("");
   const [confirmTokenReset, setConfirmTokenReset] = useState(false);
   const [showMigration, setShowMigration] = useState(false);
+  const [showXUIMigration, setShowXUIMigration] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [updateChecking, setUpdateChecking] = useState(true);
   const [updateCheckError, setUpdateCheckError] = useState("");
@@ -1203,6 +1206,9 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
         <SettingSection icon={<Database size={19} />} title="旧版面板数据迁移" description="从旧版面板导入用户、节点、订阅、模板和覆写">
           <Button type="button" variant="secondary" onClick={() => setShowMigration(true)}><Database size={16} />打开迁移向导</Button>
         </SettingSection>
+        <SettingSection icon={<Layers size={19} />} title="3x-ui 接管与平滑迁移评估" description="只读深度评估 3x-ui 实例，安全预检冲突，备战导入至 RelayDock，绝不干扰现网业务">
+          <Button type="button" variant="secondary" onClick={() => setShowXUIMigration(true)}><Layers size={16} />评估并备战导入 3x-ui</Button>
+        </SettingSection>
         <SettingSection icon={<RefreshCw size={19} />} title="外部订阅同步" description="节点匹配、缓存与流量同步策略">
           <Toggle checked={userSubscription.force_sync_external} onChange={(force_sync_external) => setUserSubscription({ ...userSubscription, force_sync_external })} label="订阅访问时强制同步外部订阅" />
           <Toggle checked={userSubscription.keep_node_name} onChange={(keep_node_name) => setUserSubscription({ ...userSubscription, keep_node_name })} label="同步时保留现有节点名称" />
@@ -1339,6 +1345,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
       onConfirm={() => void applyUpdate()}
     /> : null}
     {showMigration ? <LegacyPanelImportDialog notify={notify} onClose={() => setShowMigration(false)} /> : null}
+    {showXUIMigration ? <XUIImportDialog notify={notify} onClose={() => setShowXUIMigration(false)} /> : null}
     {probeServerPickerOpen ? <Dialog title="选择服务器" description={`已选择 ${visibleProbeServerDraft.length} / ${servers.length}`} onClose={() => setProbeServerPickerOpen(false)} wide>
       <div className="probe-server-picker">
         <div className="probe-server-picker-toolbar">

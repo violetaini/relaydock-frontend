@@ -1,6 +1,12 @@
 import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useState, type ErrorInfo, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import QRCode from "qrcode";
+import "./user-portal.css";
 import {
   Activity,
+  HardDrive,
+  RotateCcw,
+  Sparkles,
+  QrCode,
   ArrowDownToLine,
   ArrowUpFromLine,
   Boxes,
@@ -421,7 +427,7 @@ export function filterTrafficHistory<T extends { date: string }>(items: T[], per
   });
 }
 
-function DashboardPage({ profile, navigate, canNavigateNodes }: { profile: Profile; navigate: (page: PageKey, options?: { usersScope?: UsersScope }) => void; canNavigateNodes: boolean }) {
+function AdminDashboardPage({ profile, navigate, canNavigateNodes }: { profile: Profile; navigate: (page: PageKey, options?: { usersScope?: UsersScope }) => void; canNavigateNodes: boolean }) {
   const [servers, setServers] = useState<RemoteServer[]>([]);
   const [nodes, setNodes] = useState<NodeItem[]>([]);
   const [users, setUsers] = useState<UserItem[]>([]);
@@ -559,6 +565,375 @@ function Metric({ icon, label, value, detail, tone = "accent", progress }: { ico
   const safeProgress = validProgress == null ? undefined : Math.min(100, validProgress);
   const progressText = validProgress == null ? "" : `${validProgress.toFixed(1)}%`;
   return <Surface className={`metric metric-${tone}`}><div className="metric-top"><span className="metric-icon">{icon}</span><span className="metric-copy"><span>{label}</span><small>{detail}</small></span></div><strong>{value}</strong>{safeProgress != null ? <span className="metric-progress" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={safeProgress} aria-valuetext={progressText}><span style={{ width: `${safeProgress}%` }} /></span> : null}</Surface>;
+}
+
+
+interface UserPortalSummary {
+  success: boolean;
+  user: {
+    username: string;
+    nickname: string;
+    email: string;
+    role: string;
+    is_admin: boolean;
+  };
+  package: {
+    id: number;
+    name: string;
+    description: string;
+    start_date?: string;
+    end_date?: string;
+    days_remaining: number;
+    is_expired: boolean;
+    speed_limit_mbps: number;
+    device_limit: number;
+  };
+  traffic: {
+    total_limit_bytes: number;
+    total_used_bytes: number;
+    remaining_bytes: number;
+    usage_percentage: number;
+    reset_day: number;
+    days_until_reset: number;
+  };
+  nodes: {
+    total_count: number;
+    online_count: number;
+  };
+  subscription: {
+    token?: string;
+    user_short_code?: string;
+    custom_short_code?: string;
+  };
+}
+
+interface DashboardClientOption {
+  type: string;
+  name: string;
+  tag: string;
+  icon: string;
+  badge?: string;
+  deepLink?: (url: string, name: string) => string;
+}
+
+const DASHBOARD_CLIENT_OPTIONS: DashboardClientOption[] = [
+  {
+    type: "clash",
+    name: "Clash / Verge",
+    tag: "clash",
+    icon: "⚡",
+    badge: "推荐",
+    deepLink: (url: string, name: string) => `clash://install-config?url=${encodeURIComponent(url)}&name=${encodeURIComponent(name)}`,
+  },
+  {
+    type: "sing-box",
+    name: "Sing-box",
+    tag: "sing-box",
+    icon: "📦",
+    badge: "原生",
+    deepLink: (url: string, name: string) => {
+      const target = url + (url.includes("?") ? "&t=sing-box" : "?t=sing-box");
+      return `sing-box://import-remote-profile?url=${encodeURIComponent(target)}#${encodeURIComponent(name)}`;
+    },
+  },
+  {
+    type: "shadowrocket",
+    name: "Shadowrocket",
+    tag: "shadowrocket",
+    icon: "🚀",
+    badge: "iOS",
+    deepLink: (url: string, name: string) => {
+      try {
+        const target = url + (url.includes("?") ? "&t=shadowrocket" : "?t=shadowrocket");
+        return `shadowrocket://add/sub://${btoa(target)}?title=${encodeURIComponent(name)}`;
+      } catch {
+        return "";
+      }
+    },
+  },
+  {
+    type: "surge",
+    name: "Surge",
+    tag: "surge",
+    icon: "🌊",
+    badge: "Mac/iOS",
+    deepLink: (url: string) => {
+      const target = url + (url.includes("?") ? "&t=surge" : "?t=surge");
+      return `surge:///install-config?url=${encodeURIComponent(target)}`;
+    },
+  },
+  {
+    type: "loon",
+    name: "Loon",
+    tag: "loon",
+    icon: "🎈",
+    badge: "iOS",
+    deepLink: (url: string, name: string) => {
+      const target = url + (url.includes("?") ? "&t=loon" : "?t=loon");
+      return `loon://import?n=${encodeURIComponent(name)}&url=${encodeURIComponent(target)}`;
+    },
+  },
+  {
+    type: "qx",
+    name: "Quantumult X",
+    tag: "qx",
+    icon: "⭕",
+    badge: "iOS",
+    deepLink: (url: string, name: string) => {
+      const target = url + (url.includes("?") ? "&t=qx" : "?t=qx");
+      return `quantumult-x:///add-resource?remote-resource={"server_remote":["${target}, tag=${name}"]}`;
+    },
+  },
+  {
+    type: "stash",
+    name: "Stash",
+    tag: "stash",
+    icon: "📱",
+    badge: "iOS",
+    deepLink: (url: string, name: string) => `stash://install-config?url=${encodeURIComponent(url)}&name=${encodeURIComponent(name)}`,
+  },
+];
+
+function UserDashboardPage({ profile, navigate }: { profile: Profile; navigate: (page: PageKey) => void }) {
+  const branding = useBranding();
+  const [summary, setSummary] = useState<UserPortalSummary | null>(null);
+  const [traffic, setTraffic] = useState<TrafficSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [period, setPeriod] = useState<TrafficPeriod>("month");
+  const [qrOpen, setQrOpen] = useState(false);
+  const [qrDataUrl, setQrDataUrl] = useState("");
+  const [copiedLabel, setCopiedLabel] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [sumRes, trfRes] = await Promise.all([
+        api.get<UserPortalSummary>("/api/user/portal-summary"),
+        api.get<TrafficSummary>("/api/traffic/summary").catch(() => null),
+      ]);
+      setSummary(sumRes);
+      setTraffic(trfRes);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "无法加载用户概览");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const subUrl = useMemo(() => {
+    if (!summary?.subscription) return "";
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    const shortCode = summary.subscription.custom_short_code || summary.subscription.user_short_code;
+    if (shortCode) return `${origin}/x/${shortCode}`;
+    if (summary.subscription.token) return `${origin}/api/subscription?token=${summary.subscription.token}`;
+    return `${origin}/api/subscription`;
+  }, [summary]);
+
+  useEffect(() => {
+    if (!qrOpen || !subUrl) return;
+    let active = true;
+    void QRCode.toDataURL(subUrl, {
+      errorCorrectionLevel: "M",
+      margin: 2,
+      width: 280,
+      color: { dark: "#0f172a", light: "#ffffff" },
+    }).then((url) => {
+      if (active) setQrDataUrl(url);
+    });
+    return () => { active = false; };
+  }, [qrOpen, subUrl]);
+
+  const copyText = async (text: string, label: string) => {
+    try {
+      if (navigator.clipboard) await navigator.clipboard.writeText(text);
+      setCopiedLabel(label);
+      window.setTimeout(() => setCopiedLabel(null), 2500);
+    } catch {
+      // ignore
+    }
+  };
+
+  const getClientUrl = (tag: string) => {
+    if (!subUrl) return "";
+    if (tag === "clash") return subUrl;
+    const separator = subUrl.includes("?") ? "&" : "?";
+    return `${subUrl}${separator}t=${tag}`;
+  };
+
+  const totalLimit = summary?.traffic.total_limit_bytes ?? 0;
+  const totalUsed = summary?.traffic.total_used_bytes ?? 0;
+  const remaining = totalLimit > 0 ? Math.max(0, totalLimit - totalUsed) : -1;
+  const usagePercent = totalLimit > 0 ? Math.min(100, Math.round((totalUsed / totalLimit) * 100)) : 0;
+  const isDanger = usagePercent >= 90;
+  const isWarning = usagePercent >= 75 && !isDanger;
+
+  const history = filterTrafficHistory(traffic?.history ?? [], period);
+  const maxHistory = Math.max(1, ...history.map((item) => item.used_gb));
+  const periodUsed = history.reduce((total, item) => total + item.used_gb, 0);
+  const periodDescription = period === "today" ? "今天 00:00 起" : period === "week" ? "本周一 00:00 起" : "自本月 1 日 00:00 起";
+  const periodTabs: Array<[TrafficPeriod, string]> = [["today", "今天"], ["week", "本周"], ["month", "本月"]];
+  const selectPeriodByKey = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    let next = index;
+    if (event.key === "ArrowRight") next = (index + 1) % periodTabs.length;
+    else if (event.key === "ArrowLeft") next = (index - 1 + periodTabs.length) % periodTabs.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = periodTabs.length - 1;
+    else return;
+    event.preventDefault();
+    setPeriod(periodTabs[next][0]);
+    document.getElementById(`dashboard-period-${periodTabs[next][0]}`)?.focus();
+  };
+
+  return (
+    <>
+      <h1 className="sr-only">流量信息</h1>
+      {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
+
+      <div className="metric-grid">
+        <Metric tone="accent" icon={<HardDrive size={22} />} label="当期配额" value={loading ? "--" : totalLimit > 0 ? formatBytes(totalLimit) : "不限流量"} detail="本周期套餐总额度" />
+        <Metric tone="info" icon={<Activity size={22} />} label="已用流量" value={loading ? "--" : formatBytes(totalUsed)} detail="计费上下行累计消耗" />
+        <Metric tone="good" icon={<Sparkles size={22} />} label="剩余流量" value={loading ? "--" : remaining >= 0 ? formatBytes(remaining) : "不限"} detail="本周期可用余量" />
+        <Metric tone={isDanger ? "bad" : isWarning ? "warn" : "info"} icon={<RotateCcw size={22} />} label="使用率" value={loading ? "--" : `${usagePercent}%`} detail={summary?.traffic.reset_day ? `每月 ${summary.traffic.reset_day} 日重置 (余 ${summary.traffic.days_until_reset} 天)` : "周期自动重置"} progress={usagePercent} />
+      </div>
+
+      <Surface className="mmw-plan-banner" style={{ marginTop: "1rem", marginBottom: "1rem" }}>
+        <div className="mmw-plan-info">
+          <div className="mmw-plan-name-wrap">
+            <span className="mmw-plan-name">{summary?.package.name || "全球优质加速套餐"}</span>
+            <Badge tone="good">生效中</Badge>
+          </div>
+          <div className="mmw-plan-dates">
+            <span>到期时间：{summary?.package.end_date ? summary.package.end_date.split("T")[0].split(" ")[0] : "长期有效"}</span>
+            {summary?.package.days_remaining != null ? <Badge tone={summary.package.days_remaining <= 5 ? "bad" : "neutral"}>剩余 {summary.package.days_remaining} 天</Badge> : null}
+            <span>设备限制：{summary?.package.device_limit ? `${summary.package.device_limit} 台` : "不限"}</span>
+            <span>可用节点：{summary?.nodes.total_count ?? 11} 个全部在线</span>
+          </div>
+        </div>
+      </Surface>
+
+      <Surface className="dashboard-sub-surface" style={{ padding: "1.25rem", marginBottom: "1rem" }}>
+        <div className="surface-heading" style={{ marginBottom: "1rem" }}>
+          <div>
+            <h2 style={{ fontSize: "1.05rem", margin: 0 }}>快捷订阅与客户端导入</h2>
+            <small className="muted">一键复制通用订阅链接，或调起本地客户端快速导入节点</small>
+          </div>
+          <div style={{ display: "flex", gap: "0.5rem" }}>
+            <Button variant="primary" onClick={() => copyText(subUrl, "订阅链接已复制")}>
+              <Copy size={16} />
+              {copiedLabel === "订阅链接已复制" ? "已复制！" : "复制订阅链接"}
+            </Button>
+            <Button variant="secondary" onClick={() => setQrOpen(true)}>
+              <QrCode size={16} />
+              二维码
+            </Button>
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(145px, 1fr))", gap: "0.6rem" }}>
+          {DASHBOARD_CLIENT_OPTIONS.map((client) => {
+            const clientUrl = getClientUrl(client.tag);
+            const deepLink = client.deepLink ? client.deepLink(clientUrl, branding.name || "Chitanda Relay") : "";
+            return (
+              <button
+                key={client.tag}
+                type="button"
+                className="button button-secondary"
+                style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.5rem 0.75rem", fontSize: "0.85rem", textAlign: "left" }}
+                onClick={() => {
+                  if (deepLink) {
+                    window.location.href = deepLink;
+                    copyText(clientUrl, `${client.name} 订阅链接已复制`);
+                  } else {
+                    copyText(clientUrl, `${client.name} 订阅链接已复制`);
+                  }
+                }}
+              >
+                <span>{client.icon} {client.name.split(" ")[0]}</span>
+                {client.badge ? <Badge tone="info">{client.badge}</Badge> : null}
+              </button>
+            );
+          })}
+        </div>
+      </Surface>
+
+      <Surface className={`chart-surface dashboard-chart ${!loading && history.length === 0 ? "is-empty" : ""}`} style={{ marginBottom: "1rem" }}>
+        <div className="surface-heading dashboard-chart-heading">
+          <div><h2>每日流量消耗</h2><small>{periodDescription}</small></div>
+          <div className="dashboard-chart-tools">
+            <span className={`dashboard-live-state ${error ? "is-error" : loading ? "is-syncing" : "is-online"}`}><span />{error ? "数据异常" : loading ? "同步中" : "已同步"}</span>
+            <IconButton label="查看流量明细" onClick={() => navigate("traffic")}><ChevronRight size={17} /></IconButton>
+            <IconButton label="刷新流量概览" onClick={() => void load()} disabled={loading}><RefreshCw className={loading ? "is-spinning" : ""} size={17} /></IconButton>
+            <span className="chart-total">{periodUsed.toFixed(1)} GB</span>
+            <div className="dashboard-period" role="tablist" aria-label="流量周期">
+              {periodTabs.map(([value, label], index) => <button id={`dashboard-period-${value}`} key={value} type="button" role="tab" aria-controls="dashboard-traffic-chart" aria-selected={period === value} tabIndex={period === value ? 0 : -1} className={period === value ? "is-active" : ""} onKeyDown={(event) => selectPeriodByKey(event, index)} onClick={() => setPeriod(value)}>{label}</button>)}
+            </div>
+          </div>
+        </div>
+        {loading ? <div className="center-state"><Spinner /></div> : history.length === 0 ? <EmptyState icon={<Activity size={22} />} title="暂无历史记录" /> : (
+          <div id="dashboard-traffic-chart" className={`bar-chart period-${period}`} role="tabpanel" aria-label="每日流量消耗图">
+            <span className="sr-only">{history.map((item) => `${item.date} ${item.used_gb} GB`).join("；")}</span>
+            {history.map((item) => <div className="bar-column" key={item.date} title={`${item.date}: ${item.used_gb} GB`}><span className="bar-value">{item.used_gb > 0 ? item.used_gb : ""}</span><span className="bar" style={{ height: `${Math.max(4, item.used_gb / maxHistory * 100)}%` }} /><small>{item.date.slice(-2)}</small></div>)}
+          </div>
+        )}
+      </Surface>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem" }}>
+        <Surface style={{ padding: "1.1rem", cursor: "pointer" }} onClick={() => navigate("nodes")}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.5rem" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 600, fontSize: "1rem" }}><Route size={20} color="var(--color-primary, #6366f1)" />节点管理</span>
+            <ChevronRight size={18} className="muted" />
+          </div>
+          <p className="muted" style={{ fontSize: "0.86rem", margin: 0, lineHeight: 1.5 }}>
+            查看授权的 11 个国际高速节点与延迟实测；也可使用授权服务器（东京/香港/洛杉矶）自建独立节点。
+          </p>
+        </Surface>
+
+        <Surface style={{ padding: "1.1rem", cursor: "pointer" }} onClick={() => navigate("generator")}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.5rem" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 600, fontSize: "1rem" }}><Wrench size={20} color="var(--color-primary, #6366f1)" />生成订阅</span>
+            <ChevronRight size={18} className="muted" />
+          </div>
+          <p className="muted" style={{ fontSize: "0.86rem", margin: 0, lineHeight: 1.5 }}>
+            自由挑选心仪节点、自选或创建分流规则模板，一键生成 Clash、Sing-box 等定制客户端订阅。
+          </p>
+        </Surface>
+
+        <Surface style={{ padding: "1.1rem", cursor: "pointer" }} onClick={() => navigate("subscriptions")}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.5rem" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 600, fontSize: "1rem" }}><Link2 size={20} color="var(--color-primary, #6366f1)" />订阅链接</span>
+            <ChevronRight size={18} className="muted" />
+          </div>
+          <p className="muted" style={{ fontSize: "0.86rem", margin: 0, lineHeight: 1.5 }}>
+            管理已开通的订阅 Token，查看客户端格式 URL 及历史导出记录。
+          </p>
+        </Surface>
+      </div>
+
+      {qrOpen ? (
+        <Dialog title="订阅二维码" description="使用移动客户端（如小火箭、Sing-box、Loon）扫描快速导入" onClose={() => setQrOpen(false)}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "1rem", padding: "1rem 0" }}>
+            {qrDataUrl ? <img src={qrDataUrl} alt="订阅二维码" style={{ width: 260, height: 260, borderRadius: 8, background: "#fff", padding: 8 }} /> : <Spinner />}
+            <code style={{ fontSize: "0.78rem", wordBreak: "break-all", maxWidth: "100%", background: "var(--bg-subtle, #f1f5f9)", padding: "0.5rem", borderRadius: 4 }}>
+              {subUrl}
+            </code>
+            <Button variant="primary" onClick={() => copyText(subUrl, "订阅链接已复制")}>
+              <Copy size={15} />复制链接
+            </Button>
+          </div>
+        </Dialog>
+      ) : null}
+    </>
+  );
+}
+
+function DashboardPage({ profile, navigate, canNavigateNodes }: { profile: Profile; navigate: (page: PageKey, options?: { usersScope?: UsersScope }) => void; canNavigateNodes: boolean }) {
+  if (!profile.is_admin) {
+    return <UserDashboardPage profile={profile} navigate={navigate} />;
+  }
+  return <AdminDashboardPage profile={profile} navigate={navigate} canNavigateNodes={canNavigateNodes} />;
 }
 
 function ServersPage({ notify }: { notify: (message: string, tone?: ToastState["tone"]) => void }) {

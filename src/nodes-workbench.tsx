@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import QRCode from "qrcode";
 import {
@@ -7,6 +7,9 @@ import {
   ArrowUp,
   ArrowLeft,
   ArrowRight,
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  ChevronRight,
   Cable,
   Check,
   ChevronDown,
@@ -47,6 +50,7 @@ import {
   Upload,
   UserRound,
   Wifi,
+  WifiOff,
   X,
   Zap,
 } from "lucide-react";
@@ -66,6 +70,7 @@ import {
   managedInboundSupportsPublishing,
   managedProtocolOptions,
   newManagedInboundDraft,
+  protocolBadgeText,
   protocolDefaults,
   randomBase64,
   createManagedUUID,
@@ -78,6 +83,7 @@ import type { ManagedGrantProtocol, ManagedGrantProtocolProfile } from "./manage
 import { generateWireGuardKeyPair } from "./xray-inbound-presets";
 import { SelfServiceNodes } from "./self-service-nodes";
 import type { RemoteServer, ServerListResponse } from "./types";
+import { CountryFlag, normalizeCountryCode } from "./country-flag";
 import {
   Badge,
   Button,
@@ -92,6 +98,7 @@ import {
   Surface,
   Toggle,
   formatBytes,
+  relativeTime,
 } from "./ui";
 import "./nodes-workbench.css";
 
@@ -251,7 +258,7 @@ interface TempSubscriptionResponse {
 type SortMode = "recent" | "custom" | "name" | "protocol" | "server" | "latency" | "speed";
 type SourceFilter = "all" | "managed" | "imported" | "routed";
 type WorkbenchDialog =
-  | { kind: "managed-create" }
+  | { kind: "managed-create"; initialServerID?: number }
   | { kind: "edit"; node: WorkbenchNode }
   | { kind: "config"; node: WorkbenchNode }
   | { kind: "import" }
@@ -306,7 +313,7 @@ export interface ManagedNodeOffer {
   sort_order: number;
 }
 
-const protocols = ["vmess", "vless", "trojan", "ss", "socks5", "http", "hysteria2", "tuic", "anytls", "wireguard"];
+const protocols = ["vmess", "vless", "trojan", "ss", "socks5", "http", "hysteria2", "tuic", "anytls", "wireguard", "chitanda"];
 
 function isSnellProxy(proxy: Record<string, unknown>): boolean {
   return String(proxy.type || proxy.protocol || "").trim().toLowerCase() === "snell";
@@ -479,6 +486,48 @@ function nodeSource(node: WorkbenchNode): Exclude<SourceFilter, "all"> {
   return "imported";
 }
 
+export interface WorkbenchServerRow {
+  key: string;
+  name: string;
+  server?: RemoteServer;
+  isExternal?: boolean;
+  isRouted?: boolean;
+  nodes: WorkbenchNode[];
+  enabledCount: number;
+  protocols: string[];
+  connected: boolean;
+  endpoint: string;
+  countryCode?: string;
+  uploadSpeed: number;
+  downloadSpeed: number;
+  trafficUsed: number;
+  trafficLimit: number;
+  lastHeartbeat?: string;
+}
+
+export function inferCountryCode(serverName: string, nodes: WorkbenchNode[] = [], explicitCode?: string): string | undefined {
+  if (explicitCode) {
+    const normalized = normalizeCountryCode(explicitCode);
+    if (normalized) return normalized;
+  }
+  const match = serverName.match(/(?:^|[-_])(hk|jp|tw|kr|us|sg|ru|gb|de|fr|ca|au|in|nl)(?:[-_]|$)/i);
+  if (match) return match[1].toUpperCase();
+  for (const node of nodes) {
+    for (const tag of nodeTags(node)) {
+      const normalized = normalizeCountryCode(tag);
+      if (normalized) return normalized;
+    }
+  }
+  return undefined;
+}
+
+export function nodeServerName(node: WorkbenchNode): string {
+  const srv = node.original_server?.trim();
+  if (srv) return srv;
+  if (node.node_type === "routed") return "路由出站";
+  return "外部导入";
+}
+
 function nodeProtocolKey(protocol: string): string {
   switch (protocol.trim().toLowerCase()) {
     case "shadowsocks": return "ss";
@@ -486,16 +535,93 @@ function nodeProtocolKey(protocol: string): string {
     case "wg": return "wireguard";
     case "hysteria":
     case "hy2": return "hysteria2";
+    case "chitanda": return "chitanda";
+    case "dokodemo-door":
+    case "anydoor":
+    case "tunnel": return "tunnel";
     default: return protocol.trim().toLowerCase();
   }
 }
 
 function isTunnelNode(node: WorkbenchNode | undefined): boolean {
-  return Boolean(node && node.node_type !== "routed" && node.inbound_tag.trim().toLowerCase().startsWith("anydoor-"));
+  if (!node || node.node_type === "routed") return false;
+  const tag = (node.inbound_tag || "").trim().toLowerCase();
+  const proto = (node.protocol || "").trim().toLowerCase();
+  return tag.startsWith("anydoor-") || proto === "dokodemo-door" || proto === "tunnel" || proto === "anydoor";
 }
 
 function displayedNodeProtocol(node: WorkbenchNode): string {
   return isTunnelNode(node) ? "tunnel" : nodeProtocolKey(node.protocol);
+}
+
+function chitandaFallbackType(fallback?: string): string {
+  const fb = (fallback || "").trim();
+  if (!fb || fb === "default" || fb === "builtin" || fb === "embed") return "default";
+  if (fb === "127.0.0.1:80") return "127.0.0.1:80";
+  if (fb === "127.0.0.1:8080") return "127.0.0.1:8080";
+  if (fb === "unix:/run/nginx.sock") return "unix:/run/nginx.sock";
+  if (fb === "/var/www/html") return "/var/www/html";
+  return "custom";
+}
+
+function ChitandaFallbackControl({
+  value,
+  onChange,
+}: {
+  value?: string;
+  onChange: (val: string) => void;
+}) {
+  const currentType = chitandaFallbackType(value);
+  const isBuiltinDefault = currentType === "default" || !value || value === "default" || value === "builtin" || value === "embed";
+
+  return (
+    <Field label="隐藏伪装站 (Fallback 目标)" hint="主动探测或非法握手时回退防探测目标">
+      <div style={{ display: "flex", gap: "8px" }}>
+        <select
+          aria-label="回退目标预设模板"
+          style={{ width: "45%" }}
+          value={currentType}
+          onChange={(event) => {
+            const val = event.target.value;
+            if (val === "default") {
+              onChange("default");
+            } else if (val === "127.0.0.1:80") {
+              onChange("127.0.0.1:80");
+            } else if (val === "127.0.0.1:8080") {
+              onChange("127.0.0.1:8080");
+            } else if (val === "unix:/run/nginx.sock") {
+              onChange("unix:/run/nginx.sock");
+            } else if (val === "/var/www/html") {
+              onChange("/var/www/html");
+            } else {
+              if (isBuiltinDefault) {
+                onChange("");
+              }
+            }
+          }}
+        >
+          <option value="default">🏢 内置防探测默认页</option>
+          <option value="127.0.0.1:80">🌐 本地端口反代 (80)</option>
+          <option value="127.0.0.1:8080">🌐 本地端口反代 (8080)</option>
+          <option value="unix:/run/nginx.sock">🔌 Nginx UDS 反代</option>
+          <option value="/var/www/html">📁 本地静态目录</option>
+          <option value="custom">✏️ 自定义目标</option>
+        </select>
+        <input
+          aria-label="回退目标地址"
+          style={{ width: "55%" }}
+          value={value ?? "default"}
+          onChange={(event) => onChange(event.target.value.trim())}
+          placeholder="default 或 127.0.0.1:8080"
+        />
+      </div>
+      {isBuiltinDefault && (
+        <div style={{ fontSize: "12px", color: "#52c41a", marginTop: "5px", display: "flex", alignItems: "center", gap: "4px" }}>
+          <Check size={14} /> 已启用 Vanguard Global Operations Hub 内置伪装 ERP 响应式门户
+        </div>
+      )}
+    </Field>
+  );
 }
 
 function nodePayload(node: WorkbenchNode, patch: Partial<WorkbenchNode> = {}) {
@@ -593,8 +719,19 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
   const orderDirtyRef = useRef(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [viewMode, setViewMode] = useState<"nodes" | "servers">(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("arcway-nodes-view-mode");
+      if (saved === "servers" || saved === "nodes") return saved;
+    }
+    return "nodes";
+  });
+  const [selectedServerName, setSelectedServerName] = useState<string | null>(null);
+  const [expandedServers, setExpandedServers] = useState<Set<string>>(() => new Set());
+  const [remoteServers, setRemoteServers] = useState<RemoteServer[]>([]);
   const [search, setSearch] = useState("");
   const [source, setSource] = useState<SourceFilter>("all");
+  const [server, setServer] = useState("all");
   const [protocol, setProtocol] = useState("all");
   const [tag, setTag] = useState("all");
   const [sort, setSort] = useState<SortMode>("recent");
@@ -615,7 +752,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
     setError("");
     if (!isAdmin) setUserCreationError("");
     try {
-      const [nodeResponse, speedResponse, configResponse, routedResponse, offerResponse, creationResponse] = await Promise.all([
+      const [nodeResponse, speedResponse, configResponse, routedResponse, offerResponse, creationResponse, serverResponse] = await Promise.all([
         api.get<{ nodes?: WorkbenchNode[] }>("/api/admin/nodes"),
         isAdmin
           ? api.get<{ results?: SpeedResult[] | null }>("/api/admin/speedtest/results?latest=1").catch(() => ({ results: [] }))
@@ -630,6 +767,9 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
           : api.get<UserManagedCreationContext>("/api/user/managed-node-creation")
             .then((context) => ({ context, error: "" }))
             .catch((reason) => ({ context: null, error: reasonMessage(reason, "服务器创建授权加载失败") })),
+        isAdmin
+          ? api.get<ServerListResponse>("/api/admin/remote-servers").catch(() => ({ success: false, servers: [] }))
+          : Promise.resolve({ success: true, servers: [] }),
       ]);
       if (requestID !== loadRequestRef.current) return;
       const list = nodeResponse.nodes ?? [];
@@ -639,6 +779,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       setUserRouted(routedResponse);
       setUserCreationContext(creationResponse.context);
       setUserCreationError(creationResponse.error);
+      setRemoteServers(serverResponse?.servers ?? creationResponse?.context?.servers ?? []);
       setManualOrder((current) => reconcileNodeOrder(orderDirtyRef.current ? current : configResponse.node_order, list));
       setLatest(Object.fromEntries((speedResponse.results ?? []).map((item) => [item.node_id, item])));
       setSelected((current) => new Set([...current].filter((id) => list.some((node) => node.id === id))));
@@ -732,14 +873,141 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
     return () => window.clearInterval(timer);
   }, [hasRunning, load]);
 
+  const changeViewMode = (mode: "nodes" | "servers") => {
+    setViewMode(mode);
+    setSelectedServerName(null);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("arcway-nodes-view-mode", mode);
+    }
+  };
+
+  const toggleExpandServer = (name: string) => {
+    setExpandedServers((current) => {
+      const next = new Set(current);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+
+  const serverRows = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    const map = new Map<string, WorkbenchServerRow>();
+
+    for (const srv of remoteServers) {
+      map.set(srv.name, {
+        key: `server-${srv.id}`,
+        name: srv.name,
+        server: srv,
+        isExternal: false,
+        isRouted: false,
+        nodes: [],
+        enabledCount: 0,
+        protocols: [],
+        connected: Boolean(srv.ws_connected || srv.status === "online" || srv.status === "connected"),
+        endpoint: srv.domain || srv.ip_address || "地址待上报",
+        countryCode: inferCountryCode(srv.name, [], srv.country_code),
+        uploadSpeed: srv.current_upload_speed || 0,
+        downloadSpeed: srv.current_download_speed || 0,
+        trafficUsed: srv.traffic_used || 0,
+        trafficLimit: srv.traffic_limit || 0,
+        lastHeartbeat: srv.last_heartbeat,
+      });
+    }
+
+    for (const node of nodes) {
+      const srvName = nodeServerName(node);
+      let row = map.get(srvName);
+      if (!row) {
+        const isExt = srvName === "外部导入";
+        const isRtd = srvName === "路由出站";
+        row = {
+          key: `group-${srvName}`,
+          name: srvName,
+          isExternal: isExt,
+          isRouted: isRtd,
+          nodes: [],
+          enabledCount: 0,
+          protocols: [],
+          connected: true,
+          endpoint: isExt ? "外部订阅 / 手动导入" : isRtd ? "落地出站" : "自建服务器",
+          countryCode: inferCountryCode(srvName, [node]),
+          uploadSpeed: 0,
+          downloadSpeed: 0,
+          trafficUsed: 0,
+          trafficLimit: 0,
+        };
+        map.set(srvName, row);
+      }
+      row.nodes.push(node);
+      if (node.enabled) row.enabledCount += 1;
+      const proto = displayedNodeProtocol(node);
+      if (!row.protocols.includes(proto)) row.protocols.push(proto);
+      if (!row.countryCode) row.countryCode = inferCountryCode(srvName, row.nodes);
+    }
+
+    let list = Array.from(map.values());
+    if (enabledOnly) {
+      list = list.filter((row) => row.enabledCount > 0);
+    }
+    if (query) {
+      list = list.filter((row) => {
+        if (row.name.toLowerCase().includes(query)) return true;
+        if (row.endpoint.toLowerCase().includes(query)) return true;
+        if (row.countryCode?.toLowerCase().includes(query)) return true;
+        if (row.protocols.some((p) => p.toLowerCase().includes(query))) return true;
+        return row.nodes.some((n) => {
+          const addr = nodeAddress(n);
+          return [n.node_name, n.protocol, addr.host, ...nodeTags(n)].some((t) => t?.toLowerCase().includes(query));
+        });
+      });
+    }
+
+    return list.sort((a, b) => {
+      const aIsSpecial = a.isExternal || a.isRouted;
+      const bIsSpecial = b.isExternal || b.isRouted;
+      if (aIsSpecial !== bIsSpecial) return aIsSpecial ? 1 : -1;
+      return a.name.localeCompare(b.name, "zh-CN");
+    });
+  }, [enabledOnly, nodes, remoteServers, search]);
+
+  const activeServerRow = useMemo(() => {
+    if (!selectedServerName) return null;
+    return serverRows.find((r) => r.name === selectedServerName) ?? null;
+  }, [selectedServerName, serverRows]);
+
+  const selectedServerNodes = useMemo(() => {
+    if (!selectedServerName) return [];
+    return activeServerRow?.nodes ?? nodes.filter((n) => nodeServerName(n) === selectedServerName);
+  }, [activeServerRow, nodes, selectedServerName]);
+
+  const selectedServerEnabledCount = useMemo(() => {
+    return selectedServerNodes.filter((n) => n.enabled).length;
+  }, [selectedServerNodes]);
+
   const sourceScopedNodes = useMemo(() => source === "all" ? nodes : nodes.filter((node) => nodeSource(node) === source), [nodes, source]);
-  const protocolCounts = useMemo(() => {
+  const serverCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    for (const node of sourceScopedNodes) counts[displayedNodeProtocol(node)] = (counts[displayedNodeProtocol(node)] || 0) + 1;
+    for (const node of sourceScopedNodes) {
+      const srv = nodeServerName(node);
+      counts[srv] = (counts[srv] || 0) + 1;
+    }
     return counts;
   }, [sourceScopedNodes]);
+  const serverFilterOptions = useMemo(() => {
+    return Object.keys(serverCounts).sort((a, b) => a.localeCompare(b, "zh-CN"));
+  }, [serverCounts]);
+  const serverScopedNodes = useMemo(() => {
+    if (server === "all") return sourceScopedNodes;
+    return sourceScopedNodes.filter((node) => nodeServerName(node) === server);
+  }, [server, sourceScopedNodes]);
+  const protocolCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const node of serverScopedNodes) counts[displayedNodeProtocol(node)] = (counts[displayedNodeProtocol(node)] || 0) + 1;
+    return counts;
+  }, [serverScopedNodes]);
   const protocolFilterOptions = useMemo(() => Array.from(new Set([...protocols, ...Object.keys(protocolCounts)])).filter((item) => item !== "snell" && protocolCounts[item]), [protocolCounts]);
-  const protocolScopedNodes = useMemo(() => protocol === "all" ? sourceScopedNodes : sourceScopedNodes.filter((node) => displayedNodeProtocol(node) === protocol), [protocol, sourceScopedNodes]);
+  const protocolScopedNodes = useMemo(() => protocol === "all" ? serverScopedNodes : serverScopedNodes.filter((node) => displayedNodeProtocol(node) === protocol), [protocol, serverScopedNodes]);
   const allTags = useMemo(() => Array.from(new Set(protocolScopedNodes.flatMap(nodeTags))).sort((a, b) => a.localeCompare(b, "zh-CN")), [protocolScopedNodes]);
   const knownTags = useMemo(() => Array.from(new Set(nodes.flatMap(nodeTags))).sort((a, b) => a.localeCompare(b, "zh-CN")), [nodes]);
   const sourceCounts = useMemo(() => {
@@ -747,6 +1015,9 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
     for (const node of nodes) counts[nodeSource(node)] += 1;
     return counts;
   }, [nodes]);
+  useEffect(() => {
+    if (server !== "all" && !serverCounts[server]) setServer("all");
+  }, [server, serverCounts]);
   useEffect(() => {
     if (protocol !== "all" && !protocolCounts[protocol]) setProtocol("all");
   }, [protocol, protocolCounts]);
@@ -757,6 +1028,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
     const query = search.trim().toLowerCase();
     const filtered = nodes.filter((node) => {
       if (source !== "all" && nodeSource(node) !== source) return false;
+      if (server !== "all" && nodeServerName(node) !== server) return false;
       if (protocol !== "all" && displayedNodeProtocol(node) !== protocol) return false;
       if (tag !== "all" && !nodeTags(node).includes(tag)) return false;
       if (enabledOnly && !node.enabled) return false;
@@ -775,7 +1047,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       if (sort === "speed") return (latest[b.id]?.down_mbps || -1) - (latest[a.id]?.down_mbps || -1);
       return new Date(b.updated_at || b.created_at || 0).getTime() - new Date(a.updated_at || a.created_at || 0).getTime();
     });
-  }, [enabledOnly, latest, manualOrder, nodes, protocol, search, sort, source, tag]);
+  }, [enabledOnly, latest, manualOrder, nodes, protocol, search, server, sort, source, tag]);
 
   const selectedNodes = useMemo(() => nodes.filter((node) => selected.has(node.id)), [nodes, selected]);
   const canCreateOnGrantedServer = !isAdmin && Boolean(userCreationContext?.servers?.some((server) => userCreationGrant(server)?.state === "active"));
@@ -963,6 +1235,164 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
     }
   };
 
+  const renderNodeTable = (rowNodes: WorkbenchNode[], isCompact = false) => {
+    const isAllSelected = rowNodes.length > 0 && rowNodes.every((node) => selected.has(node.id));
+    const toggleVisibleScope = () => {
+      setSelected((current) => {
+        const next = new Set(current);
+        if (isAllSelected) rowNodes.forEach((node) => next.delete(node.id));
+        else rowNodes.forEach((node) => next.add(node.id));
+        return next;
+      });
+    };
+
+    if (rowNodes.length === 0) {
+      return (
+        <EmptyState
+          icon={<Route size={24} />}
+          title="该范围内暂无节点"
+          description="从受管服务器创建节点，或调整筛选条件"
+          action={!nodes.length ? (
+            <Button onClick={() => isAdmin || canCreateOnGrantedServer ? setDialog({ kind: "managed-create" }) : setDialog({ kind: "import" })}>
+              {isAdmin || canCreateOnGrantedServer ? <Server size={16} /> : <Upload size={16} />}
+              {isAdmin || canCreateOnGrantedServer ? "在服务器创建" : "导入节点"}
+            </Button>
+          ) : undefined}
+        />
+      );
+    }
+
+    return (
+      <div className={`table-wrap nw-node-table-scroll ${isCompact ? "is-compact-table" : ""}`}>
+        <table className="nw-node-table">
+          <thead>
+            <tr>
+              <th className="nw-check-col">
+                <input
+                  aria-label="选择当前结果"
+                  type="checkbox"
+                  checked={isAllSelected}
+                  onChange={toggleVisibleScope}
+                />
+              </th>
+              {sort === "custom" && viewMode === "nodes" && !isCompact ? (
+                <th className="nw-order-col">顺序</th>
+              ) : null}
+              <th>协议 / 节点</th>
+              <th>标签与归属</th>
+              <th>服务器地址</th>
+              <th>连通性</th>
+              <th>测速结果</th>
+              <th>状态</th>
+              <th aria-label="操作" />
+            </tr>
+          </thead>
+          <tbody>
+            {rowNodes.map((node) => {
+              const address = nodeAddress(node);
+              const ping = tcping[node.id];
+              const speed = latest[node.id];
+              const offer = offers.find((item) => item.node_id === node.id);
+              const orderIndex = manualOrder.indexOf(node.id);
+              return (
+                <tr key={node.id} className={selected.has(node.id) ? "is-selected" : ""}>
+                  <td className="nw-cell-check">
+                    <input
+                      aria-label={`选择 ${node.node_name}`}
+                      type="checkbox"
+                      checked={selected.has(node.id)}
+                      onChange={() => toggleSelection(node.id)}
+                    />
+                  </td>
+                  {sort === "custom" && viewMode === "nodes" && !isCompact ? (
+                    <td className="nw-order-col nw-cell-order" data-label="顺序">
+                      <span>{orderIndex + 1}</span>
+                      <IconButton label={`上移 ${node.node_name}`} disabled={orderIndex <= 0} onClick={() => moveManualNode(node.id, -1)}><ArrowUp size={14} /></IconButton>
+                      <IconButton label={`下移 ${node.node_name}`} disabled={orderIndex < 0 || orderIndex >= manualOrder.length - 1} onClick={() => moveManualNode(node.id, 1)}><ArrowDown size={14} /></IconButton>
+                    </td>
+                  ) : null}
+                  <td className="nw-cell-primary">
+                    <div className="nw-node-primary">
+                      <Badge tone="info" className="nw-protocol-badge" title={displayedNodeProtocol(node) === "tunnel" ? "TUNNEL" : node.protocol.toUpperCase() || "UNKNOWN"}>{protocolBadgeText(displayedNodeProtocol(node))}</Badge>
+                      <span>
+                        <strong>{node.node_name}</strong>
+                        <small>#{node.id}{isTunnelNode(node) ? (node.protocol.toLowerCase() === "dokodemo-door" || node.protocol.toLowerCase() === "tunnel" ? " · 端口转发" : ` · 目标协议 ${node.protocol.toUpperCase()}`) : node.node_type === "routed" ? " · 路由出站" : ""}{node.relay_orig_server ? " · 已中转" : ""}</small>
+                      </span>
+                      {node.credential_state === "pending" ? <Badge tone="warn">凭据待下发</Badge> : null}
+                    </div>
+                  </td>
+                  <td className="nw-cell-owner">
+                    <div className="nw-node-tags">
+                      {offer?.enabled ? <Badge tone="good">自助发布</Badge> : null}
+                      {nodeTags(node).length ? nodeTags(node).slice(0, 3).map((item) => <Badge key={item}>{item}</Badge>) : <span className="muted">未分类</span>}
+                    </div>
+                    <small className="cell-note">{node.original_server || node.created_by || "外部导入"}{node.inbound_tag ? ` · ${node.inbound_tag}` : ""}</small>
+                  </td>
+                  <td className="nw-cell-address" data-label="服务器">
+                    <code className="nw-address">{address.host || "-"}:{address.port || "-"}</code>
+                    {node.relay_orig_server ? <small className="cell-note">原站 {node.relay_orig_server}:{node.relay_orig_port || "-"}</small> : node.original_domain ? <small className="cell-note">原域名 {node.original_domain}</small> : null}
+                  </td>
+                  <td className="nw-cell-latency" data-label="连通性">
+                    <button className={`nw-result-button ${ping?.success ? "is-good" : ping?.error ? "is-bad" : ""}`} disabled={ping?.loading} title={tcpingResultTitle(ping)} onClick={() => void pingOne(node)}>
+                      {ping?.loading ? <Spinner label="" /> : <Zap size={14} />}
+                      {tcpingResultLabel(ping)}
+                    </button>
+                  </td>
+                  <td className="nw-cell-speed" data-label="测速">
+                    {isAdmin ? (
+                      <button className="nw-speed-cell" title={speed?.error || "打开节点测速"} onClick={() => setDialog({ kind: "speed", nodeIDs: [node.id] })}>
+                        <Badge tone={speedTone(speed)}>{resultLabel(speed)}</Badge>
+                        {speed?.egress_ip ? <small>{speed.egress_ip}</small> : null}
+                      </button>
+                    ) : (
+                      <Badge tone="neutral">管理员功能</Badge>
+                    )}
+                  </td>
+                  <td className="nw-cell-status" data-label="状态">
+                    {isAdmin ? (
+                      <button className="nw-status-button" title={`点击${node.enabled ? "停用" : "启用"}`} onClick={() => void update(node, { enabled: !node.enabled }, node.enabled ? "节点已停用" : "节点已启用")}>
+                        <span className={node.enabled ? "is-on" : ""} />
+                        {node.enabled ? "启用" : "停用"}
+                      </button>
+                    ) : (
+                      <Badge tone={node.enabled ? "good" : "neutral"}>{node.enabled ? "启用" : "停用"}</Badge>
+                    )}
+                  </td>
+                  <td className="nw-cell-actions">
+                    <NodeActions
+                      node={node}
+                      isAdmin={isAdmin}
+                      userRouted={userRouted}
+                      userManagedCreation={userCreationByNodeID.get(node.id)}
+                      onEdit={() => setDialog({ kind: "edit", node })}
+                      onConfig={() => setDialog({ kind: "config", node })}
+                      onQRCode={() => setDialog({ kind: "qr", node })}
+                      onRelay={() => setDialog({ kind: "relay", node })}
+                      onAnyDoor={() => setDialog({ kind: "anydoor", node })}
+                      onCancelRelay={() => cancelRelay(node)}
+                      onChain={() => setDialog({ kind: "chain", node })}
+                      onResolve={() => setDialog({ kind: "resolve", node })}
+                      onRegion={() => setDialog({ kind: "region", node })}
+                      onRestore={() => restoreDomain(node)}
+                      onRoute={() => setDialog({ kind: "route", node })}
+                      onTempSub={() => setDialog({ kind: "temp-sub", nodes: [node] })}
+                      onDelete={() => {
+                        const creation = userCreationByNodeID.get(node.id);
+                        if (isAdmin) removeNode(node);
+                        else if (creation) removeUserManagedCreation(node, creation);
+                        else removeUserRouted(node);
+                      }}
+                    />
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
   const closeDialog = () => setDialog(null);
   return (
     <div className="nodes-workbench">
@@ -989,7 +1419,29 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       <Surface className="nw-command-surface">
         <div className="nw-command-row">
           <div className="search-box nw-search"><Search size={17} /><input aria-label="搜索节点" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="名称、地址、协议、标签或服务器" /></div>
-          <Field label="排序"><select aria-label="节点排序" value={sort} onChange={(event) => setSort(event.target.value as SortMode)}><option value="recent">最近更新</option><option value="custom">自定义顺序</option><option value="name">节点名称</option><option value="protocol">协议</option><option value="server">服务器地址</option><option value="latency">延迟</option><option value="speed">下载速度</option></select></Field>
+          <div className="segmented-control nw-view-mode-switch" role="tablist" aria-label="视图模式">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={viewMode === "nodes"}
+              className={viewMode === "nodes" ? "is-active" : ""}
+              onClick={() => changeViewMode("nodes")}
+            >
+              <Route size={15} />按节点选择 ({nodes.length})
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={viewMode === "servers"}
+              className={viewMode === "servers" ? "is-active" : ""}
+              onClick={() => changeViewMode("servers")}
+            >
+              <Server size={15} />按服务器选择 ({serverRows.length})
+            </button>
+          </div>
+          {viewMode === "nodes" ? (
+            <Field label="排序"><select aria-label="节点排序" value={sort} onChange={(event) => setSort(event.target.value as SortMode)}><option value="recent">最近更新</option><option value="custom">自定义顺序</option><option value="name">节点名称</option><option value="protocol">协议</option><option value="server">服务器地址</option><option value="latency">延迟</option><option value="speed">下载速度</option></select></Field>
+          ) : null}
           <label className="nw-compact-check"><input type="checkbox" checked={enabledOnly} onChange={(event) => setEnabledOnly(event.target.checked)} />仅启用</label>
           <div className="nw-tool-menu" ref={toolMenuRef}>
             <button ref={toolButtonRef} type="button" className="button button-secondary" aria-haspopup="menu" aria-expanded={showTools} onClick={() => showTools ? setShowTools(false) : openTools()} onKeyDown={(event) => {
@@ -1009,25 +1461,56 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
             </div> : null}
           </div>
         </div>
-        {isAdmin ? <div className="nw-parity-actions" role="toolbar" aria-label="节点快捷操作">
-          <Button aria-label="切换节点自定义排序" variant={sort === "custom" ? "primary" : "secondary"} onClick={() => setSort(sort === "custom" ? "recent" : "custom")}><ListFilter size={16} />排序模式</Button>
-          <Button aria-label="创建节点路由出站" variant="secondary" onClick={() => selectedNodes.length === 1 ? setDialog({ kind: "route", node: selectedNodes[0] }) : notify("请先选择一个基础节点创建路由出站", "error")}><Route size={16} />路由出站</Button>
-          <Button aria-label="打开测速工作台" variant="secondary" onClick={() => setDialog({ kind: "speed", nodeIDs: selectedNodes.map((node) => node.id) })}><Gauge size={16} />节点测速</Button>
-          <Button aria-label="打开分享 URI 工具" variant="secondary" onClick={() => setDialog({ kind: "uris" })}><Link2 size={16} />URI 管理</Button>
-          <Button aria-label="打开订阅同步工作台" variant="secondary" onClick={() => setDialog({ kind: "subscriptions" })}><Globe2 size={16} />同步外部订阅</Button>
-        </div> : null}
-        <div className="nw-filter-group nw-source-filter" aria-label="节点来源">
-          <button className={source === "all" ? "is-active" : ""} onClick={() => setSource("all")}><ListFilter size={13} />全部节点 <span>{nodes.length}</span></button>
-          <button className={source === "managed" ? "is-active" : ""} onClick={() => setSource("managed")}><Server size={13} />服务器创建 <span>{sourceCounts.managed}</span></button>
-          <button className={source === "imported" ? "is-active" : ""} onClick={() => setSource("imported")}><Upload size={13} />外部导入 <span>{sourceCounts.imported}</span></button>
-          <button className={source === "routed" ? "is-active" : ""} onClick={() => setSource("routed")}><Route size={13} />路由出站 <span>{sourceCounts.routed}</span></button>
-        </div>
-        <div className="nw-filter-group" aria-label="协议筛选">
-          <button className={protocol === "all" ? "is-active" : ""} onClick={() => setProtocol("all")}>全部协议 <span>{sourceScopedNodes.length}</span></button>
-          {protocolFilterOptions.map((item) => <button key={item} className={protocol === item ? "is-active" : ""} onClick={() => setProtocol(item)}>{item.toUpperCase()} <span>{protocolCounts[item]}</span></button>)}
-        </div>
-        {allTags.length ? <div className="nw-filter-group nw-tag-filters" aria-label="标签筛选"><button className={tag === "all" ? "is-active" : ""} onClick={() => setTag("all")}>全部标签</button>{allTags.map((item) => <button key={item} className={tag === item ? "is-active" : ""} onClick={() => setTag(item)}><Tag size={12} />{item}</button>)}</div> : null}
-        {sort === "custom" ? <div className="nw-order-toolbar"><span><ArrowUp size={15} />使用每行的上下箭头调整订阅节点顺序</span><Button variant={orderDirty ? "primary" : "secondary"} disabled={savingOrder || !orderDirty} onClick={() => void saveManualOrder()}>{savingOrder ? <Spinner label="正在保存" /> : <><Check size={15} />保存节点顺序</>}</Button></div> : null}
+        {viewMode === "nodes" ? (
+          <>
+            {isAdmin ? <div className="nw-parity-actions" role="toolbar" aria-label="节点快捷操作">
+              <Button aria-label="创建节点路由出站" variant="secondary" onClick={() => selectedNodes.length === 1 ? setDialog({ kind: "route", node: selectedNodes[0] }) : notify("请先选择一个基础节点创建路由出站", "error")}><Route size={16} />路由出站</Button>
+              <Button aria-label="打开测速工作台" variant="secondary" onClick={() => setDialog({ kind: "speed", nodeIDs: selectedNodes.map((node) => node.id) })}><Gauge size={16} />节点测速</Button>
+              <Button aria-label="打开分享 URI 工具" variant="secondary" onClick={() => setDialog({ kind: "uris" })}><Link2 size={16} />URI 管理</Button>
+              <Button aria-label="打开订阅同步工作台" variant="secondary" onClick={() => setDialog({ kind: "subscriptions" })}><Globe2 size={16} />同步外部订阅</Button>
+            </div> : null}
+            <div className="nw-filter-group nw-source-filter" aria-label="节点来源">
+              <button className={source === "all" ? "is-active" : ""} onClick={() => setSource("all")}><ListFilter size={13} />全部节点 <span>{nodes.length}</span></button>
+              <button className={source === "managed" ? "is-active" : ""} onClick={() => setSource("managed")}><Server size={13} />服务器创建 <span>{sourceCounts.managed}</span></button>
+              <button className={source === "imported" ? "is-active" : ""} onClick={() => setSource("imported")}><Upload size={13} />外部导入 <span>{sourceCounts.imported}</span></button>
+              <button className={source === "routed" ? "is-active" : ""} onClick={() => setSource("routed")}><Route size={13} />路由出站 <span>{sourceCounts.routed}</span></button>
+            </div>
+            {serverFilterOptions.length > 0 ? (
+              <div className="nw-filter-group nw-server-filters" aria-label="服务器筛选">
+                <button className={server === "all" ? "is-active" : ""} onClick={() => setServer("all")}>
+                  <Server size={13} />全部服务器 <span>{sourceScopedNodes.length}</span>
+                </button>
+                {serverFilterOptions.length > 4 ? (
+                  <select
+                    aria-label="快速选择服务器"
+                    className={`nw-server-select ${server !== "all" ? "is-active" : ""}`}
+                    value={server}
+                    onChange={(event) => setServer(event.target.value)}
+                  >
+                    <option value="all">下拉直选 ({sourceScopedNodes.length})</option>
+                    {serverFilterOptions.map((item) => (
+                      <option key={item} value={item}>
+                        {item} ({serverCounts[item]})
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
+                {serverFilterOptions.map((item) => (
+                  <button key={item} className={server === item ? "is-active" : ""} onClick={() => setServer(item)}>
+                    {item === "外部导入" ? <Upload size={13} /> : item === "路由出站" ? <Route size={13} /> : <Server size={13} />}
+                    {item} <span>{serverCounts[item]}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <div className="nw-filter-group" aria-label="协议筛选">
+              <button className={protocol === "all" ? "is-active" : ""} onClick={() => setProtocol("all")}>全部协议 <span>{serverScopedNodes.length}</span></button>
+              {protocolFilterOptions.map((item) => <button key={item} className={protocol === item ? "is-active" : ""} onClick={() => setProtocol(item)} title={item.toUpperCase()}>{protocolBadgeText(item)} <span>{protocolCounts[item]}</span></button>)}
+            </div>
+            {allTags.length ? <div className="nw-filter-group nw-tag-filters" aria-label="标签筛选"><button className={tag === "all" ? "is-active" : ""} onClick={() => setTag("all")}>全部标签</button>{allTags.map((item) => <button key={item} className={tag === item ? "is-active" : ""} onClick={() => setTag(item)}><Tag size={12} />{item}</button>)}</div> : null}
+            {sort === "custom" ? <div className="nw-order-toolbar"><span><ArrowUp size={15} />使用每行的上下箭头调整订阅节点顺序</span><Button variant={orderDirty ? "primary" : "secondary"} disabled={savingOrder || !orderDirty} onClick={() => void saveManualOrder()}>{savingOrder ? <Spinner label="正在保存" /> : <><Check size={15} />保存节点顺序</>}</Button></div> : null}
+          </>
+        ) : null}
       </Surface>
 
       {selectedNodes.length ? <div className="nw-batchbar" role="toolbar" aria-label="批量操作">
@@ -1044,28 +1527,195 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       </div> : null}
 
       <Surface className="table-surface nw-node-surface">
-        {loading ? <div className="center-state"><Spinner label="正在加载节点" /></div> : visible.length === 0 ? <EmptyState icon={<Route size={24} />} title={nodes.length ? "没有匹配的节点" : "暂无节点"} description={nodes.length ? "调整筛选条件后重试" : "从受管服务器创建节点，或导入已经建好的外部节点"} action={!nodes.length ? <Button onClick={() => isAdmin || canCreateOnGrantedServer ? setDialog({ kind: "managed-create" }) : setDialog({ kind: "import" })}>{isAdmin || canCreateOnGrantedServer ? <Server size={16} /> : <Upload size={16} />}{isAdmin || canCreateOnGrantedServer ? "在服务器创建" : "导入节点"}</Button> : undefined} /> : <div className="table-wrap nw-node-table-scroll"><table className="nw-node-table"><thead><tr><th className="nw-check-col"><input aria-label="选择当前结果" type="checkbox" checked={allVisibleSelected} onChange={toggleVisible} /></th>{sort === "custom" ? <th className="nw-order-col">顺序</th> : null}<th>协议 / 节点</th><th>标签与归属</th><th>服务器地址</th><th>连通性</th><th>测速结果</th><th>状态</th><th aria-label="操作" /></tr></thead><tbody>{visible.map((node) => {
-          const address = nodeAddress(node);
-          const ping = tcping[node.id];
-          const speed = latest[node.id];
-          const offer = offers.find((item) => item.node_id === node.id);
-          const orderIndex = manualOrder.indexOf(node.id);
-          return <tr key={node.id} className={selected.has(node.id) ? "is-selected" : ""}>
-            <td className="nw-cell-check"><input aria-label={`选择 ${node.node_name}`} type="checkbox" checked={selected.has(node.id)} onChange={() => toggleSelection(node.id)} /></td>
-            {sort === "custom" ? <td className="nw-order-col nw-cell-order" data-label="顺序"><span>{orderIndex + 1}</span><IconButton label={`上移 ${node.node_name}`} disabled={orderIndex <= 0} onClick={() => moveManualNode(node.id, -1)}><ArrowUp size={14} /></IconButton><IconButton label={`下移 ${node.node_name}`} disabled={orderIndex < 0 || orderIndex >= manualOrder.length - 1} onClick={() => moveManualNode(node.id, 1)}><ArrowDown size={14} /></IconButton></td> : null}
-            <td className="nw-cell-primary"><div className="nw-node-primary"><Badge tone="info">{displayedNodeProtocol(node).toUpperCase() || "UNKNOWN"}</Badge><span><strong>{node.node_name}</strong><small>#{node.id}{isTunnelNode(node) ? ` · 目标协议 ${node.protocol.toUpperCase()}` : node.node_type === "routed" ? " · 路由出站" : ""}{node.relay_orig_server ? " · 已中转" : ""}</small></span>{node.credential_state === "pending" ? <Badge tone="warn">凭据待下发</Badge> : null}</div></td>
-            <td className="nw-cell-owner"><div className="nw-node-tags">{offer?.enabled ? <Badge tone="good">自助发布</Badge> : null}{nodeTags(node).length ? nodeTags(node).slice(0, 3).map((item) => <Badge key={item}>{item}</Badge>) : <span className="muted">未分类</span>}</div><small className="cell-note">{node.original_server || node.created_by || "外部导入"}{node.inbound_tag ? ` · ${node.inbound_tag}` : ""}</small></td>
-            <td className="nw-cell-address" data-label="服务器"><code className="nw-address">{address.host || "-"}:{address.port || "-"}</code>{node.relay_orig_server ? <small className="cell-note">原站 {node.relay_orig_server}:{node.relay_orig_port || "-"}</small> : node.original_domain ? <small className="cell-note">原域名 {node.original_domain}</small> : null}</td>
-            <td className="nw-cell-latency" data-label="连通性"><button className={`nw-result-button ${ping?.success ? "is-good" : ping?.error ? "is-bad" : ""}`} disabled={ping?.loading} title={tcpingResultTitle(ping)} onClick={() => void pingOne(node)}>{ping?.loading ? <Spinner label="" /> : <Zap size={14} />}{tcpingResultLabel(ping)}</button></td>
-            <td className="nw-cell-speed" data-label="测速">{isAdmin ? <button className="nw-speed-cell" title={speed?.error || "打开节点测速"} onClick={() => setDialog({ kind: "speed", nodeIDs: [node.id] })}><Badge tone={speedTone(speed)}>{resultLabel(speed)}</Badge>{speed?.egress_ip ? <small>{speed.egress_ip}</small> : null}</button> : <Badge tone="neutral">管理员功能</Badge>}</td>
-            <td className="nw-cell-status" data-label="状态">{isAdmin ? <button className="nw-status-button" title={`点击${node.enabled ? "停用" : "启用"}`} onClick={() => void update(node, { enabled: !node.enabled }, node.enabled ? "节点已停用" : "节点已启用")}><span className={node.enabled ? "is-on" : ""} />{node.enabled ? "启用" : "停用"}</button> : <Badge tone={node.enabled ? "good" : "neutral"}>{node.enabled ? "启用" : "停用"}</Badge>}</td>
-            <td className="nw-cell-actions"><NodeActions node={node} isAdmin={isAdmin} userRouted={userRouted} userManagedCreation={userCreationByNodeID.get(node.id)} onEdit={() => setDialog({ kind: "edit", node })} onConfig={() => setDialog({ kind: "config", node })} onQRCode={() => setDialog({ kind: "qr", node })} onRelay={() => setDialog({ kind: "relay", node })} onAnyDoor={() => setDialog({ kind: "anydoor", node })} onCancelRelay={() => cancelRelay(node)} onChain={() => setDialog({ kind: "chain", node })} onResolve={() => setDialog({ kind: "resolve", node })} onRegion={() => setDialog({ kind: "region", node })} onRestore={() => restoreDomain(node)} onRoute={() => setDialog({ kind: "route", node })} onTempSub={() => setDialog({ kind: "temp-sub", nodes: [node] })} onDelete={() => { const creation = userCreationByNodeID.get(node.id); if (isAdmin) removeNode(node); else if (creation) removeUserManagedCreation(node, creation); else removeUserRouted(node); }} /></td>
-          </tr>;
-        })}</tbody></table></div>}
+        {loading ? (
+          <div className="center-state"><Spinner label="正在加载节点" /></div>
+        ) : viewMode === "nodes" ? (
+          visible.length === 0 ? (
+            <EmptyState
+              icon={<Route size={24} />}
+              title={nodes.length ? "没有匹配的节点" : "暂无节点"}
+              description={nodes.length ? "调整筛选条件后重试" : "从受管服务器创建节点，或导入已经建好的外部节点"}
+              action={!nodes.length ? (
+                <Button onClick={() => isAdmin || canCreateOnGrantedServer ? setDialog({ kind: "managed-create" }) : setDialog({ kind: "import" })}>
+                  {isAdmin || canCreateOnGrantedServer ? <Server size={16} /> : <Upload size={16} />}
+                  {isAdmin || canCreateOnGrantedServer ? "在服务器创建" : "导入节点"}
+                </Button>
+              ) : undefined}
+            />
+          ) : (
+            renderNodeTable(visible)
+          )
+        ) : selectedServerName ? (
+          <div className="nw-server-drilldown-wrap">
+            <div className="nw-server-drilldown-header">
+              <Button variant="secondary" onClick={() => setSelectedServerName(null)}>
+                <ArrowLeft size={16} />返回服务器列表
+              </Button>
+              <div className="nw-server-drilldown-title">
+                <span className={`service-server-icon ${activeServerRow?.connected ? "is-online" : ""}`}>
+                  {activeServerRow?.isExternal ? <Upload size={16} /> : activeServerRow?.isRouted ? <Route size={16} /> : activeServerRow?.connected ? <Wifi size={16} /> : <WifiOff size={16} />}
+                </span>
+                <div>
+                  <strong>
+                    {activeServerRow?.countryCode ? (
+                      <span className="service-country" title={activeServerRow.countryCode}>
+                        <CountryFlag countryCode={activeServerRow.countryCode} />
+                      </span>
+                    ) : null}
+                    <span className="service-country-name">{selectedServerName}</span>
+                  </strong>
+                  <small>{activeServerRow?.endpoint || "服务器"} · 共 {selectedServerNodes.length} 个节点（{selectedServerEnabledCount} 个已启用）</small>
+                </div>
+              </div>
+              <div className="nw-server-drilldown-actions">
+                {isAdmin && activeServerRow?.server?.id ? (
+                  <Button onClick={() => setDialog({ kind: "managed-create", initialServerID: activeServerRow.server?.id })}>
+                    <Plus size={16} />在此服务器创建节点
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+            {renderNodeTable(selectedServerNodes)}
+          </div>
+        ) : serverRows.length === 0 ? (
+          <EmptyState
+            icon={<Server size={24} />}
+            title="没有匹配的服务器"
+            description="调整搜索词后重试，或添加新服务器"
+          />
+        ) : (
+          <div className="table-wrap nw-server-table-scroll">
+            <table className="nw-server-table" aria-label="服务器列表">
+              <thead>
+                <tr>
+                  <th className="nw-server-expand-th" aria-label="展开" />
+                  <th>服务器</th>
+                  <th>状态</th>
+                  <th>承载节点</th>
+                  <th>协议</th>
+                  <th>实时速率</th>
+                  <th>本期流量</th>
+                  <th aria-label="操作">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {serverRows.map((row) => {
+                  const isExpanded = expandedServers.has(row.name);
+                  return (
+                    <Fragment key={row.key}>
+                      <tr className={isExpanded ? "is-expanded-parent" : ""}>
+                        <td className="nw-server-expand-cell">
+                          <button
+                            type="button"
+                            className="nw-server-expand-btn"
+                            aria-label={isExpanded ? `折叠 ${row.name} 节点` : `展开 ${row.name} 节点`}
+                            title={isExpanded ? "折叠节点" : "展开节点"}
+                            aria-expanded={isExpanded}
+                            onClick={() => toggleExpandServer(row.name)}
+                          >
+                            {isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                          </button>
+                        </td>
+                        <td>
+                          <button
+                            type="button"
+                            className="service-name-button"
+                            title={`查看 ${row.name} 的节点`}
+                            onClick={() => setSelectedServerName(row.name)}
+                          >
+                            <span className={`service-server-icon ${row.connected ? "is-online" : ""}`}>
+                              {row.isExternal ? <Upload size={16} /> : row.isRouted ? <Route size={16} /> : row.connected ? <Wifi size={16} /> : <WifiOff size={16} />}
+                            </span>
+                            <span>
+                              <strong>
+                                {row.countryCode ? (
+                                  <span className="service-country" title={row.countryCode}>
+                                    <CountryFlag countryCode={row.countryCode} />
+                                  </span>
+                                ) : null}
+                                <span className="service-country-name">{row.name}</span>
+                              </strong>
+                              <small>{row.endpoint}</small>
+                            </span>
+                          </button>
+                        </td>
+                        <td>
+                          <Badge tone={row.connected ? "good" : "neutral"}>
+                            {row.connected ? "在线" : "离线"}
+                          </Badge>
+                          {row.lastHeartbeat ? (
+                            <small className="cell-note">{relativeTime(row.lastHeartbeat)}</small>
+                          ) : null}
+                        </td>
+                        <td>
+                          <div className="nw-server-node-count-col">
+                            <strong>{row.nodes.length} 个节点</strong>
+                            <small className="cell-note">{row.enabledCount} 个启用</small>
+                          </div>
+                        </td>
+                        <td>
+                          <div className="nw-server-protocols-col">
+                            {row.protocols.map((p) => (
+                              <Badge key={p} tone="info" className="nw-protocol-badge" title={p.toUpperCase()}>{protocolBadgeText(p)}</Badge>
+                            ))}
+                            {!row.protocols.length ? <span className="muted">暂无</span> : null}
+                          </div>
+                        </td>
+                        <td>
+                          <span className="speed-pair">
+                            <small><ArrowUpFromLine size={13} />{formatBytes(row.uploadSpeed, true)}</small>
+                            <small><ArrowDownToLine size={13} />{formatBytes(row.downloadSpeed, true)}</small>
+                          </span>
+                        </td>
+                        <td>
+                          <strong>{formatBytes(row.trafficUsed)}</strong>
+                          <small className="cell-note">{row.trafficLimit > 0 ? `限额 ${formatBytes(row.trafficLimit)}` : "不限额"}</small>
+                        </td>
+                        <td className="nw-server-actions-col">
+                          <div className="nw-row-actions">
+                            <Button
+                              variant="secondary"
+                              onClick={() => setSelectedServerName(row.name)}
+                            >
+                              <Route size={14} />查看节点 ({row.nodes.length})
+                            </Button>
+                            {isAdmin && row.server?.id ? (
+                              <IconButton
+                                label={`在 ${row.name} 创建入站`}
+                                onClick={() => setDialog({ kind: "managed-create", initialServerID: row.server?.id })}
+                              >
+                                <Plus size={16} />
+                              </IconButton>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                      {isExpanded ? (
+                        <tr className="nw-server-inline-row">
+                          <td colSpan={8} className="nw-server-inline-cell">
+                            <div className="nw-inline-node-box">
+                              <div className="nw-inline-node-box-header">
+                                <span><strong>{row.name}</strong> 的节点列表 ({row.nodes.length})</span>
+                                <Button variant="ghost" onClick={() => setSelectedServerName(row.name)}>
+                                  进入独立视图 <ArrowRight size={14} />
+                                </Button>
+                              </div>
+                              {renderNodeTable(row.nodes, true)}
+                            </div>
+                          </td>
+                        </tr>
+                      ) : null}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </Surface>
       </>}
 
-      {dialog?.kind === "managed-create" ? <ManagedNodeWizard nodes={nodes} isAdmin={isAdmin} userContext={userCreationContext ?? undefined} onClose={closeDialog} onComplete={async (message, tone) => { closeDialog(); if (tone) notify(message, tone); else notify(message); await load(true); }} /> : null}
+      {dialog?.kind === "managed-create" ? <ManagedNodeWizard nodes={nodes} isAdmin={isAdmin} initialServerID={dialog.initialServerID} userContext={userCreationContext ?? undefined} onClose={closeDialog} onComplete={async (message, tone) => { closeDialog(); if (tone) notify(message, tone); else notify(message); await load(true); }} /> : null}
       {dialog?.kind === "edit" ? <NodeEditor node={dialog.node} offer={offers.find((item) => item.node_id === dialog.node.id)} availableTags={knownTags} onClose={closeDialog} onComplete={async (message) => { closeDialog(); notify(message); await load(true); }} /> : null}
       {dialog?.kind === "config" ? <ConfigDialog node={dialog.node} editable={isAdmin} onClose={closeDialog} onComplete={async () => { closeDialog(); notify("节点配置已更新"); await load(true); }} /> : null}
       {dialog?.kind === "import" ? <ImportDialog onClose={closeDialog} onComplete={async (count) => { closeDialog(); notify(`已导入 ${count} 个节点`); await load(true); }} /> : null}
@@ -1352,7 +2002,7 @@ export function NodeEditor({ node, offer, availableTags = [], onClose, onComplet
 }
 
 function serverReady(server: RemoteServer): boolean {
-  return Boolean(server.xray_running && (server.ws_connected || server.status === "online" || server.status === "connected"));
+  return Boolean(server.ws_connected || server.status === "online" || server.status === "connected");
 }
 
 function managedCertificateUsable(certificate: ManagedCertificate): boolean {
@@ -1495,13 +2145,13 @@ function managedInboundPreview(draft: ManagedInboundDraft, isAdmin: boolean): Re
       };
     });
   }
-  for (const key of ["password", "user", "pass", "auth"]) {
+  for (const key of ["password", "user", "pass", "auth", "psk"]) {
     if (settings[key] !== undefined) settings[key] = "创建后由服务端自动生成";
   }
   return preview;
 }
 
-function ManagedNodeWizard({ nodes, isAdmin, userContext, onClose, onComplete }: { nodes: WorkbenchNode[]; isAdmin: boolean; userContext?: UserManagedCreationContext; onClose: () => void; onComplete: (message: string, tone?: "success" | "error") => void }) {
+function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClose, onComplete }: { nodes: WorkbenchNode[]; isAdmin: boolean; initialServerID?: number; userContext?: UserManagedCreationContext; onClose: () => void; onComplete: (message: string, tone?: "success" | "error") => void }) {
   const wizardRef = useRef<HTMLDivElement>(null);
   const inventoryRequestRef = useRef(0);
   const realityDomainsRequestRef = useRef(0);
@@ -1509,7 +2159,7 @@ function ManagedNodeWizard({ nodes, isAdmin, userContext, onClose, onComplete }:
   const [step, setStep] = useState(1);
   const [servers, setServers] = useState<RemoteServer[]>([]);
   const [certificates, setCertificates] = useState<ManagedCertificate[]>([]);
-  const [serverID, setServerID] = useState("");
+  const [serverID, setServerID] = useState(() => initialServerID ? String(initialServerID) : "");
   const [draft, setDraft] = useState<ManagedInboundDraft>(() => newManagedInboundDraft());
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
@@ -1917,11 +2567,160 @@ function ManagedNodeWizard({ nodes, isAdmin, userContext, onClose, onComplete }:
         {draft.protocol === "vless-ws" ? <div className="nw-inline-note"><Shield size={16} /><span>VLESS WS 未启用传输加密，适合受信或私有链路；公网优先使用 Reality 或 WSS。</span></div> : null}
         {draft.protocol === "shadowsocks" ? <><Field label="加密方式"><select aria-label="Shadowsocks 加密方式" value={draft.ssCipher} onChange={(event) => chooseSSCipher(event.target.value as ManagedInboundDraft["ssCipher"])}><optgroup label="经典 AEAD"><option value="aes-128-gcm" disabled={!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", "aes-128-gcm")}>AES-128-GCM（多用户）</option><option value="aes-256-gcm" disabled={!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", "aes-256-gcm")}>AES-256-GCM（多用户）</option><option value="chacha20-ietf-poly1305" disabled={!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", "chacha20-ietf-poly1305")}>ChaCha20-IETF-Poly1305（共享密码）</option></optgroup><optgroup label="Shadowsocks 2022（多用户）"><option value="2022-blake3-aes-128-gcm" disabled={!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", "2022-blake3-aes-128-gcm")}>2022 BLAKE3 AES-128-GCM</option><option value="2022-blake3-aes-256-gcm" disabled={!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", "2022-blake3-aes-256-gcm")}>2022 BLAKE3 AES-256-GCM</option></optgroup></select></Field>{isAdmin ? isShadowsocks2022Cipher(draft.ssCipher) ? <div className="form-grid"><Field label="服务端主密钥" hint="切换加密方式时自动生成"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value.trim() })} /></Field><Field label="初始用户密钥" hint="管理员节点凭据"><input value={draft.ssUserPassword} onChange={(event) => setDraft({ ...draft, ssUserPassword: event.target.value.trim() })} /></Field></div> : isShadowsocksClassicMultiUserCipher(draft.ssCipher) ? <Field label="初始用户密码" hint="管理员节点凭据；后续用户使用独立密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field> : <Field label="节点共享密码" hint="旧式共享凭据，不能发布到用户自助目录"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field> : null}</> : null}
         {isAdmin && (draft.protocol === "socks5" || draft.protocol === "http") ? <div className="form-grid"><Field label="初始用户名"><input value={draft.accountUsername} onChange={(event) => setDraft({ ...draft, accountUsername: event.target.value.trim() })} /></Field><Field label="初始密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field></div> : null}
-        {selectedProtocol?.requiresCertificate ? <>{isManagedUUIDProtocol(draft.protocol) ? <Field label="托管证书"><select value={draft.certificateId} onChange={(event) => { const certificate = validCertificates.find((item) => String(item.id) === event.target.value); setDraft({ ...draft, certificateId: event.target.value, domain: managedTLSHostnameForCertificate(certificate, selectedServer, draft.domain) }); }}><option value="">请选择证书</option>{validCertificates.map((item) => <option value={item.id} key={item.id}>{item.domain}</option>)}</select></Field> : <div className="form-grid">{isAdmin ? <Field label="认证密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field> : null}<Field label="托管证书"><select value={draft.certificateId} onChange={(event) => { const certificate = validCertificates.find((item) => String(item.id) === event.target.value); setDraft({ ...draft, certificateId: event.target.value, domain: managedTLSHostnameForCertificate(certificate, selectedServer, draft.domain) }); }}><option value="">请选择证书</option>{validCertificates.map((item) => <option value={item.id} key={item.id}>{item.domain}</option>)}</select></Field></div>}<Field label="TLS SNI"><input value={draft.domain} onChange={(event) => setDraft({ ...draft, domain: event.target.value })} placeholder="edge.example.com" /></Field><Toggle checked={draft.skipCertVerify} onChange={(skipCertVerify) => setDraft({ ...draft, skipCertVerify })} label="客户端跳过证书校验" /></> : null}
+                {draft.protocol === "chitanda" ? (
+          <>
+            <div className="form-grid">
+              <Field label="传输模式 (Transport)" hint="Chitanda 5 大底层传输载荷模式">
+                <select
+                  aria-label="Chitanda 传输模式"
+                  value={draft.chitandaTransport || "h2"}
+                  onChange={(event) => {
+                    const nextTransport = event.target.value as ManagedInboundDraft["chitandaTransport"];
+                    setDraft((current) => {
+                      const suffix = current.tag.split("-").slice(2).join("-") || current.tag.split("-")[1] || randomHex(6);
+                      return {
+                        ...current,
+                        chitandaTransport: nextTransport,
+                        tag: current.tag.startsWith("chitanda-") ? `chitanda-${nextTransport}-${suffix}` : current.tag,
+                      };
+                    });
+                  }}
+                >
+                  <option value="h2">h2 · HTTP/2 (TLS 1.3 多路复用 - 推荐)</option>
+                  <option value="stream">stream · RawStream (专线极速 · AES-128-GCM · 免证书/纯IP)</option>
+                  <option value="h3">h3 · HTTP/3 (QUIC Stream · 抗丢包弱网 · 需TLS)</option>
+                  <option value="auto">auto · 自适应容灾 (H2 ↔ H3 自动切换 · 需TLS)</option>
+                  <option value="h1">h1 · 纯 IP 全双工 (HTTP/1.1 · PSK-AEAD · 免证书)</option>
+                </select>
+              </Field>
+              <Field label="PSK 共享密钥 (Pre-Shared Key)" hint="通信主凭据（32 字节推荐）">
+                <div className="nw-copy-field">
+                  <input
+                    value={draft.password}
+                    onChange={(event) => setDraft({ ...draft, password: event.target.value.trim() })}
+                    placeholder="32 字节预共享密钥"
+                  />
+                  <IconButton
+                    label="生成随机 32 字节 PSK"
+                    onClick={() => setDraft({ ...draft, password: randomHex(32) })}
+                  >
+                    <RefreshCw size={15} />
+                  </IconButton>
+                </div>
+              </Field>
+            </div>
+
+            {draft.chitandaTransport === "stream" ? (
+              <>
+                <div className="nw-inline-note">
+                  <Shield size={16} />
+                  <span>
+                    <strong>RawStream 专线极速模式</strong>：基于硬件 AES-128-GCM + 动态 Padding 混淆，单端口支持 TCP/UDP。无 TLS 开销，抗主动探测（非法探测即刻 RST 断开）。<strong>完全无需 SSL 证书与域名</strong>。
+                  </span>
+                </div>
+                <Field label="节点标识 (Server ID)（可选）" hint="绑定节点身份，防范跨节点握手重放；可留空自动继承服务器标识">
+                  <input
+                    value={draft.serverID || ""}
+                    onChange={(event) => setDraft({ ...draft, serverID: event.target.value.trim() })}
+                    placeholder={selectedServer?.name || "tokyo-node-01"}
+                  />
+                </Field>
+              </>
+            ) : draft.chitandaTransport === "h1" ? (
+              <>
+                <div className="nw-inline-note">
+                  <Shield size={16} />
+                  <span>
+                    <strong>纯 IP 直连免证书模式 (H1)</strong>：内层采用 ChaCha20-Poly1305 AEAD 加密，伪装成全双工 HTTP/1.1。<strong>无需配置 SSL 证书与 SNI 域名</strong>。
+                  </span>
+                </div>
+                <div className="form-grid">
+                  <Field label="分流路径 (Secret Path)" hint="私密防探测握手入口">
+                    <input
+                      value={draft.wsPath}
+                      onChange={(event) => setDraft({ ...draft, wsPath: event.target.value.trim() })}
+                      placeholder="/api/v1/sync"
+                    />
+                  </Field>
+                  <ChitandaFallbackControl
+                    value={draft.fallbackSite}
+                    onChange={(fallbackSite) => setDraft({ ...draft, fallbackSite })}
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="nw-inline-note">
+                  <ShieldCheck size={16} />
+                  <span>
+                    <strong>TLS 1.3 传输加密 ({draft.chitandaTransport?.toUpperCase() || "H2"})</strong>：使用标准 TLS 伪装并自动注入 ALPN（{draft.chitandaTransport === "h3" ? "h3" : draft.chitandaTransport === "auto" ? "h2, h3, http/1.1" : "h2, http/1.1"}）。<strong>必须绑定有效的托管证书与 SNI</strong>。
+                  </span>
+                </div>
+                <div className="form-grid">
+                  <Field label="分流路径 (Secret Path)" hint="私密防探测握手入口">
+                    <input
+                      value={draft.wsPath}
+                      onChange={(event) => setDraft({ ...draft, wsPath: event.target.value.trim() })}
+                      placeholder="/api/v1/sync"
+                    />
+                  </Field>
+                  <ChitandaFallbackControl
+                    value={draft.fallbackSite}
+                    onChange={(fallbackSite) => setDraft({ ...draft, fallbackSite })}
+                  />
+                </div>
+                <div className="form-grid">
+                  <Field label="托管 TLS 证书" hint="必须绑定有效的域名证书">
+                    <select
+                      value={draft.certificateId}
+                      onChange={(event) => {
+                        const certificate = validCertificates.find((item) => String(item.id) === event.target.value);
+                        setDraft({
+                          ...draft,
+                          certificateId: event.target.value,
+                          domain: managedTLSHostnameForCertificate(certificate, selectedServer, draft.domain),
+                        });
+                      }}
+                    >
+                      <option value="">请选择证书</option>
+                      {validCertificates.map((item) => (
+                        <option value={item.id} key={item.id}>
+                          {item.domain}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="TLS SNI / 伪装域名" hint="客户端 TLS 握手域名">
+                    <input
+                      value={draft.domain}
+                      onChange={(event) => setDraft({ ...draft, domain: event.target.value.trim() })}
+                      placeholder="status.chitanda.org"
+                    />
+                  </Field>
+                </div>
+                <Toggle
+                  checked={draft.skipCertVerify}
+                  onChange={(skipCertVerify) => setDraft({ ...draft, skipCertVerify })}
+                  label="客户端跳过证书校验 (Skip Cert Verify)"
+                />
+              </>
+            )}
+          </>
+        ) : null}
+        {selectedProtocol?.requiresCertificate && draft.protocol !== "chitanda" ? <>{isManagedUUIDProtocol(draft.protocol) ? <Field label="托管证书"><select value={draft.certificateId} onChange={(event) => { const certificate = validCertificates.find((item) => String(item.id) === event.target.value); setDraft({ ...draft, certificateId: event.target.value, domain: managedTLSHostnameForCertificate(certificate, selectedServer, draft.domain) }); }}><option value="">请选择证书</option>{validCertificates.map((item) => <option value={item.id} key={item.id}>{item.domain}</option>)}</select></Field> : <div className="form-grid">{isAdmin ? <Field label="认证密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field> : null}<Field label="托管证书"><select value={draft.certificateId} onChange={(event) => { const certificate = validCertificates.find((item) => String(item.id) === event.target.value); setDraft({ ...draft, certificateId: event.target.value, domain: managedTLSHostnameForCertificate(certificate, selectedServer, draft.domain) }); }}><option value="">请选择证书</option>{validCertificates.map((item) => <option value={item.id} key={item.id}>{item.domain}</option>)}</select></Field></div>}<Field label="TLS SNI"><input value={draft.domain} onChange={(event) => setDraft({ ...draft, domain: event.target.value })} placeholder="edge.example.com" /></Field><Toggle checked={draft.skipCertVerify} onChange={(skipCertVerify) => setDraft({ ...draft, skipCertVerify })} label="客户端跳过证书校验" /></> : null}
         {isAdmin && !isTunnel ? <div className="managed-publish-panel"><Toggle checked={draft.publish && canPublish} disabled={!canPublish} onChange={(publish) => setDraft({ ...draft, publish })} label="创建后发布到用户自助目录" />{draft.publish && canPublish ? <Field label="目录排序" hint="数值越小越靠前"><input type="number" min="0" value={draft.sortOrder} onChange={(event) => setDraft({ ...draft, sortOrder: event.target.value })} /></Field> : <small>{canPublish ? "稍后也可以在节点编辑中发布。" : publishDisabledReason}</small>}</div> : null}
       </section> : <section className="managed-wizard-step">
         <div className="managed-step-heading"><span><ShieldCheck size={19} /></span><div><h3>确认创建</h3><p>创建会写入远程 Xray，并在控制端生成对应节点。</p></div></div>
-        <dl className="managed-review"><div><dt>服务器</dt><dd>{selectedServer?.name}</dd></div><div><dt>节点名称</dt><dd>{draft.name}</dd></div><div><dt>协议</dt><dd>{protocolLabel(draft.protocol)}</dd></div><div><dt>监听</dt><dd>{draft.port} · {isTunnel ? "TCP + UDP" : isWireGuard ? "UDP" : draft.ipVersion.toUpperCase()}</dd></div><div><dt>入站标识（Tag）</dt><dd><code>{draft.tag}</code></dd></div>{isTunnel ? <div><dt>目标节点</dt><dd>{selectedForwardNode?.node_name} · <code>{draft.targetAddress}:{draft.targetPort}</code></dd></div> : isAdmin ? <div><dt>用户目录</dt><dd>{draft.publish && canPublish ? "创建后发布" : "暂不发布"}</dd></div> : <div><dt>授权归属</dt><dd>当前账号专用</dd></div>}</dl>
+        <dl className="managed-review">
+          <div><dt>服务器</dt><dd>{selectedServer?.name}</dd></div>
+          <div><dt>节点名称</dt><dd>{draft.name}</dd></div>
+          <div><dt>协议</dt><dd>{protocolLabel(draft.protocol)}</dd></div>
+          <div><dt>监听</dt><dd>{draft.port} · {isTunnel ? "TCP + UDP" : isWireGuard ? "UDP" : draft.ipVersion.toUpperCase()}</dd></div>
+          <div><dt>入站标识（Tag）</dt><dd><code>{draft.tag}</code></dd></div>
+          {draft.protocol === "chitanda" ? <div><dt>传输模式</dt><dd><code>{draft.chitandaTransport || "h2"}</code> ({draft.chitandaTransport === "stream" ? "RawStream 专线极速 · 免证书" : draft.chitandaTransport === "h1" ? "纯 IP 全双工 · 免证书" : "TLS 1.3 传输加密"})</dd></div> : null}
+          {draft.protocol === "chitanda" && draft.chitandaTransport !== "stream" ? <div><dt>回退防探测</dt><dd><code>{draft.fallbackSite || "default"}</code> {chitandaFallbackType(draft.fallbackSite) === "default" ? "(Vanguard ERP 内置页)" : ""}</dd></div> : null}
+          {isTunnel ? <div><dt>目标节点</dt><dd>{selectedForwardNode?.node_name} · <code>{draft.targetAddress}:{draft.targetPort}</code></dd></div> : isAdmin ? <div><dt>用户目录</dt><dd>{draft.publish && canPublish ? "创建后发布" : "暂不发布"}</dd></div> : <div><dt>授权归属</dt><dd>当前账号专用</dd></div>}
+        </dl>
         <details className="secure-inbound-preview"><summary>{isAdmin ? "查看将提交的 Xray JSON" : "查看入站结构（凭据由服务端替换）"}</summary><textarea className="nw-code-editor" aria-label="受管节点 Xray JSON" rows={16} readOnly spellCheck={false} value={JSON.stringify(managedInboundPreview(draft, isAdmin), null, 2)} /></details>
       </section>}
       {!loading ? <div className="dialog-actions managed-wizard-actions"><Button type="button" variant="secondary" onClick={step === 1 ? onClose : () => { setError(""); setStep((current) => current - 1); }} disabled={working}><ArrowLeft size={16} />{step === 1 ? "取消" : "上一步"}</Button>{step < 4 ? <Button type="button" onClick={validateStep} disabled={working || (step === 1 && (!readyServers.length || inventoryWorking || inventoryServerID !== serverID)) || (step === 2 && !allowedProtocolOptions.length) || keyWorking || wireGuardKeyWorking}>下一步<ArrowRight size={16} /></Button> : <Button type="button" onClick={() => void submit()} disabled={working}>{working ? <Spinner label="正在创建并校验" /> : <><Server size={16} />创建节点</>}</Button>}</div> : null}
@@ -2577,7 +3376,7 @@ export function SpeedDialog({ nodes, initialNodeIDs, latest, notify, onClose, on
       </div>
       <div className="nw-speed-options"><Toggle checked={latencyOnly} onChange={setLatencyOnly} label="仅测试真实连接延迟" /><Field label="自定义下载地址（可选）"><input type="url" value={url} disabled={latencyOnly} onChange={(event) => setURL(event.target.value)} placeholder="留空使用内置测速地址" /></Field></div>
       <div className="nw-list-toolbar"><div className="search-box"><Search size={16} /><input aria-label="搜索测速节点" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索节点或服务器" /></div><span>{selected.size} 个已选</span>{selected.size ? <Button onClick={() => void run()} disabled={working}>{working ? <Spinner label="正在提交" /> : <><Gauge size={16} />开始测速</>}</Button> : null}</div>
-      <div className="nw-dialog-table"><table><thead><tr><th className="nw-check-col"><input aria-label="选择全部测速节点" type="checkbox" checked={allVisibleSelected} onChange={toggleVisible} /></th><th>协议 / 节点</th><th>服务器</th><th>最新速度</th><th>延迟</th><th aria-label="操作" /></tr></thead><tbody>{rows.map((node) => { const result = latest[node.id]; const address = nodeAddress(node); return <tr key={node.id}><td><input aria-label={`选择测速 ${node.node_name}`} type="checkbox" checked={selected.has(node.id)} onChange={() => toggleOne(node.id)} /></td><td><div className="nw-node-primary"><Badge tone="info">{node.protocol.toUpperCase()}</Badge><strong>{node.node_name}</strong></div></td><td><code className="nw-address">{address.host}:{address.port}</code></td><td><Badge tone={speedTone(result)}>{resultLabel(result)}</Badge>{result?.error ? <small className="cell-note" title={result.error}>{result.error}</small> : null}</td><td>{result?.status === "ok" ? `${result.latency_ms} ms` : "-"}</td><td><div className="nw-row-actions"><IconButton label={`查看 ${node.node_name} 测速历史`} onClick={() => onOpenHistory(node.id)}><History size={16} /></IconButton><IconButton label={`测试 ${node.node_name}`} disabled={working || result?.status === "running"} onClick={() => void run([node.id])}>{result?.status === "running" ? <Activity size={16} /> : <Play size={16} />}</IconButton></div></td></tr>; })}</tbody></table></div>
+      <div className="nw-dialog-table"><table><thead><tr><th className="nw-check-col"><input aria-label="选择全部测速节点" type="checkbox" checked={allVisibleSelected} onChange={toggleVisible} /></th><th>协议 / 节点</th><th>服务器</th><th>最新速度</th><th>延迟</th><th aria-label="操作" /></tr></thead><tbody>{rows.map((node) => { const result = latest[node.id]; const address = nodeAddress(node); return <tr key={node.id}><td><input aria-label={`选择测速 ${node.node_name}`} type="checkbox" checked={selected.has(node.id)} onChange={() => toggleOne(node.id)} /></td><td><div className="nw-node-primary"><Badge tone="info" className="nw-protocol-badge" title={node.protocol.toUpperCase()}>{protocolBadgeText(node.protocol)}</Badge><strong>{node.node_name}</strong></div></td><td><code className="nw-address">{address.host}:{address.port}</code></td><td><Badge tone={speedTone(result)}>{resultLabel(result)}</Badge>{result?.error ? <small className="cell-note" title={result.error}>{result.error}</small> : null}</td><td>{result?.status === "ok" ? `${result.latency_ms} ms` : "-"}</td><td><div className="nw-row-actions"><IconButton label={`查看 ${node.node_name} 测速历史`} onClick={() => onOpenHistory(node.id)}><History size={16} /></IconButton><IconButton label={`测试 ${node.node_name}`} disabled={working || result?.status === "running"} onClick={() => void run([node.id])}>{result?.status === "running" ? <Activity size={16} /> : <Play size={16} />}</IconButton></div></td></tr>; })}</tbody></table></div>
       {!rows.length ? <EmptyState icon={<Gauge size={22} />} title="没有匹配节点" description="调整搜索条件后重试" /> : null}
       </> : <LineSpeedtestView notify={notify} />}
       <DialogStatusBar><span><ShieldCheck size={15} />{view === "nodes" ? "主控测速会串行运行，避免多个节点争抢带宽" : "线路测速直接使用目标服务器公网出口，不经过代理节点"}</span><Button variant="secondary" onClick={onClose}>关闭</Button></DialogStatusBar>
@@ -2740,7 +3539,7 @@ export function URIManagerDialog({ notify, onClose }: { notify: NodesWorkbenchNo
   return <Dialog title="URI 管理器" description="按用户生成已注入专属凭据的节点分享链接" onClose={onClose} wide><div className="form-stack">
     {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
     <div className="nw-uri-filters"><div className="search-box"><Search size={16} /><input aria-label="搜索 URI" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="用户、节点、协议或链接" /></div><Field label="用户"><select aria-label="URI 用户" value={username} onChange={(event) => setUsername(event.target.value)}><option value="all">全部用户</option>{usernames.map((item) => <option key={item}>{item}</option>)}</select></Field><Field label="协议"><select aria-label="URI 协议" value={protocol} onChange={(event) => setProtocol(event.target.value)}><option value="all">全部协议</option>{protocols.map((item) => <option key={item}>{item.toUpperCase()}</option>)}</select></Field><Button variant="secondary" disabled={!visible.length} onClick={() => void copy(visible.map((item) => item.uri).join("\n"), `已复制 ${visible.length} 条 URI`)}><FileDown size={16} />复制当前结果</Button></div>
-    {loading ? <div className="center-state"><Spinner label="正在生成 URI" /></div> : visible.length ? <div className="nw-dialog-table"><table><thead><tr><th>用户</th><th>协议 / 节点</th><th>类型</th><th>分享 URI</th><th aria-label="操作" /></tr></thead><tbody>{visible.map((item) => <tr key={`${item.username}-${item.node_id}`}><td><span className="nw-user-cell"><UserRound size={15} />{item.username}</span></td><td><div className="nw-node-primary"><Badge tone="info">{item.protocol.toUpperCase()}</Badge><strong>{item.node_name}</strong></div></td><td><Badge>{item.node_type === "routed" ? "路由出站" : "物理节点"}</Badge></td><td><code className="nw-uri-value" title={item.uri}>{item.uri}</code></td><td><IconButton label={`复制 ${item.username} 的 ${item.node_name} URI`} onClick={() => void copy(item.uri, "URI 已复制")}><Copy size={16} /></IconButton></td></tr>)}</tbody></table></div> : <EmptyState icon={<Link2 size={22} />} title={items.length ? "没有匹配 URI" : "暂无可用 URI"} description={items.length ? "调整筛选条件后重试" : "用户需要拥有套餐节点或可见的专属节点"} />}
+    {loading ? <div className="center-state"><Spinner label="正在生成 URI" /></div> : visible.length ? <div className="nw-dialog-table"><table><thead><tr><th>用户</th><th>协议 / 节点</th><th>类型</th><th>分享 URI</th><th aria-label="操作" /></tr></thead><tbody>{visible.map((item) => <tr key={`${item.username}-${item.node_id}`}><td><span className="nw-user-cell"><UserRound size={15} />{item.username}</span></td><td><div className="nw-node-primary"><Badge tone="info" className="nw-protocol-badge" title={item.protocol.toUpperCase()}>{protocolBadgeText(item.protocol)}</Badge><strong>{item.node_name}</strong></div></td><td><Badge>{item.node_type === "routed" ? "路由出站" : "物理节点"}</Badge></td><td><code className="nw-uri-value" title={item.uri}>{item.uri}</code></td><td><IconButton label={`复制 ${item.username} 的 ${item.node_name} URI`} onClick={() => void copy(item.uri, "URI 已复制")}><Copy size={16} /></IconButton></td></tr>)}</tbody></table></div> : <EmptyState icon={<Link2 size={22} />} title={items.length ? "没有匹配 URI" : "暂无可用 URI"} description={items.length ? "调整筛选条件后重试" : "用户需要拥有套餐节点或可见的专属节点"} />}
     <DialogStatusBar><span>{visible.length} / {items.length} 条 URI</span><Button variant="secondary" onClick={onClose}>关闭</Button></DialogStatusBar>
   </div></Dialog>;
 }
@@ -3029,7 +3828,7 @@ export function NodeShareQRCodeDialog({ node, notify, onClose }: { node: Workben
         {dataURL ? <img src={dataURL} alt={`${node.node_name} 节点二维码`} width={320} height={320} /> : <Spinner label={loading ? "正在生成节点链接" : "正在本地生成二维码"} />}
       </div> : null}
       {item ? <div className="nw-qr-uri">
-        <span><Badge tone="info">{item.protocol.toUpperCase()}</Badge><strong>{item.node_name}</strong></span>
+        <span><Badge tone="info" className="nw-protocol-badge" title={item.protocol.toUpperCase()}>{protocolBadgeText(item.protocol)}</Badge><strong>{item.node_name}</strong></span>
         <code aria-label="节点分享 URI">{item.uri}</code>
         <IconButton label="复制节点分享链接" onClick={() => void copy()}><Copy size={17} /></IconButton>
       </div> : null}
@@ -3070,7 +3869,7 @@ export function TempSubscriptionDialog({ nodes, notify, onClose }: { nodes: Work
     {error ? <ErrorState message={error} /> : null}
     <div className="nw-temp-summary"><span><HardDriveDownload size={20} /><strong>{valid.length}</strong><small>可用节点</small></span><span><Clock3 size={20} /><strong>{Number(expireSeconds) / 60}</strong><small>有效分钟</small></span><span><Download size={20} /><strong>{maxAccess}</strong><small>最大访问</small></span></div>
     <div className="form-grid"><Field label="最大访问次数"><input type="number" min="1" max="100" value={maxAccess} onChange={(event) => { setMaxAccess(event.target.value); setResult(null); }} /></Field><Field label="有效时间"><select value={expireSeconds} onChange={(event) => { setExpireSeconds(event.target.value); setResult(null); }}><option value="60">1 分钟</option><option value="300">5 分钟</option><option value="600">10 分钟</option><option value="1800">30 分钟</option><option value="3600">1 小时</option></select></Field></div>
-    <div className="nw-temp-node-list">{valid.map(({ node }) => <span key={node.id}><Badge tone="info">{node.protocol.toUpperCase()}</Badge>{node.node_name}</span>)}</div>
+    <div className="nw-temp-node-list">{valid.map(({ node }) => <span key={node.id}><Badge tone="info" className="nw-protocol-badge" title={node.protocol.toUpperCase()}>{protocolBadgeText(node.protocol)}</Badge>{node.node_name}</span>)}</div>
     {nodes.length !== valid.length ? <div className="nw-inline-note"><ShieldCheck size={16} /><span>{nodes.length - valid.length} 个节点因配置无法解析而不会加入订阅</span></div> : null}
     {result ? <section className="nw-secret-panel"><div className="nw-secret-heading"><Link2 size={18} /><span><strong>临时订阅已生成</strong><small>到期 {formatDate(result.expire_at)} · 最多访问 {result.max_access} 次</small></span></div><Field label="订阅地址"><div className="nw-copy-field"><input readOnly value={fullURL} /><IconButton label="复制临时订阅地址" onClick={() => void copy()}><Copy size={16} /></IconButton></div></Field></section> : null}
     <div className="dialog-actions"><Button variant="secondary" onClick={onClose}>关闭</Button>{result ? <Button onClick={() => void generate()} disabled={working}><RefreshCw size={16} />重新生成</Button> : <Button onClick={() => void generate()} disabled={working || !valid.length}>{working ? <Spinner label="正在生成" /> : <><Link2 size={16} />生成订阅</>}</Button>}</div>

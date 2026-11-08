@@ -7,6 +7,7 @@ import {
 } from "./xray-inbound-presets";
 
 export type ManagedProtocol =
+  | "chitanda"
   | "vless-reality"
   | "vless-tls"
   | "vless-grpc-tls"
@@ -28,7 +29,7 @@ export type ManagedProtocol =
   | "wireguard"
   | "anydoor";
 
-export type ManagedProtocolFamily = "vless" | "vmess" | "trojan" | "shadowsocks" | "hysteria2" | "socks5" | "http" | "wireguard" | "anydoor";
+export type ManagedProtocolFamily = "chitanda" | "vless" | "vmess" | "trojan" | "shadowsocks" | "hysteria2" | "socks5" | "http" | "wireguard" | "anydoor";
 export type ShadowsocksCipher =
   | "aes-128-gcm"
   | "aes-256-gcm"
@@ -68,6 +69,9 @@ export interface ManagedInboundDraft {
   forwardNodeId: string;
   targetAddress: string;
   targetPort: string;
+  fallbackSite?: string;
+  serverID?: string;
+  chitandaTransport?: "h2" | "h3" | "auto" | "stream" | "h1";
   publish: boolean;
   sortOrder: string;
 }
@@ -91,6 +95,7 @@ export const managedProtocolOptions: Array<{
   detail: string;
   requiresCertificate?: boolean;
 }> = [
+  { value: "chitanda", family: "chitanda", familyLabel: "Chitanda", label: "Chitanda (千反田)", detail: "自研高性能抗探测协议 · 全传输模式 (H2 / H3 / Auto / Stream / H1)", requiresCertificate: false },
   { value: "vless-reality", family: "vless", familyLabel: "VLESS", label: "VLESS Reality", detail: "RAW/TCP · Reality · 伪装目标 SNI 必填" },
   { value: "vless-tls", family: "vless", familyLabel: "VLESS", label: "VLESS TCP TLS", detail: "TCP · 托管 TLS 证书", requiresCertificate: true },
   { value: "vless-grpc-tls", family: "vless", familyLabel: "VLESS", label: "VLESS gRPC TLS", detail: "gRPC · 托管 TLS 证书 · ALPN h2", requiresCertificate: true },
@@ -216,6 +221,7 @@ export function newManagedInboundDraft(): ManagedInboundDraft {
 export function protocolDefaults(protocol: ManagedProtocol): Partial<ManagedInboundDraft> {
   const base = { protocol, port: "443" } as const;
   switch (protocol) {
+    case "chitanda": return { ...base, port: "28443", tag: "chitanda-h2", wsPath: "/api/v1/sync", password: randomHex(32), fallbackSite: "default", chitandaTransport: "h2", serverID: "", flow: "" };
     case "vless-reality": return { ...base, tag: "vless-reality", flow: "xtls-rprx-vision" };
     case "vless-tls": return { ...base, tag: "vless-tcp-tls", flow: "xtls-rprx-vision" };
     case "vless-grpc-tls": return { ...base, tag: "vless-grpc-tls", flow: "", wsPath: `vless-${randomHex(12)}` };
@@ -606,6 +612,55 @@ export function buildManagedInboundRequest(draft: ManagedInboundDraft): ManagedI
         },
       };
       break;
+    case "chitanda": {
+      const transport = draft.chitandaTransport || "h2";
+      const isNoTLS = transport === "stream" || transport === "h1";
+      let streamSettings: Record<string, unknown>;
+      let tlsProps: Record<string, unknown> = {};
+
+      if (isNoTLS) {
+        streamSettings = {
+          security: "none",
+        };
+      } else {
+        const tls = tlsStream(draft);
+        tlsProps = { cert_id: tls.cert_id };
+        const sSettings = tls.streamSettings as Record<string, unknown>;
+        const tlsSettings = sSettings.tlsSettings as Record<string, unknown>;
+        if (transport === "h3") {
+          tlsSettings.alpn = ["h3"];
+        } else if (transport === "auto") {
+          tlsSettings.alpn = ["h2", "h3", "http/1.1"];
+        } else {
+          tlsSettings.alpn = ["h2", "http/1.1"];
+        }
+        streamSettings = sSettings;
+      }
+
+      const settings: Record<string, unknown> = {
+        psk: requirePassword(draft.password),
+        transport,
+      };
+
+      if (draft.serverID?.trim()) {
+        settings.server_id = draft.serverID.trim();
+      }
+      if (transport !== "stream") {
+        settings.path = draft.wsPath || "/api/v1/sync";
+        settings.fallback = (draft.fallbackSite || "default").trim();
+      }
+
+      inbound = {
+        tag: requireInboundTag(draft.tag),
+        listen: "0.0.0.0",
+        port: requirePort(draft.port),
+        protocol: "chitanda",
+        settings,
+        ...tlsProps,
+        streamSettings,
+      };
+      break;
+    }
   }
 
   return {
@@ -617,3 +672,61 @@ export function buildManagedInboundRequest(draft: ManagedInboundDraft): ManagedI
     inbound,
   };
 }
+
+/**
+ * Maps a protocol name to a 2-character uppercase identifier for uniform visual alignment.
+ */
+export function protocolBadgeText(protocol: string | undefined | null): string {
+  const p = (protocol || "").trim().toLowerCase();
+  switch (p) {
+    case "ss":
+    case "shadowsocks":
+      return "SS";
+    case "chitanda":
+    case "ch":
+      return "CH";
+    case "dokodemo-door":
+    case "dokodemo":
+    case "anydoor":
+    case "tunnel":
+    case "forward":
+    case "dd":
+      return "DD";
+    case "vless":
+    case "vl":
+      return "VL";
+    case "vmess":
+    case "vm":
+      return "VM";
+    case "trojan":
+    case "tr":
+      return "TR";
+    case "hysteria":
+    case "hysteria2":
+    case "hy2":
+    case "hy":
+      return "HY";
+    case "wireguard":
+    case "wg":
+      return "WG";
+    case "tuic":
+    case "tu":
+      return "TU";
+    case "socks":
+    case "socks5":
+    case "s5":
+      return "S5";
+    case "http":
+    case "https":
+    case "ht":
+      return "HT";
+    case "naive":
+    case "naiveproxy":
+    case "nv":
+      return "NV";
+    default:
+      if (!p) return "--";
+      return (p.length <= 2 ? p : p.slice(0, 2)).toUpperCase();
+  }
+}
+

@@ -1926,3 +1926,46 @@
   .top-layout-switch,
   .topbar-layout-switch { display: none !important; }
 }
+
+
+/* Probe instant skeleton */
+.public-probe-card.is-skeleton {
+  pointer-events: none;
+  min-height: 180px;
+}
+.public-probe-skeleton-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.15);
+  animation: probe-pulse 1.4s ease-in-out infinite;
+}
+.public-probe-skeleton-line {
+  display: inline-block;
+  height: 16px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.15);
+  animation: probe-pulse 1.4s ease-in-out infinite;
+}
+.public-probe-skeleton-line.short {
+  width: 90px;
+}
+.public-probe-skeleton-pill {
+  width: 50px;
+  height: 20px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.1);
+  animation: probe-pulse 1.4s ease-in-out infinite;
+}
+.public-probe-skeleton-metric {
+  display: block;
+  height: 24px;
+  margin-bottom: 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  animation: probe-pulse 1.4s ease-in-out infinite;
+}
+@keyframes probe-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.7; }
+}

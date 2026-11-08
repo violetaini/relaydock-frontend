@@ -16,6 +16,45 @@ type BootState = "loading" | "setup" | "login" | "ready" | "error";
 const publicProbeRefreshIntervalMs = 1_000;
 const preloadRecoveryKey = "arcway-preload-recovery-at";
 const preloadRecoveryWindowMs = 60_000;
+const PROBE_CACHE_KEY = "arcway-public-probe-cache";
+
+function loadCachedProbe(): PublicProbeState {
+  if (typeof window !== "undefined") {
+    try {
+      const saved = localStorage.getItem(PROBE_CACHE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        const normalized = normalizePublicProbeState(parsed);
+        if (normalized && normalized.enabled) {
+          return normalized;
+        }
+      }
+    } catch {
+      // Ignore corrupted cache.
+    }
+  }
+  return {
+    ...emptyPublicProbeState(),
+    enabled: true,
+    title: "ちちゃんの探針",
+    show_name: true,
+    show_cpu: true,
+    show_memory: true,
+    show_disk: true,
+    show_traffic: true,
+    show_speed: true,
+  };
+}
+
+function saveCachedProbe(probe: PublicProbeState) {
+  try {
+    if (typeof localStorage !== "undefined" && probe && probe.enabled) {
+      localStorage.setItem(PROBE_CACHE_KEY, JSON.stringify(probe));
+    }
+  } catch {
+    // Ignore quota or disabled storage.
+  }
+}
 
 export function recoverFromPreloadError(event: Event, reload: () => void = () => window.location.reload(), now = Date.now()): boolean {
   let previous = 0;
@@ -58,19 +97,31 @@ function publicBrandingFrame(value: unknown): Branding {
 }
 
 export function App() {
-  const [state, setState] = useState<BootState>("loading");
+  const [loginRequested, setLoginRequested] = useState(() => {
+    if (typeof location === "undefined") return false;
+    return location.hash.replace(/^#\/?/, "") === "login";
+  });
+  const [probePreview, setProbePreview] = useState(() => {
+    if (typeof location === "undefined") return false;
+    return new URLSearchParams(location.search).get("probe") === "1";
+  });
+  const [state, setState] = useState<BootState>(() => {
+    if (typeof window !== "undefined" && !getToken() && location.hash.replace(/^#\/?/, "") !== "login") {
+      return "login";
+    }
+    return "loading";
+  });
   const [profile, setProfile] = useState<Profile | null>(null);
   const [error, setError] = useState("");
-  const [publicReady, setPublicReady] = useState(false);
   const [wallpaper, setWallpaper] = useState("");
   const [logoutNotice, setLogoutNotice] = useState("");
-  const [probe, setProbe] = useState<PublicProbeState>(emptyPublicProbeState);
+  const [probe, setProbe] = useState<PublicProbeState>(loadCachedProbe);
   const [branding, setBranding] = useState<Branding>(DEFAULT_BRANDING);
-  const [loginRequested, setLoginRequested] = useState(() => location.hash.replace(/^#\/?/, "") === "login");
-  const [probePreview, setProbePreview] = useState(() => new URLSearchParams(location.search).get("probe") === "1");
 
   const bootstrap = useCallback(async () => {
-    setState("loading");
+    if (getToken() || location.hash.replace(/^#\/?/, "") === "login") {
+      setState("loading");
+    }
     setError("");
     try {
       const setup = await api.get<{ needs_setup: boolean }>("/api/setup/status");
@@ -91,13 +142,18 @@ export function App() {
           setToken("");
           location.hash = "/login";
           setState("login");
+          setLoginRequested(true);
           return;
         }
         throw reason;
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "控制端启动失败");
-      setState("error");
+      if (getToken()) {
+        setError(reason instanceof Error ? reason.message : "控制端启动失败");
+        setState("error");
+      } else {
+        setState("login");
+      }
     }
   }, []);
 
@@ -111,22 +167,34 @@ export function App() {
   }, []);
   useEffect(() => { applyBrandingDocument(branding); }, [branding]);
   useEffect(() => {
-    const onHash = () => setLoginRequested(location.hash.replace(/^#\/?/, "") === "login");
+    if (location.hash.replace(/^#\/?/, "") === "portal") {
+      location.hash = "/dashboard";
+    }
+    const onHash = () => {
+      const cleanHash = location.hash.replace(/^#\/?/, "");
+      if (cleanHash === "portal") {
+        location.hash = "/dashboard";
+        return;
+      }
+      setLoginRequested(cleanHash === "login");
+    };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
   useEffect(() => {
     if (state !== "login" && !probePreview) return;
     let cancelled = false;
-    setPublicReady(false);
     Promise.all([
       api.get<{ login_wallpaper?: string }>("/api/public/login-wallpaper").catch(() => ({ login_wallpaper: "" })),
       api.get<unknown>("/api/public/probe-servers").catch(() => emptyPublicProbeState()),
     ]).then(([wallpaperResponse, probeResponse]) => {
       if (cancelled) return;
       setWallpaper(wallpaperResponse.login_wallpaper?.trim() ?? "");
-      setProbe(publicProbeFrame(probeResponse) ?? emptyPublicProbeState());
-      setPublicReady(true);
+      const nextProbe = publicProbeFrame(probeResponse) ?? emptyPublicProbeState();
+      setProbe(nextProbe);
+      if (nextProbe.enabled) {
+        saveCachedProbe(nextProbe);
+      }
     });
     return () => { cancelled = true; };
   }, [probePreview, state]);
@@ -144,7 +212,12 @@ export function App() {
 
     const update = (value: unknown) => {
       const next = publicProbeFrame(value);
-      if (!stopped && next) setProbe(next);
+      if (!stopped && next) {
+        setProbe(next);
+        if (next.enabled) {
+          saveCachedProbe(next);
+        }
+      }
     };
     const poll = async () => {
       if (pollInFlight) return;
@@ -283,10 +356,6 @@ export function App() {
     content = <main className="boot-screen boot-error"><BrandMark className="brand-mark-large" size={32} /><ErrorState message={error} /><Button onClick={() => void bootstrap()}>重新连接</Button></main>;
   } else if (state === "setup") {
     content = <SetupScreen onComplete={() => setState("login")} />;
-  } else if (state === "login" && !publicReady) {
-    content = <main className="boot-screen"><BrandMark className="brand-mark-large" size={32} /><Spinner label="正在加载入口" /></main>;
-  } else if (probePreview && !publicReady) {
-    content = <main className="boot-screen"><BrandMark className="brand-mark-large" size={32} /><Spinner label="正在加载公开探针" /></main>;
   } else if (probePreview && probe.enabled) {
     content = <PublicProbeScreen probe={probe} onLogin={leaveProbePreview} loginLabel="返回控制台" />;
   } else if (state === "login" && probe.enabled && !loginRequested) {
@@ -294,7 +363,13 @@ export function App() {
   } else if (state === "login") {
     content = <LoginScreen wallpaper={wallpaper} notice={logoutNotice} onLogin={onLogin} />;
   } else if (profile) {
-    content = <ConsoleApp profile={profile} onLogout={logout} onBrandingChange={setBranding} />;
+    content = (
+      <ConsoleApp
+        profile={profile}
+        onLogout={logout}
+        onBrandingChange={setBranding}
+      />
+    );
   }
   return <BrandingProvider branding={branding}>{content}</BrandingProvider>;
 }

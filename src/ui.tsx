@@ -12,8 +12,25 @@ export function IconButton({ label, className = "", type = "button", ...props }:
   return <button type={type} className={`icon-button ${className}`} aria-label={label} title={label} {...props} />;
 }
 
-export function Badge({ tone = "neutral", children }: { tone?: "good" | "warn" | "bad" | "info" | "neutral"; children: ReactNode }) {
-  return <span className={`badge badge-${tone}`}>{children}</span>;
+export function Badge({
+  tone = "neutral",
+  className,
+  title,
+  children,
+}: {
+  tone?: "good" | "warn" | "bad" | "info" | "neutral";
+  className?: string;
+  title?: string;
+  children: ReactNode;
+}) {
+  return (
+    <span
+      className={`badge badge-${tone}${className ? ` ${className}` : ""}`}
+      title={title}
+    >
+      {children}
+    </span>
+  );
 }
 
 export function Spinner({ label = "正在加载" }: { label?: string }) {

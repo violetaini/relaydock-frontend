@@ -7,6 +7,7 @@ import {
   managedInboundSupportsPublishing,
   managedProtocolOptions,
   newManagedInboundDraft,
+  protocolBadgeText,
   randomBase64,
   type ManagedProtocol,
 } from "./managed-node-presets";
@@ -495,5 +496,26 @@ describe("managed node protocol presets", () => {
         ...extraSettings,
       },
     });
+  });
+});
+
+describe("protocolBadgeText", () => {
+  it("maps all major protocols to 2-character uppercase identifiers", () => {
+    expect(protocolBadgeText("shadowsocks")).toBe("SS");
+    expect(protocolBadgeText("ss")).toBe("SS");
+    expect(protocolBadgeText("chitanda")).toBe("CH");
+    expect(protocolBadgeText("ch")).toBe("CH");
+    expect(protocolBadgeText("dokodemo-door")).toBe("DD");
+    expect(protocolBadgeText("tunnel")).toBe("DD");
+    expect(protocolBadgeText("anydoor")).toBe("DD");
+    expect(protocolBadgeText("vless")).toBe("VL");
+    expect(protocolBadgeText("vmess")).toBe("VM");
+    expect(protocolBadgeText("trojan")).toBe("TR");
+    expect(protocolBadgeText("hysteria2")).toBe("HY");
+    expect(protocolBadgeText("wireguard")).toBe("WG");
+    expect(protocolBadgeText("tuic")).toBe("TU");
+    expect(protocolBadgeText("socks5")).toBe("S5");
+    expect(protocolBadgeText("http")).toBe("HT");
+    expect(protocolBadgeText("")).toBe("--");
   });
 });

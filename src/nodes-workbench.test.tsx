@@ -23,6 +23,8 @@ import {
   managedTLSHostnameForCertificate,
   managedGrantAllowsProtocol,
   nodeDuplicateIdentity,
+  nodeServerName,
+  inferCountryCode,
   type WorkbenchNode,
 } from "./nodes-workbench";
 
@@ -228,7 +230,7 @@ describe("WireGuard nodes", () => {
 
     expect(await screen.findByText("办公室 WireGuard")).toBeInTheDocument();
     expect(screen.getByRole("table").parentElement).toHaveClass("nw-node-table-scroll");
-    expect(screen.getAllByText("WIREGUARD")).toHaveLength(2);
+    expect(screen.getAllByText("WG")).toHaveLength(2);
     expect(screen.getByText("203.0.113.10:51820")).toBeInTheDocument();
     const latencyButton = screen.getByRole("button", { name: "测延迟" });
     expect(latencyButton).toHaveAttribute("title", "点击使用 Mihomo 发起 HTTPS 204 代理实测；包含协议握手、代理出口和测试站响应，不是纯网络 RTT");
@@ -845,7 +847,8 @@ describe("node any-door forwarding", () => {
 
     const row = (await screen.findByText("A-B-C Tunnel")).closest("tr");
     expect(row).not.toBeNull();
-    expect(within(row as HTMLTableRowElement).getByText("TUNNEL")).toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).getByText("DD")).toBeInTheDocument();
+    expect(within(row as HTMLTableRowElement).getByText("DD")).toHaveAttribute("title", "TUNNEL");
     expect(within(row as HTMLTableRowElement).getByText(/目标协议 VLESS/)).toBeInTheDocument();
   });
 
@@ -1697,5 +1700,165 @@ describe("single node QR import", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("menu", { name: "香港 A 节点操作" })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
+  });
+
+  describe("server filtering", () => {
+    it("resolves nodeServerName accurately", () => {
+      expect(nodeServerName({ original_server: "node-hk-aliyun" } as WorkbenchNode)).toBe("node-hk-aliyun");
+      expect(nodeServerName({ original_server: "", node_type: "routed" } as WorkbenchNode)).toBe("路由出站");
+      expect(nodeServerName({ original_server: "", node_type: "physical" } as WorkbenchNode)).toBe("外部导入");
+      expect(nodeServerName({ original_server: undefined } as unknown as WorkbenchNode)).toBe("外部导入");
+    });
+
+    it("filters nodes by server pill and dropdown reactively", async () => {
+      const node1: WorkbenchNode = { ...node(1, "香港 01", "ss"), original_server: "node-hk-aliyun" };
+      const node2: WorkbenchNode = { ...node(2, "东京 01", "vless"), original_server: "node-jp-ddps" };
+      const node3: WorkbenchNode = { ...node(3, "香港 02", "vmess"), original_server: "node-hk-aliyun" };
+      const node4: WorkbenchNode = { ...node(4, "导入节点", "trojan"), original_server: "", inbound_tag: "" };
+      const node5: WorkbenchNode = { ...node(5, "首尔 01", "wireguard"), original_server: "node-kr-seoul" };
+      const node6: WorkbenchNode = { ...node(6, "台北 01", "ss"), original_server: "node-tw-bgp" };
+
+      vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+        if (path === "/api/admin/nodes") return { nodes: [node1, node2, node3, node4, node5, node6] } as T;
+        if (path.startsWith("/api/admin/speedtest/results")) return { results: [] } as T;
+        if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
+        if (path === "/api/user/config") return userConfig([1, 2, 3, 4, 5, 6]) as T;
+        throw new Error(`unexpected GET ${path}`);
+      });
+
+      render(<NodesWorkbench isAdmin={true} notify={vi.fn()} />);
+
+      // Wait for table to load
+      expect(await screen.findByText("香港 01")).toBeInTheDocument();
+      expect(screen.getByText("东京 01")).toBeInTheDocument();
+      expect(screen.getByText("导入节点")).toBeInTheDocument();
+
+      // Check server filter pills
+      const serverGroup = screen.getByLabelText("服务器筛选");
+      expect(within(serverGroup).getByRole("button", { name: /全部服务器 6/ })).toBeInTheDocument();
+      expect(within(serverGroup).getByRole("button", { name: /node-hk-aliyun 2/ })).toBeInTheDocument();
+      expect(within(serverGroup).getByRole("button", { name: /node-jp-ddps 1/ })).toBeInTheDocument();
+      expect(within(serverGroup).getByRole("button", { name: /外部导入 1/ })).toBeInTheDocument();
+
+      // Click node-hk-aliyun pill
+      fireEvent.click(within(serverGroup).getByRole("button", { name: /node-hk-aliyun 2/ }));
+      expect(screen.getByText("香港 01")).toBeInTheDocument();
+      expect(screen.getByText("香港 02")).toBeInTheDocument();
+      expect(screen.queryByText("东京 01")).not.toBeInTheDocument();
+      expect(screen.queryByText("导入节点")).not.toBeInTheDocument();
+
+      // Protocol group scoped to node-hk-aliyun (which has ss and vmess)
+      const protocolGroup = screen.getByLabelText("协议筛选");
+      expect(within(protocolGroup).getByRole("button", { name: /全部协议 2/ })).toBeInTheDocument();
+      expect(within(protocolGroup).getByRole("button", { name: /^SS 1$/ })).toBeInTheDocument();
+      expect(within(protocolGroup).getByRole("button", { name: /VM 1/ })).toBeInTheDocument();
+      expect(within(protocolGroup).queryByRole("button", { name: /VLESS/ })).not.toBeInTheDocument();
+
+      // Since there are 5 servers (node-hk-aliyun, node-jp-ddps, node-kr-seoul, node-tw-bgp, 外部导入) > 4, dropdown is rendered
+      const select = within(serverGroup).getByLabelText("快速选择服务器");
+      expect(select).toBeInTheDocument();
+
+      // Select via dropdown
+      fireEvent.change(select, { target: { value: "node-jp-ddps" } });
+      expect(screen.getByText("东京 01")).toBeInTheDocument();
+      expect(screen.queryByText("香港 01")).not.toBeInTheDocument();
+
+      // Click 全部服务器 to reset
+      fireEvent.click(within(serverGroup).getByRole("button", { name: /全部服务器 6/ }));
+      expect(screen.getByText("香港 01")).toBeInTheDocument();
+      expect(screen.getByText("东京 01")).toBeInTheDocument();
+      expect(screen.getByText("导入节点")).toBeInTheDocument();
+    });
+  });
+
+  describe("server view mode switching and drilldown", () => {
+    it("infers country code from server names and tags accurately", () => {
+      expect(inferCountryCode("node-hk-aliyun")).toBe("HK");
+      expect(inferCountryCode("node-jp-ddps")).toBe("JP");
+      expect(inferCountryCode("node-tw-bgp")).toBe("TW");
+      expect(inferCountryCode("node-kr-seoul")).toBe("KR");
+      expect(inferCountryCode("custom-box", [{ tags: ["SG"] } as unknown as WorkbenchNode])).toBe("SG");
+      expect(inferCountryCode("custom-unknown")).toBeUndefined();
+    });
+
+    it("switches between node view and server view, supports drilldown and inline expand", async () => {
+      const node1: WorkbenchNode = { ...node(1, "香港 01", "ss"), original_server: "node-hk-aliyun" };
+      const node2: WorkbenchNode = { ...node(2, "香港 02", "vmess"), original_server: "node-hk-aliyun" };
+      const node3: WorkbenchNode = { ...node(3, "东京 01", "vless"), original_server: "node-jp-ddps" };
+      const node4: WorkbenchNode = { ...node(4, "外部导入节点", "trojan"), original_server: "", inbound_tag: "" };
+
+      vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+        if (path === "/api/admin/nodes") return { nodes: [node1, node2, node3, node4] } as T;
+        if (path.startsWith("/api/admin/speedtest/results")) return { results: [] } as T;
+        if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
+        if (path === "/api/user/config") return userConfig([1, 2, 3, 4]) as T;
+        if (path === "/api/admin/remote-servers") {
+          return {
+            success: true,
+            servers: [
+              { id: 1, name: "node-hk-aliyun", status: "connected", ip_address: "42.3.69.79", domain: "hk.example.com", current_upload_speed: 1024, current_download_speed: 2048, traffic_used: 5000000000, traffic_limit: 100000000000 },
+              { id: 2, name: "node-jp-ddps", status: "connected", ip_address: "158.51.111.32", domain: "jp.example.com", current_upload_speed: 512, current_download_speed: 1024, traffic_used: 1000000000, traffic_limit: 0 },
+            ],
+          } as T;
+        }
+        throw new Error(`unexpected GET ${path}`);
+      });
+
+      render(<NodesWorkbench isAdmin={true} notify={vi.fn()} />);
+
+      // Initially in node view
+      expect(await screen.findByText("香港 01")).toBeInTheDocument();
+      expect(screen.getByText("东京 01")).toBeInTheDocument();
+      expect(screen.getByText("外部导入节点")).toBeInTheDocument();
+
+      // Check view mode switch buttons exist
+      const nodeViewBtn = screen.getByRole("tab", { name: /按节点选择/ });
+      const serverViewBtn = screen.getByRole("tab", { name: /按服务器选择/ });
+      expect(nodeViewBtn).toBeInTheDocument();
+      expect(serverViewBtn).toBeInTheDocument();
+      expect(nodeViewBtn).toHaveClass("is-active");
+
+      // Switch to server view mode
+      fireEvent.click(serverViewBtn);
+      expect(serverViewBtn).toHaveClass("is-active");
+
+      // Should now render the server table
+      const serverTable = screen.getByRole("table", { name: "服务器列表" });
+      expect(serverTable).toBeInTheDocument();
+      expect(within(serverTable).getByText("node-hk-aliyun")).toBeInTheDocument();
+      expect(within(serverTable).getByText("node-jp-ddps")).toBeInTheDocument();
+      expect(within(serverTable).getByText("外部导入")).toBeInTheDocument();
+      expect(within(serverTable).getByText("2 个节点")).toBeInTheDocument(); // node-hk-aliyun has 2 nodes
+
+      // Drill down into node-hk-aliyun by clicking "查看节点"
+      const viewHKNodesBtn = within(serverTable).getByRole("button", { name: /查看节点 \(2\)/ });
+      fireEvent.click(viewHKNodesBtn);
+
+      // Should now show the drilldown header and only HK nodes
+      expect(screen.getByRole("button", { name: /返回服务器列表/ })).toBeInTheDocument();
+      expect(screen.getByText("香港 01")).toBeInTheDocument();
+      expect(screen.getByText("香港 02")).toBeInTheDocument();
+      expect(screen.queryByText("东京 01")).not.toBeInTheDocument();
+      expect(screen.queryByText("外部导入节点")).not.toBeInTheDocument();
+
+      // Click "返回服务器列表"
+      fireEvent.click(screen.getByRole("button", { name: /返回服务器列表/ }));
+
+      // Should be back to the server table
+      expect(screen.getByRole("table", { name: "服务器列表" })).toBeInTheDocument();
+      expect(within(screen.getByRole("table", { name: "服务器列表" })).getByText("node-jp-ddps")).toBeInTheDocument();
+
+      // Test inline expand on node-jp-ddps
+      const expandJPBtn = screen.getByRole("button", { name: "展开 node-jp-ddps 节点" });
+      fireEvent.click(expandJPBtn);
+      expect(screen.getByText(/的节点列表 \(1\)/)).toBeInTheDocument();
+      expect(screen.getByText("东京 01")).toBeInTheDocument();
+
+      // Switch back to "按节点选择"
+      fireEvent.click(nodeViewBtn);
+      expect(screen.getByText("香港 01")).toBeInTheDocument();
+      expect(screen.getByText("东京 01")).toBeInTheDocument();
+      expect(screen.getByText("外部导入节点")).toBeInTheDocument();
+    });
   });
 });

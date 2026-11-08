@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { Cloud, RefreshCw, TicketCheck, Trash2, TriangleAlert } from "lucide-react";
+import { Check, Cloud, RefreshCw, TicketCheck, Trash2, TriangleAlert } from "lucide-react";
 import { api } from "./api";
 import type { RemoteServer } from "./types";
 import { Badge, Button, ConfirmDialog, Dialog, ErrorState, Field, IconButton, Spinner, Surface } from "./ui";
@@ -23,10 +23,11 @@ function readString(value: Record<string, unknown> | null, keys: string[]): stri
   return "";
 }
 
-export function WarpManagement({ server, notify, configDirty, onChanged }: {
+export function WarpManagement({ server, notify, configDirty, onSaveConfig, onChanged }: {
   server: RemoteServer;
   notify: Notify;
   configDirty: boolean;
+  onSaveConfig?: () => Promise<unknown> | unknown;
   onChanged: () => Promise<void>;
 }) {
   const [status, setStatus] = useState<Record<string, unknown> | null>(null);
@@ -100,16 +101,30 @@ export function WarpManagement({ server, notify, configDirty, onChanged }: {
 
   return (
     <div className="warp-management-stack">
-      {configDirty ? <div className="warp-draft-warning" role="note"><TriangleAlert size={18} /><span><strong>存在未保存的 Xray 更改</strong><small>请先保存或重新读取配置，再管理 WARP，避免覆盖当前草稿或刚生成的出站。</small></span></div> : null}
+      {configDirty ? <div className="warp-draft-warning" role="note" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
+          <TriangleAlert size={18} style={{ flexShrink: 0 }} />
+          <span><strong>存在未保存的 Xray 更改</strong><small>基础设置中有草稿尚未保存。建议先保存当前草稿，再生成 WARP 出站。</small></span>
+        </div>
+        {onSaveConfig ? (
+          <Button variant="secondary" onClick={async () => { try { await onSaveConfig(); notify("配置已保存，已解除草稿锁定"); } catch {} }}>
+            <Check size={14} />保存当前更改并继续
+          </Button>
+        ) : null}
+      </div> : null}
       {error ? <ErrorState message={error} onRetry={() => void loadStatus()} /> : null}
       <Surface className="warp-management-surface">
-        <div className="surface-heading control-heading"><div><h2>WARP 出站</h2><small>{server.name} · 安装、License 与出站生命周期</small></div><IconButton label="刷新 WARP 状态" onClick={() => void loadStatus()} disabled={loading}><RefreshCw size={17} /></IconButton></div>
+        <div className="surface-heading control-heading"><div><h2>WARP 出站</h2><small>{server.name} · 原生 Xray WireGuard 出站，无需系统安装额外常驻进程</small></div><IconButton label="刷新 WARP 状态" onClick={() => void loadStatus()} disabled={loading}><RefreshCw size={17} /></IconButton></div>
+        <div className="warp-core-notice" style={{ display: "flex", alignItems: "center", gap: "10px", padding: "10px 14px", background: "var(--surface-muted)", borderRadius: "var(--radius-sm)", marginBottom: "14px", border: "1px solid var(--border)", fontSize: "12px", color: "var(--text-soft)" }}>
+          <Cloud size={16} style={{ flexShrink: 0, color: "var(--accent)" }} />
+          <span>原版 3X-UI 与 RelayDock 均基于 Xray 原生 <strong>WireGuard</strong> 协议出站连接 Cloudflare WARP，<strong>不需要在系统安装额外客户端或常驻守护进程</strong>。点击即可一键向 Cloudflare 申请密钥并下发双栈出站。</span>
+        </div>
         {loading ? <div className="center-state"><Spinner label="正在读取 WARP 状态" /></div> : (
           <div className="warp-layout">
             <div className={`warp-state ${installed ? "is-ready" : ""}`}><span><Cloud size={30} /></span><div><Badge tone={installed ? "good" : "neutral"}>{installed ? "已注册" : "未注册"}</Badge><h3>{server.name}</h3><p>{stateLabel || (installed ? "WARP 账户已注册" : "尚未注册 WARP")}</p></div></div>
             <div className="warp-facts"><div><small>IPv4</small><strong>{addressV4 || "-"}</strong></div><div><small>IPv6</small><strong>{addressV6 || "-"}</strong></div><div><small>账户类型</small><strong>{account || "-"}</strong></div></div>
             <div className="warp-actions">
-              {!installed ? <Button disabled={working !== null || blocked} onClick={() => setPendingAction("install")}><Cloud size={16} />安装 WARP</Button> : <>
+              {!installed ? <Button aria-label="安装 WARP" disabled={working !== null || blocked} onClick={() => setPendingAction("install")}><Cloud size={16} />一键生成 WARP 出站（免系统安装）</Button> : <>
                 <Button variant="secondary" disabled={working !== null || configDirty} onClick={() => setLicenseOpen(true)}><TicketCheck size={16} />更新 License</Button>
                 <Button variant="danger" disabled={working !== null || configDirty} onClick={() => setPendingAction("remove")}><Trash2 size={16} />移除 WARP</Button>
               </>}

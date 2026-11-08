@@ -6,7 +6,8 @@ export type ManagedGrantProtocol =
   | "hysteria"
   | "socks"
   | "http"
-  | "snell";
+  | "snell"
+  | "chitanda";
 
 export type ManagedGrantProtocolProfile =
   | "vless-reality"
@@ -28,7 +29,8 @@ export type ManagedGrantProtocolProfile =
   | "hysteria2"
   | "socks5"
   | "http"
-  | "snell";
+  | "snell"
+  | "chitanda-h2";
 
 export interface ManagedGrantProtocolProfileOption {
   value: ManagedGrantProtocolProfile;
@@ -98,6 +100,13 @@ export const managedGrantProtocolGroups: ManagedGrantProtocolGroup[] = [
     value: "http",
     label: "HTTP",
     profiles: [{ value: "http", family: "http", label: "HTTP Proxy", detail: "TCP · 用户名密码" }],
+  },
+  {
+    value: "chitanda",
+    label: "Chitanda",
+    profiles: [
+      { value: "chitanda-h2", family: "chitanda", label: "Chitanda H2", detail: "HTTP/2 · PSK + TLS" },
+    ],
   },
 ];
 

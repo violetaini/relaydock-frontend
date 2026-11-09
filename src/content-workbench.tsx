@@ -1810,6 +1810,22 @@ export function CertificatesWorkbenchPage({ notify = noNotify, isAdmin = true }:
   </section>;
 }
 
+const formatCertProvider = (provider?: string) => {
+  const p = (provider || "").trim();
+  if (!p || p === "manual") return "手动导入";
+  if (p === "letsencrypt") return "Let's Encrypt";
+  if (p === "letsencrypt-staging") return "Let's Encrypt (Staging)";
+  return p;
+};
+
+const formatCertChallenge = (mode?: string) => {
+  const m = (mode || "").trim();
+  if (m === "manual") return "手动导入";
+  if (m === "dns") return "DNS-01";
+  if (m === "http" || m === "webroot") return "HTTP-01";
+  return m || "手动导入";
+};
+
 function CertificateTable({ items, working, onApply, onEdit, onRenew, onToggle, onDelete }: { items: CertificateItem[]; working: boolean; onApply: () => void; onEdit: (item: CertificateItem) => void; onRenew: (item: CertificateItem) => void; onToggle: (item: CertificateItem, value: boolean) => void; onDelete: (item: CertificateItem) => void }) {
   if (items.length === 0) return <Surface><EmptyState icon={<ShieldCheck size={24} />} title="暂无证书" description="申请 ACME 证书或上传已有 PEM 证书。" action={<Button onClick={onApply}><Plus size={16} />申请证书</Button>} /></Surface>;
   return <Surface className="table-surface cw-compact-table cw-managed-table cw-certificate-table">
@@ -1819,10 +1835,10 @@ function CertificateTable({ items, working, onApply, onEdit, onRenew, onToggle, 
         const manual = item.provider === "manual" || item.challenge_mode === "manual";
         return <tr key={item.id}>
         <td data-label="域名"><div className="cw-file-name"><span className="cw-file-icon"><LockKeyhole size={16} /></span><span><strong title={item.domain}>{item.domain}</strong><small title={item.email}>{item.email || "未记录邮箱"}</small></span></div>{item.message ? <span className={`cw-table-note cw-clamp-note ${item.status === "failed" ? "cw-private-warning" : ""}`} title={item.message}>{item.message}</span> : null}</td>
-        <td data-label="状态 / CA"><span className="cw-status"><span className={`cw-status-dot is-${item.status}`} /><Badge tone={certificateTone(item.status)}>{certificateStatus(item.status)}</Badge></span><span className="cw-table-note">{item.provider || "manual"} · {item.challenge_mode || "manual"}</span></td>
+        <td data-label="状态 / CA"><span className="cw-status"><span className={`cw-status-dot is-${item.status}`} /><Badge tone={certificateTone(item.status)}>{certificateStatus(item.status)}</Badge></span><span className="cw-table-note">{formatCertProvider(item.provider)} · {formatCertChallenge(item.challenge_mode)}</span></td>
         <td data-label="有效期"><strong>{formatDate(item.expiry_date)}</strong><span className="cw-table-note">签发 {formatDate(item.issue_date)}</span></td>
         <td data-label="自动续期"><Toggle checked={item.auto_renew} disabled={manual && !item.auto_renew} onChange={(value) => onToggle(item, value)} label="自动续期" /><span className="cw-table-note">{manual ? "手动证书不自动续期" : "到期前自动续期"}</span></td>
-        <td data-label="操作"><div className="cw-table-actions"><IconButton label={`编辑 ${item.domain}`} onClick={() => onEdit(item)}><Pencil size={16} /></IconButton>{item.status === "failed" ? <Button variant="secondary" disabled={working || item.provider === "manual"} onClick={() => onRenew(item)}><RotateCw size={15} />重试申请</Button> : <IconButton label={`续期 ${item.domain}`} disabled={working || item.status === "pending" || item.provider === "manual"} onClick={() => onRenew(item)}><RotateCw size={16} /></IconButton>}<IconButton label={`删除 ${item.domain}`} onClick={() => onDelete(item)}><Trash2 size={16} /></IconButton></div></td>
+        <td data-label="操作"><div className="cw-table-actions"><IconButton label={`编辑 ${item.domain}`} onClick={() => onEdit(item)}><Pencil size={16} /></IconButton>{item.status === "failed" ? <Button variant="secondary" disabled={working || manual} onClick={() => onRenew(item)}><RotateCw size={15} />重试申请</Button> : <IconButton label={manual ? `${item.domain} 为手动导入证书，不可在线续期` : `续期 ${item.domain}`} disabled={working || item.status === "pending" || manual} onClick={() => onRenew(item)}><RotateCw size={16} /></IconButton>}<IconButton label={`删除 ${item.domain}`} onClick={() => onDelete(item)}><Trash2 size={16} /></IconButton></div></td>
       </tr>})}</tbody>
     </table></div>
   </Surface>;
@@ -1869,7 +1885,7 @@ function EditCertificateDialog({ item, providers, onClose, onComplete }: { item:
   const [autoRenew, setAutoRenew] = useState(item.auto_renew);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
-  const manual = provider === "manual";
+  const manual = provider === "manual" || item.challenge_mode === "manual";
   const issued = item.status === "valid" || Boolean(item.issue_date);
   const providerIsKnown = ["manual", "letsencrypt", "letsencrypt-staging"].includes(provider);
 
@@ -1898,7 +1914,7 @@ function EditCertificateDialog({ item, providers, onClose, onComplete }: { item:
       <div className="cw-form-grid">
         <Field label="域名" hint="证书域名来自证书内容，不能直接修改"><input aria-label="域名" readOnly value={domain} /></Field>
         <Field label="联系邮箱"><input required={!manual} type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="admin@example.com" /></Field>
-        <Field label="证书颁发机构" hint={issued ? "已签发证书不能更改 CA" : undefined}><select aria-label="证书颁发机构" disabled={issued} value={provider} onChange={(event) => { const value = event.target.value; setProvider(value); if (value === "manual") setAutoRenew(false); }}>{!providerIsKnown ? <option value={provider}>{provider}</option> : null}<option value="letsencrypt">Let's Encrypt</option><option value="letsencrypt-staging">Let's Encrypt Staging</option><option value="manual">手动上传</option></select></Field>
+        <Field label="证书颁发机构" hint={issued ? "已签发证书不能更改 CA" : undefined}><select aria-label="证书颁发机构" disabled={issued} value={provider} onChange={(event) => { const value = event.target.value; setProvider(value); if (value === "manual") setAutoRenew(false); }}>{!providerIsKnown ? <option value={provider}>{formatCertProvider(provider)}</option> : null}<option value="letsencrypt">Let's Encrypt</option><option value="letsencrypt-staging">Let's Encrypt Staging</option><option value="manual">手动上传</option></select></Field>
         {!manual ? <Field label="验证方式"><input aria-label="验证方式" readOnly value="DNS-01（DNS TXT 验证）" /></Field> : null}
         {!manual ? <Field label="DNS 提供商"><select required aria-label="DNS 提供商" value={dnsProviderID} onChange={(event) => setDNSProviderID(event.target.value)}><option value="">请选择 DNS 提供商</option>{providers.map((providerItem) => <option key={providerItem.id} value={String(providerItem.id)}>{providerItem.name} · {providerItem.provider_type}</option>)}</select></Field> : null}
       </div>

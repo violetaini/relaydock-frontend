@@ -125,7 +125,7 @@ function resolvePage(isAdmin: boolean): PageKey {
   const candidate = location.hash.replace(/^#\/?/, "").split("?")[0] as PageKey;
   const known: PageKey[] = ["dashboard", "subscriptions", "generator", "servers", "nodes", "forwarding", "traffic", "users", "packages", "certificates", "templates", "subscribeFiles", "customRules", "rulesConfig", "settings", "account"];
   if (!known.includes(candidate)) return "dashboard";
-  if (!isAdmin && ["servers", "users", "packages", "certificates", "rulesConfig", "settings"].includes(candidate)) return "dashboard";
+  if (!isAdmin && ["servers", "users", "packages", "rulesConfig", "settings"].includes(candidate)) return "dashboard";
   return candidate;
 }
 
@@ -140,6 +140,7 @@ const permissionKey: Partial<Record<PageKey, string>> = {
   generator: "generator",
   nodes: "nodes",
   forwarding: "forwarding",
+  certificates: "certificates",
   templates: "templates",
   subscribeFiles: "subscribe-files",
   customRules: "custom-rules",
@@ -337,7 +338,7 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: P
           </NavGroup>
           <NavGroup label="常用管理" className="nav-utility">
             <a className="nav-item nav-probe-link" href={publicProbeURL} aria-label="返回探针" title="返回探针"><House size={18} /><span>返回探针</span></a>
-            {profile.is_admin ? <NavItem active={page === "certificates"} icon={<ShieldCheck size={18} />} label="证书管理" onClick={() => navigate("certificates")} /> : null}
+            {pageAllowed("certificates", profile.is_admin, userPages) ? <NavItem active={page === "certificates"} icon={<ShieldCheck size={18} />} label="证书管理" onClick={() => navigate("certificates")} /> : null}
             {pageAllowed("templates", profile.is_admin, userPages) ? <NavItem active={page === "templates"} icon={<Clipboard size={18} />} label="模板管理" onClick={() => navigate("templates")} /> : null}
             {pageAllowed("subscribeFiles", profile.is_admin, userPages) ? <NavItem active={page === "subscribeFiles"} icon={<FileText size={18} />} label="订阅管理" onClick={() => navigate("subscribeFiles")} /> : null}
             {profile.is_admin ? <NavItem active={page === "settings"} icon={<Settings size={18} />} label="系统设置" onClick={() => navigate("settings")} /> : null}
@@ -386,7 +387,7 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: P
           {page === "traffic" ? <TrafficWorkbenchPage profile={profile} /> : null}
           {page === "users" && profile.is_admin ? <UsersWorkbenchPage notify={notify} initialScope={usersScope} /> : null}
           {page === "packages" && profile.is_admin ? <PackagesPage notify={notify} /> : null}
-          {page === "certificates" && profile.is_admin ? <CertificatesWorkbenchPage notify={notify} /> : null}
+          {page === "certificates" && pageAllowed(page, profile.is_admin, userPages) ? <CertificatesWorkbenchPage notify={notify} isAdmin={profile.is_admin} /> : null}
           {page === "templates" && pageAllowed(page, profile.is_admin, userPages) ? <TemplatesWorkbenchPage notify={notify} /> : null}
           {page === "subscribeFiles" && pageAllowed(page, profile.is_admin, userPages) ? <SubscribeFilesPage isAdmin={profile.is_admin} notify={notify} onOpenCustomRules={pageAllowed("customRules", profile.is_admin, userPages) ? () => navigate("customRules") : undefined} onOpenRulesConfig={profile.is_admin ? () => navigate("rulesConfig") : undefined} /> : null}
           {page === "customRules" && pageAllowed(page, profile.is_admin, userPages) ? <CustomRulesWorkbenchPage notify={notify} /> : null}

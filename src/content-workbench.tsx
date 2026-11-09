@@ -1730,7 +1730,7 @@ function CreateTemplateDialog({ onClose, onComplete }: { onClose: () => void; on
 
 type CertificatePending = { kind: "certificate"; item: CertificateItem } | { kind: "provider"; item: DNSProviderItem };
 
-export function CertificatesWorkbenchPage({ notify = noNotify }: ContentPageProps) {
+export function CertificatesWorkbenchPage({ notify = noNotify, isAdmin = true }: ContentPageProps & { isAdmin?: boolean }) {
   const [tab, setTab] = useState<"certificates" | "providers">("certificates");
   const [certificates, setCertificates] = useState<CertificateItem[]>([]);
   const [providers, setProviders] = useState<DNSProviderItem[]>([]);
@@ -1749,11 +1749,12 @@ export function CertificatesWorkbenchPage({ notify = noNotify }: ContentPageProp
   const load = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      const [certPayload, providerPayload, serverPayload] = await Promise.all([
-        api.get<{ success?: boolean; certificates?: CertificateItem[] }>("/api/admin/certificates"),
-        api.get<{ success?: boolean; providers?: DNSProviderWire[] }>("/api/admin/dns-providers"),
-        api.get<{ servers?: RemoteServerItem[] }>("/api/admin/remote-servers"),
-      ]);
+      const certPromise = api.get<{ success?: boolean; certificates?: CertificateItem[] }>("/api/admin/certificates");
+      const providerPromise = api.get<{ success?: boolean; providers?: DNSProviderWire[] }>("/api/admin/dns-providers");
+      const serverPromise = isAdmin
+        ? api.get<{ servers?: RemoteServerItem[] }>("/api/admin/remote-servers")
+        : Promise.resolve({ servers: [] as RemoteServerItem[] });
+      const [certPayload, providerPayload, serverPayload] = await Promise.all([certPromise, providerPromise, serverPromise]);
       assertSuccess(certPayload, "加载证书失败");
       assertSuccess(providerPayload, "加载 DNS 提供商失败");
       setCertificates(certPayload.certificates ?? []);
@@ -1767,7 +1768,7 @@ export function CertificatesWorkbenchPage({ notify = noNotify }: ContentPageProp
       setServers(serverPayload.servers ?? []);
     } catch (reason) { setError(fail(reason, "加载证书管理数据失败")); }
     finally { setLoading(false); }
-  }, []);
+  }, [isAdmin]);
   useEffect(() => { void load(); }, [load]);
 
   const renew = async (item: CertificateItem) => {
@@ -1805,7 +1806,7 @@ export function CertificatesWorkbenchPage({ notify = noNotify }: ContentPageProp
     <PageHeader title="SSL/TLS 证书管理" description="管理 ACME 证书，支持通配符、DNS 验证、多 CA 和自动部署。" actions={<><IconButton label="刷新证书" onClick={() => void load()}><RefreshCw size={18} /></IconButton>{tab === "certificates" ? <><Button onClick={() => setShowApply(true)}><Plus size={16} />申请证书</Button><Button variant="secondary" onClick={() => setShowUpload(true)}><Upload size={16} />上传证书</Button><Button variant="secondary" onClick={() => setEditingProvider("new")}><KeyRound size={16} />DNS 提供商</Button></> : <Button onClick={() => setEditingProvider("new")}><Plus size={16} />DNS 提供商</Button>}</>} />
     <div className="cw-tabs" role="tablist" aria-label="证书管理分类"><button type="button" role="tab" aria-selected={tab === "certificates"} className={tab === "certificates" ? "is-active" : ""} onClick={() => setTab("certificates")}><Award size={16} />证书 <span>{certificates.length}</span></button><button type="button" role="tab" aria-selected={tab === "providers"} className={tab === "providers" ? "is-active" : ""} onClick={() => setTab("providers")}><KeyRound size={16} />DNS 提供商 <span>{providers.length}</span></button></div>
     {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
-    {loading ? <Surface className="cw-loading"><Spinner /></Surface> : tab === "certificates" ? <CertificateTable items={certificates} working={working} onApply={() => setShowApply(true)} onEdit={setEditingCertificate} onRenew={(item) => void renew(item)} onToggle={(item, key, value) => void toggleCertificate(item, key, value)} onDeploy={setDeploying} onDelete={(item) => setPending({ kind: "certificate", item })} /> : <DNSProviderTable items={providers} onCreate={() => setEditingProvider("new")} onEdit={setEditingProvider} onDelete={(item) => setPending({ kind: "provider", item })} />}
+    {loading ? <Surface className="cw-loading"><Spinner /></Surface> : tab === "certificates" ? <CertificateTable items={certificates} working={working} isAdmin={isAdmin} onApply={() => setShowApply(true)} onEdit={setEditingCertificate} onRenew={(item) => void renew(item)} onToggle={(item, key, value) => void toggleCertificate(item, key, value)} onDeploy={setDeploying} onDelete={(item) => setPending({ kind: "certificate", item })} /> : <DNSProviderTable items={providers} onCreate={() => setEditingProvider("new")} onEdit={setEditingProvider} onDelete={(item) => setPending({ kind: "provider", item })} />}
     {showApply ? <ApplyCertificateDialog providers={providers} onCreateProvider={() => { setShowApply(false); setProviderForApply(true); setEditingProvider("new"); }} onClose={() => setShowApply(false)} onComplete={async () => { setShowApply(false); notify("证书申请已提交"); await load(); }} /> : null}
     {showUpload ? <UploadCertificateDialog onClose={() => setShowUpload(false)} onComplete={async () => { setShowUpload(false); notify("证书已上传"); await load(); }} /> : null}
     {editingCertificate ? <EditCertificateDialog item={editingCertificate} providers={providers} onClose={() => setEditingCertificate(null)} onComplete={async () => { setEditingCertificate(null); notify("证书设置已更新"); await load(); }} /> : null}
@@ -1815,7 +1816,7 @@ export function CertificatesWorkbenchPage({ notify = noNotify }: ContentPageProp
   </section>;
 }
 
-function CertificateTable({ items, working, onApply, onEdit, onRenew, onToggle, onDeploy, onDelete }: { items: CertificateItem[]; working: boolean; onApply: () => void; onEdit: (item: CertificateItem) => void; onRenew: (item: CertificateItem) => void; onToggle: (item: CertificateItem, key: "auto_renew" | "auto_deploy", value: boolean) => void; onDeploy: (item: CertificateItem) => void; onDelete: (item: CertificateItem) => void }) {
+function CertificateTable({ items, working, isAdmin = true, onApply, onEdit, onRenew, onToggle, onDeploy, onDelete }: { items: CertificateItem[]; working: boolean; isAdmin?: boolean; onApply: () => void; onEdit: (item: CertificateItem) => void; onRenew: (item: CertificateItem) => void; onToggle: (item: CertificateItem, key: "auto_renew" | "auto_deploy", value: boolean) => void; onDeploy: (item: CertificateItem) => void; onDelete: (item: CertificateItem) => void }) {
   if (items.length === 0) return <Surface><EmptyState icon={<ShieldCheck size={24} />} title="暂无证书" description="申请 ACME 证书或上传已有 PEM 证书。" action={<Button onClick={onApply}><Plus size={16} />申请证书</Button>} /></Surface>;
   return <Surface className="table-surface cw-compact-table cw-managed-table cw-certificate-table">
     <div className="table-wrap"><table>
@@ -1830,8 +1831,8 @@ function CertificateTable({ items, working, onApply, onEdit, onRenew, onToggle, 
         <td data-label="状态 / CA"><span className="cw-status"><span className={`cw-status-dot is-${item.status}`} /><Badge tone={certificateTone(item.status)}>{certificateStatus(item.status)}</Badge></span><span className="cw-table-note">{item.provider || "manual"} · {item.challenge_mode || "manual"}</span></td>
         <td data-label="目标"><strong title={item.remote_server_name}>{item.remote_server_name || (item.remote_server_id ? `服务器 #${item.remote_server_id}` : "主控本地")}</strong><span className="cw-table-note">{item.deploy_target && item.deploy_target !== "none" ? `部署到 ${item.deploy_target}` : "未配置部署"}</span></td>
         <td data-label="有效期"><strong>{formatDate(item.expiry_date)}</strong><span className="cw-table-note">签发 {formatDate(item.issue_date)}</span></td>
-        <td data-label="自动化"><div className="cw-auto-stack"><Toggle checked={item.auto_renew} disabled={manual && !item.auto_renew} onChange={(value) => onToggle(item, "auto_renew", value)} label="自动续期" /><Toggle checked={item.auto_deploy} disabled={!canAutoDeploy && !item.auto_deploy} onChange={(value) => onToggle(item, "auto_deploy", value)} label={`${manual ? "自动部署到" : "签发或续期后自动部署到"}${scope}`} /><span className="cw-table-note">{manual ? hasDeployConfig ? `手动证书不自动续期；部署范围：${scope}` : "手动证书不自动续期；请先配置部署目标和路径" : hasDeployConfig ? `自动部署范围：${scope}` : "请先配置部署目标和路径"}</span></div></td>
-        <td data-label="操作"><div className="cw-table-actions"><IconButton label={`编辑 ${item.domain}`} onClick={() => onEdit(item)}><Pencil size={16} /></IconButton>{item.status === "failed" ? <Button variant="secondary" disabled={working || item.provider === "manual"} onClick={() => onRenew(item)}><RotateCw size={15} />重试申请</Button> : <IconButton label={`续期 ${item.domain}`} disabled={working || item.status === "pending" || item.provider === "manual"} onClick={() => onRenew(item)}><RotateCw size={16} /></IconButton>}<IconButton label={`部署 ${item.domain}`} disabled={item.status !== "valid"} onClick={() => onDeploy(item)}><Server size={16} /></IconButton><IconButton label={`删除 ${item.domain}`} onClick={() => onDelete(item)}><Trash2 size={16} /></IconButton></div></td>
+        <td data-label="自动化"><div className="cw-auto-stack"><Toggle checked={item.auto_renew} disabled={manual && !item.auto_renew} onChange={(value) => onToggle(item, "auto_renew", value)} label="自动续期" />{isAdmin ? <Toggle checked={item.auto_deploy} disabled={!canAutoDeploy && !item.auto_deploy} onChange={(value) => onToggle(item, "auto_deploy", value)} label={`${manual ? "自动部署到" : "签发或续期后自动部署到"}${scope}`} /> : null}<span className="cw-table-note">{manual ? hasDeployConfig && isAdmin ? `手动证书不自动续期；部署范围：${scope}` : "手动证书不自动续期" : hasDeployConfig && isAdmin ? `自动部署范围：${scope}` : "自动续期"}</span></div></td>
+        <td data-label="操作"><div className="cw-table-actions"><IconButton label={`编辑 ${item.domain}`} onClick={() => onEdit(item)}><Pencil size={16} /></IconButton>{item.status === "failed" ? <Button variant="secondary" disabled={working || item.provider === "manual"} onClick={() => onRenew(item)}><RotateCw size={15} />重试申请</Button> : <IconButton label={`续期 ${item.domain}`} disabled={working || item.status === "pending" || item.provider === "manual"} onClick={() => onRenew(item)}><RotateCw size={16} /></IconButton>}{isAdmin ? <IconButton label={`部署 ${item.domain}`} disabled={item.status !== "valid"} onClick={() => onDeploy(item)}><Server size={16} /></IconButton> : null}<IconButton label={`删除 ${item.domain}`} onClick={() => onDelete(item)}><Trash2 size={16} /></IconButton></div></td>
       </tr>})}</tbody>
     </table></div>
   </Surface>;

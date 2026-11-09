@@ -274,6 +274,11 @@ const dnsProviderFields: Record<string, DNSProviderField[]> = {
     { label: "账户邮箱（可选）", key: "CF_API_EMAIL", type: "email", optional: true },
     { label: "API 密钥", key: cloudflareCredentialKey },
   ],
+  huaweicloud: [
+    { label: "AccessKey ID (AK)", key: "HUAWEICLOUD_ACCESS_KEY_ID" },
+    { label: "Secret Access Key (SK)", key: "HUAWEICLOUD_SECRET_ACCESS_KEY" },
+    { label: "Region 区域代码（可选，默认 cn-north-4）", key: "HUAWEICLOUD_REGION", optional: true },
+  ],
   alidns: [
     { label: "AccessKey ID", key: "ALICLOUD_ACCESS_KEY" },
     { label: "AccessKey Secret", key: "ALICLOUD_SECRET_KEY" },
@@ -301,11 +306,20 @@ function parseDNSProviderCredentials(value: DNSProviderCredentialsResponse["cred
 
 function credentialsForEditor(providerType: string, value: DNSProviderCredentialsResponse["credentials"]): Record<string, string> {
   const stored = parseDNSProviderCredentials(value);
-  if (providerType !== "cloudflare") return stored;
-  return {
-    CF_API_EMAIL: stored.CF_API_EMAIL || "",
-    [cloudflareCredentialKey]: stored.CF_DNS_API_TOKEN || stored.CF_API_KEY || stored[cloudflareCredentialKey] || "",
-  };
+  if (providerType === "cloudflare") {
+    return {
+      CF_API_EMAIL: stored.CF_API_EMAIL || "",
+      [cloudflareCredentialKey]: stored.CF_DNS_API_TOKEN || stored.CF_API_KEY || stored[cloudflareCredentialKey] || "",
+    };
+  }
+  if (providerType === "huaweicloud" || providerType === "huawei") {
+    return {
+      HUAWEICLOUD_ACCESS_KEY_ID: stored.HUAWEICLOUD_ACCESS_KEY_ID || stored.AccessKeyId || stored.ak || "",
+      HUAWEICLOUD_SECRET_ACCESS_KEY: stored.HUAWEICLOUD_SECRET_ACCESS_KEY || stored.SecretAccessKey || stored.sk || "",
+      HUAWEICLOUD_REGION: stored.HUAWEICLOUD_REGION || stored.Region || stored.region || "cn-north-4",
+    };
+  }
+  return stored;
 }
 
 const noNotify: ContentNotify = () => undefined;
@@ -1832,9 +1846,7 @@ function ApplyCertificateDialog({ providers, onCreateProvider, onClose, onComple
   const [domain, setDomain] = useState("");
   const [email, setEmail] = useState("");
   const [provider, setProvider] = useState("letsencrypt");
-  const [challenge, setChallenge] = useState("dns");
   const [dnsProviderID, setDNSProviderID] = useState(() => providers[0] ? String(providers[0].id) : "");
-  const [webrootPath, setWebrootPath] = useState("/var/www/html");
   const [deployTarget, setDeployTarget] = useState("none");
   const [certPath, setCertPath] = useState("");
   const [keyPath, setKeyPath] = useState("");
@@ -1854,13 +1866,11 @@ function ApplyCertificateDialog({ providers, onCreateProvider, onClose, onComple
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setWorking(true); setError("");
     try {
-      if (domain.includes("*") && challenge !== "dns") throw new Error("泛域名证书必须使用 DNS-01 验证");
-      if (challenge === "dns" && !dnsProviderID) throw new Error("请选择 DNS 提供商");
+      if (!dnsProviderID) throw new Error("请选择用于 DNS-01 TXT 验证的 DNS 提供商");
       if (deployTarget !== "none" && (!certPath.trim() || !keyPath.trim())) throw new Error("请输入证书和私钥部署路径");
       const payload = assertSuccess(await api.post<Envelope>("/api/admin/certificates/create", {
-        domain: domain.trim(), email: email.trim(), provider, challenge_mode: challenge,
-        webroot_path: challenge === "webroot" ? webrootPath.trim() : "",
-        dns_provider_id: challenge === "dns" ? Number(dnsProviderID) : 0,
+        domain: domain.trim(), email: email.trim(), provider, challenge_mode: "dns",
+        dns_provider_id: Number(dnsProviderID),
         remote_server_id: 0, auto_renew: autoRenew,
         deploy_target: deployTarget,
         deploy_cert_path: deployTarget === "none" ? "" : certPath.trim(),
@@ -1872,16 +1882,14 @@ function ApplyCertificateDialog({ providers, onCreateProvider, onClose, onComple
     } catch (reason) { setError(fail(reason, "提交证书申请失败")); }
     finally { setWorking(false); }
   };
-  return <Dialog title="申请 ACME 证书" description="支持 HTTP、Webroot 与 DNS-01 验证" onClose={onClose} dismissible={!working} wide><form className="cw-form" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}<div className="cw-form-grid"><Field label="域名"><input required value={domain} onChange={(event) => setDomain(event.target.value)} placeholder="example.com 或 *.example.com" /></Field><Field label="联系邮箱"><input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="admin@example.com" /></Field><Field label="证书颁发机构"><select value={provider} onChange={(event) => setProvider(event.target.value)}><option value="letsencrypt">Let's Encrypt</option><option value="letsencrypt-staging">Let's Encrypt Staging</option></select></Field><Field label="验证方式"><select value={challenge} onChange={(event) => setChallenge(event.target.value)}><option value="dns">DNS-01</option><option value="standalone">HTTP 独立验证</option><option value="webroot">网站根目录</option></select></Field>{challenge === "dns" ? <Field label="DNS 提供商" hint={providers.length ? "使用已保存的 DNS API 凭据" : "还没有可用凭据，请先添加 DNS 提供商"}><div className="cw-provider-picker"><select required aria-label="DNS 提供商" value={dnsProviderID} onChange={(event) => setDNSProviderID(event.target.value)}><option value="">请选择 DNS 提供商</option>{providers.map((item) => <option key={item.id} value={String(item.id)}>{item.name} · {item.provider_type}</option>)}</select><Button type="button" variant="secondary" onClick={onCreateProvider}><Plus size={15} />添加</Button></div></Field> : null}{challenge === "webroot" ? <Field label="网站根目录"><input required value={webrootPath} onChange={(event) => setWebrootPath(event.target.value)} /></Field> : null}<Field label="部署目标"><select value={deployTarget} onChange={(event) => { const value = event.target.value; setDeployTarget(value); if (value === "none") setAutoDeploy(false); }}><option value="none">仅保存</option><option value="nginx">Nginx</option><option value="xray">Xray</option><option value="both">Nginx + Xray</option></select></Field></div>{deployTarget !== "none" ? <div className="cw-form-grid"><Field label="证书部署路径"><input required value={certPath} onChange={(event) => setCertPath(event.target.value)} /></Field><Field label="私钥部署路径"><input required value={keyPath} onChange={(event) => setKeyPath(event.target.value)} /></Field></div> : null}<div className="cw-checkboxes"><Toggle checked={autoRenew} onChange={setAutoRenew} label="自动续期" /><Toggle checked={autoDeploy} disabled={deployTarget === "none" || !certPath.trim() || !keyPath.trim()} onChange={setAutoDeploy} label="签发或续期后自动部署到主控" /></div><div className="cw-help"><Info size={16} /><span>证书始终由主控签发；自动部署只写入主控。需要下发远端时，请在签发完成后使用“手动部署”选择具体服务器。</span></div><div className="dialog-actions"><Button type="button" variant="secondary" disabled={working} onClick={onClose}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在提交" /> : <><ShieldCheck size={16} />提交申请</>}</Button></div></form></Dialog>;
+  return <Dialog title="申请 ACME 证书" description="仅支持 DNS TXT (DNS-01) 验证，原生支持通配符泛域名" onClose={onClose} dismissible={!working} wide><form className="cw-form" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}<div className="cw-form-grid"><Field label="域名"><input required value={domain} onChange={(event) => setDomain(event.target.value)} placeholder="example.com 或 *.example.com" /></Field><Field label="联系邮箱"><input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="admin@example.com" /></Field><Field label="证书颁发机构"><select value={provider} onChange={(event) => setProvider(event.target.value)}><option value="letsencrypt">Let's Encrypt</option><option value="letsencrypt-staging">Let's Encrypt Staging</option></select></Field><Field label="验证方式" hint="系统仅支持 DNS TXT 记录自动验证"><input aria-label="验证方式" readOnly value="DNS-01（DNS TXT 验证）" /></Field><Field label="DNS 提供商" hint={providers.length ? "使用已保存的 DNS API 凭据自动添加与验证 TXT 记录" : "还没有可用凭据，请先添加 DNS 提供商"}><div className="cw-provider-picker"><select required aria-label="DNS 提供商" value={dnsProviderID} onChange={(event) => setDNSProviderID(event.target.value)}><option value="">请选择 DNS 提供商</option>{providers.map((item) => <option key={item.id} value={String(item.id)}>{item.name} · {item.provider_type}</option>)}</select><Button type="button" variant="secondary" onClick={onCreateProvider}><Plus size={15} />添加</Button></div></Field><Field label="部署目标"><select value={deployTarget} onChange={(event) => { const value = event.target.value; setDeployTarget(value); if (value === "none") setAutoDeploy(false); }}><option value="none">仅保存</option><option value="nginx">Nginx</option><option value="xray">Xray</option><option value="both">Nginx + Xray</option></select></Field></div>{deployTarget !== "none" ? <div className="cw-form-grid"><Field label="证书部署路径"><input required value={certPath} onChange={(event) => setCertPath(event.target.value)} /></Field><Field label="私钥部署路径"><input required value={keyPath} onChange={(event) => setKeyPath(event.target.value)} /></Field></div> : null}<div className="cw-checkboxes"><Toggle checked={autoRenew} onChange={setAutoRenew} label="自动续期" /><Toggle checked={autoDeploy} disabled={deployTarget === "none" || !certPath.trim() || !keyPath.trim()} onChange={setAutoDeploy} label="签发或续期后自动部署到主控" /></div><div className="cw-help"><Info size={16} /><span>证书始终由主控签发；自动部署只写入主控。需要下发远端时，请在签发完成后使用“手动部署”选择具体服务器。</span></div><div className="dialog-actions"><Button type="button" variant="secondary" disabled={working} onClick={onClose}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在提交" /> : <><ShieldCheck size={16} />提交申请</>}</Button></div></form></Dialog>;
 }
 
 function EditCertificateDialog({ item, providers, onClose, onComplete }: { item: CertificateItem; providers: DNSProviderItem[]; onClose: () => void; onComplete: () => void }) {
   const domain = item.domain;
   const [email, setEmail] = useState(item.email || "");
   const [provider, setProvider] = useState(item.provider || "manual");
-  const [challenge, setChallenge] = useState(item.challenge_mode || (item.provider === "manual" ? "manual" : "dns"));
   const [dnsProviderID, setDNSProviderID] = useState(item.dns_provider_id ? String(item.dns_provider_id) : "");
-  const [webrootPath, setWebrootPath] = useState(item.webroot_path || "/var/www/html");
   const [deployTarget, setDeployTarget] = useState(item.deploy_target || "none");
   const [certPath, setCertPath] = useState(item.deploy_cert_path || "");
   const [keyPath, setKeyPath] = useState(item.deploy_key_path || "");
@@ -1892,23 +1900,21 @@ function EditCertificateDialog({ item, providers, onClose, onComplete }: { item:
   const manual = provider === "manual";
   const issued = item.status === "valid" || Boolean(item.issue_date);
   const providerIsKnown = ["manual", "letsencrypt", "letsencrypt-staging"].includes(provider);
-  const challengeIsKnown = ["dns", "standalone", "webroot", "manual"].includes(challenge);
   const deploymentScope = item.remote_server_id ? item.remote_server_name || `服务器 #${item.remote_server_id}` : "主控";
   const autoDeployAvailable = deployTarget !== "none" && Boolean(certPath.trim()) && Boolean(keyPath.trim());
 
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setWorking(true); setError("");
     try {
-      if (!manual && domain.includes("*") && challenge !== "dns") throw new Error("泛域名证书必须使用 DNS-01 验证");
-      if (!manual && challenge === "dns" && !dnsProviderID) throw new Error("请选择 DNS 提供商");
+      if (!manual && !dnsProviderID) throw new Error("请选择用于 DNS-01 TXT 验证的 DNS 提供商");
       if (deployTarget !== "none" && (!certPath.trim() || !keyPath.trim())) throw new Error("请输入证书和私钥部署路径");
       assertSuccess(await api.put<Envelope>(`/api/admin/certificates/${item.id}`, {
         domain: domain.trim(),
         email: email.trim(),
         provider,
-        challenge_mode: manual ? "manual" : challenge,
-        webroot_path: !manual && challenge === "webroot" ? webrootPath.trim() : "",
-        dns_provider_id: !manual && challenge === "dns" ? Number(dnsProviderID) : 0,
+        challenge_mode: manual ? "manual" : "dns",
+        webroot_path: "",
+        dns_provider_id: !manual ? Number(dnsProviderID) : 0,
         remote_server_id: item.remote_server_id || 0,
         auto_renew: !manual && autoRenew,
         auto_deploy: deployTarget !== "none" && autoDeploy,
@@ -1927,10 +1933,9 @@ function EditCertificateDialog({ item, providers, onClose, onComplete }: { item:
       <div className="cw-form-grid">
         <Field label="域名" hint="证书域名来自证书内容，不能直接修改"><input aria-label="域名" readOnly value={domain} /></Field>
         <Field label="联系邮箱"><input required={!manual} type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="admin@example.com" /></Field>
-        <Field label="证书颁发机构" hint={issued ? "已签发证书不能更改 CA" : undefined}><select aria-label="证书颁发机构" disabled={issued} value={provider} onChange={(event) => { const value = event.target.value; setProvider(value); if (value === "manual") { setChallenge("manual"); setAutoRenew(false); } else if (challenge === "manual") { setChallenge("dns"); } }}>{!providerIsKnown ? <option value={provider}>{provider}</option> : null}<option value="letsencrypt">Let's Encrypt</option><option value="letsencrypt-staging">Let's Encrypt Staging</option><option value="manual">手动上传</option></select></Field>
-        {!manual ? <Field label="验证方式"><select value={challenge} onChange={(event) => setChallenge(event.target.value)}>{!challengeIsKnown ? <option value={challenge}>{challenge}</option> : null}<option value="dns">DNS-01</option><option value="standalone">HTTP 独立验证</option><option value="webroot">网站根目录</option></select></Field> : null}
-        {!manual && challenge === "dns" ? <Field label="DNS 提供商"><select required value={dnsProviderID} onChange={(event) => setDNSProviderID(event.target.value)}><option value="">请选择 DNS 提供商</option>{providers.map((providerItem) => <option key={providerItem.id} value={String(providerItem.id)}>{providerItem.name} · {providerItem.provider_type}</option>)}</select></Field> : null}
-        {!manual && challenge === "webroot" ? <Field label="网站根目录"><input required value={webrootPath} onChange={(event) => setWebrootPath(event.target.value)} /></Field> : null}
+        <Field label="证书颁发机构" hint={issued ? "已签发证书不能更改 CA" : undefined}><select aria-label="证书颁发机构" disabled={issued} value={provider} onChange={(event) => { const value = event.target.value; setProvider(value); if (value === "manual") setAutoRenew(false); }}>{!providerIsKnown ? <option value={provider}>{provider}</option> : null}<option value="letsencrypt">Let's Encrypt</option><option value="letsencrypt-staging">Let's Encrypt Staging</option><option value="manual">手动上传</option></select></Field>
+        {!manual ? <Field label="验证方式"><input aria-label="验证方式" readOnly value="DNS-01（DNS TXT 验证）" /></Field> : null}
+        {!manual ? <Field label="DNS 提供商"><select required aria-label="DNS 提供商" value={dnsProviderID} onChange={(event) => setDNSProviderID(event.target.value)}><option value="">请选择 DNS 提供商</option>{providers.map((providerItem) => <option key={providerItem.id} value={String(providerItem.id)}>{providerItem.name} · {providerItem.provider_type}</option>)}</select></Field> : null}
         <Field label="部署目标"><select value={deployTarget} onChange={(event) => { const value = event.target.value; setDeployTarget(value); if (value === "none") setAutoDeploy(false); }}><option value="none">仅保存</option><option value="nginx">Nginx</option><option value="xray">Xray</option><option value="both">Nginx + Xray</option></select></Field>
       </div>
       {deployTarget !== "none" ? <div className="cw-form-grid"><Field label="证书部署路径"><input required value={certPath} onChange={(event) => setCertPath(event.target.value)} /></Field><Field label="私钥部署路径"><input required value={keyPath} onChange={(event) => setKeyPath(event.target.value)} /></Field></div> : null}
@@ -2056,7 +2061,7 @@ function DNSProviderDialog({ item, onClose, onComplete }: { item?: DNSProviderIt
     <form className="cw-form" onSubmit={submit}>
       {error ? <ErrorState message={error} /> : null}
       <Field label="名称"><input required value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：Cloudflare 主账号" /></Field>
-      <Field label="提供商类型"><select value={providerType} onChange={(event) => setProviderType(event.target.value)}>{Object.keys(dnsProviderFields).map((type) => <option key={type} value={type}>{type}</option>)}</select></Field>
+      <Field label="提供商类型"><select value={providerType} onChange={(event) => setProviderType(event.target.value)}>{Object.keys(dnsProviderFields).map((type) => <option key={type} value={type}>{type === "huaweicloud" ? "huaweicloud (华为云)" : type === "alidns" ? "alidns (阿里云)" : type === "tencentcloud" ? "tencentcloud (腾讯云)" : type === "cloudflare" ? "cloudflare (Cloudflare)" : type}</option>)}</select></Field>
       <div className="cw-form-section">
         <div className="cw-form-section-heading"><strong>{providerChanged ? "新提供商凭据" : "DNS API 凭据"}</strong>{item && !providerChanged ? <Button type="button" variant="secondary" disabled={loadingCredentials} onClick={() => void loadCredentials()}>{loadingCredentials ? <Spinner label="正在读取" /> : <><Eye size={15} />{credentialsLoaded ? "重新读取已保存凭据" : "显示已保存凭据"}</>}</Button> : null}</div>
         {providerType === "cloudflare" ? <p className="cw-section-hint">邮箱留空时按 API Token 使用；填写邮箱时按 Global API Key 使用。</p> : null}

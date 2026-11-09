@@ -30,7 +30,11 @@ export type ManagedGrantProtocolProfile =
   | "socks5"
   | "http"
   | "snell"
-  | "chitanda-h2";
+  | "chitanda-stream"
+  | "chitanda-h2"
+  | "chitanda-h3"
+  | "chitanda-auto"
+  | "chitanda-h1";
 
 export interface ManagedGrantProtocolProfileOption {
   value: ManagedGrantProtocolProfile;
@@ -105,7 +109,11 @@ export const managedGrantProtocolGroups: ManagedGrantProtocolGroup[] = [
     value: "chitanda",
     label: "Chitanda",
     profiles: [
+      { value: "chitanda-stream", family: "chitanda", label: "Chitanda Stream", detail: "RawStream 专线极速 · PSK 免证书" },
       { value: "chitanda-h2", family: "chitanda", label: "Chitanda H2", detail: "HTTP/2 · PSK + TLS" },
+      { value: "chitanda-h3", family: "chitanda", label: "Chitanda H3", detail: "HTTP/3 QUIC · PSK + TLS" },
+      { value: "chitanda-auto", family: "chitanda", label: "Chitanda Auto", detail: "H2 / H3 / Auto · PSK + TLS" },
+      { value: "chitanda-h1", family: "chitanda", label: "Chitanda H1", detail: "HTTP/1.1 纯 IP · PSK 免证书" },
     ],
   },
 ];

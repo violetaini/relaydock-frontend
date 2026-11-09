@@ -1623,7 +1623,7 @@ function MihomoVersionModal({
   return (
     <Dialog
       title="切换 Mihomo 核心版本"
-      description="支持在线切换到 MetaCubeX/mihomo 官方 Release 的任意稳定版本。"
+      description="支持在线切换到 Chitanda 专有定制 Release 的任意稳定版本。"
       onClose={onClose}
       dismissible={!switching}
     >
@@ -1631,10 +1631,10 @@ function MihomoVersionModal({
         {error ? <div className="system-update-error" role="alert">{error}</div> : null}
         <div className="system-update-versions" aria-label="核心当前版本">
           <div><span>当前已安装</span><strong>{currentVersion || "未安装"}</strong></div>
-          <div><span>来源仓库</span><strong>MetaCubeX/mihomo</strong></div>
+          <div><span>来源仓库</span><strong>chitanda-project/chitanda（专有定制核心）</strong></div>
         </div>
 
-        <Field label="目标版本" hint="选择要安装或切换的官方内核版本">
+        <Field label="目标版本" hint="选择要安装或切换的专有定制内核版本">
           {loading ? (
             <div className="center-state"><Spinner label="正在获取版本列表..." /></div>
           ) : (
@@ -1654,7 +1654,7 @@ function MihomoVersionModal({
 
         <div className="system-update-notice" role="note">
           <Shield size={17} />
-          <span>点击确认切换后将从 GitHub 自动下载官方 Release 对应架构内核并解压校验，完成后立即对后续节点测速生效。</span>
+          <span>点击确认切换后将从 Chitanda 仓库自动下载专有 Release 对应架构内核并解压校验，完成后立即对后续节点测速生效。</span>
         </div>
 
         <div className="dialog-actions">

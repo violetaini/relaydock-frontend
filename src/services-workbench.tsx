@@ -2220,7 +2220,7 @@ function AgentVersionButton({ server, version, working, compact = false, onUpgra
   const checking = Boolean(version?.loading);
   const upgradeAvailable = canUpgradeAgent(version);
   const currentVersion = agentVersionIsCurrent(version);
-  const label = current ? `${compact ? "" : "Agent "}v${current}` : compact ? "Agent --" : "Agent 未知";
+  const label = current ? `Agent v${current}` : compact ? "Agent --" : "Agent 未知";
   const title = upgradeAvailable
     ? `Agent 当前 v${current || "未知"}，上游最新 v${latest}；点击后确认升级`
     : currentVersion

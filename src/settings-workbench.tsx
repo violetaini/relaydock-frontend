@@ -501,7 +501,7 @@ const defaultSecurity: SecuritySettings = {
 };
 
 const defaultPermissions: PermissionSettings = {
-  pages: [], quota_template: 0, quota_override: 0, quota_subscribe: 0,
+  pages: ["subscription", "generator", "nodes", "certificates", "templates", "subscribe-files", "custom-rules"], quota_template: 0, quota_override: 0, quota_subscribe: 0,
   routed_outbound_enabled: false, quota_routed_outbound: 2, daily_limit_routed_outbound: 5,
 };
 

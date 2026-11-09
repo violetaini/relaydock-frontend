@@ -114,6 +114,15 @@ interface MihomoStatusResponse {
   status: MihomoCoreStatus;
 }
 
+interface MihomoVersionsResponse {
+  success: boolean;
+  current_version: string;
+  target_version: string;
+  latest_version: string;
+  manageable: boolean;
+  versions: string[];
+}
+
 interface ProbeDisguiseSettings {
   enabled: boolean;
   title: string;
@@ -680,6 +689,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
   const [mihomoLoading, setMihomoLoading] = useState(true);
   const [mihomoWorking, setMihomoWorking] = useState(false);
   const [mihomoError, setMihomoError] = useState("");
+  const [mihomoVersionModalOpen, setMihomoVersionModalOpen] = useState(false);
   const [activeGroup, setActiveGroup] = useState<SettingsGroupID>("settings-general");
   const groupTabRefs = useRef<Partial<Record<SettingsGroupID, HTMLButtonElement | null>>>({});
 
@@ -841,19 +851,23 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
     void loadMihomoStatus();
   }, [checkUpdate, load, loadMihomoStatus]);
 
-  const installMihomo = async () => {
+  const installMihomo = async (targetVersion?: string) => {
     setMihomoWorking(true);
     setMihomoError("");
     try {
-      const response = await api.post<MihomoStatusResponse>("/api/admin/speedtest/mihomo/install");
+      const response = targetVersion
+        ? await api.post<MihomoStatusResponse>("/api/admin/speedtest/mihomo/install", { version: targetVersion })
+        : await api.post<MihomoStatusResponse>("/api/admin/speedtest/mihomo/install");
       setMihomoStatus(response.status);
       notify(response.status.current_version
         ? `主控 Mihomo ${response.status.current_version} 已就绪`
         : "主控 Mihomo 已安装");
+      return true;
     } catch (reason) {
       const message = messageOf(reason, "Mihomo 安装失败");
       setMihomoError(message);
       notify(message, "error");
+      return false;
     } finally {
       setMihomoWorking(false);
     }
@@ -1324,6 +1338,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
           error={mihomoError}
           onRefresh={() => void loadMihomoStatus()}
           onInstall={() => void installMihomo()}
+          onSwitchVersion={() => setMihomoVersionModalOpen(true)}
         />
         <BackupPanel notify={notify} />
         <DebugLogsPanel notify={notify} />
@@ -1346,6 +1361,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
     /> : null}
     {showMigration ? <LegacyPanelImportDialog notify={notify} onClose={() => setShowMigration(false)} /> : null}
     {showXUIMigration ? <XUIImportDialog notify={notify} onClose={() => setShowXUIMigration(false)} /> : null}
+    {mihomoVersionModalOpen ? <MihomoVersionModal currentVersion={mihomoStatus?.current_version || ""} onClose={() => setMihomoVersionModalOpen(false)} onSwitch={installMihomo} /> : null}
     {probeServerPickerOpen ? <Dialog title="选择服务器" description={`已选择 ${visibleProbeServerDraft.length} / ${servers.length}`} onClose={() => setProbeServerPickerOpen(false)} wide>
       <div className="probe-server-picker">
         <div className="probe-server-picker-toolbar">
@@ -1503,13 +1519,14 @@ function SystemUpdatePanel({ info, checking, checkError, runState, progress, log
   </SettingSection>;
 }
 
-function MihomoCorePanel({ status, loading, working, error, onRefresh, onInstall }: {
+function MihomoCorePanel({ status, loading, working, error, onRefresh, onInstall, onSwitchVersion }: {
   status: MihomoCoreStatus | null;
   loading: boolean;
   working: boolean;
   error: string;
   onRefresh: () => void;
   onInstall: () => void;
+  onSwitchVersion: () => void;
 }) {
   const sourceLabel = status?.source === "managed"
     ? "Arcway 管理"
@@ -1548,9 +1565,109 @@ function MihomoCorePanel({ status, loading, working, error, onRefresh, onInstall
     {error ? <div className="system-update-error" role="alert">{error}</div> : null}
     <div className="system-update-actions">
       <Button type="button" variant="secondary" onClick={onRefresh} disabled={loading || working}><RefreshCw size={16} />刷新状态</Button>
+      {canInstall ? <Button type="button" variant="secondary" onClick={onSwitchVersion} disabled={loading || working}><RotateCcw size={16} />切换版本</Button> : null}
       {canInstall ? <Button type="button" onClick={onInstall} disabled={working}>{working ? <Spinner label={status?.ready ? "更新中" : "安装中"} /> : <><Download size={16} />{actionLabel}</>}</Button> : null}
     </div>
   </SettingSection>;
+}
+
+function MihomoVersionModal({
+  currentVersion,
+  onClose,
+  onSwitch,
+}: {
+  currentVersion: string;
+  onClose: () => void;
+  onSwitch: (version: string) => Promise<boolean>;
+}) {
+  const [loading, setLoading] = useState(true);
+  const [versions, setVersions] = useState<string[]>([]);
+  const [selectedVersion, setSelectedVersion] = useState("");
+  const [switching, setSwitching] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        const res = await api.get<MihomoVersionsResponse>("/api/admin/speedtest/mihomo/versions");
+        if (active) {
+          setVersions(res.versions || []);
+          if (res.versions && res.versions.length > 0) {
+            setSelectedVersion(res.versions[0]);
+          }
+        }
+      } catch (e) {
+        if (active) {
+          setError(messageOf(e, "获取版本列表失败"));
+        }
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+    return () => { active = false; };
+  }, []);
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!selectedVersion) return;
+    setSwitching(true);
+    setError("");
+    const success = await onSwitch(selectedVersion);
+    setSwitching(false);
+    if (success) {
+      onClose();
+    }
+  };
+
+  return (
+    <Dialog
+      title="切换 Mihomo 核心版本"
+      description="支持在线切换到 MetaCubeX/mihomo 官方 Release 的任意稳定版本。"
+      onClose={onClose}
+      dismissible={!switching}
+    >
+      <form onSubmit={handleSubmit} className="form-stack">
+        {error ? <div className="system-update-error" role="alert">{error}</div> : null}
+        <div className="system-update-versions" aria-label="核心当前版本">
+          <div><span>当前已安装</span><strong>{currentVersion || "未安装"}</strong></div>
+          <div><span>来源仓库</span><strong>MetaCubeX/mihomo</strong></div>
+        </div>
+
+        <Field label="目标版本" hint="选择要安装或切换的官方内核版本">
+          {loading ? (
+            <div className="center-state"><Spinner label="正在获取版本列表..." /></div>
+          ) : (
+            <select
+              value={selectedVersion}
+              onChange={(e) => setSelectedVersion(e.target.value)}
+              disabled={switching || versions.length === 0}
+            >
+              {versions.map((ver, idx) => (
+                <option key={ver} value={ver}>
+                  {ver} {idx === 0 ? "（最新 Release）" : ""} {ver === `v${currentVersion}` || ver === currentVersion ? "— 当前版本" : ""}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
+
+        <div className="system-update-notice" role="note">
+          <Shield size={17} />
+          <span>点击确认切换后将从 GitHub 自动下载官方 Release 对应架构内核并解压校验，完成后立即对后续节点测速生效。</span>
+        </div>
+
+        <div className="dialog-actions">
+          <Button type="button" variant="secondary" onClick={onClose} disabled={switching}>
+            取消
+          </Button>
+          <Button type="submit" disabled={switching || loading || !selectedVersion}>
+            {switching ? <Spinner label="正在下载切换..." /> : <><Download size={16} />确认切换</>}
+          </Button>
+        </div>
+      </form>
+    </Dialog>
+  );
 }
 
 function NumberField({ label, value, onChange, min = 1, max }: { label: string; value: number; onChange: (value: number) => void; min?: number; max?: number }) {

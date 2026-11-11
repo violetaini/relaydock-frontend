@@ -84,6 +84,8 @@ export interface ManagedInboundRequest {
   node_name: string;
   ip_version: "v4" | "v6" | "both";
   forward_node_id?: number;
+  wss_domain?: string;
+  wss_cert_id?: number;
   wss_site_type?: "static" | "proxy";
   wss_site_value?: string;
   client_options?: {
@@ -526,7 +528,14 @@ export function validateWSSCamouflageProxyTarget(siteValue: string): string {
   return raw;
 }
 
-export function buildManagedInboundRequest(draft: ManagedInboundDraft): ManagedInboundRequest {
+export interface BuildManagedInboundOptions {
+  omitWSSServerOverrides?: boolean;
+}
+
+export function buildManagedInboundRequest(
+  draft: ManagedInboundDraft,
+  options?: BuildManagedInboundOptions,
+): ManagedInboundRequest {
   const name = draft.name.trim();
   if (!name) throw new Error("节点名称不能为空");
   let inbound: Record<string, unknown>;
@@ -761,18 +770,26 @@ export function buildManagedInboundRequest(draft: ManagedInboundDraft): ManagedI
   }
 
   const isWSS = draft.protocol === "vless-wss" || draft.protocol === "vmess-wss" || draft.protocol === "trojan-wss";
-  let wssSiteProps: { wss_site_type?: "static" | "proxy"; wss_site_value?: string } = {};
-  if (isWSS && draft.wssSiteType) {
-    if (draft.wssSiteType === "proxy") {
-      wssSiteProps = {
-        wss_site_type: "proxy",
-        wss_site_value: validateWSSCamouflageProxyTarget(draft.wssSiteValue || ""),
-      };
-    } else {
-      wssSiteProps = {
-        wss_site_type: "static",
-        wss_site_value: (draft.wssSiteValue || "").trim(),
-      };
+  let wssProps: {
+    wss_domain?: string;
+    wss_cert_id?: number;
+    wss_site_type?: "static" | "proxy";
+    wss_site_value?: string;
+  } = {};
+  if (isWSS && !options?.omitWSSServerOverrides) {
+    wssProps.wss_domain = requireDomain(draft.domain);
+    const wssCertID = Number(draft.certificateId);
+    if (Number.isInteger(wssCertID) && wssCertID > 0) {
+      wssProps.wss_cert_id = wssCertID;
+    }
+    if (draft.wssSiteType) {
+      if (draft.wssSiteType === "proxy") {
+        wssProps.wss_site_type = "proxy";
+        wssProps.wss_site_value = validateWSSCamouflageProxyTarget(draft.wssSiteValue || "");
+      } else {
+        wssProps.wss_site_type = "static";
+        wssProps.wss_site_value = (draft.wssSiteValue || "").trim();
+      }
     }
   }
 
@@ -781,7 +798,7 @@ export function buildManagedInboundRequest(draft: ManagedInboundDraft): ManagedI
     node_name: name,
     ip_version: draft.ipVersion,
     ...(forwardNodeID ? { forward_node_id: forwardNodeID } : {}),
-    ...wssSiteProps,
+    ...wssProps,
     ...(draft.skipCertVerify ? { client_options: { skip_cert_verify: true } } : {}),
     inbound,
   };

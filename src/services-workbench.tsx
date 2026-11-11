@@ -48,6 +48,11 @@ import { NAVIGATION_REQUEST_EVENT, type NavigationRequestDetail } from "./naviga
 import type { NginxMode, RealtimeMessage, RemoteServer, ServerListResponse, SharedServerToken } from "./types";
 import { validateWSSCamouflageProxyTarget } from "./managed-node-presets";
 import {
+  findBestMatchingCertificate,
+  managedTLSHostnameForCertificate,
+  certificateMatchRankForHost,
+} from "./tls-cert-match";
+import {
   buildTrojanInbound,
   buildWireGuardClientProfile,
   buildWireGuardClientConfig,
@@ -690,6 +695,7 @@ type VlessInboundCreationPreset = Extract<InboundCreationPreset, "reality" | "ws
 interface SecureInboundDraft {
   uuid: string;
   domain: string;
+  certificateId?: string;
   path: string;
   shortId: string;
   privateKey: string;
@@ -741,6 +747,7 @@ function newSecureInboundDraft(serverDomain = ""): SecureInboundDraft {
   return {
     uuid: createUUID(),
     domain: serverDomain.trim().toLowerCase(),
+    certificateId: "",
     path: `/ws/${randomHex(12)}`,
     shortId: randomHex(16),
     privateKey: "",
@@ -3465,10 +3472,14 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
         return owner === 0 || owner === serverId;
       });
       setCertificates(available);
-      const matchingCertificate = available.find((certificate) => certificateMatchesHost(certificate, serverDomain));
+      const matchingCertificate = findBestMatchingCertificate(available, serverDomain, serverId)?.certificate;
+      const initialCertId = matchingCertificate ? String(matchingCertificate.id) : "";
       setTrojanDraft((current) => current.certificateId || available.length === 0
         ? current
-        : { ...current, certificateId: matchingCertificate ? String(matchingCertificate.id) : "" });
+        : { ...current, certificateId: initialCertId });
+      setSecureDraft((current) => current.certificateId || available.length === 0
+        ? current
+        : { ...current, certificateId: initialCertId });
     } catch (reason) {
       setCertificatesError(messageFrom(reason, "托管证书暂不可用"));
     } finally {
@@ -3616,14 +3627,17 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
       setListen(trojanDraft.combination === "ws-tls" ? "127.0.0.1" : "0.0.0.0");
       setPort(trojanDraft.combination === "tcp-tls" || trojanDraft.combination === "grpc-tls" ? "8443" : "443");
       setTrojanDraft((current) => ({ ...current, domain: current.domain || serverDomain.trim().toLowerCase() }));
-      if (trojanDraft.combination === "tcp-tls" || trojanDraft.combination === "grpc-tls") void loadCertificates();
+      if (trojanDraft.combination === "tcp-tls" || trojanDraft.combination === "grpc-tls" || trojanDraft.combination === "ws-tls") void loadCertificates();
       return;
     }
     setTag((current) => !current || generatedTags.has(current) ? `vless-${preset}` : current);
     setProtocol("vless");
     setListen(preset === "wss" ? "127.0.0.1" : "0.0.0.0");
     setPort("443");
-    if (preset === "wss") setSecureDraft((current) => ({ ...current, domain: serverDomain.trim().toLowerCase() }));
+    if (preset === "wss") {
+      setSecureDraft((current) => ({ ...current, domain: current.domain || serverDomain.trim().toLowerCase() }));
+      void loadCertificates();
+    }
     if (preset === "reality") {
       if (creationPreset !== "reality") setSecureDraft((current) => ({ ...current, domain: "" }));
       void loadRealityDomains();
@@ -3640,7 +3654,7 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
     }));
     setListen(combination === "ws-tls" ? "127.0.0.1" : "0.0.0.0");
     setPort(combination === "tcp-tls" || combination === "grpc-tls" ? "8443" : "443");
-    if (combination === "tcp-tls" || combination === "grpc-tls") void loadCertificates();
+    if (combination === "tcp-tls" || combination === "grpc-tls" || combination === "ws-tls") void loadCertificates();
     if (combination === "tcp-reality") {
       void loadRealityDomains();
       if (!trojanDraft.privateKey || !trojanDraft.publicKey) void generateTrojanRealityKeys();
@@ -3794,7 +3808,21 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
         if (!(response.node_id ?? response.node?.id)) throw new Error("WireGuard 创建完成但控制端未返回节点记录");
         generatedWireGuardClientConfig = response.client_config || generatedWireGuardClientConfig;
       } else {
-        assertSuccess(await api.post<ActionResponse>(endpoint, { action: "add", [kind]: resource }), `创建${label}失败`);
+        const isWSSInbound = kind === "inbound" && editor.mode === "create" && (
+          creationPreset === "wss" || (creationPreset === "trojan" && trojanDraft.combination === "ws-tls")
+        );
+        const wssDomain = isWSSInbound
+          ? (creationPreset === "wss" ? secureDraft.domain.trim() : trojanDraft.domain.trim())
+          : "";
+        const rawWSSCert = creationPreset === "wss" ? secureDraft.certificateId : trojanDraft.certificateId;
+        const matchedCert = isWSSInbound && !rawWSSCert && wssDomain
+          ? findBestMatchingCertificate(certificates, wssDomain, serverId)?.certificate?.id
+          : undefined;
+        const wssCertID = Number(rawWSSCert || matchedCert) || undefined;
+        const addPayload: Record<string, unknown> = { action: "add", [kind]: resource };
+        if (wssDomain) addPayload.wss_domain = wssDomain;
+        if (wssCertID) addPayload.wss_cert_id = wssCertID;
+        assertSuccess(await api.post<ActionResponse>(endpoint, addPayload), `创建${label}失败`);
       }
       notify(editor.mode === "edit" ? `${label}已更新` : `${label}已创建`);
       if (editor.mode === "create" && creationPreset === "wireguard") {
@@ -3895,8 +3923,8 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
             <div className="form-grid two"><Field label="服务端公钥"><div className="generated-secret"><code>{wireGuardDraft.serverPublicKey || "生成中..."}</code></div></Field><Field label="客户端 Endpoint" hint="按节点域名、IPv4、IPv6 的顺序选择"><input aria-label="WireGuard 客户端 Endpoint" readOnly value={wireGuardEndpointDisplay ? `${wireGuardEndpointDisplay}:${port}` : "服务器尚未上报可连接地址"} /></Field></div>
           </> : creationPreset === "trojan" ? <>
             <div className="form-grid two"><Field label="传输与安全"><select aria-label="Trojan 传输与安全" value={trojanDraft.combination} onChange={(event) => selectTrojanCombination(event.target.value as TrojanCombination)}><option value="tcp-tls">TCP + TLS</option><option value="ws-tls">WebSocket + TLS（Nginx）</option><option value="grpc-tls">gRPC + TLS</option><option value="tcp-reality">TCP + Reality</option></select></Field><Field label="Trojan 密码"><div className="secure-field-action"><input required aria-label="Trojan 密码" value={trojanDraft.password} onChange={(event) => setTrojanDraft((current) => ({ ...current, password: event.target.value }))} /><IconButton type="button" label="重新生成 Trojan 密码" onClick={() => setTrojanDraft((current) => ({ ...current, password: randomHex(32) }))}><RefreshCw size={15} /></IconButton></div></Field></div>
-            <Field label={trojanDraft.combination === "tcp-reality" ? "Reality 伪装目标 / SNI" : "TLS 节点域名"} hint={trojanDraft.combination === "ws-tls" ? "使用服务器域名，由 Nginx 终止 TLS" : undefined}><div className="secure-field-action"><input required aria-label={trojanDraft.combination === "tcp-reality" ? "Trojan Reality 伪装目标 / SNI" : "Trojan TLS 节点域名"} list={trojanDraft.combination === "tcp-reality" ? `trojan-reality-domains-${serverId}` : undefined} readOnly={trojanDraft.combination === "ws-tls"} value={trojanDraft.domain} onChange={(event) => setTrojanDraft((current) => ({ ...current, domain: event.target.value.trim().toLowerCase() }))} placeholder="edge.example.com" />{trojanDraft.combination === "tcp-reality" ? <IconButton type="button" label="重新探测 Trojan Reality 域名" disabled={domainsLoading} onClick={() => void loadRealityDomains()}>{domainsLoading ? <Spinner /> : <RefreshCw size={15} />}</IconButton> : null}</div></Field>
-            {trojanDraft.combination === "tcp-tls" || trojanDraft.combination === "grpc-tls" ? <Field label="托管 TLS 证书" hint="仅显示主控通用证书和当前服务器证书"><select required aria-label="Trojan TLS 证书" value={trojanDraft.certificateId || ""} onChange={(event) => setTrojanDraft((current) => ({ ...current, certificateId: event.target.value }))}><option value="">{certificatesLoading ? "正在读取证书..." : "请选择证书"}</option>{certificates.map((certificate) => <option key={certificate.id} value={certificate.id}>{certificate.domain} · {Number(certificate.remote_server_id) ? certificate.remote_server_name || `服务器 #${certificate.remote_server_id}` : "主控通用"}</option>)}</select>{certificatesError ? <small className="secure-inline-error">{certificatesError}</small> : null}</Field> : null}
+            <Field label={trojanDraft.combination === "tcp-reality" ? "Reality 伪装目标 / SNI" : "TLS 节点域名"} hint={trojanDraft.combination === "ws-tls" ? "创建时同步节点域名并自动匹配/下发 Nginx TLS 证书" : undefined}><div className="secure-field-action"><input required aria-label={trojanDraft.combination === "tcp-reality" ? "Trojan Reality 伪装目标 / SNI" : "Trojan TLS 节点域名"} list={trojanDraft.combination === "tcp-reality" ? `trojan-reality-domains-${serverId}` : undefined} value={trojanDraft.domain} onChange={(event) => { const next = event.target.value.trim().toLowerCase(); const matched = findBestMatchingCertificate(certificates, next, serverId); setTrojanDraft((current) => ({ ...current, domain: next, certificateId: matched ? String(matched.certificate.id) : current.certificateId })); }} placeholder="edge.example.com" />{trojanDraft.combination === "tcp-reality" ? <IconButton type="button" label="重新探测 Trojan Reality 域名" disabled={domainsLoading} onClick={() => void loadRealityDomains()}>{domainsLoading ? <Spinner /> : <RefreshCw size={15} />}</IconButton> : null}</div></Field>
+            {trojanDraft.combination === "tcp-tls" || trojanDraft.combination === "grpc-tls" || trojanDraft.combination === "ws-tls" ? <Field label="托管 TLS 证书" hint="自动匹配覆盖该域名的单域名或泛域名证书"><select required={trojanDraft.combination !== "ws-tls"} aria-label="Trojan TLS 证书" value={trojanDraft.certificateId || ""} onChange={(event) => { const certId = event.target.value; const cert = certificates.find((item) => String(item.id) === certId); setTrojanDraft((current) => ({ ...current, certificateId: certId, domain: managedTLSHostnameForCertificate(cert, serverDomain ? { domain: serverDomain, id: serverId } : undefined, current.domain) })); }}><option value="">{certificatesLoading ? "正在读取证书..." : trojanDraft.combination === "ws-tls" ? "自动匹配或选择证书" : "请选择证书"}</option>{certificates.map((certificate) => <option key={certificate.id} value={certificate.id}>{certificate.domain} · {Number(certificate.remote_server_id) ? certificate.remote_server_name || `服务器 #${certificate.remote_server_id}` : "主控通用"}</option>)}</select>{certificatesError ? <small className="secure-inline-error">{certificatesError}</small> : null}</Field> : null}
             {trojanDraft.combination === "ws-tls" ? <Field label="WebSocket 路径" hint="Agent 保存时会安全随机化最终路径"><input required aria-label="Trojan WebSocket 路径" value={trojanDraft.path || ""} onChange={(event) => setTrojanDraft((current) => ({ ...current, path: event.target.value }))} /></Field> : null}
             {trojanDraft.combination === "grpc-tls" ? <Field label="gRPC Service Name"><input required aria-label="Trojan gRPC Service Name" value={trojanDraft.serviceName || ""} onChange={(event) => setTrojanDraft((current) => ({ ...current, serviceName: event.target.value }))} /></Field> : null}
             {trojanDraft.combination === "tcp-reality" ? <>
@@ -3908,13 +3936,38 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
           </> : creationPreset === "tcp" ? <>
             <Field label="客户端 UUID"><div className="secure-field-action"><input required aria-label="客户端 UUID" value={secureDraft.uuid} onChange={(event) => setSecureDraft({ ...secureDraft, uuid: event.target.value.trim() })} /><IconButton type="button" label="重新生成客户端 UUID" onClick={() => setSecureDraft({ ...secureDraft, uuid: createUUID() })}><RefreshCw size={15} /></IconButton></div></Field>
           </> : <>
-            <div className="form-grid two"><Field label="客户端 UUID"><div className="secure-field-action"><input required aria-label="客户端 UUID" value={secureDraft.uuid} onChange={(event) => setSecureDraft({ ...secureDraft, uuid: event.target.value.trim() })} /><IconButton type="button" label="重新生成客户端 UUID" onClick={() => setSecureDraft({ ...secureDraft, uuid: createUUID() })}><RefreshCw size={15} /></IconButton></div></Field><Field label={creationPreset === "reality" ? "Reality 伪装目标 / SNI" : "TLS 节点域名"} hint={creationPreset === "reality" ? "必须明确选择目标；优先使用同 ASN 且证书覆盖该 SNI 的 TLS 站点" : creationPreset === "wss" && !serverDomain ? "请先在服务器编辑页配置节点域名" : undefined}><div className="secure-field-action"><input required aria-label={creationPreset === "reality" ? "Reality 伪装目标 / SNI" : "TLS 节点域名"} list={creationPreset === "reality" ? `reality-domains-${serverId}` : undefined} readOnly={creationPreset === "wss"} value={secureDraft.domain} onChange={(event) => setSecureDraft({ ...secureDraft, domain: event.target.value.trim().toLowerCase() })} placeholder="www.example.com" />{creationPreset === "reality" ? <IconButton type="button" label="重新探测 Reality 域名" disabled={domainsLoading} onClick={() => void loadRealityDomains()}>{domainsLoading ? <Spinner /> : <RefreshCw size={15} />}</IconButton> : null}</div></Field></div>
+            <div className="form-grid two"><Field label="客户端 UUID"><div className="secure-field-action"><input required aria-label="客户端 UUID" value={secureDraft.uuid} onChange={(event) => setSecureDraft({ ...secureDraft, uuid: event.target.value.trim() })} /><IconButton type="button" label="重新生成客户端 UUID" onClick={() => setSecureDraft({ ...secureDraft, uuid: createUUID() })}><RefreshCw size={15} /></IconButton></div></Field><Field label={creationPreset === "reality" ? "Reality 伪装目标 / SNI" : "TLS 节点域名"} hint={creationPreset === "reality" ? "必须明确选择目标；优先使用同 ASN 且证书覆盖该 SNI 的 TLS 站点" : "创建时同步节点域名并自动匹配/下发 Nginx TLS 证书"}><div className="secure-field-action"><input required aria-label={creationPreset === "reality" ? "Reality 伪装目标 / SNI" : "TLS 节点域名"} list={creationPreset === "reality" ? `reality-domains-${serverId}` : undefined} value={secureDraft.domain} onChange={(event) => { const next = event.target.value.trim().toLowerCase(); const matched = findBestMatchingCertificate(certificates, next, serverId); setSecureDraft((current) => ({ ...current, domain: next, certificateId: matched ? String(matched.certificate.id) : current.certificateId })); }} placeholder="edge.example.com" />{creationPreset === "reality" ? <IconButton type="button" label="重新探测 Reality 域名" disabled={domainsLoading} onClick={() => void loadRealityDomains()}>{domainsLoading ? <Spinner /> : <RefreshCw size={15} />}</IconButton> : null}</div></Field></div>
             {creationPreset === "reality" ? <>
               <datalist id={`reality-domains-${serverId}`}>{realityDomains.map((item) => <option key={item.domain} value={item.domain}>{item.success ? `443 可达 · ${item.latency_ms ?? "-"} ms` : item.error || "探测失败"}</option>)}</datalist>
               {domainsError ? <small className="secure-inline-error">{domainsError}</small> : null}
               <div className="form-grid two"><Field label="Reality Short ID" hint="2-16 位偶数长度十六进制"><input required aria-label="Reality Short ID" value={secureDraft.shortId} onChange={(event) => setSecureDraft({ ...secureDraft, shortId: event.target.value.trim().toLowerCase() })} /></Field><Field label="X25519 密钥对"><div className="secure-key-status"><Badge tone={validRealityKey(secureDraft.privateKey) && validRealityKey(secureDraft.publicKey) ? "good" : "warn"}>{validRealityKey(secureDraft.privateKey) && validRealityKey(secureDraft.publicKey) ? "已生成" : "未就绪"}</Badge><Button type="button" variant="secondary" disabled={keyWorking !== ""} onClick={() => void generateRealityKeys()}>{keyWorking === "reality" ? <Spinner label="生成中" /> : <><KeyRound size={15} />重新生成</>}</Button></div></Field></div>
               <div className="secure-encryption-row"><Toggle checked={secureDraft.enhancedEncryption} disabled={keyWorking !== ""} label="VLESS 后量子增强加密" onChange={(checked) => { setSecureDraft((current) => ({ ...current, enhancedEncryption: checked })); if (checked && (!secureDraft.decryptionConfig || !secureDraft.encryption)) void generateVlessEncryption(); }} />{secureDraft.enhancedEncryption ? <span><Badge tone={secureDraft.decryptionConfig && secureDraft.encryption ? "good" : "warn"}>{secureDraft.decryptionConfig && secureDraft.encryption ? "增强密钥已生成" : "增强密钥未就绪"}</Badge><Button type="button" variant="ghost" disabled={keyWorking !== ""} onClick={() => void generateVlessEncryption()}>{keyWorking === "encryption" ? <Spinner label="生成中" /> : <><RefreshCw size={14} />重生成</>}</Button></span> : null}</div>
-            </> : <Field label="WebSocket 路径" hint="必须以 / 开头；Agent 保存时会安全随机化最终路径"><input required aria-label="WebSocket 路径" value={secureDraft.path} onChange={(event) => setSecureDraft({ ...secureDraft, path: event.target.value })} placeholder="/ws/path" /></Field>}
+            </> : <>
+              <Field label="托管 TLS 证书" hint="自动匹配覆盖该域名的单域名或泛域名证书">
+                <select
+                  aria-label="VLESS WSS 托管证书"
+                  value={secureDraft.certificateId || ""}
+                  onChange={(event) => {
+                    const certId = event.target.value;
+                    const cert = certificates.find((item) => String(item.id) === certId);
+                    setSecureDraft((current) => ({
+                      ...current,
+                      certificateId: certId,
+                      domain: managedTLSHostnameForCertificate(cert, serverDomain ? { domain: serverDomain, id: serverId } : undefined, current.domain),
+                    }));
+                  }}
+                >
+                  <option value="">{certificatesLoading ? "正在读取证书..." : "自动匹配或选择证书"}</option>
+                  {certificates.map((certificate) => (
+                    <option key={certificate.id} value={certificate.id}>
+                      {certificate.domain} · {Number(certificate.remote_server_id) ? certificate.remote_server_name || `服务器 #${certificate.remote_server_id}` : "主控通用"}
+                    </option>
+                  ))}
+                </select>
+                {certificatesError ? <small className="secure-inline-error">{certificatesError}</small> : null}
+              </Field>
+              <Field label="WebSocket 路径" hint="必须以 / 开头；Agent 保存时会安全随机化最终路径"><input required aria-label="WebSocket 路径" value={secureDraft.path} onChange={(event) => setSecureDraft({ ...secureDraft, path: event.target.value })} placeholder="/ws/path" /></Field>
+            </>}
           </>}
           <details className="secure-inbound-preview"><summary>查看生成的 Xray JSON</summary>{securePreview ? <textarea className="service-code-editor xray-resource-json" aria-label="生成的入站 JSON" readOnly value={securePreview} /> : <small>字段与密钥完整后显示最终配置</small>}</details>
         </> : kind === "outbound" ? <>

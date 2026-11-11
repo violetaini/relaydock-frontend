@@ -745,19 +745,11 @@ describe("content workbench certificates", () => {
     })));
   });
 
-  it("disables invalid automation shortcuts for manual certificates and missing deployment paths", async () => {
-    mockCertificateLoads({ provider: "manual", challenge_mode: "manual", deploy_target: "xray", deploy_cert_path: "/etc/arcway/manual.pem", deploy_key_path: "/etc/arcway/manual.key" });
+  it("disables automatic renewal for manual certificates", async () => {
+    mockCertificateLoads({ provider: "manual", challenge_mode: "manual" });
     render(<CertificatesWorkbenchPage notify={vi.fn()} />);
 
     expect(await screen.findByRole("switch", { name: "自动续期" })).toBeDisabled();
-    expect(screen.getByRole("switch", { name: "自动部署到主控" })).toBeEnabled();
-
-    cleanup();
-    vi.restoreAllMocks();
-    mockCertificateLoads({ deploy_target: "xray", deploy_cert_path: "", deploy_key_path: "" });
-    render(<CertificatesWorkbenchPage notify={vi.fn()} />);
-
-    expect(await screen.findByRole("switch", { name: "签发或续期后自动部署到主控" })).toBeDisabled();
   });
 
   it("does not fetch stored DNS credentials automatically and preserves them on an untouched edit", async () => {
@@ -877,7 +869,7 @@ describe("content workbench certificates", () => {
     expect(put).not.toHaveBeenCalled();
   });
 
-  it("edits certificate renewal and deployment settings without changing issued identity", async () => {
+  it("edits certificate renewal settings without changing issued identity", async () => {
     mockCertificateLoads();
     const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
     const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
@@ -887,7 +879,7 @@ describe("content workbench certificates", () => {
     const dialog = screen.getByRole("dialog", { name: "编辑证书设置" });
     expect(within(dialog).getByLabelText("域名")).toHaveAttribute("readonly");
     expect(within(dialog).getByLabelText("证书颁发机构")).toBeDisabled();
-    fireEvent.click(within(dialog).getByRole("switch", { name: "自动续期" }));
+    fireEvent.click(within(dialog).getByRole("switch", { name: "到期前自动续期" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "保存设置" }));
 
     await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/certificates/3", {
@@ -899,10 +891,6 @@ describe("content workbench certificates", () => {
       dns_provider_id: 8,
       remote_server_id: 0,
       auto_renew: true,
-      auto_deploy: false,
-      deploy_target: "none",
-      deploy_cert_path: "",
-      deploy_key_path: "",
     }));
     expect(post).not.toHaveBeenCalledWith("/api/admin/certificates/create", expect.anything());
   });
@@ -998,66 +986,5 @@ describe("content workbench certificates", () => {
     fireEvent.click(await screen.findByRole("button", { name: "重试申请" }));
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/certificates/renew", { id: 3 }));
-  });
-
-  it("deploys a valid certificate with the handler's required paths", async () => {
-    mockCertificateLoads();
-    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
-    render(<CertificatesWorkbenchPage notify={vi.fn()} />);
-
-    fireEvent.click(await screen.findByRole("button", { name: "部署 *.example.com" }));
-    fireEvent.click(screen.getByRole("button", { name: "立即部署" }));
-
-    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/certificates/deploy", {
-      id: 3,
-      deploy_target: "both",
-      deploy_cert_path: "/usr/local/nginx/cert/_.example.com.pem",
-      deploy_key_path: "/usr/local/nginx/cert/_.example.com.key",
-      deploy_local: true,
-      remote_server_ids: [],
-    }));
-  });
-
-  it("cannot dismiss a manual deployment while its request is still running", async () => {
-    mockCertificateLoads();
-    let resolveDeploy!: (value: { success: boolean }) => void;
-    vi.spyOn(api, "post").mockImplementation(() => new Promise((resolve) => { resolveDeploy = resolve; }));
-    render(<CertificatesWorkbenchPage notify={vi.fn()} />);
-
-    fireEvent.click(await screen.findByRole("button", { name: "部署 *.example.com" }));
-    fireEvent.click(screen.getByRole("button", { name: "立即部署" }));
-
-    await waitFor(() => expect(screen.getByRole("button", { name: "取消" })).toBeDisabled());
-    expect(screen.queryByRole("button", { name: "关闭" })).not.toBeInTheDocument();
-    fireEvent.keyDown(document, { key: "Escape" });
-    fireEvent.mouseDown(screen.getByRole("presentation"));
-    expect(screen.getByRole("dialog", { name: "手动部署证书" })).toBeInTheDocument();
-
-    resolveDeploy({ success: true });
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "手动部署证书" })).not.toBeInTheDocument());
-  });
-
-  it("deploys only to the explicitly selected remote servers", async () => {
-    mockCertificateLoads({}, { success: true, credentials: {} }, [{ id: 12, name: "Edge HK" }, { id: 14, name: "Edge JP" }]);
-    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
-    render(<CertificatesWorkbenchPage notify={vi.fn()} />);
-
-    fireEvent.click(await screen.findByRole("button", { name: "部署 *.example.com" }));
-    const dialog = screen.getByRole("dialog", { name: "手动部署证书" });
-    expect(within(dialog).getByRole("checkbox", { name: "主控本地" })).toBeChecked();
-    fireEvent.click(within(dialog).getByRole("checkbox", { name: "主控本地" }));
-    expect(within(dialog).getByRole("button", { name: "立即部署" })).toBeDisabled();
-    fireEvent.click(within(dialog).getByRole("checkbox", { name: "远端服务器 Edge HK" }));
-    expect(within(dialog).getByRole("checkbox", { name: "远端服务器 Edge JP" })).not.toBeChecked();
-    fireEvent.click(within(dialog).getByRole("button", { name: "立即部署" }));
-
-    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/certificates/deploy", {
-      id: 3,
-      deploy_target: "both",
-      deploy_cert_path: "/usr/local/nginx/cert/_.example.com.pem",
-      deploy_key_path: "/usr/local/nginx/cert/_.example.com.key",
-      deploy_local: false,
-      remote_server_ids: [12],
-    }));
   });
 });

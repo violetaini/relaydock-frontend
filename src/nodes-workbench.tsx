@@ -86,6 +86,15 @@ import {
 } from "./managed-node-presets";
 import type { ManagedGrantProtocol, ManagedGrantProtocolProfile } from "./managed-grant-protocols";
 import { generateWireGuardKeyPair } from "./xray-inbound-presets";
+import {
+  certificateMatchRankForHost,
+  defaultDomainAndCertificateForTLS,
+  findBestMatchingCertificate,
+  isTLSCertificateUsable,
+  managedCertificateCoversServer,
+  managedCertificateNameMatchesHost as matchCertificateNameToHost,
+  managedTLSHostnameForCertificate as resolveTLSHostnameForCertificate,
+} from "./tls-cert-match";
 import { SelfServiceNodes } from "./self-service-nodes";
 import type { RemoteServer, ServerListResponse } from "./types";
 import { CountryFlag, normalizeCountryCode } from "./country-flag";
@@ -2027,43 +2036,19 @@ function serverReady(server: RemoteServer): boolean {
 }
 
 function managedCertificateUsable(certificate: ManagedCertificate): boolean {
-  if (certificate.status.toLowerCase() !== "valid") return false;
-  if (!certificate.expiry_date) return true;
-  const expiry = Date.parse(certificate.expiry_date);
-  return Number.isFinite(expiry) && expiry > Date.now();
+  return isTLSCertificateUsable(certificate);
 }
 
 export function managedCertificateNameMatchesHost(name: string, hostname: string): boolean {
-  const normalizedName = name.trim().toLowerCase().replace(/\.$/, "");
-  const normalizedHost = hostname.trim().toLowerCase().replace(/\.$/, "");
-  if (!normalizedName || !normalizedHost) return false;
-  if (normalizedName === normalizedHost) return true;
-  if (!normalizedName.startsWith("*.")) return false;
-  const suffix = normalizedName.slice(2);
-  return normalizedHost.endsWith(`.${suffix}`) && normalizedHost.split(".").length === suffix.split(".").length + 1;
+  return matchCertificateNameToHost(name, hostname);
 }
 
 export function managedCertificateMatchesServer(certificate: ManagedCertificate, server: RemoteServer | undefined): boolean {
-  const serverDomain = server?.domain?.trim().toLowerCase();
-  if (!server || !serverDomain || !managedCertificateUsable(certificate)) return false;
-  const certificateServerID = Number(certificate.remote_server_id) || 0;
-  const certificateNames = managedCertificateNames(certificate);
-  return (certificateServerID === 0 || certificateServerID === server.id) &&
-    certificateNames.some((name) => managedCertificateNameMatchesHost(name, serverDomain));
-}
-
-function managedCertificateNames(certificate: ManagedCertificate): string[] {
-  return certificate.dns_names?.length ? certificate.dns_names : [certificate.domain];
+  return managedCertificateUsable(certificate) && managedCertificateCoversServer(certificate, server);
 }
 
 export function managedTLSHostnameForCertificate(certificate: ManagedCertificate | undefined, server: RemoteServer | undefined, current: string): string {
-  if (!certificate) return current;
-  const names = managedCertificateNames(certificate);
-  const serverDomain = server?.domain?.trim().toLowerCase() || "";
-  if (serverDomain && names.some((name) => managedCertificateNameMatchesHost(name, serverDomain))) return serverDomain;
-  const currentDomain = current.trim().toLowerCase();
-  if (currentDomain && names.some((name) => managedCertificateNameMatchesHost(name, currentDomain))) return currentDomain;
-  return names.find((name) => !name.trim().startsWith("*."))?.trim().toLowerCase() || "";
+  return resolveTLSHostnameForCertificate(certificate, server, current);
 }
 
 function protocolLabel(value: ManagedProtocol): string {
@@ -2148,8 +2133,21 @@ function availableInboundPort(server: RemoteServer | undefined, protocol: Manage
   return "443";
 }
 
+function protocolRequiresManagedTLSCert(
+  protocol: ManagedProtocol,
+  chitandaTransport?: ManagedInboundDraft["chitandaTransport"],
+): boolean {
+  if (isManagedWSSProtocol(protocol)) return true;
+  if (protocol === "chitanda") {
+    return chitandaTransport !== "stream" && chitandaTransport !== "h1";
+  }
+  return Boolean(managedProtocolOptions.find((item) => item.value === protocol)?.requiresCertificate);
+}
+
 function managedInboundPreview(draft: ManagedInboundDraft, isAdmin: boolean): Record<string, unknown> {
-  const inbound = draft.protocol === "wireguard" ? buildManagedWireGuardInbound(draft) : buildManagedInboundRequest(draft).inbound;
+  const inbound = draft.protocol === "wireguard"
+    ? buildManagedWireGuardInbound(draft)
+    : buildManagedInboundRequest(draft, { omitWSSServerOverrides: !isAdmin }).inbound;
   if (isAdmin) return inbound;
   const preview = JSON.parse(JSON.stringify(inbound)) as Record<string, unknown>;
   const settings = preview.settings && typeof preview.settings === "object" && !Array.isArray(preview.settings)
@@ -2208,13 +2206,70 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
     return nodeSource(node) === "managed" && Boolean(address.host && address.port);
   });
   const selectedForwardNode = forwardingCandidates.find((node) => String(node.id) === draft.forwardNodeId);
-  const validCertificates = certificates.filter((certificate) => {
-    const certificateServerID = Number(certificate.remote_server_id) || 0;
-    return managedCertificateUsable(certificate) && (certificateServerID === 0 || certificateServerID === selectedServer?.id);
-  });
+  const validCertificates = certificates.filter((certificate) => isTLSCertificateUsable(certificate, Date.now(), selectedServer?.id));
   const matchingWSSCertificates = certificates.filter((certificate) => managedCertificateMatchesServer(certificate, selectedServer));
   const isWSS = isManagedWSSProtocol(draft.protocol);
   const wssReady = Boolean(selectedServer?.domain?.trim() && matchingWSSCertificates.length);
+  const requiresTLSCert = protocolRequiresManagedTLSCert(draft.protocol, draft.chitandaTransport);
+  const selectedTLSCertificate = validCertificates.find((item) => String(item.id) === draft.certificateId);
+  const autoMatchedTLSCert = draft.domain.trim()
+    ? findBestMatchingCertificate(validCertificates, draft.domain, selectedServer?.id)
+    : undefined;
+  const selectedTLSCertRank = selectedTLSCertificate && draft.domain.trim()
+    ? certificateMatchRankForHost(selectedTLSCertificate, draft.domain)
+    : -1;
+  const tlsMatchHint = !validCertificates.length
+    ? "暂无可用托管证书，请先到证书管理申请或上传"
+    : draft.domain.trim()
+      ? selectedTLSCertificate && selectedTLSCertRank >= 0
+        ? `已自动匹配${selectedTLSCertRank === 0 ? "单域名" : "泛域名"}证书（${selectedTLSCertificate.domain}）`
+        : autoMatchedTLSCert
+          ? `已自动匹配${autoMatchedTLSCert.matchKind === "exact" ? "单域名" : "泛域名"}证书（${autoMatchedTLSCert.certificate.domain}）`
+          : "未匹配到覆盖当前域名的有效证书，请调整域名或手动选择"
+      : "填写域名后将自动匹配单域名或泛域名证书";
+
+  const updateTLSDomain = (nextDomain: string) => {
+    const matched = findBestMatchingCertificate(validCertificates, nextDomain, selectedServer?.id);
+    setDraft((current) => ({
+      ...current,
+      domain: nextDomain,
+      certificateId: matched ? String(matched.certificate.id) : "",
+    }));
+  };
+
+  const chooseTLSCertificate = (nextCertID: string) => {
+    const certificate = validCertificates.find((item) => String(item.id) === nextCertID);
+    setDraft((current) => ({
+      ...current,
+      certificateId: nextCertID,
+      domain: managedTLSHostnameForCertificate(certificate, selectedServer, current.domain),
+    }));
+  };
+
+  useEffect(() => {
+    if (!requiresTLSCert || !selectedServer) return;
+    setDraft((current) => {
+      if (!protocolRequiresManagedTLSCert(current.protocol, current.chitandaTransport)) return current;
+      const currentCert = validCertificates.find((item) => String(item.id) === current.certificateId);
+      const currentDomain = current.domain.trim();
+      if (currentDomain && currentCert && certificateMatchRankForHost(currentCert, currentDomain) >= 0) {
+        return current;
+      }
+      if (currentDomain) {
+        const matched = findBestMatchingCertificate(validCertificates, currentDomain, selectedServer.id);
+        if (!matched || String(matched.certificate.id) === current.certificateId) return current;
+        return { ...current, certificateId: String(matched.certificate.id) };
+      }
+      const defaults = defaultDomainAndCertificateForTLS(validCertificates, selectedServer, "");
+      if (!defaults.domain && !defaults.certificateId) return current;
+      if (defaults.domain === current.domain && defaults.certificateId === current.certificateId) return current;
+      return {
+        ...current,
+        domain: defaults.domain || current.domain,
+        certificateId: defaults.certificateId || current.certificateId,
+      };
+    });
+  }, [draft.chitandaTransport, draft.protocol, requiresTLSCert, selectedServer, validCertificates]);
   const isPlainWS = isManagedPlainWSProtocol(draft.protocol);
   const isReality = isManagedRealityProtocol(draft.protocol);
   const isGRPC = isManagedGRPCProtocol(draft.protocol);
@@ -2339,7 +2394,10 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
           ? server.domain?.trim() || ""
           : isManagedRealityProtocol(protocol)
             ? ""
-            : next.domain,
+            : protocolRequiresManagedTLSCert(protocol, next.chitandaTransport)
+              ? server.domain?.trim() || ""
+              : next.domain,
+        certificateId: protocolRequiresManagedTLSCert(protocol, next.chitandaTransport) ? "" : next.certificateId,
       };
     });
     void loadInboundInventory(server);
@@ -2391,9 +2449,9 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
     if (isManagedWSSProtocol(draft.protocol)) {
       setDraft((current) => ({
         ...current,
-        domain: selectedServer.domain?.trim() || "",
-        wssSiteType: isAdmin ? (selectedServer.site_type === "proxy" ? "proxy" : "static") : undefined,
-        wssSiteValue: isAdmin ? (selectedServer.site_value || "") : undefined,
+        domain: current.domain || selectedServer.domain?.trim() || "",
+        wssSiteType: isAdmin ? (current.wssSiteType || (selectedServer.site_type === "proxy" ? "proxy" : "static")) : undefined,
+        wssSiteValue: isAdmin ? (current.wssSiteValue ?? (selectedServer.site_value || "")) : undefined,
       }));
     }
     if ((selectedServer.xray_mode !== "embedded" || !managedInboundSupportsPublishing(draft)) && draft.publish) setDraft((current) => ({ ...current, publish: false }));
@@ -2411,6 +2469,19 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
       let ssCipher = defaults.ssCipher ?? current.ssCipher;
       if (!isAdmin && protocol === "shadowsocks" && !managedGrantAllowsProtocol(selectedGrant, protocol, ssCipher)) ssCipher = "aes-128-gcm";
       const ssKeyLength = ssCipher === "2022-blake3-aes-128-gcm" ? 16 : 32;
+      const wasTLSCert = protocolRequiresManagedTLSCert(current.protocol, current.chitandaTransport);
+      const nextIsTLSCert = protocolRequiresManagedTLSCert(protocol, defaults.chitandaTransport ?? current.chitandaTransport);
+      const nextDomain = isManagedWSSProtocol(protocol)
+        ? (wasTLSCert && current.domain.trim() ? current.domain.trim() : selectedServer?.domain?.trim() || "")
+        : isManagedPlainWSProtocol(protocol) || (isManagedRealityProtocol(protocol) && !isManagedRealityProtocol(current.protocol))
+          ? ""
+          : nextIsTLSCert
+            ? (wasTLSCert && current.domain.trim() ? current.domain.trim() : selectedServer?.domain?.trim() || "")
+            : current.domain;
+      const matched = nextIsTLSCert ? findBestMatchingCertificate(validCertificates, nextDomain, selectedServer?.id) : undefined;
+      const defaultsTLS = nextIsTLSCert && !nextDomain ? defaultDomainAndCertificateForTLS(validCertificates, selectedServer, "") : undefined;
+      const resolvedDomain = defaultsTLS?.domain || nextDomain;
+      const resolvedCertId = matched ? String(matched.certificate.id) : (defaultsTLS?.certificateId || "");
       const next = {
         ...current,
         ...defaults,
@@ -2419,11 +2490,8 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
         uuid: isManagedUUIDProtocol(protocol) ? current.uuid || createManagedUUID() : current.uuid,
         password: protocol === "shadowsocks" ? randomBase64(ssKeyLength) : current.password || createManagedUUID(),
         ssUserPassword: protocol === "shadowsocks" ? randomBase64(ssKeyLength) : current.ssUserPassword,
-        domain: isManagedWSSProtocol(protocol)
-          ? selectedServer?.domain?.trim() || ""
-          : isManagedPlainWSProtocol(protocol) || (isManagedRealityProtocol(protocol) && !isManagedRealityProtocol(current.protocol))
-            ? ""
-            : current.domain,
+        domain: resolvedDomain,
+        certificateId: nextIsTLSCert ? resolvedCertId : "",
         forwardNodeId: protocol === "anydoor" ? String(forwardNode?.id || "") : current.forwardNodeId,
         targetAddress: protocol === "anydoor" ? forwardAddress.host : current.targetAddress,
         targetPort: protocol === "anydoor" ? String(forwardAddress.port || 2033) : current.targetPort,
@@ -2473,11 +2541,9 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
       }
       if (step === 2) {
         if (!isAdmin && !managedGrantAllowsProtocol(selectedGrant, draft.protocol, draft.protocol === "shadowsocks" ? draft.ssCipher : undefined)) throw new Error("当前服务器授权不允许创建该协议组合");
-        if (isWSS && !selectedServer?.domain?.trim()) throw new Error(`${protocolLabel(draft.protocol)} 需要先在服务器设置节点域名`);
-        if (isWSS && matchingWSSCertificates.length === 0) throw new Error(`${protocolLabel(draft.protocol)} 需要一张覆盖节点域名且未过期的托管证书`);
         if (isReality && (!draft.privateKey || !draft.publicKey)) throw new Error("Reality 密钥尚未生成完成");
         if (isWireGuard && (!draft.wireGuardServerPrivateKey || !draft.wireGuardServerPublicKey || !draft.wireGuardClientPrivateKey || !draft.wireGuardClientPublicKey)) throw new Error("WireGuard 密钥尚未生成完成");
-        if (selectedProtocol?.requiresCertificate && validCertificates.length === 0) throw new Error("该协议需要托管 TLS 证书，请先到证书管理申请或上传证书");
+        if (!isAdmin && selectedProtocol?.requiresCertificate && validCertificates.length === 0) throw new Error("该协议需要托管 TLS 证书，请先到证书管理申请或上传证书");
         setStep(3);
         return;
       }
@@ -2485,7 +2551,24 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
         buildManagedWireGuardInbound(draft);
         buildManagedWireGuardClientConfig(draft, wireGuardEndpoint);
       } else {
-        buildManagedInboundRequest(isAdmin ? draft : { ...draft, wssSiteType: undefined, wssSiteValue: undefined });
+        if (requiresTLSCert) {
+          const matchedDomain = draft.domain.trim();
+          if (!matchedDomain) throw new Error("请填写节点域名");
+          const cert = validCertificates.find((item) => String(item.id) === draft.certificateId)
+            ?? findBestMatchingCertificate(validCertificates, matchedDomain, selectedServer?.id)?.certificate;
+          if (!cert) {
+            throw new Error("未找到或未选择覆盖当前域名的有效托管 TLS 证书，请先在证书管理申请或上传证书");
+          }
+          if (certificateMatchRankForHost(cert, matchedDomain) < 0) {
+            throw new Error(`所选证书（${cert.domain}）不覆盖域名 ${matchedDomain}，请更换域名或证书`);
+          }
+          if (!draft.certificateId) {
+            setDraft((current) => ({ ...current, certificateId: String(cert.id) }));
+          }
+        }
+        buildManagedInboundRequest(
+          isAdmin ? draft : { ...draft, wssSiteType: undefined, wssSiteValue: undefined },
+        );
       }
       setStep(4);
     } catch (reason) { setError(reasonMessage(reason, "请补全当前步骤")); }
@@ -2516,7 +2599,13 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
         });
         return;
       }
-      const payload = buildManagedInboundRequest(isAdmin ? draft : { ...draft, wssSiteType: undefined, wssSiteValue: undefined });
+      const effectiveCertId = requiresTLSCert && !draft.certificateId
+        ? findBestMatchingCertificate(validCertificates, draft.domain.trim(), selectedServer.id)?.certificate?.id
+        : undefined;
+      const submitDraft = effectiveCertId ? { ...draft, certificateId: String(effectiveCertId) } : draft;
+      const payload = buildManagedInboundRequest(
+        isAdmin ? submitDraft : { ...submitDraft, wssSiteType: undefined, wssSiteValue: undefined },
+      );
       const willPublish = draft.publish && canPublish;
       const createEndpoint = isAdmin ? "/api/admin/managed-nodes/create" : "/api/user/managed-node-creation";
       const response = await api.post<ManagedCreateResponse>(`${createEndpoint}?server_id=${selectedServer.id}`, payload);
@@ -2572,7 +2661,7 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
         {!readyServers.length && servers.length ? <div className="nw-inline-note"><Activity size={16} /><span>{isAdmin ? "当前没有 Xray 在线的服务器，恢复在线后才能继续。" : "授权服务器当前离线、使用外置 Xray、未运行 Xray 或节点名额已满。"}</span></div> : null}
       </section> : step === 2 ? <section className="managed-wizard-step">
         <div className="managed-step-heading"><span><Network size={19} /></span><div><h3>选择协议与安全组合</h3><p>仅显示当前 Agent 可安全创建的协议组合。</p></div></div>
-        {allowedProtocolOptions.length ? <div className="form-grid"><Field label="协议"><select aria-label="节点协议" value={selectedFamily} onChange={(event) => { const family = event.target.value as ManagedProtocolFamily; const first = allowedProtocolOptions.find((item) => item.family === family); if (first) chooseProtocol(first.value); }}>{(isAdmin ? managedProtocolFamilies : allowedProtocolFamilies).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field><Field label="传输与安全预设"><select aria-label="节点传输与安全预设" value={draft.protocol} onChange={(event) => chooseProtocol(event.target.value as ManagedProtocol)}>{familyProtocols.map((option) => { const wssOption = isManagedWSSProtocol(option.value); const disabled = wssOption && !wssReady; const reason = !selectedServer?.domain?.trim() ? "服务器未配置域名" : "缺少匹配的有效证书"; return <option key={option.value} value={option.value} disabled={disabled}>{option.label}{disabled ? `（${reason}）` : ""}</option>; })}</select></Field></div> : <ErrorState message="当前授权没有可由面板创建的协议组合，请联系管理员调整授权。" />}
+        {allowedProtocolOptions.length ? <div className="form-grid"><Field label="协议"><select aria-label="节点协议" value={selectedFamily} onChange={(event) => { const family = event.target.value as ManagedProtocolFamily; const first = allowedProtocolOptions.find((item) => item.family === family); if (first) chooseProtocol(first.value); }}>{(isAdmin ? managedProtocolFamilies : allowedProtocolFamilies).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field><Field label="传输与安全预设"><select aria-label="节点传输与安全预设" value={draft.protocol} onChange={(event) => chooseProtocol(event.target.value as ManagedProtocol)}>{familyProtocols.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field></div> : <ErrorState message="当前授权没有可由面板创建的协议组合，请联系管理员调整授权。" />}
         <div className="managed-import-only"><span><Shield size={16} /></span><div><strong>{selectedProtocol?.label}</strong><small>{selectedProtocol?.detail}</small></div></div>
         <div className="managed-import-only"><span><Upload size={16} /></span><div><strong>TUIC、AnyTLS 与外部节点</strong><small>已有节点统一使用“导入已有节点”，仅用于订阅、测速和用户分配。</small></div></div>
       </section> : step === 3 ? <section className="managed-wizard-step">
@@ -2593,7 +2682,20 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
         {draft.protocol === "trojan-wss" && isAdmin ? <Field label="认证密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field> : null}
         {isGRPC ? <Field label="gRPC Service Name" hint="客户端必须填写相同值；无需以 / 开头"><input value={draft.wsPath} onChange={(event) => setDraft({ ...draft, wsPath: event.target.value })} placeholder="grpc-service" /></Field> : null}
         {isWSS ? <>
-          <div className="form-grid"><Field label="TLS 节点域名" hint="由服务器域名和 Nginx 提供 TLS"><input readOnly value={draft.domain} /></Field><Field label="WebSocket 路径"><input value={draft.wsPath} onChange={(event) => setDraft({ ...draft, wsPath: event.target.value })} /></Field></div>
+          <div className="form-grid">
+            <Field label="TLS 节点域名" hint="创建时同步节点域名并自动匹配/下发 Nginx TLS 证书">
+              <input value={draft.domain} onChange={(event) => updateTLSDomain(event.target.value)} placeholder="node.example.com" />
+            </Field>
+            <Field label="托管 TLS 证书" hint={tlsMatchHint}>
+              <select aria-label="托管证书" value={draft.certificateId} onChange={(event) => chooseTLSCertificate(event.target.value)}>
+                <option value="">请选择证书</option>
+                {validCertificates.map((item) => (
+                  <option value={item.id} key={item.id}>{item.domain}</option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          <Field label="WebSocket 路径"><input value={draft.wsPath} onChange={(event) => setDraft({ ...draft, wsPath: event.target.value })} /></Field>
           {isAdmin ? <>
             <div className="form-grid">
               <Field label="WSS 伪装站点类型" hint="非 WebSocket 路径访问 443 时的伪装响应">
@@ -2716,17 +2818,11 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
                   />
                 </div>
                 <div className="form-grid">
-                  <Field label="托管 TLS 证书" hint="必须绑定有效的域名证书">
+                  <Field label="托管 TLS 证书" hint={tlsMatchHint}>
                     <select
+                      aria-label="托管证书"
                       value={draft.certificateId}
-                      onChange={(event) => {
-                        const certificate = validCertificates.find((item) => String(item.id) === event.target.value);
-                        setDraft({
-                          ...draft,
-                          certificateId: event.target.value,
-                          domain: managedTLSHostnameForCertificate(certificate, selectedServer, draft.domain),
-                        });
-                      }}
+                      onChange={(event) => chooseTLSCertificate(event.target.value)}
                     >
                       <option value="">请选择证书</option>
                       {validCertificates.map((item) => (
@@ -2739,7 +2835,7 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
                   <Field label="TLS SNI / 伪装域名" hint="客户端 TLS 握手域名">
                     <input
                       value={draft.domain}
-                      onChange={(event) => setDraft({ ...draft, domain: event.target.value.trim() })}
+                      onChange={(event) => updateTLSDomain(event.target.value)}
                       placeholder="status.chitanda.org"
                     />
                   </Field>
@@ -2753,7 +2849,7 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
             )}
           </>
         ) : null}
-        {selectedProtocol?.requiresCertificate && draft.protocol !== "chitanda" ? <>{isManagedUUIDProtocol(draft.protocol) ? <Field label="托管证书"><select value={draft.certificateId} onChange={(event) => { const certificate = validCertificates.find((item) => String(item.id) === event.target.value); setDraft({ ...draft, certificateId: event.target.value, domain: managedTLSHostnameForCertificate(certificate, selectedServer, draft.domain) }); }}><option value="">请选择证书</option>{validCertificates.map((item) => <option value={item.id} key={item.id}>{item.domain}</option>)}</select></Field> : <div className="form-grid">{isAdmin ? <Field label="认证密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field> : null}<Field label="托管证书"><select value={draft.certificateId} onChange={(event) => { const certificate = validCertificates.find((item) => String(item.id) === event.target.value); setDraft({ ...draft, certificateId: event.target.value, domain: managedTLSHostnameForCertificate(certificate, selectedServer, draft.domain) }); }}><option value="">请选择证书</option>{validCertificates.map((item) => <option value={item.id} key={item.id}>{item.domain}</option>)}</select></Field></div>}<Field label="TLS SNI"><input value={draft.domain} onChange={(event) => setDraft({ ...draft, domain: event.target.value })} placeholder="edge.example.com" /></Field><Toggle checked={draft.skipCertVerify} onChange={(skipCertVerify) => setDraft({ ...draft, skipCertVerify })} label="客户端跳过证书校验" /></> : null}
+        {selectedProtocol?.requiresCertificate && draft.protocol !== "chitanda" && !isWSS ? <>{isManagedUUIDProtocol(draft.protocol) ? <Field label="托管证书" hint={tlsMatchHint}><select aria-label="托管证书" value={draft.certificateId} onChange={(event) => chooseTLSCertificate(event.target.value)}><option value="">请选择证书</option>{validCertificates.map((item) => <option value={item.id} key={item.id}>{item.domain}</option>)}</select></Field> : <div className="form-grid">{isAdmin ? <Field label="认证密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field> : null}<Field label="托管证书" hint={tlsMatchHint}><select aria-label="托管证书" value={draft.certificateId} onChange={(event) => chooseTLSCertificate(event.target.value)}><option value="">请选择证书</option>{validCertificates.map((item) => <option value={item.id} key={item.id}>{item.domain}</option>)}</select></Field></div>}<Field label="TLS SNI"><input value={draft.domain} onChange={(event) => updateTLSDomain(event.target.value)} placeholder="edge.example.com" /></Field><Toggle checked={draft.skipCertVerify} onChange={(skipCertVerify) => setDraft({ ...draft, skipCertVerify })} label="客户端跳过证书校验" /></> : null}
         {isAdmin && !isTunnel ? <div className="managed-publish-panel"><Toggle checked={draft.publish && canPublish} disabled={!canPublish} onChange={(publish) => setDraft({ ...draft, publish })} label="创建后发布到用户自助目录" />{draft.publish && canPublish ? <Field label="目录排序" hint="数值越小越靠前"><input type="number" min="0" value={draft.sortOrder} onChange={(event) => setDraft({ ...draft, sortOrder: event.target.value })} /></Field> : <small>{canPublish ? "稍后也可以在节点编辑中发布。" : publishDisabledReason}</small>}</div> : null}
       </section> : <section className="managed-wizard-step">
         <div className="managed-step-heading"><span><ShieldCheck size={19} /></span><div><h3>确认创建</h3><p>创建会写入远程 Xray，并在控制端生成对应节点。</p></div></div>

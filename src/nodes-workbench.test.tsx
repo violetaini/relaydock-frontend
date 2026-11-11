@@ -1358,7 +1358,7 @@ describe("managed server node creation", () => {
     expect(notify).toHaveBeenCalledWith("WireGuard 节点已创建");
   });
 
-  it("offers public WS without a server domain while keeping WSS disabled", async () => {
+  it("allows selecting WSS even without server domain and provides editable domain and auto-matching certificate", async () => {
     const existing = node(1, "香港 A");
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
       if (path === "/api/admin/nodes") return { nodes: [existing] } as T;
@@ -1367,7 +1367,10 @@ describe("managed server node creation", () => {
       if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
       if (path === "/api/admin/remote-servers") return { servers: [{ id: 3, name: "香港入口", status: "online", ws_connected: true, xray_running: true, xray_mode: "embedded", ipv6_enabled: false, domain: "", ip_address: "203.0.113.8", current_upload_speed: 0, current_download_speed: 0, traffic_limit: 0, traffic_used: 0, traffic_stats_mode: "both", traffic_source: "xray", connection_mode: "websocket", encrypted: true, inbounds: [] }] } as T;
       if (path === "/api/admin/remote/inbounds?server_id=3") return { success: true, inbounds: [] } as T;
-      if (path === "/api/admin/certificates") return { certificates: [] } as T;
+      if (path === "/api/admin/certificates") return { certificates: [
+        { id: 11, domain: "*.example.com", status: "valid", expiry_date: "2030-01-01T00:00:00Z" },
+        { id: 12, domain: "wss.example.com", status: "valid", expiry_date: "2030-01-01T00:00:00Z" },
+      ] } as T;
       if (path === "/api/admin/remote/reality-domains?server_id=3") return { domains: [{ domain: "www.cloudflare.com", success: true, latency_ms: 16 }] } as T;
       throw new Error(`unexpected GET ${path}`);
     });
@@ -1382,18 +1385,19 @@ describe("managed server node creation", () => {
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
 
     const preset = await screen.findByRole("combobox", { name: "节点传输与安全预设" });
-    expect(screen.getByRole("option", { name: /VLESS WSS/ })).toBeDisabled();
+    expect(screen.getByRole("option", { name: "VLESS WSS" })).not.toBeDisabled();
     expect(screen.getByRole("option", { name: "VLESS WS" })).not.toBeDisabled();
-    fireEvent.change(preset, { target: { value: "vless-ws" } });
+    fireEvent.change(preset, { target: { value: "vless-wss" } });
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
 
-    expect(await screen.findByRole("textbox", { name: /WebSocket Host（可选）/ })).toHaveValue("");
-    expect(screen.getByRole("spinbutton", { name: "监听端口" })).toHaveValue(8080);
-    fireEvent.change(screen.getByRole("textbox", { name: "节点名称" }), { target: { value: "香港 WS" } });
-    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
-    const preview = await screen.findByRole("textbox", { name: "受管节点 Xray JSON" });
-    expect((preview as HTMLTextAreaElement).value).toContain('"listen": "0.0.0.0"');
-    expect((preview as HTMLTextAreaElement).value).not.toContain('"headers"');
+    const domainInput = await screen.findByPlaceholderText("node.example.com");
+    expect(domainInput).toBeInTheDocument();
+    fireEvent.change(domainInput, { target: { value: "node.example.com" } });
+    const certSelect = screen.getByRole("combobox", { name: "托管证书" });
+    expect(certSelect).toHaveValue("11");
+
+    fireEvent.change(domainInput, { target: { value: "wss.example.com" } });
+    expect(certSelect).toHaveValue("12");
   });
 
   it("publishes managed classic AES but turns publishing off for shared classic ChaCha20", async () => {
@@ -1418,7 +1422,6 @@ describe("managed server node creation", () => {
     fireEvent.click(await screen.findByRole("button", { name: "在服务器创建" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "下一步" })).not.toBeDisabled());
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
-    expect(screen.getByRole("option", { name: /VLESS WSS（缺少匹配的有效证书）/ })).toBeDisabled();
     fireEvent.change(await screen.findByRole("combobox", { name: "节点协议" }), { target: { value: "shadowsocks" } });
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
 

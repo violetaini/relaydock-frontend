@@ -10,6 +10,7 @@ export type ManagedGrantProtocol =
   | "chitanda";
 
 export type ManagedGrantProtocolProfile =
+  | "vless-tcp-none"
   | "vless-reality"
   | "vless-tcp-tls"
   | "vless-grpc-tls"
@@ -54,6 +55,7 @@ export const managedGrantProtocolGroups: ManagedGrantProtocolGroup[] = [
     value: "vless",
     label: "VLESS",
     profiles: [
+      { value: "vless-tcp-none", family: "vless", label: "TCP", detail: "TCP · 无 TLS" },
       { value: "vless-reality", family: "vless", label: "Reality", detail: "TCP · Reality" },
       { value: "vless-tcp-tls", family: "vless", label: "TCP TLS", detail: "TCP · TLS 证书" },
       { value: "vless-grpc-tls", family: "vless", label: "gRPC TLS", detail: "gRPC · TLS 证书" },

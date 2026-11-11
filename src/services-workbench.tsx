@@ -46,6 +46,7 @@ import { api, openDashboardSocket, requestStream } from "./api";
 import { CountryFlag } from "./country-flag";
 import { NAVIGATION_REQUEST_EVENT, type NavigationRequestDetail } from "./navigation-guard";
 import type { NginxMode, RealtimeMessage, RemoteServer, ServerListResponse, SharedServerToken } from "./types";
+import { validateWSSCamouflageProxyTarget } from "./managed-node-presets";
 import {
   buildTrojanInbound,
   buildWireGuardClientProfile,
@@ -683,8 +684,8 @@ function xrayResourceProtocol(resource: XrayResource): string {
   return typeof resource.protocol === "string" ? resource.protocol : "";
 }
 
-type InboundCreationPreset = "reality" | "wss" | "wireguard" | "trojan" | "advanced";
-type VlessInboundCreationPreset = Extract<InboundCreationPreset, "reality" | "wss">;
+type InboundCreationPreset = "reality" | "wss" | "tcp" | "wireguard" | "trojan" | "advanced";
+type VlessInboundCreationPreset = Extract<InboundCreationPreset, "reality" | "wss" | "tcp">;
 
 interface SecureInboundDraft {
   uuid: string;
@@ -834,12 +835,26 @@ function buildSecureInbound(
   if (!tag) throw new Error("Tag 不能为空");
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("监听端口必须在 1 到 65535 之间");
   if (!validUUID(uuid)) throw new Error("UUID 必须是标准的 36 位格式");
-  if (!validDomain(domain)) throw new Error("域名必须是不含协议、端口和路径的有效主机名");
+  if (preset !== "tcp" && !validDomain(domain)) throw new Error("域名必须是不含协议、端口和路径的有效主机名");
 
   const settings: Record<string, unknown> = {
     clients: [{ id: uuid, ...(preset === "reality" ? { flow: "xtls-rprx-vision" } : {}) }],
     decryption: "none",
   };
+  if (preset === "tcp") {
+    return {
+      tag,
+      listen: "0.0.0.0",
+      port,
+      protocol: "vless",
+      settings,
+      streamSettings: {
+        network: "tcp",
+        security: "none",
+      },
+      sniffing: { enabled: true, destOverride: ["http", "tls", "quic"], routeOnly: false },
+    };
+  }
   if (preset === "reality" && draft.enhancedEncryption) {
     if (!draft.decryptionConfig || !draft.encryption) throw new Error("增强加密密钥尚未生成，请重试或关闭增强加密");
     settings.decryption = draft.decryptionConfig;
@@ -2593,7 +2608,7 @@ function ServerFormFields({ form, setForm, editing = false }: { form: CreateServ
     <Field label="流量统计方向"><select value={form.trafficStatsMode} onChange={(event) => patch("trafficStatsMode", event.target.value)}><option value="both">上行 + 下行</option><option value="max">上行 / 下行取较大值</option><option value="upload">仅上行</option><option value="download">仅下行</option></select></Field>
     <div className="service-toggle-grid"><Toggle checked={form.ipv6Enabled} onChange={(value) => patch("ipv6Enabled", value)} label="启用 IPv6" /><Toggle checked={form.ddnsEnabled} onChange={(value) => patch("ddnsEnabled", value)} label="自动同步 DDNS" /></div>
     {form.ddnsEnabled ? <Field label="DDNS 提供商" hint={providerHint}><select aria-label="DDNS 提供商" value={form.ddnsProviderID} onChange={(event) => patch("ddnsProviderID", event.target.value)}><option value="0">自动（按证书）</option>{configuredProviderMissing ? <option value={form.ddnsProviderID}>当前配置 #{form.ddnsProviderID}（列表中不可用）</option> : null}{dnsProviders.map((provider) => <option key={provider.id} value={String(provider.id)}>{provider.name}（{provider.providerType}）</option>)}</select></Field> : null}
-    {!editing ? <details className="service-advanced-fields"><summary>前置与伪装站高级选项</summary><div className="form-stack"><div className="form-grid"><Field label="接管模式"><select value={form.stealMode} onChange={(event) => patch("stealMode", event.target.value)}><option value="default">不接管</option><option value="tunnel">Tunnel</option><option value="fallback">Fallback</option></select></Field><Field label="站点类型"><select value={form.siteType} onChange={(event) => patch("siteType", event.target.value)}><option value="static">静态目录</option><option value="proxy">反向代理</option></select></Field></div><Field label={form.siteType === "proxy" ? "反代目标" : "静态目录"}><input value={form.siteValue} onChange={(event) => patch("siteValue", event.target.value)} placeholder={form.siteType === "proxy" ? "http://127.0.0.1:8080" : "/var/www/html"} /></Field></div></details> : null}
+    <details className="service-advanced-fields" open={editing && form.siteType === "proxy"}><summary>前置与伪装站高级选项（WSS / 443 伪装反代）</summary><div className="form-stack"><div className="form-grid"><Field label="接管模式"><select value={form.stealMode} onChange={(event) => patch("stealMode", event.target.value)} disabled={editing}><option value="default">不接管（纯 WSS / 标准）</option><option value="tunnel">Tunnel</option><option value="fallback">Fallback</option></select></Field><Field label="伪装站点类型"><select aria-label="伪装站点类型" value={form.siteType} onChange={(event) => patch("siteType", event.target.value)}><option value="static">静态目录 / 默认 404</option><option value="proxy">反向代理指定伪装网站</option></select></Field></div><Field label={form.siteType === "proxy" ? "反代伪装网站目标" : "静态目录"} hint={form.siteType === "proxy" ? "严禁反代套了 Cloudflare CDN 的网站，防止服务器被全网扫描当成免费 CF 优选节点" : "留空使用默认静态目录或 404"}><input aria-label="伪装站点目标" value={form.siteValue} onChange={(event) => patch("siteValue", event.target.value)} placeholder={form.siteType === "proxy" ? "https://origin.example.com" : "/var/www/html"} /></Field></div></details>
   </>;
 }
 
@@ -2606,6 +2621,9 @@ function CreateServerDialog({ onClose, onCreated }: { onClose: () => void; onCre
     setWorking(true);
     setError("");
     try {
+      if (form.siteType === "proxy" && form.siteValue.trim()) {
+        validateWSSCamouflageProxyTarget(form.siteValue);
+      }
       const response = assertSuccess(await api.post<ActionResponse & { server?: ManagedServer; install_command?: string }>("/api/admin/remote-servers/create", {
         name: form.name.trim(),
         ip_address: form.ipAddress.trim(),
@@ -2663,6 +2681,9 @@ function formFromServer(server: ManagedServer): CreateServerForm {
     ipv6Enabled: server.ipv6_enabled,
     ddnsEnabled: Boolean(server.ddns_enabled),
     ddnsProviderID: String(server.ddns_provider_id ?? 0),
+    stealMode: server.steal_mode || "default",
+    siteType: server.site_type || "static",
+    siteValue: server.site_value || "",
   };
 }
 
@@ -2675,6 +2696,9 @@ function EditServerDialog({ server, onClose, onSaved }: { server: ManagedServer;
     setWorking(true);
     setError("");
     try {
+      if (form.siteType === "proxy") {
+        validateWSSCamouflageProxyTarget(form.siteValue);
+      }
       const updatesPullConfig = Boolean(form.pullAddress.trim()) || form.connectionMode === "pull";
       let pullToken = "";
       if (updatesPullConfig) {
@@ -2700,6 +2724,8 @@ function EditServerDialog({ server, onClose, onSaved }: { server: ManagedServer;
         ipv6_enabled: form.ipv6Enabled,
         ddns_enabled: form.ddnsEnabled,
         ddns_provider_id: Number(form.ddnsProviderID) || 0,
+        site_type: form.siteType,
+        site_value: form.siteValue.trim(),
       };
       if (form.trafficUsedGB.trim()) payload.traffic_used = gbToBytes(form.trafficUsedGB);
       assertSuccess(await api.put<ActionResponse>("/api/admin/remote-servers/update", payload), "保存服务器设置失败");
@@ -3573,7 +3599,7 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
       setJsonDraft(JSON.stringify(value, null, 2));
       return;
     }
-    const generatedTags = new Set(["vless-reality", "vless-wss", "wireguard-in", "trojan-in"]);
+    const generatedTags = new Set(["vless-reality", "vless-wss", "vless-tcp", "wireguard-in", "trojan-in"]);
     if (preset === "wireguard") {
       setTag((current) => !current || generatedTags.has(current) ? "wireguard-in" : current);
       setProtocol("wireguard");
@@ -3595,7 +3621,7 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
     }
     setTag((current) => !current || generatedTags.has(current) ? `vless-${preset}` : current);
     setProtocol("vless");
-    setListen(preset === "reality" ? "0.0.0.0" : "127.0.0.1");
+    setListen(preset === "wss" ? "127.0.0.1" : "0.0.0.0");
     setPort("443");
     if (preset === "wss") setSecureDraft((current) => ({ ...current, domain: serverDomain.trim().toLowerCase() }));
     if (preset === "reality") {
@@ -3846,6 +3872,7 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
       {kind === "inbound" && editor.mode === "create" ? <div className="secure-inbound-presets" role="tablist" aria-label="入站创建方式">
         <button type="button" role="tab" disabled={working || Boolean(wireGuardCreated)} aria-selected={creationPreset === "reality"} className={creationPreset === "reality" ? "is-active" : ""} onClick={() => selectCreationPreset("reality")}><ShieldCheck size={16} /><span><strong>VLESS + Reality</strong><small>xtls-rprx-vision · X25519</small></span></button>
         <button type="button" role="tab" disabled={working || Boolean(wireGuardCreated)} aria-selected={creationPreset === "wss"} className={creationPreset === "wss" ? "is-active" : ""} onClick={() => selectCreationPreset("wss")}><Cloud size={16} /><span><strong>VLESS + WS + TLS</strong><small>Nginx · 443</small></span></button>
+        <button type="button" role="tab" disabled={working || Boolean(wireGuardCreated)} aria-selected={creationPreset === "tcp"} className={creationPreset === "tcp" ? "is-active" : ""} onClick={() => selectCreationPreset("tcp")}><Network size={16} /><span><strong>VLESS + TCP</strong><small>无 TLS · 直连/中转</small></span></button>
         <button type="button" role="tab" disabled={working || Boolean(wireGuardCreated)} aria-selected={creationPreset === "wireguard"} className={creationPreset === "wireguard" ? "is-active" : ""} onClick={() => selectCreationPreset("wireguard")}><Network size={16} /><span><strong>WireGuard</strong><small>Xray 原生入站</small></span></button>
         <button type="button" role="tab" disabled={working || Boolean(wireGuardCreated)} aria-selected={creationPreset === "trojan"} className={creationPreset === "trojan" ? "is-active" : ""} onClick={() => selectCreationPreset("trojan")}><ShieldCheck size={16} /><span><strong>Trojan</strong><small>TLS · WS · gRPC · Reality</small></span></button>
         <button type="button" role="tab" disabled={working || Boolean(wireGuardCreated)} aria-selected={creationPreset === "advanced"} className={creationPreset === "advanced" ? "is-active" : ""} onClick={() => selectCreationPreset("advanced")}><Code2 size={16} /><span><strong>高级 JSON</strong><small>全部协议</small></span></button>
@@ -3858,9 +3885,9 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
         <div className="dialog-actions"><Button type="button" onClick={closeEditor}><Check size={16} />完成</Button></div>
       </div> : editor.mode === "view" ? <textarea className="service-code-editor xray-resource-json" aria-label={`${label}只读 JSON`} readOnly value={jsonDraft} /> : <form className="form-stack" onSubmit={submit}>
         {kind === "inbound" && editor.mode === "create" && creationPreset !== "advanced" ? <>
-          <div className="secure-inbound-reference"><span><Badge tone={creationPreset === "wireguard" || creationPreset === "trojan" ? "good" : matchingExample ? "good" : examplesError ? "warn" : "neutral"}>{creationPreset === "wireguard" ? "Xray 原生" : creationPreset === "trojan" ? "常用组合" : examplesLoading ? "模板读取中" : matchingExample ? "官方模板" : "内置模板"}</Badge><strong>{creationPreset === "wireguard" ? "WireGuard 入站与客户端配置" : creationPreset === "trojan" ? "Trojan 安全传输向导" : matchingExample?.dir_name || (creationPreset === "reality" ? "VLESS TCP Reality" : "VLESS WSS")}</strong></span>{creationPreset !== "wireguard" && creationPreset !== "trojan" && examplesError ? <small>{examplesError}</small> : null}</div>
+          <div className="secure-inbound-reference"><span><Badge tone={creationPreset === "wireguard" || creationPreset === "trojan" || creationPreset === "tcp" ? "good" : matchingExample ? "good" : examplesError ? "warn" : "neutral"}>{creationPreset === "wireguard" ? "Xray 原生" : creationPreset === "trojan" || creationPreset === "tcp" ? "常用组合" : examplesLoading ? "模板读取中" : matchingExample ? "官方模板" : "内置模板"}</Badge><strong>{creationPreset === "wireguard" ? "WireGuard 入站与客户端配置" : creationPreset === "trojan" ? "Trojan 安全传输向导" : creationPreset === "tcp" ? "VLESS TCP（无 TLS）直连/中转入站" : matchingExample?.dir_name || (creationPreset === "reality" ? "VLESS TCP Reality" : "VLESS WSS")}</strong></span>{creationPreset !== "wireguard" && creationPreset !== "trojan" && creationPreset !== "tcp" && examplesError ? <small>{examplesError}</small> : null}</div>
           {nginxMode === "reuse_existing" && (creationPreset === "wss" || (creationPreset === "trojan" && trojanDraft.combination === "ws-tls")) ? <div className="service-nginx-reuse-notice" role="note"><ShieldCheck size={17} /><span><strong>此入站将复用系统已有 Nginx</strong><small>Arcway 只添加独立站点配置并安全重载，不会覆盖主配置或接管 Nginx 服务。</small></span></div> : null}
-          <div className="form-grid two"><Field label="Tag"><input required aria-label="入站 Tag" value={tag} onChange={(event) => setTag(event.target.value)} placeholder={creationPreset === "wireguard" ? "wireguard-in" : creationPreset === "trojan" ? "trojan-in" : creationPreset === "reality" ? "vless-reality" : "vless-wss"} /></Field><Field label={creationPreset === "wss" || (creationPreset === "trojan" && trojanDraft.combination === "ws-tls") ? "外部 TLS 端口" : "监听端口"}><input type="number" min="1" max="65535" required aria-label="入站监听端口" value={port} onChange={(event) => setPort(event.target.value)} /></Field></div>
+          <div className="form-grid two"><Field label="Tag"><input required aria-label="入站 Tag" value={tag} onChange={(event) => setTag(event.target.value)} placeholder={creationPreset === "wireguard" ? "wireguard-in" : creationPreset === "trojan" ? "trojan-in" : creationPreset === "tcp" ? "vless-tcp" : creationPreset === "reality" ? "vless-reality" : "vless-wss"} /></Field><Field label={creationPreset === "wss" || (creationPreset === "trojan" && trojanDraft.combination === "ws-tls") ? "外部 TLS 端口" : "监听端口"}><input type="number" min="1" max="65535" required aria-label="入站监听端口" value={port} onChange={(event) => setPort(event.target.value)} /></Field></div>
           {creationPreset === "wireguard" ? <>
             <div className="secure-key-status wireguard-key-status"><span><Badge tone={validWireGuardKey(wireGuardDraft.serverPrivateKey) && validWireGuardKey(wireGuardDraft.clientPrivateKey) ? "good" : "warn"}>{validWireGuardKey(wireGuardDraft.serverPrivateKey) && validWireGuardKey(wireGuardDraft.clientPrivateKey) ? "两组密钥已生成" : "密钥未就绪"}</Badge><small>客户端凭据将由控制端加密存储</small></span><Button type="button" variant="secondary" disabled={wireGuardKeyWorking} onClick={() => void generateWireGuardKeys()}>{wireGuardKeyWorking ? <Spinner label="生成中" /> : <><KeyRound size={15} />重新生成密钥</>}</Button></div>
             <div className="form-grid two"><Field label="服务端隧道地址"><input required aria-label="WireGuard 服务端地址" value={wireGuardDraft.serverAddress} onChange={(event) => setWireGuardDraft((current) => ({ ...current, serverAddress: event.target.value }))} /></Field><Field label="客户端隧道地址"><input required aria-label="WireGuard 客户端地址" value={wireGuardDraft.clientAddress} onChange={(event) => setWireGuardDraft((current) => ({ ...current, clientAddress: event.target.value }))} /></Field></div>
@@ -3878,6 +3905,8 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
               <div className="form-grid two"><Field label="Reality Short ID"><input required aria-label="Trojan Reality Short ID" value={trojanDraft.shortId || ""} onChange={(event) => setTrojanDraft((current) => ({ ...current, shortId: event.target.value.trim().toLowerCase() }))} /></Field><Field label="Reality X25519 密钥"><div className="secure-key-status"><Badge tone={validRealityKey(trojanDraft.privateKey || "") && validRealityKey(trojanDraft.publicKey || "") ? "good" : "warn"}>{validRealityKey(trojanDraft.privateKey || "") && validRealityKey(trojanDraft.publicKey || "") ? "已生成" : "未就绪"}</Badge><Button type="button" variant="secondary" disabled={trojanKeyWorking} onClick={() => void generateTrojanRealityKeys()}>{trojanKeyWorking ? <Spinner label="生成中" /> : <><KeyRound size={15} />重新生成</>}</Button></div></Field></div>
               <Field label="Reality 客户端公钥"><div className="generated-secret"><code>{trojanDraft.publicKey || "生成中..."}</code>{trojanDraft.publicKey ? <IconButton type="button" label="复制 Trojan Reality 公钥" onClick={() => void copyGenerated(trojanDraft.publicKey || "", "Reality 公钥")}><Copy size={16} /></IconButton> : null}</div></Field>
             </> : null}
+          </> : creationPreset === "tcp" ? <>
+            <Field label="客户端 UUID"><div className="secure-field-action"><input required aria-label="客户端 UUID" value={secureDraft.uuid} onChange={(event) => setSecureDraft({ ...secureDraft, uuid: event.target.value.trim() })} /><IconButton type="button" label="重新生成客户端 UUID" onClick={() => setSecureDraft({ ...secureDraft, uuid: createUUID() })}><RefreshCw size={15} /></IconButton></div></Field>
           </> : <>
             <div className="form-grid two"><Field label="客户端 UUID"><div className="secure-field-action"><input required aria-label="客户端 UUID" value={secureDraft.uuid} onChange={(event) => setSecureDraft({ ...secureDraft, uuid: event.target.value.trim() })} /><IconButton type="button" label="重新生成客户端 UUID" onClick={() => setSecureDraft({ ...secureDraft, uuid: createUUID() })}><RefreshCw size={15} /></IconButton></div></Field><Field label={creationPreset === "reality" ? "Reality 伪装目标 / SNI" : "TLS 节点域名"} hint={creationPreset === "reality" ? "必须明确选择目标；优先使用同 ASN 且证书覆盖该 SNI 的 TLS 站点" : creationPreset === "wss" && !serverDomain ? "请先在服务器编辑页配置节点域名" : undefined}><div className="secure-field-action"><input required aria-label={creationPreset === "reality" ? "Reality 伪装目标 / SNI" : "TLS 节点域名"} list={creationPreset === "reality" ? `reality-domains-${serverId}` : undefined} readOnly={creationPreset === "wss"} value={secureDraft.domain} onChange={(event) => setSecureDraft({ ...secureDraft, domain: event.target.value.trim().toLowerCase() })} placeholder="www.example.com" />{creationPreset === "reality" ? <IconButton type="button" label="重新探测 Reality 域名" disabled={domainsLoading} onClick={() => void loadRealityDomains()}>{domainsLoading ? <Spinner /> : <RefreshCw size={15} />}</IconButton> : null}</div></Field></div>
             {creationPreset === "reality" ? <>

@@ -2073,6 +2073,7 @@ function protocolLabel(value: ManagedProtocol): string {
 const managedProtocolFamilies = Array.from(new Map(managedProtocolOptions.map((item) => [item.family, item.familyLabel])).entries());
 
 const managedProtocolGrantScopes: Partial<Record<ManagedProtocol, { family: ManagedGrantProtocol; profile: ManagedGrantProtocolProfile }>> = {
+  vless: { family: "vless", profile: "vless-tcp-none" },
   "vless-reality": { family: "vless", profile: "vless-reality" },
   "vless-tls": { family: "vless", profile: "vless-tcp-tls" },
   "vless-grpc-tls": { family: "vless", profile: "vless-grpc-tls" },
@@ -2387,9 +2388,16 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
 
   useEffect(() => {
     if (!selectedServer) return;
-    if (isManagedWSSProtocol(draft.protocol)) setDraft((current) => ({ ...current, domain: selectedServer.domain?.trim() || "" }));
+    if (isManagedWSSProtocol(draft.protocol)) {
+      setDraft((current) => ({
+        ...current,
+        domain: selectedServer.domain?.trim() || "",
+        wssSiteType: isAdmin ? (selectedServer.site_type === "proxy" ? "proxy" : "static") : undefined,
+        wssSiteValue: isAdmin ? (selectedServer.site_value || "") : undefined,
+      }));
+    }
     if ((selectedServer.xray_mode !== "embedded" || !managedInboundSupportsPublishing(draft)) && draft.publish) setDraft((current) => ({ ...current, publish: false }));
-  }, [draft.protocol, draft.publish, draft.ssCipher, selectedServer]);
+  }, [draft.protocol, draft.publish, draft.ssCipher, isAdmin, selectedServer]);
 
   const chooseProtocol = (protocol: ManagedProtocol) => {
     if (!isAdmin && !managedGrantAllowsProtocol(selectedGrant, protocol)) {
@@ -2477,7 +2485,7 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
         buildManagedWireGuardInbound(draft);
         buildManagedWireGuardClientConfig(draft, wireGuardEndpoint);
       } else {
-        buildManagedInboundRequest(draft);
+        buildManagedInboundRequest(isAdmin ? draft : { ...draft, wssSiteType: undefined, wssSiteValue: undefined });
       }
       setStep(4);
     } catch (reason) { setError(reasonMessage(reason, "请补全当前步骤")); }
@@ -2508,7 +2516,7 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
         });
         return;
       }
-      const payload = buildManagedInboundRequest(draft);
+      const payload = buildManagedInboundRequest(isAdmin ? draft : { ...draft, wssSiteType: undefined, wssSiteValue: undefined });
       const willPublish = draft.publish && canPublish;
       const createEndpoint = isAdmin ? "/api/admin/managed-nodes/create" : "/api/user/managed-node-creation";
       const response = await api.post<ManagedCreateResponse>(`${createEndpoint}?server_id=${selectedServer.id}`, payload);
@@ -2580,11 +2588,28 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
           <datalist id="managed-reality-domains">{realityDomains.map((item) => <option key={item.domain} value={item.domain}>{item.success ? `443 可达 · ${item.latency_ms ?? "-"} ms` : "探测失败"}</option>)}</datalist>
           <div className="managed-key-state"><span><KeyRound size={16} /><span><strong>X25519 密钥</strong><small>{draft.privateKey && draft.publicKey ? "已安全生成" : "等待生成"}</small></span></span><Button type="button" variant="secondary" disabled={keyWorking} onClick={() => void generateRealityKeys()}>{keyWorking ? <Spinner label="正在生成" /> : <><RefreshCw size={15} />重新生成</>}</Button></div>
         </> : null}
-        {draft.protocol === "vless-tls" ? <div className="form-grid">{isAdmin ? <Field label="客户端 UUID"><div className="nw-copy-field"><input value={draft.uuid} onChange={(event) => setDraft({ ...draft, uuid: event.target.value })} /><IconButton label="重新生成 UUID" onClick={() => setDraft({ ...draft, uuid: createManagedUUID() })}><RefreshCw size={15} /></IconButton></div></Field> : null}<Field label="流控"><select aria-label="VLESS TLS 流控" value={draft.flow} onChange={(event) => setDraft({ ...draft, flow: event.target.value as ManagedInboundDraft["flow"] })}><option value="xtls-rprx-vision">XTLS Vision（推荐）</option><option value="">无流控</option></select></Field></div> : (draft.protocol === "vless-grpc-tls" || draft.protocol === "vless-ws" || draft.protocol === "vless-wss") && isAdmin ? <Field label="客户端 UUID"><div className="nw-copy-field"><input value={draft.uuid} onChange={(event) => setDraft({ ...draft, uuid: event.target.value })} /><IconButton label="重新生成 UUID" onClick={() => setDraft({ ...draft, uuid: createManagedUUID() })}><RefreshCw size={15} /></IconButton></div></Field> : null}
+        {draft.protocol === "vless-tls" ? <div className="form-grid">{isAdmin ? <Field label="客户端 UUID"><div className="nw-copy-field"><input value={draft.uuid} onChange={(event) => setDraft({ ...draft, uuid: event.target.value })} /><IconButton label="重新生成 UUID" onClick={() => setDraft({ ...draft, uuid: createManagedUUID() })}><RefreshCw size={15} /></IconButton></div></Field> : null}<Field label="流控"><select aria-label="VLESS TLS 流控" value={draft.flow} onChange={(event) => setDraft({ ...draft, flow: event.target.value as ManagedInboundDraft["flow"] })}><option value="xtls-rprx-vision">XTLS Vision（推荐）</option><option value="">无流控</option></select></Field></div> : (draft.protocol === "vless" || draft.protocol === "vless-grpc-tls" || draft.protocol === "vless-ws" || draft.protocol === "vless-wss") && isAdmin ? <Field label="客户端 UUID"><div className="nw-copy-field"><input value={draft.uuid} onChange={(event) => setDraft({ ...draft, uuid: event.target.value })} /><IconButton label="重新生成 UUID" onClick={() => setDraft({ ...draft, uuid: createManagedUUID() })}><RefreshCw size={15} /></IconButton></div></Field> : null}
         {draft.protocol === "vmess" || draft.protocol === "vmess-tls" || draft.protocol === "vmess-grpc-tls" || draft.protocol === "vmess-ws" || draft.protocol === "vmess-wss" ? <div className="form-grid">{isAdmin ? <Field label="客户端 UUID"><div className="nw-copy-field"><input value={draft.uuid} onChange={(event) => setDraft({ ...draft, uuid: event.target.value })} /><IconButton label="重新生成 UUID" onClick={() => setDraft({ ...draft, uuid: createManagedUUID() })}><RefreshCw size={15} /></IconButton></div></Field> : null}<Field label="客户端加密"><select value={draft.vmessCipher} onChange={(event) => setDraft({ ...draft, vmessCipher: event.target.value as ManagedInboundDraft["vmessCipher"] })}><option value="auto">Auto（推荐）</option><option value="aes-128-gcm">AES-128-GCM</option><option value="chacha20-poly1305">ChaCha20-Poly1305</option></select></Field></div> : null}
         {draft.protocol === "trojan-wss" && isAdmin ? <Field label="认证密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field> : null}
         {isGRPC ? <Field label="gRPC Service Name" hint="客户端必须填写相同值；无需以 / 开头"><input value={draft.wsPath} onChange={(event) => setDraft({ ...draft, wsPath: event.target.value })} placeholder="grpc-service" /></Field> : null}
-        {isWSS ? <div className="form-grid"><Field label="TLS 节点域名" hint="由服务器域名和 Nginx 提供 TLS"><input readOnly value={draft.domain} /></Field><Field label="WebSocket 路径"><input value={draft.wsPath} onChange={(event) => setDraft({ ...draft, wsPath: event.target.value })} /></Field></div> : isPlainWS ? <div className="form-grid"><Field label="WebSocket Host（可选）" hint="留空即可直接使用服务器 IP 或节点地址"><input value={draft.domain} onChange={(event) => setDraft({ ...draft, domain: event.target.value })} placeholder="可留空" /></Field><Field label="WebSocket 路径"><input value={draft.wsPath} onChange={(event) => setDraft({ ...draft, wsPath: event.target.value })} /></Field></div> : null}
+        {isWSS ? <>
+          <div className="form-grid"><Field label="TLS 节点域名" hint="由服务器域名和 Nginx 提供 TLS"><input readOnly value={draft.domain} /></Field><Field label="WebSocket 路径"><input value={draft.wsPath} onChange={(event) => setDraft({ ...draft, wsPath: event.target.value })} /></Field></div>
+          {isAdmin ? <>
+            <div className="form-grid">
+              <Field label="WSS 伪装站点类型" hint="非 WebSocket 路径访问 443 时的伪装响应">
+                <select aria-label="WSS 伪装站点类型" value={draft.wssSiteType || "static"} onChange={(event) => setDraft({ ...draft, wssSiteType: event.target.value as "static" | "proxy" })}>
+                  <option value="static">静态页面 / 默认 404</option>
+                  <option value="proxy">反向代理指定伪装网站</option>
+                </select>
+              </Field>
+              <Field label={draft.wssSiteType === "proxy" ? "反代伪装网站地址" : "静态站点目录（可选）"} hint={draft.wssSiteType === "proxy" ? "仅允许源站直连网站，严禁填写套了 Cloudflare CDN 的站点" : "留空默认返回 404 或 /usr/local/nginx/html"}>
+                <input aria-label="WSS 伪装站点目标" value={draft.wssSiteValue || ""} onChange={(event) => setDraft({ ...draft, wssSiteValue: event.target.value })} placeholder={draft.wssSiteType === "proxy" ? "https://www.apple.com" : "留空使用默认 404"} />
+              </Field>
+            </div>
+            {draft.wssSiteType === "proxy" ? <div className="nw-inline-note"><ShieldCheck size={16} /><span><strong>防 CF 优选节点滥用保护已启用</strong>：系统会自动检测并拦截 Cloudflare 域名与 CDN IP 段（含 DNS 解析校验），且 Nginx 强制锁定 <code>Host: $proxy_host</code>、<code>SNI: $proxy_host</code> 并阻断非节点路径的 WebSocket 升级，防止服务器被扫描当成免费 CF 优选节点。</span></div> : null}
+          </> : null}
+        </> : isPlainWS ? <div className="form-grid"><Field label="WebSocket Host（可选）" hint="留空即可直接使用服务器 IP 或节点地址"><input value={draft.domain} onChange={(event) => setDraft({ ...draft, domain: event.target.value })} placeholder="可留空" /></Field><Field label="WebSocket 路径"><input value={draft.wsPath} onChange={(event) => setDraft({ ...draft, wsPath: event.target.value })} /></Field></div> : null}
+        {draft.protocol === "vless" ? <div className="nw-inline-note"><Shield size={16} /><span>VLESS TCP（无 TLS）未启用传输加密，支持直接通过 IP 监听或作为中转落地节点。</span></div> : null}
         {draft.protocol === "vless-ws" ? <div className="nw-inline-note"><Shield size={16} /><span>VLESS WS 未启用传输加密，适合受信或私有链路；公网优先使用 Reality 或 WSS。</span></div> : null}
         {draft.protocol === "shadowsocks" ? <><Field label="加密方式"><select aria-label="Shadowsocks 加密方式" value={draft.ssCipher} onChange={(event) => chooseSSCipher(event.target.value as ManagedInboundDraft["ssCipher"])}><optgroup label="经典 AEAD"><option value="aes-128-gcm" disabled={!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", "aes-128-gcm")}>AES-128-GCM（多用户）</option><option value="aes-256-gcm" disabled={!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", "aes-256-gcm")}>AES-256-GCM（多用户）</option><option value="chacha20-ietf-poly1305" disabled={!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", "chacha20-ietf-poly1305")}>ChaCha20-IETF-Poly1305（共享密码）</option></optgroup><optgroup label="Shadowsocks 2022（多用户）"><option value="2022-blake3-aes-128-gcm" disabled={!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", "2022-blake3-aes-128-gcm")}>2022 BLAKE3 AES-128-GCM</option><option value="2022-blake3-aes-256-gcm" disabled={!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", "2022-blake3-aes-256-gcm")}>2022 BLAKE3 AES-256-GCM</option></optgroup></select></Field>{isAdmin ? isShadowsocks2022Cipher(draft.ssCipher) ? <div className="form-grid"><Field label="服务端主密钥" hint="切换加密方式时自动生成"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value.trim() })} /></Field><Field label="初始用户密钥" hint="管理员节点凭据"><input value={draft.ssUserPassword} onChange={(event) => setDraft({ ...draft, ssUserPassword: event.target.value.trim() })} /></Field></div> : isShadowsocksClassicMultiUserCipher(draft.ssCipher) ? <Field label="初始用户密码" hint="管理员节点凭据；后续用户使用独立密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field> : <Field label="节点共享密码" hint="旧式共享凭据，不能发布到用户自助目录"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field> : null}</> : null}
         {isAdmin && (draft.protocol === "socks5" || draft.protocol === "http") ? <div className="form-grid"><Field label="初始用户名"><input value={draft.accountUsername} onChange={(event) => setDraft({ ...draft, accountUsername: event.target.value.trim() })} /></Field><Field label="初始密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field></div> : null}
@@ -3752,6 +3777,8 @@ function clashToXrayOutbound(config: JsonObject): JsonObject {
       ...(Array.isArray(config.alpn) && config.alpn.length ? { alpn: config.alpn } : {}),
       ...(config.fingerprint ? { fingerprint: config.fingerprint } : {}),
     };
+  } else {
+    stream.security = "none";
   }
   outbound.streamSettings = stream;
   return outbound;

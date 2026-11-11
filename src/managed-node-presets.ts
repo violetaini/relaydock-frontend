@@ -8,6 +8,7 @@ import {
 
 export type ManagedProtocol =
   | "chitanda"
+  | "vless"
   | "vless-reality"
   | "vless-tls"
   | "vless-grpc-tls"
@@ -70,6 +71,8 @@ export interface ManagedInboundDraft {
   targetAddress: string;
   targetPort: string;
   fallbackSite?: string;
+  wssSiteType?: "static" | "proxy";
+  wssSiteValue?: string;
   serverID?: string;
   chitandaTransport?: "h2" | "h3" | "auto" | "stream" | "h1";
   publish: boolean;
@@ -81,6 +84,8 @@ export interface ManagedInboundRequest {
   node_name: string;
   ip_version: "v4" | "v6" | "both";
   forward_node_id?: number;
+  wss_site_type?: "static" | "proxy";
+  wss_site_value?: string;
   client_options?: {
     skip_cert_verify?: boolean;
   };
@@ -101,6 +106,7 @@ export const managedProtocolOptions: Array<{
   { value: "vless-grpc-tls", family: "vless", familyLabel: "VLESS", label: "VLESS gRPC TLS", detail: "gRPC · 托管 TLS 证书 · ALPN h2", requiresCertificate: true },
   { value: "vless-wss", family: "vless", familyLabel: "VLESS", label: "VLESS WSS", detail: "WebSocket · Nginx TLS · 节点域名" },
   { value: "vless-ws", family: "vless", familyLabel: "VLESS", label: "VLESS WS", detail: "WebSocket · 无 TLS · 域名可选 · 受信链路" },
+  { value: "vless", family: "vless", familyLabel: "VLESS", label: "VLESS TCP（无 TLS）", detail: "TCP · 无传输层加密" },
   { value: "vmess-tls", family: "vmess", familyLabel: "VMess", label: "VMess TCP TLS", detail: "TCP · 托管 TLS 证书", requiresCertificate: true },
   { value: "vmess-grpc-tls", family: "vmess", familyLabel: "VMess", label: "VMess gRPC TLS", detail: "gRPC · 托管 TLS 证书 · ALPN h2", requiresCertificate: true },
   { value: "vmess-wss", family: "vmess", familyLabel: "VMess", label: "VMess WSS", detail: "WebSocket · Nginx TLS · 节点域名" },
@@ -135,7 +141,7 @@ export function isManagedGRPCProtocol(protocol: ManagedProtocol): boolean {
 }
 
 export function isManagedUUIDProtocol(protocol: ManagedProtocol): boolean {
-  return protocol === "vless-reality" || protocol === "vless-tls" || protocol === "vless-grpc-tls" || protocol === "vless-ws" || protocol === "vless-wss" || protocol === "vmess" || protocol === "vmess-tls" || protocol === "vmess-grpc-tls" || protocol === "vmess-ws" || protocol === "vmess-wss";
+  return protocol === "vless" || protocol === "vless-reality" || protocol === "vless-tls" || protocol === "vless-grpc-tls" || protocol === "vless-ws" || protocol === "vless-wss" || protocol === "vmess" || protocol === "vmess-tls" || protocol === "vmess-grpc-tls" || protocol === "vmess-ws" || protocol === "vmess-wss";
 }
 
 export function isShadowsocks2022Cipher(cipher: ShadowsocksCipher): boolean {
@@ -213,6 +219,8 @@ export function newManagedInboundDraft(): ManagedInboundDraft {
     forwardNodeId: "",
     targetAddress: "",
     targetPort: "2033",
+    wssSiteType: "static",
+    wssSiteValue: "",
     publish: false,
     sortOrder: "0",
   };
@@ -222,6 +230,7 @@ export function protocolDefaults(protocol: ManagedProtocol): Partial<ManagedInbo
   const base = { protocol, port: "443" } as const;
   switch (protocol) {
     case "chitanda": return { ...base, port: "28443", tag: "chitanda-h2", wsPath: "/api/v1/sync", password: randomHex(32), fallbackSite: "default", chitandaTransport: "h2", serverID: "", flow: "" };
+    case "vless": return { ...base, tag: "vless-tcp", flow: "", domain: "" };
     case "vless-reality": return { ...base, tag: "vless-reality", flow: "xtls-rprx-vision" };
     case "vless-tls": return { ...base, tag: "vless-tcp-tls", flow: "xtls-rprx-vision" };
     case "vless-grpc-tls": return { ...base, tag: "vless-grpc-tls", flow: "", wsPath: `vless-${randomHex(12)}` };
@@ -435,6 +444,88 @@ export function buildManagedWireGuardClientProfile(draft: ManagedInboundDraft): 
   return buildWireGuardClientProfile(managedWireGuardFields(draft));
 }
 
+const CLOUDFLARE_DOMAIN_SUFFIXES = [
+  "cloudflare.com",
+  "cloudflare.net",
+  "cloudflare-dns.com",
+  "workers.dev",
+  "pages.dev",
+  "trycloudflare.com",
+  "cfargotunnel.com",
+];
+
+const CLOUDFLARE_IPV4_CIDRS: Array<[number, number]> = [
+  [0xad_f5_30_00, 20], // 173.245.48.0/20
+  [0x67_15_f4_00, 22], // 103.21.244.0/22
+  [0x67_16_c8_00, 22], // 103.22.200.0/22
+  [0x67_1f_04_00, 22], // 103.31.4.0/22
+  [0x8d_65_40_00, 18], // 141.101.64.0/18
+  [0x6c_a2_c0_00, 18], // 108.162.192.0/18
+  [0xbe_5d_f0_00, 20], // 190.93.240.0/20
+  [0xbc_72_60_00, 20], // 188.114.96.0/20
+  [0xc5_ea_f0_00, 22], // 197.234.240.0/22
+  [0xc6_29_80_00, 17], // 198.41.128.0/17
+  [0xa2_9e_00_00, 15], // 162.158.0.0/15
+  [0x68_10_00_00, 13], // 104.16.0.0/13
+  [0x68_18_00_00, 14], // 104.24.0.0/14
+  [0xac_40_00_00, 13], // 172.64.0.0/13
+  [0x83_00_48_00, 22], // 131.0.72.0/22
+  [0x01_01_01_01, 32], // 1.1.1.1/32
+  [0x01_00_00_01, 32], // 1.0.0.1/32
+];
+
+function parseIPv4ToUint32(host: string): number | null {
+  const parts = host.split(".");
+  if (parts.length !== 4) return null;
+  let result = 0;
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return null;
+    const n = Number(part);
+    if (n < 0 || n > 255) return null;
+    result = ((result << 8) | n) >>> 0;
+  }
+  return result >>> 0;
+}
+
+function isCloudflareIPv4(ipNum: number): boolean {
+  for (const [base, prefix] of CLOUDFLARE_IPV4_CIDRS) {
+    const mask = prefix === 32 ? 0xff_ff_ff_ff : (~((1 << (32 - prefix)) - 1)) >>> 0;
+    if (((ipNum & mask) >>> 0) === ((base & mask) >>> 0)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function validateWSSCamouflageProxyTarget(siteValue: string): string {
+  const raw = siteValue.trim();
+  if (!raw) throw new Error("请填写反代伪装网站地址（如 https://origin.example.com）");
+  let parsed: URL;
+  try {
+    parsed = raw.startsWith("http://") || raw.startsWith("https://") ? new URL(raw) : new URL(`https://${raw}`);
+  } catch {
+    throw new Error("反代伪装网站地址格式无效");
+  }
+  const host = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (!host) throw new Error("反代伪装网站地址格式无效");
+  if (/^[0-9.]+$/.test(host) && parseIPv4ToUint32(host) === null) {
+    throw new Error(`反代目标 IP 格式无效: ${host}`);
+  }
+  for (const suffix of CLOUDFLARE_DOMAIN_SUFFIXES) {
+    if (host === suffix || host.endsWith(`.${suffix}`)) {
+      throw new Error(`禁止反代 Cloudflare 域名 (${host})：反代 CF CDN 站点会导致服务器被全网扫描并滥用为免费优选节点`);
+    }
+  }
+  const ipv4Num = parseIPv4ToUint32(host);
+  if (ipv4Num !== null && isCloudflareIPv4(ipv4Num)) {
+    throw new Error(`禁止反代 Cloudflare CDN IP (${host})：反代 CF 节点会导致服务器被滥用为免费优选节点`);
+  }
+  if (/^(2400:cb00|2606:4700|2803:f800|2405:b500|2405:8100|2a06:98c[0-7]|2c0f:f248):/i.test(host)) {
+    throw new Error(`禁止反代 Cloudflare CDN IPv6 (${host})：反代 CF 节点会导致服务器被滥用为免费优选节点`);
+  }
+  return raw;
+}
+
 export function buildManagedInboundRequest(draft: ManagedInboundDraft): ManagedInboundRequest {
   const name = draft.name.trim();
   if (!name) throw new Error("节点名称不能为空");
@@ -464,6 +555,12 @@ export function buildManagedInboundRequest(draft: ManagedInboundDraft): ManagedI
       inbound = {
         ...baseInbound(draft, "vless", { clients: [{ id: requireUUID(draft.uuid), email: "admin" }], decryption: "none" }),
         ...grpcTLSStream(draft),
+      };
+      break;
+    case "vless":
+      inbound = {
+        ...baseInbound(draft, "vless", { clients: [{ id: requireUUID(draft.uuid), email: "admin" }], decryption: "none" }),
+        streamSettings: { network: "tcp", security: "none" },
       };
       break;
     case "vless-ws":
@@ -663,11 +760,28 @@ export function buildManagedInboundRequest(draft: ManagedInboundDraft): ManagedI
     }
   }
 
+  const isWSS = draft.protocol === "vless-wss" || draft.protocol === "vmess-wss" || draft.protocol === "trojan-wss";
+  let wssSiteProps: { wss_site_type?: "static" | "proxy"; wss_site_value?: string } = {};
+  if (isWSS && draft.wssSiteType) {
+    if (draft.wssSiteType === "proxy") {
+      wssSiteProps = {
+        wss_site_type: "proxy",
+        wss_site_value: validateWSSCamouflageProxyTarget(draft.wssSiteValue || ""),
+      };
+    } else {
+      wssSiteProps = {
+        wss_site_type: "static",
+        wss_site_value: (draft.wssSiteValue || "").trim(),
+      };
+    }
+  }
+
   return {
     action: "add",
     node_name: name,
     ip_version: draft.ipVersion,
     ...(forwardNodeID ? { forward_node_id: forwardNodeID } : {}),
+    ...wssSiteProps,
     ...(draft.skipCertVerify ? { client_options: { skip_cert_verify: true } } : {}),
     inbound,
   };

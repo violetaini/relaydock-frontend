@@ -39,6 +39,9 @@ export interface RemoteServer {
   xray_version?: string;
   xray_mode: string;
   nginx_mode?: NginxMode;
+  steal_mode?: string;
+  site_type?: string;
+  site_value?: string;
   traffic_limit: number;
   traffic_used: number;
   traffic_stats_mode: string;

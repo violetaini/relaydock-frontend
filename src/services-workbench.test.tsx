@@ -337,7 +337,7 @@ describe("service management workbench", () => {
     expect(controls?.children).toHaveLength(4);
     expect(within(controls as HTMLElement).getByText("WS")).toBeInTheDocument();
     expect(within(controls as HTMLElement).getByText("Xray")).toBeInTheDocument();
-    expect(within(controls as HTMLElement).getByText("v0.3.0")).toBeInTheDocument();
+    expect(within(controls as HTMLElement).getByText("Agent v0.3.0")).toBeInTheDocument();
 
     fireEvent.mouseEnter(address);
     await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
@@ -677,7 +677,7 @@ describe("service management workbench", () => {
     const upgradeButton = await screen.findByRole("button", { name: "升级 Edge Hong Kong Agent" });
     expect(upgradeButton).toHaveClass("has-update");
     expect(upgradeButton).toHaveAttribute("title", expect.stringContaining("上游最新 v0.3.1"));
-    expect(within(upgradeButton).getByText("v0.3.0")).toBeInTheDocument();
+    expect(within(upgradeButton).getByText("Agent v0.3.0")).toBeInTheDocument();
     expect(upgradeButton.querySelector("i")).toBeInTheDocument();
     fireEvent.click(upgradeButton);
 

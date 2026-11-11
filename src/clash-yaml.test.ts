@@ -145,4 +145,42 @@ password: secret
       port: 5245,
     });
   });
+
+  it("supports VLESS TCP (no TLS) inbound presets and blocks Cloudflare CDN proxy targets", async () => {
+    const {
+      buildManagedInboundRequest,
+      newManagedInboundDraft,
+      protocolDefaults,
+      validateWSSCamouflageProxyTarget,
+    } = await import("./managed-node-presets");
+
+    const draft = {
+      ...newManagedInboundDraft(),
+      ...protocolDefaults("vless"),
+      name: "VLESS Plain TCP",
+      tag: "vless-tcp-test",
+      port: "20080",
+      uuid: "63d4765a-4e7e-4a60-a47f-9780b98e7e9b",
+    };
+    const req = buildManagedInboundRequest(draft);
+    expect(req.inbound).toMatchObject({
+      tag: "vless-tcp-test",
+      listen: "0.0.0.0",
+      port: 20080,
+      protocol: "vless",
+      settings: {
+        clients: [{ id: "63d4765a-4e7e-4a60-a47f-9780b98e7e9b", email: "admin" }],
+        decryption: "none",
+      },
+      streamSettings: {
+        network: "tcp",
+        security: "none",
+      },
+    });
+
+    expect(() => validateWSSCamouflageProxyTarget("https://demo.workers.dev")).toThrow(/Cloudflare/);
+    expect(() => validateWSSCamouflageProxyTarget("http://104.16.1.1")).toThrow(/Cloudflare/);
+    expect(() => validateWSSCamouflageProxyTarget("https://172.67.5.10")).toThrow(/Cloudflare/);
+    expect(validateWSSCamouflageProxyTarget("https://origin.example.com")).toBe("https://origin.example.com");
+  });
 });

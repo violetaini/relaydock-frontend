@@ -56,6 +56,11 @@ import {
 } from "lucide-react";
 import { api } from "./api";
 import {
+  formatProxyToClashJSON,
+  formatProxyToClashYAML,
+  parseClashProxyInput,
+} from "./clash-yaml";
+import {
   buildManagedInboundRequest,
   buildManagedWireGuardClientProfile,
   buildManagedWireGuardClientConfig,
@@ -408,11 +413,8 @@ function readConfig(node: WorkbenchNode): Record<string, unknown> {
   for (const raw of [node.clash_config, node.parsed_config]) {
     if (!raw?.trim()) continue;
     try {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        const config = parsed as Record<string, unknown>;
-        if (Object.keys(config).length > 0) return config;
-      }
+      const config = parseClashProxyInput(raw);
+      if (Object.keys(config).length > 0) return config;
     } catch { /* Keep trying fallbacks. */ }
   }
   return {};
@@ -439,7 +441,7 @@ function managedSelfServiceConfigSupported(protocol: string, rawConfig: string, 
   if (normalizedProtocol === "wireguard") return false;
   if (normalizedProtocol !== "ss") return true;
   try {
-    const config = JSON.parse(rawConfig || "{}");
+    const config = parseClashProxyInput(rawConfig || "{}");
     const cipher = String(config?.cipher || config?.method || "").trim().toLowerCase();
     return cipher.startsWith("2022-")
       || ((cipher === "aes-128-gcm" || cipher === "aes-256-gcm") && managedMultiUser);
@@ -1913,6 +1915,7 @@ function NodeActions({ node, isAdmin, userRouted, userManagedCreation, onEdit, o
 
 export function NodeEditor({ node, offer, availableTags = [], onClose, onComplete }: { node?: WorkbenchNode; offer?: ManagedNodeOffer; availableTags?: string[]; onClose: () => void; onComplete: (message: string) => void }) {
   const initial = node ? readConfig(node) : { name: "", type: "vless", server: "", port: 443 };
+  const [configFormat, setConfigFormat] = useState<"yaml" | "json">("yaml");
   const [form, setForm] = useState({
     name: node?.node_name || String(initial.name || ""),
     protocol: node?.protocol || String(initial.type || "vless"),
@@ -1922,7 +1925,7 @@ export function NodeEditor({ node, offer, availableTags = [], onClose, onComplet
     enabled: node?.enabled ?? true,
     selfService: offer?.enabled ?? false,
     offerOrder: String(offer?.sort_order ?? 0),
-    config: JSON.stringify(initial, null, 2),
+    config: formatProxyToClashYAML(initial),
   });
   const [tags, setTags] = useState(() => nodeTags(node ?? {} as WorkbenchNode));
   const [tagInput, setTagInput] = useState("");
@@ -1932,19 +1935,33 @@ export function NodeEditor({ node, offer, availableTags = [], onClose, onComplet
   const protocolOptions = form.protocol && !protocols.includes(form.protocol.toLowerCase()) ? [form.protocol, ...protocols] : protocols;
   const managedMultiUser = node?.managed_multi_user === true;
   const selfServiceProtocolReady = !tunnelNode && managedSelfServiceConfigSupported(form.protocol, form.config, managedMultiUser);
+  const switchConfigFormat = (nextFormat: "yaml" | "json") => {
+    if (nextFormat === configFormat) return;
+    setError("");
+    try {
+      const parsed = parseClashProxyInput(form.config || "{}");
+      setForm((current) => ({
+        ...current,
+        config: nextFormat === "yaml" ? formatProxyToClashYAML(parsed) : formatProxyToClashJSON(parsed),
+      }));
+      setConfigFormat(nextFormat);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "配置格式转换失败");
+    }
+  };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setWorking(true);
     setError("");
     try {
-      const config = JSON.parse(form.config || "{}");
-      if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("Clash 配置必须是 JSON 对象");
+      const config = parseClashProxyInput(form.config || "{}");
+      const portNum = Number(form.port);
       config.name = form.name.trim();
       config.type = form.protocol.trim().toLowerCase();
       config.server = form.server.trim();
-      config.port = Number(form.port);
-      if (!config.name || !config.type || !config.server || !config.port) throw new Error("名称、协议、服务器地址和端口均为必填项");
-      if (config.port < 1 || config.port > 65535) throw new Error("端口必须在 1-65535 之间");
+      config.port = portNum;
+      if (!config.name || !config.type || !config.server || !portNum) throw new Error("名称、协议、服务器地址和端口均为必填项");
+      if (portNum < 1 || portNum > 65535) throw new Error("端口必须在 1-65535 之间");
       if (form.selfService && tunnelNode) throw new Error("Tunnel 转发节点不能发布到用户自助目录");
       if (form.selfService && !managedSelfServiceConfigSupported(form.protocol, JSON.stringify(config), managedMultiUser)) throw new Error(nodeProtocolKey(form.protocol) === "wireguard" ? "WireGuard 暂不支持按用户自助开通；管理员创建的普通节点仍可分配到套餐和订阅" : "导入或旧版经典 Shadowsocks 无法确认多用户入站结构，不能直接发布；请从服务器创建经典 AES-GCM 节点，或改用 Shadowsocks 2022");
       const configJSON = JSON.stringify(config);
@@ -1984,7 +2001,7 @@ export function NodeEditor({ node, offer, availableTags = [], onClose, onComplet
     if (clean && !tags.includes(clean)) setTags((current) => [...current, clean]);
     setTagInput("");
   };
-  return <Dialog title={node ? `编辑 ${node.node_name}` : "手工添加节点"} description="基础字段会同步写回完整 Clash JSON 配置" onClose={onClose} wide>
+  return <Dialog title={node ? `编辑 ${node.node_name}` : "手工添加节点"} description="基础字段会同步写回完整 Clash 节点配置" onClose={onClose} wide>
     <form className="form-stack" onSubmit={submit}>
       {error ? <ErrorState message={error} /> : null}
       <div className="form-grid"><Field label="节点名称"><input autoFocus required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field><Field label="协议"><select value={form.protocol} onChange={(event) => setForm({ ...form, protocol: event.target.value })}>{protocolOptions.map((item) => <option value={item} key={item}>{item.toUpperCase()}</option>)}</select></Field></div>
@@ -1993,7 +2010,11 @@ export function NodeEditor({ node, offer, availableTags = [], onClose, onComplet
       {availableTags.length ? <div className="nw-tag-choices" aria-label="已有标签">{availableTags.map((item) => <button type="button" key={item} className={tags.includes(item) ? "is-active" : ""} aria-pressed={tags.includes(item)} onClick={() => setTags((current) => current.includes(item) ? current.filter((tag) => tag !== item) : [...current, item])}>{item}</button>)}</div> : null}
       <Field label="原始 URI（可选）"><input value={form.rawURL} onChange={(event) => setForm({ ...form, rawURL: event.target.value })} placeholder="vless://..." /></Field>
       {node?.original_server ? <div className="nw-inline-note"><Server size={16} /><span>受管服务器：<strong>{node.original_server}</strong>{node.inbound_tag ? ` · 入站 ${node.inbound_tag}` : ""}</span></div> : null}
-      <Field label="Clash JSON 配置" hint="保存前会校验 JSON，并以顶部基础字段覆盖 name/type/server/port"><textarea className="nw-code-editor" rows={14} spellCheck={false} value={form.config} onChange={(event) => setForm({ ...form, config: event.target.value })} /></Field>
+      <div className="nw-tabs" role="tablist" aria-label="节点配置格式">
+        <button type="button" role="tab" aria-selected={configFormat === "yaml"} className={configFormat === "yaml" ? "is-active" : ""} onClick={() => switchConfigFormat("yaml")}>标准 Clash YAML</button>
+        <button type="button" role="tab" aria-selected={configFormat === "json"} className={configFormat === "json" ? "is-active" : ""} onClick={() => switchConfigFormat("json")}>JSON</button>
+      </div>
+      <Field label={configFormat === "yaml" ? "标准 Clash 节点配置 (YAML)" : "Clash JSON 配置"} hint="支持标准 Clash YAML（proxies: - ...）或 JSON 格式，保存前自动以顶部基础字段覆盖 name/type/server/port"><textarea className="nw-code-editor" rows={14} spellCheck={false} value={form.config} onChange={(event) => setForm({ ...form, config: event.target.value })} /></Field>
       <Toggle checked={form.enabled} onChange={(enabled) => setForm({ ...form, enabled })} label="启用节点" />
       {node ? <div className="nw-managed-offer"><Toggle checked={form.selfService} disabled={(!offer && (!node.original_server || !node.inbound_tag)) || (!selfServiceProtocolReady && !form.selfService)} onChange={(selfService) => setForm({ ...form, selfService })} label="允许获授权用户自助开通" />{form.selfService ? <Field label="目录排序" hint="数值越小越靠前"><input type="number" min="0" step="1" value={form.offerOrder} onChange={(event) => setForm({ ...form, offerOrder: event.target.value })} /></Field> : null}{!node.original_server || !node.inbound_tag ? <small>需要受管服务器和入站标识（Tag）后才能发布。</small> : tunnelNode ? <small>Tunnel 转发节点复用目标节点凭据，不能单独发布到用户目录。</small> : !selfServiceProtocolReady ? <small>{nodeProtocolKey(form.protocol) === "wireguard" ? "WireGuard 暂不支持按用户自助开通；管理员创建的普通节点仍可分配到套餐和订阅。" : "经典 Shadowsocks 只有共享密码，不能安全分配给独立用户；请改用 Shadowsocks 2022。"}</small> : <small>保存时会校验 Agent 的开通、到期和限速能力。</small>}</div> : null}
       <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose} disabled={working}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />保存节点</>}</Button></div>
@@ -2729,15 +2750,32 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
 }
 
 function ConfigDialog({ node, editable, onClose, onComplete }: { node: WorkbenchNode; editable: boolean; onClose: () => void; onComplete: () => void }) {
+  const [format, setFormat] = useState<"yaml" | "json">("yaml");
   const [config, setConfig] = useState(() => {
-    try { return JSON.stringify(JSON.parse(node.clash_config || "{}"), null, 2); } catch { return node.clash_config || "{}"; }
+    try {
+      const yamlText = formatProxyToClashYAML(node.clash_config || "{}");
+      return yamlText !== "proxies: []\n" ? yamlText : (node.clash_config || "");
+    } catch {
+      return node.clash_config || "";
+    }
   });
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
+  const switchFormat = (nextFormat: "yaml" | "json") => {
+    if (nextFormat === format) return;
+    setError("");
+    try {
+      const parsed = parseClashProxyInput(config);
+      setConfig(nextFormat === "yaml" ? formatProxyToClashYAML(parsed) : formatProxyToClashJSON(parsed));
+      setFormat(nextFormat);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "配置格式转换失败");
+    }
+  };
   const save = async () => {
     setWorking(true); setError("");
     try {
-      const parsed = JSON.parse(config);
+      const parsed = parseClashProxyInput(config);
       for (const key of ["name", "type", "server", "port"]) if (parsed[key] === undefined || parsed[key] === "") throw new Error(`配置缺少必需字段：${key}`);
       await api.put(`/api/admin/nodes/${node.id}/config`, { clash_config: JSON.stringify(parsed) });
       onComplete();
@@ -2748,7 +2786,17 @@ function ConfigDialog({ node, editable, onClose, onComplete }: { node: Workbench
     try { await copyText(config); } catch { setError("复制失败，请手动选择配置"); }
   };
   return <Dialog title={`Clash 配置 · ${node.node_name}`} description={editable ? "修改后会同步节点名称和共享订阅" : "当前账户仅可查看配置"} onClose={onClose} wide>
-    <div className="form-stack">{error ? <ErrorState message={error} /> : null}<Field label="JSON 配置"><textarea className="nw-code-editor" aria-label="Clash JSON 配置" rows={20} readOnly={!editable} spellCheck={false} value={config} onChange={(event) => setConfig(event.target.value)} /></Field><div className="dialog-actions"><Button variant="secondary" onClick={() => void copy()}><Copy size={16} />复制</Button><Button variant="secondary" onClick={onClose}>关闭</Button>{editable ? <Button onClick={() => void save()} disabled={working}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />保存配置</>}</Button> : null}</div></div>
+    <div className="form-stack">
+      {error ? <ErrorState message={error} /> : null}
+      <div className="nw-tabs" role="tablist" aria-label="Clash 配置格式">
+        <button type="button" role="tab" aria-selected={format === "yaml"} className={format === "yaml" ? "is-active" : ""} onClick={() => switchFormat("yaml")}>标准 Clash YAML</button>
+        <button type="button" role="tab" aria-selected={format === "json"} className={format === "json" ? "is-active" : ""} onClick={() => switchFormat("json")}>JSON</button>
+      </div>
+      <Field label={format === "yaml" ? "标准 Clash 节点配置 (YAML)" : "JSON 配置"} hint={editable ? "支持标准 Clash YAML（proxies: - ...）或 JSON 格式保存" : undefined}>
+        <textarea className="nw-code-editor" aria-label="Clash 节点配置" rows={20} readOnly={!editable} spellCheck={false} value={config} onChange={(event) => setConfig(event.target.value)} />
+      </Field>
+      <div className="dialog-actions"><Button variant="secondary" onClick={() => void copy()}><Copy size={16} />复制</Button><Button variant="secondary" onClick={onClose}>关闭</Button>{editable ? <Button onClick={() => void save()} disabled={working}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />保存配置</>}</Button> : null}</div>
+    </div>
   </Dialog>;
 }
 

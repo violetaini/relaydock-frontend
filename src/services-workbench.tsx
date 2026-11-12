@@ -43,6 +43,12 @@ import {
   X,
 } from "lucide-react";
 import { api, openDashboardSocket, requestStream } from "./api";
+import {
+  PortCheckHint,
+  isPortCheckBlocking,
+  portCheckNetworkForProtocol,
+  useDebouncedPortCheck,
+} from "./port-check";
 import { CountryFlag } from "./country-flag";
 import { NAVIGATION_REQUEST_EVENT, type NavigationRequestDetail } from "./navigation-guard";
 import type { NginxMode, RealtimeMessage, RemoteServer, ServerListResponse, SharedServerToken } from "./types";
@@ -3759,9 +3765,48 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
     return resource;
   };
 
+  const inboundPortProtocol = useMemo(() => {
+    if (kind !== "inbound" || !editor || editor.mode === "view") return "";
+    if (editor.mode === "create" && creationPreset !== "advanced") {
+      if (creationPreset === "wireguard") return "wireguard";
+      if (creationPreset === "trojan") return trojanDraft.combination === "ws-tls" ? "trojan-wss" : "trojan";
+      if (creationPreset === "wss") return "vless-wss";
+      return "vless";
+    }
+    return protocol.trim();
+  }, [creationPreset, editor, kind, protocol, trojanDraft.combination]);
+
+  const inboundPortNetwork = useMemo(() => {
+    if (!inboundPortProtocol && kind === "inbound") {
+      try {
+        const parsed = JSON.parse(jsonDraft) as { settings?: { network?: unknown } };
+        if (typeof parsed?.settings?.network === "string" && parsed.settings.network.trim()) {
+          return parsed.settings.network.trim();
+        }
+      } catch {
+        // Ignore transient invalid JSON while editing raw mode.
+      }
+    }
+    return portCheckNetworkForProtocol(inboundPortProtocol);
+  }, [inboundPortProtocol, jsonDraft, kind]);
+
+  const inboundPortIgnoreTag = editor?.mode === "edit" && editor.original ? xrayResourceTag(editor.original) : "";
+  const inboundPortCheckURL = kind === "inbound" && editor && editor.mode !== "view" && port.trim()
+    ? `/api/admin/remote/port-check?server_id=${serverId}&port=${encodeURIComponent(port.trim())}&protocol=${encodeURIComponent(inboundPortProtocol)}&network=${encodeURIComponent(inboundPortNetwork)}${inboundPortIgnoreTag ? `&ignore_tag=${encodeURIComponent(inboundPortIgnoreTag)}` : ""}`
+    : null;
+  const inboundPortCheck = useDebouncedPortCheck({
+    enabled: kind === "inbound" && Boolean(editor && editor.mode !== "view"),
+    url: inboundPortCheckURL,
+    port,
+  });
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!editor || editor.mode === "view") return;
+    if (kind === "inbound" && isPortCheckBlocking(inboundPortCheck)) {
+      setEditorError(inboundPortCheck.message || "该监听端口不可用");
+      return;
+    }
     setEditorError("");
     let resource: XrayResource;
     let generatedWireGuardClientConfig = "";
@@ -3915,7 +3960,7 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
         {kind === "inbound" && editor.mode === "create" && creationPreset !== "advanced" ? <>
           <div className="secure-inbound-reference"><span><Badge tone={creationPreset === "wireguard" || creationPreset === "trojan" || creationPreset === "tcp" ? "good" : matchingExample ? "good" : examplesError ? "warn" : "neutral"}>{creationPreset === "wireguard" ? "Xray 原生" : creationPreset === "trojan" || creationPreset === "tcp" ? "常用组合" : examplesLoading ? "模板读取中" : matchingExample ? "官方模板" : "内置模板"}</Badge><strong>{creationPreset === "wireguard" ? "WireGuard 入站与客户端配置" : creationPreset === "trojan" ? "Trojan 安全传输向导" : creationPreset === "tcp" ? "VLESS TCP（无 TLS）直连/中转入站" : matchingExample?.dir_name || (creationPreset === "reality" ? "VLESS TCP Reality" : "VLESS WSS")}</strong></span>{creationPreset !== "wireguard" && creationPreset !== "trojan" && creationPreset !== "tcp" && examplesError ? <small>{examplesError}</small> : null}</div>
           {nginxMode === "reuse_existing" && (creationPreset === "wss" || (creationPreset === "trojan" && trojanDraft.combination === "ws-tls")) ? <div className="service-nginx-reuse-notice" role="note"><ShieldCheck size={17} /><span><strong>此入站将复用系统已有 Nginx</strong><small>Arcway 只添加独立站点配置并安全重载，不会覆盖主配置或接管 Nginx 服务。</small></span></div> : null}
-          <div className="form-grid two"><Field label="Tag"><input required aria-label="入站 Tag" value={tag} onChange={(event) => setTag(event.target.value)} placeholder={creationPreset === "wireguard" ? "wireguard-in" : creationPreset === "trojan" ? "trojan-in" : creationPreset === "tcp" ? "vless-tcp" : creationPreset === "reality" ? "vless-reality" : "vless-wss"} /></Field><Field label={creationPreset === "wss" || (creationPreset === "trojan" && trojanDraft.combination === "ws-tls") ? "外部 TLS 端口" : "监听端口"}><input type="number" min="1" max="65535" required aria-label="入站监听端口" value={port} onChange={(event) => setPort(event.target.value)} /></Field></div>
+          <div className="form-grid two"><Field label="Tag"><input required aria-label="入站 Tag" value={tag} onChange={(event) => setTag(event.target.value)} placeholder={creationPreset === "wireguard" ? "wireguard-in" : creationPreset === "trojan" ? "trojan-in" : creationPreset === "tcp" ? "vless-tcp" : creationPreset === "reality" ? "vless-reality" : "vless-wss"} /></Field><div className="port-field-group"><Field label={creationPreset === "wss" || (creationPreset === "trojan" && trojanDraft.combination === "ws-tls") ? "外部 TLS 端口" : "监听端口"}><input type="number" min="1" max="65535" required aria-label="入站监听端口" value={port} onChange={(event) => setPort(event.target.value)} /></Field><PortCheckHint state={inboundPortCheck} /></div></div>
           {creationPreset === "wireguard" ? <>
             <div className="secure-key-status wireguard-key-status"><span><Badge tone={validWireGuardKey(wireGuardDraft.serverPrivateKey) && validWireGuardKey(wireGuardDraft.clientPrivateKey) ? "good" : "warn"}>{validWireGuardKey(wireGuardDraft.serverPrivateKey) && validWireGuardKey(wireGuardDraft.clientPrivateKey) ? "两组密钥已生成" : "密钥未就绪"}</Badge><small>客户端凭据将由控制端加密存储</small></span><Button type="button" variant="secondary" disabled={wireGuardKeyWorking} onClick={() => void generateWireGuardKeys()}>{wireGuardKeyWorking ? <Spinner label="生成中" /> : <><KeyRound size={15} />重新生成密钥</>}</Button></div>
             <div className="form-grid two"><Field label="服务端隧道地址"><input required aria-label="WireGuard 服务端地址" value={wireGuardDraft.serverAddress} onChange={(event) => setWireGuardDraft((current) => ({ ...current, serverAddress: event.target.value }))} /></Field><Field label="客户端隧道地址"><input required aria-label="WireGuard 客户端地址" value={wireGuardDraft.clientAddress} onChange={(event) => setWireGuardDraft((current) => ({ ...current, clientAddress: event.target.value }))} /></Field></div>
@@ -3995,10 +4040,10 @@ function XrayResourcesWorkbench({ serverId, serverDomain = "", serverIPv4 = "", 
           <details className="xray-advanced-disclosure" open={outboundEditorTab === "json"}><summary>高级 JSON（可选）</summary><Field label="高级 JSON" hint="用于保留协议尚未覆盖的 Xray 字段；基础字段保存时会覆盖同名字段。"><textarea className="service-code-editor xray-resource-json" aria-label="出站高级 JSON" spellCheck={false} value={jsonDraft} onChange={(event) => { setJsonDraft(event.target.value); setOutboundEditorTab("json"); }} /></Field></details>
         </> : <>
           <div className="form-grid two"><Field label="Tag"><input required aria-label={`${label} Tag`} value={tag} onChange={(event) => setTag(event.target.value)} placeholder="vless-in" /></Field><Field label="协议"><select aria-label={`${label}协议`} value={protocol} onChange={(event) => setProtocol(event.target.value)}>{protocol && !protocols.includes(protocol) ? <option value={protocol}>{protocol}</option> : null}{protocols.map((value) => <option key={value} value={value}>{value}</option>)}</select></Field></div>
-          <div className="form-grid two"><Field label="监听地址"><input aria-label="入站监听地址" value={listen} onChange={(event) => setListen(event.target.value)} placeholder="0.0.0.0" /></Field><Field label="监听端口"><input type="number" min="1" max="65535" required aria-label="入站监听端口" value={port} onChange={(event) => setPort(event.target.value)} /></Field></div>
+          <div className="form-grid two"><Field label="监听地址"><input aria-label="入站监听地址" value={listen} onChange={(event) => setListen(event.target.value)} placeholder="0.0.0.0" /></Field><div className="port-field-group"><Field label="监听端口"><input type="number" min="1" max="65535" required aria-label="入站监听端口" value={port} onChange={(event) => setPort(event.target.value)} /></Field>{kind === "inbound" ? <PortCheckHint state={inboundPortCheck} /> : null}</div></div>
           <Field label="高级 JSON" hint="可配置完整 Xray 入站字段；必须是单个对象。"><textarea className="service-code-editor xray-resource-json" aria-label={`${label}高级 JSON`} spellCheck={false} value={jsonDraft} onChange={(event) => setJsonDraft(event.target.value)} /></Field>
         </>}
-        <div className="dialog-actions"><Button type="button" variant="secondary" onClick={closeEditor} disabled={working}>取消</Button><Button type="submit" disabled={working || (creationPreset === "reality" && keyWorking !== "") || (creationPreset === "wireguard" && wireGuardKeyWorking) || (creationPreset === "trojan" && trojanDraft.combination === "tcp-reality" && trojanKeyWorking)}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />{editor.mode === "edit" ? "保存并重建" : `创建${label}`}</>}</Button></div>
+        <div className="dialog-actions"><Button type="button" variant="secondary" onClick={closeEditor} disabled={working}>取消</Button><Button type="submit" disabled={working || (kind === "inbound" && isPortCheckBlocking(inboundPortCheck)) || (creationPreset === "reality" && keyWorking !== "") || (creationPreset === "wireguard" && wireGuardKeyWorking) || (creationPreset === "trojan" && trojanDraft.combination === "tcp-reality" && trojanKeyWorking)}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />{editor.mode === "edit" ? "保存并重建" : `创建${label}`}</>}</Button></div>
       </form>}
     </div></Dialog> : null}
     {deleting ? <ConfirmDialog title={`删除${label}`} description={`将从服务器 #${serverId} 的 Xray 运行时和配置文件中删除“${xrayResourceTag(deleting)}”。`} confirmLabel="确认删除" working={working} onCancel={() => !working && setDeleting(null)} onConfirm={() => void remove()} /> : null}

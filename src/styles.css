@@ -2584,3 +2584,39 @@ td { min-height: 62px; }
   color: #0f172a;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
+
+.port-field-group {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.port-check-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.port-check-hint.is-checking {
+  color: var(--text-soft);
+}
+.port-check-hint.is-good {
+  color: var(--green);
+}
+.port-check-hint.is-shared {
+  color: var(--blue);
+}
+.port-check-hint.is-bad {
+  color: var(--red);
+  font-weight: 500;
+}
+.port-check-hint.is-warn {
+  color: var(--amber);
+}
+@keyframes pc-spin {
+  to { transform: rotate(360deg); }
+}
+.pc-spin {
+  animation: pc-spin 0.9s linear infinite;
+}

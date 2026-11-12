@@ -56,6 +56,12 @@ import {
 } from "lucide-react";
 import { api } from "./api";
 import {
+  PortCheckHint,
+  isPortCheckBlocking,
+  portCheckNetworkForProtocol,
+  useDebouncedPortCheck,
+} from "./port-check";
+import {
   formatProxyToClashJSON,
   formatProxyToClashYAML,
   parseClashProxyInput,
@@ -2529,6 +2535,15 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
     }));
   };
 
+  const portCheckURL = step === 3 && serverID && draft.port.trim()
+    ? `${isAdmin ? "/api/admin/remote/port-check" : "/api/user/managed-node-creation/port-check"}?server_id=${encodeURIComponent(serverID)}&port=${encodeURIComponent(draft.port.trim())}&protocol=${encodeURIComponent(draft.protocol)}&network=${encodeURIComponent(portCheckNetworkForProtocol(draft.protocol))}`
+    : null;
+  const portCheck = useDebouncedPortCheck({
+    enabled: step === 3 && Boolean(serverID),
+    url: portCheckURL,
+    port: draft.port,
+  });
+
   const validateStep = () => {
     setError("");
     try {
@@ -2546,6 +2561,9 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
         if (!isAdmin && selectedProtocol?.requiresCertificate && validCertificates.length === 0) throw new Error("该协议需要托管 TLS 证书，请先到证书管理申请或上传证书");
         setStep(3);
         return;
+      }
+      if (isPortCheckBlocking(portCheck)) {
+        throw new Error(portCheck.message || "该监听端口不可用");
       }
       if (isWireGuard) {
         buildManagedWireGuardInbound(draft);
@@ -2667,7 +2685,7 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
       </section> : step === 3 ? <section className="managed-wizard-step">
         <div className="managed-step-heading"><span><Settings2 size={19} /></span><div><h3>配置 {protocolLabel(draft.protocol)}</h3><p>界面只展示当前协议需要的字段。</p></div></div>
         <div className="form-grid"><Field label="节点名称"><input autoFocus required value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder={`${selectedServer?.name || "节点"} ${protocolLabel(draft.protocol)}`} /></Field><Field label="入站标识（Tag）" hint="Xray 内部唯一标识，同一服务器不可重复"><input required value={draft.tag} onChange={(event) => setDraft({ ...draft, tag: event.target.value })} /></Field></div>
-        <div className="form-grid"><Field label="监听端口"><input required type="number" min="1" max="65535" value={draft.port} onChange={(event) => setDraft({ ...draft, port: event.target.value })} /></Field>{isTunnel ? <Field label="转发网络"><input readOnly value="TCP + UDP" /></Field> : isWireGuard ? <Field label="客户端 Endpoint"><input readOnly value={wireGuardEndpoint ? `${wireGuardEndpoint.includes(":") && !wireGuardEndpoint.startsWith("[") ? `[${wireGuardEndpoint}]` : wireGuardEndpoint}:${draft.port}` : "服务器尚未上报可连接地址"} /></Field> : <Field label="客户端地址"><select value={draft.ipVersion} onChange={(event) => setDraft({ ...draft, ipVersion: event.target.value as ManagedInboundDraft["ipVersion"] })}><option value="v4">IPv4</option>{selectedServer?.ipv6_enabled && selectedServer.ip_address_v6 ? <option value="v6">IPv6</option> : null}{selectedServer?.ipv6_enabled && selectedServer.ip_address_v6 ? <option value="both">IPv4 + IPv6</option> : null}</select></Field>}</div>
+        <div className="form-grid"><div className="port-field-group"><Field label="监听端口"><input required type="number" min="1" max="65535" value={draft.port} onChange={(event) => setDraft({ ...draft, port: event.target.value })} /></Field><PortCheckHint state={portCheck} /></div>{isTunnel ? <Field label="转发网络"><input readOnly value="TCP + UDP" /></Field> : isWireGuard ? <Field label="客户端 Endpoint"><input readOnly value={wireGuardEndpoint ? `${wireGuardEndpoint.includes(":") && !wireGuardEndpoint.startsWith("[") ? `[${wireGuardEndpoint}]` : wireGuardEndpoint}:${draft.port}` : "服务器尚未上报可连接地址"} /></Field> : <Field label="客户端地址"><select value={draft.ipVersion} onChange={(event) => setDraft({ ...draft, ipVersion: event.target.value as ManagedInboundDraft["ipVersion"] })}><option value="v4">IPv4</option>{selectedServer?.ipv6_enabled && selectedServer.ip_address_v6 ? <option value="v6">IPv6</option> : null}{selectedServer?.ipv6_enabled && selectedServer.ip_address_v6 ? <option value="both">IPv4 + IPv6</option> : null}</select></Field>}</div>
         {!isAdmin ? <div className="nw-inline-note"><KeyRound size={16} /><span><strong>节点凭据由服务端自动生成</strong><small>客户端 UUID、密码和代理账号会在提交时替换并绑定当前账号，创建后可在节点配置中查看。</small></span></div> : null}
         {isTunnel ? <><div className="form-grid"><Field label="目标节点"><select value={draft.forwardNodeId} onChange={(event) => chooseForwardNode(event.target.value)}><option value="">请选择已有节点</option>{forwardingCandidates.map((node) => { const address = nodeAddress(node); return <option key={node.id} value={node.id}>{node.node_name} · {address.host}:{address.port}</option>; })}</select></Field><Field label="目标地址"><input readOnly value={draft.targetAddress && draft.targetPort ? `${draft.targetAddress}:${draft.targetPort}` : ""} /></Field></div>{forwardingCandidates.length ? <div className="nw-inline-note"><Cable size={16} /><span><strong>TCP + UDP</strong> · {selectedForwardNode ? <code>{draft.targetAddress}:{draft.targetPort}</code> : "请选择目标节点"}</span></div> : <ErrorState message="当前没有可转发的受管节点，请先在服务器上创建节点" />}</> : null}
         {isWireGuard ? <><div className="form-grid"><Field label="服务端隧道地址"><input aria-label="WireGuard 服务端地址" value={draft.wireGuardServerAddress} onChange={(event) => setDraft({ ...draft, wireGuardServerAddress: event.target.value })} placeholder="10.66.66.1/32" /></Field><Field label="客户端隧道地址"><input aria-label="WireGuard 客户端地址" value={draft.wireGuardClientAddress} onChange={(event) => setDraft({ ...draft, wireGuardClientAddress: event.target.value })} placeholder="10.66.66.2/32" /></Field></div><div className="form-grid three"><Field label="客户端 DNS"><input aria-label="WireGuard 客户端 DNS" value={draft.wireGuardDNS} onChange={(event) => setDraft({ ...draft, wireGuardDNS: event.target.value })} /></Field><Field label="MTU"><input type="number" min="576" max="9000" aria-label="WireGuard MTU" value={draft.wireGuardMTU} onChange={(event) => setDraft({ ...draft, wireGuardMTU: event.target.value })} /></Field><Field label="Keepalive"><input type="number" min="0" max="65535" aria-label="WireGuard Keepalive" value={draft.wireGuardKeepAlive} onChange={(event) => setDraft({ ...draft, wireGuardKeepAlive: event.target.value })} /></Field></div><div className="managed-key-state"><span><KeyRound size={16} /><span><strong>WireGuard 密钥</strong><small>{draft.wireGuardServerPrivateKey && draft.wireGuardClientPrivateKey ? "两组密钥已生成；客户端凭据将加密存储" : "等待在浏览器中生成"}</small></span></span><Button type="button" variant="secondary" disabled={wireGuardKeyWorking} onClick={() => void generateWireGuardKeys()}>{wireGuardKeyWorking ? <Spinner label="正在生成" /> : <><RefreshCw size={15} />重新生成</>}</Button></div></> : null}
@@ -2865,7 +2883,7 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
         </dl>
         <details className="secure-inbound-preview"><summary>{isAdmin ? "查看将提交的 Xray JSON" : "查看入站结构（凭据由服务端替换）"}</summary><textarea className="nw-code-editor" aria-label="受管节点 Xray JSON" rows={16} readOnly spellCheck={false} value={JSON.stringify(managedInboundPreview(draft, isAdmin), null, 2)} /></details>
       </section>}
-      {!loading ? <div className="dialog-actions managed-wizard-actions"><Button type="button" variant="secondary" onClick={step === 1 ? onClose : () => { setError(""); setStep((current) => current - 1); }} disabled={working}><ArrowLeft size={16} />{step === 1 ? "取消" : "上一步"}</Button>{step < 4 ? <Button type="button" onClick={validateStep} disabled={working || (step === 1 && (!readyServers.length || inventoryWorking || inventoryServerID !== serverID)) || (step === 2 && !allowedProtocolOptions.length) || keyWorking || wireGuardKeyWorking}>下一步<ArrowRight size={16} /></Button> : <Button type="button" onClick={() => void submit()} disabled={working}>{working ? <Spinner label="正在创建并校验" /> : <><Server size={16} />创建节点</>}</Button>}</div> : null}
+      {!loading ? <div className="dialog-actions managed-wizard-actions"><Button type="button" variant="secondary" onClick={step === 1 ? onClose : () => { setError(""); setStep((current) => current - 1); }} disabled={working}><ArrowLeft size={16} />{step === 1 ? "取消" : "上一步"}</Button>{step < 4 ? <Button type="button" onClick={validateStep} disabled={working || (step === 1 && (!readyServers.length || inventoryWorking || inventoryServerID !== serverID)) || (step === 2 && !allowedProtocolOptions.length) || (step === 3 && isPortCheckBlocking(portCheck)) || keyWorking || wireGuardKeyWorking}>下一步<ArrowRight size={16} /></Button> : <Button type="button" onClick={() => void submit()} disabled={working}>{working ? <Spinner label="正在创建并校验" /> : <><Server size={16} />创建节点</>}</Button>}</div> : null}
     </div>
   </Dialog>;
 }
@@ -3026,8 +3044,17 @@ export function AnyDoorForwardDialog({ node, onClose, onComplete }: {
     return () => { active = false; };
   }, []);
 
+  const portCheckURL = serverID && port.trim()
+    ? `/api/admin/remote/port-check?server_id=${serverID}&port=${encodeURIComponent(port.trim())}&protocol=tunnel&network=tcp,udp`
+    : null;
+  const portCheck = useDebouncedPortCheck({
+    enabled: Boolean(serverID) && !loading,
+    url: portCheckURL,
+    port,
+  });
+
   const listenPort = Number(port);
-  const valid = Boolean(serverID && target.host && target.port && /^[A-Za-z0-9_-]{2,64}$/.test(tag.trim()) && Number.isInteger(listenPort) && listenPort >= 1 && listenPort <= 65535);
+  const valid = Boolean(serverID && target.host && target.port && /^[A-Za-z0-9_-]{2,64}$/.test(tag.trim()) && Number.isInteger(listenPort) && listenPort >= 1 && listenPort <= 65535 && !isPortCheckBlocking(portCheck));
   const tunnelNodeName = `${node.node_name.trim() || `节点 ${node.id}`} | Tunnel`;
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -3064,7 +3091,7 @@ export function AnyDoorForwardDialog({ node, onClose, onComplete }: {
     <form className="form-stack" onSubmit={(event) => void submit(event)}>
       {error ? <ErrorState message={error} /> : null}
       <Field label="入口服务器"><select autoFocus value={serverID || ""} disabled={loading || working} onChange={(event) => setServerID(Number(event.target.value))}><option value="">选择在线服务器</option>{servers.map((server) => <option key={server.id} value={server.id}>{server.name} · {server.domain || server.ip_address || "地址待上报"}</option>)}</select></Field>
-      <div className="form-grid"><Field label="入站标识（Tag）" hint="Xray 内部唯一标识，同一服务器不可重复"><input required value={tag} onChange={(event) => setTag(event.target.value)} /></Field><Field label="监听端口"><input required type="number" min="1" max="65535" value={port} onChange={(event) => setPort(event.target.value)} /></Field></div>
+      <div className="form-grid"><Field label="入站标识（Tag）" hint="Xray 内部唯一标识，同一服务器不可重复"><input required value={tag} onChange={(event) => setTag(event.target.value)} /></Field><div className="port-field-group"><Field label="监听端口"><input required type="number" min="1" max="65535" value={port} onChange={(event) => setPort(event.target.value)} /></Field><PortCheckHint state={portCheck} /></div></div>
       <div className="nw-inline-note"><Cable size={16} /><span><strong>TCP + UDP</strong> · <code>{target.host}:{target.port}</code></span></div>
       {!loading && servers.length === 0 ? <ErrorState message="没有可用的在线受管服务器" /> : null}
       <div className="dialog-actions"><Button type="button" variant="secondary" disabled={working} onClick={onClose}>取消</Button><Button type="submit" disabled={!valid || loading || working}>{working ? <Spinner label="正在创建" /> : <><Cable size={16} />创建任意门</>}</Button></div>

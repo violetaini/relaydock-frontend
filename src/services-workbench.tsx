@@ -484,7 +484,7 @@ const emptyCreateForm: CreateServerForm = {
   connectionMode: "websocket",
   listenPort: "23889",
   domain: "",
-  xrayMode: "external",
+  xrayMode: "embedded",
   nginxMode: "managed",
   trafficLimitGB: "",
   trafficUsedGB: "",
@@ -2059,7 +2059,7 @@ function DeleteServerDialog({ server, working, error, refreshVersion, onCancel, 
 
         <div className="service-delete-runtime-note" role="note">
           <TriangleAlert size={16} />
-          <span>{xrayMode === "embedded" ? "当前为内置 Xray：卸载 Agent 后代理服务会停止，现有连接将中断，但 Xray 配置文件仍会保留。" : "当前为外置 Xray：卸载 Agent 不会停止 Xray，它仍可能继续监听并提供代理服务。"}</span>
+          <span>{xrayMode === "embedded" ? "当前为全托管 Xray：卸载 Agent 后代理服务会停止，现有连接将中断，但 Xray 配置文件仍会保留。" : "当前为接管外部 Xray：卸载 Agent 不会停止 Xray，它仍可能继续监听并提供代理服务。"}</span>
         </div>
       </> : <div className="service-delete-shared-note"><Network size={17} /><span><strong>远端保持原状</strong><small>不会卸载服务器拥有方的 Agent，也不会修改其 Xray、Nginx、防火墙或证书。</small></span></div>}
 
@@ -2499,7 +2499,7 @@ function ServerCard({ server, serviceStatus, agentVersion, checked, credentialsL
       </div>
       <div className="service-badges">
         {server.is_federated ? <Badge tone="info">共享</Badge> : null}
-        <Badge tone="neutral">{server.xray_mode === "embedded" ? "内嵌 Xray" : "外置 Xray"}</Badge>
+        <Badge tone={server.xray_mode === "embedded" ? "good" : "neutral"}>{server.xray_mode === "embedded" ? "全托管 Xray" : "接管外部 Xray"}</Badge>
         {server.encrypted ? <Badge tone="good"><ShieldCheck size={12} />加密连接</Badge> : null}
         {server.warp_installed ? <Badge tone="info">WARP</Badge> : null}
       </div>
@@ -2608,7 +2608,7 @@ function ServerFormFields({ form, setForm, editing = false }: { form: CreateServ
     <div className="form-grid"><Field label="公网 IPv4 / 初始地址" hint="允许留空，Agent 首次连接后自动上报"><input value={form.ipAddress} onChange={(event) => patch("ipAddress", event.target.value)} placeholder="203.0.113.10" disabled={editing} /></Field><Field label="服务器地址 / DDNS 域名"><input value={form.pullAddress} onChange={(event) => patch("pullAddress", event.target.value)} placeholder="edge.example.com" /></Field></div>
     <div className="form-grid"><Field label="Agent 监听端口"><input type="number" min="1024" max="65534" value={form.listenPort} onChange={(event) => patch("listenPort", event.target.value)} disabled={editing} /></Field><Field label="Pull 端口"><input type="number" min="1" max="65535" value={form.pullPort} onChange={(event) => patch("pullPort", event.target.value)} disabled={form.connectionMode !== "pull"} /></Field></div>
     {!editing && form.connectionMode === "pull" ? <Field label="可选 Agent 认证 Token" hint="留空时由控制端安全生成"><input value={form.pullToken} onChange={(event) => patch("pullToken", event.target.value)} /></Field> : null}
-    <div className="form-grid"><Field label="节点域名" hint={form.stealMode === "default" ? undefined : "Tunnel/Fallback 接管模式必填"}><input required={form.stealMode !== "default"} value={form.domain} onChange={(event) => patch("domain", event.target.value)} placeholder="hk.example.com" /></Field><Field label="Xray 模式"><select value={form.xrayMode} onChange={(event) => patch("xrayMode", event.target.value)}><option value="external">外置 Xray</option><option value="embedded">内嵌 Xray</option></select></Field></div>
+    <div className="form-grid"><Field label="节点域名" hint={form.stealMode === "default" ? undefined : "Tunnel/Fallback 接管模式必填"}><input required={form.stealMode !== "default"} value={form.domain} onChange={(event) => patch("domain", event.target.value)} placeholder="hk.example.com" /></Field><Field label="Xray 模式" hint={form.xrayMode === "embedded" ? "推荐：由 RelayDock 全权管理 Xray 核心，支持多用户凭据隔离与自动限速" : "共存模式：仅接管现有 3x-ui / 裸 Xray，不碰原进程，仅作为管理员节点"}><select aria-label="Xray 模式" value={form.xrayMode} onChange={(event) => patch("xrayMode", event.target.value)}><option value="embedded">RelayDock 全托管（推荐 · 自带 Xray，支持多用户与限速）</option><option value="external">接管现有环境（3x-ui / 裸 Xray 共存 · 仅管理员自用）</option></select></Field></div>
     <fieldset className="service-nginx-mode"><legend>Nginx 管理模式</legend><div className="service-nginx-mode-options" role="radiogroup" aria-label="Nginx 管理模式"><button type="button" role="radio" aria-checked={form.nginxMode === "managed"} className={form.nginxMode === "managed" ? "is-active" : ""} onClick={() => patch("nginxMode", "managed")}><Server size={18} /><span><strong>Arcway 管理 Nginx</strong><small>由面板安装、启停、更新配置</small></span></button><button type="button" role="radio" aria-checked={form.nginxMode === "reuse_existing"} className={form.nginxMode === "reuse_existing" ? "is-active" : ""} onClick={() => patch("nginxMode", "reuse_existing")}><ShieldCheck size={18} /><span><strong>复用系统已有 Nginx</strong><small>只下发独立站点配置，不接管服务</small></span></button></div>{form.nginxMode === "reuse_existing" ? <div className="service-nginx-mode-note" role="note"><ShieldCheck size={17} /><span><strong>现有 Nginx 保持系统托管</strong><small>Arcway 不会安装、卸载、覆盖主配置或控制服务启停；部署前会预检配置，失败时由服务端回滚。</small></span></div> : null}</fieldset>
     <div className="form-grid"><Field label="流量限额（GB）" hint="0 或留空表示不限"><input type="number" min="0" step="0.01" value={form.trafficLimitGB} onChange={(event) => patch("trafficLimitGB", event.target.value)} /></Field><Field label={editing ? "已用流量校准（GB，可选）" : "初始已用流量（GB）"}><input type="number" min="0" step="0.01" value={form.trafficUsedGB} onChange={(event) => patch("trafficUsedGB", event.target.value)} placeholder={editing ? "留空保持不变" : "0"} /></Field></div>
     <div className="form-grid"><Field label="每月重置日" hint="0 表示不自动重置"><input type="number" min="0" max="31" value={form.trafficResetDay} onChange={(event) => patch("trafficResetDay", event.target.value)} /></Field><Field label="服务器流量来源"><select value={form.trafficSource} onChange={(event) => patch("trafficSource", event.target.value)}><option value="system">系统网卡（VPS 计费口径）</option><option value="xray">Xray 节点聚合</option></select></Field></div>
@@ -2678,7 +2678,7 @@ function formFromServer(server: ManagedServer): CreateServerForm {
     connectionMode: server.connection_mode || "websocket",
     listenPort: String(server.listen_port || 23889),
     domain: server.domain ?? "",
-    xrayMode: server.xray_mode || "external",
+    xrayMode: server.xray_mode || "embedded",
     nginxMode: server.nginx_mode || "managed",
     trafficLimitGB: bytesToGB(server.traffic_limit),
     trafficUsedGB: "",

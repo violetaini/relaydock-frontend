@@ -2284,7 +2284,7 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
     ? "WireGuard 暂不支持普通用户自助开通，管理员创建后仍会作为正常节点使用。"
     : isLegacySharedShadowsocks
     ? "经典 ChaCha20 Shadowsocks 只有一组共享密码，不能安全下发独立用户凭据；请使用经典 AES-GCM 或 SS2022。"
-    : "该服务器为外置 Xray 模式，只能创建管理员节点，不能安全提供多用户凭据。";
+    : "当前服务器为【接管外部 Xray】模式，只能创建管理员节点；如需支持多用户独立凭据与自助开通，请在服务管理中将该服务器切换为【全托管】模式。";
 
   useEffect(() => {
     const dialogBody = wizardRef.current?.closest<HTMLElement>(".dialog-body");
@@ -2658,7 +2658,7 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
             <span className={`managed-server-icon ${ready ? "is-online" : ""}`}><Server size={18} /></span><span><strong>{server.name}</strong><small>{server.domain || server.ip_address || "地址待上报"}</small></span><Badge tone={ready ? "good" : "bad"}>{serverID === String(server.id) && inventoryWorking ? "读取配置" : ready ? "可创建" : inventoryFailed ? "读取入站失败" : full ? "名额已满" : "不可创建"}</Badge>
           </button>;
         })}</div> : <EmptyState icon={<Server size={23} />} title={isAdmin ? "还没有受管服务器" : "当前没有可创建节点的服务器授权"} description={isAdmin ? "先在服务器管理添加并安装 Agent。" : "请联系管理员授权服务器、协议和节点名额。"} />}
-        {!readyServers.length && servers.length ? <div className="nw-inline-note"><Activity size={16} /><span>{isAdmin ? "当前没有 Xray 在线的服务器，恢复在线后才能继续。" : "授权服务器当前离线、使用外置 Xray、未运行 Xray 或节点名额已满。"}</span></div> : null}
+        {!readyServers.length && servers.length ? <div className="nw-inline-note"><Activity size={16} /><span>{isAdmin ? "当前没有 Xray 在线的服务器，恢复在线后才能继续。" : "授权服务器当前离线、处于接管外部模式、未运行 Xray 或节点名额已满。"}</span></div> : null}
       </section> : step === 2 ? <section className="managed-wizard-step">
         <div className="managed-step-heading"><span><Network size={19} /></span><div><h3>选择协议与安全组合</h3><p>仅显示当前 Agent 可安全创建的协议组合。</p></div></div>
         {allowedProtocolOptions.length ? <div className="form-grid"><Field label="协议"><select aria-label="节点协议" value={selectedFamily} onChange={(event) => { const family = event.target.value as ManagedProtocolFamily; const first = allowedProtocolOptions.find((item) => item.family === family); if (first) chooseProtocol(first.value); }}>{(isAdmin ? managedProtocolFamilies : allowedProtocolFamilies).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field><Field label="传输与安全预设"><select aria-label="节点传输与安全预设" value={draft.protocol} onChange={(event) => chooseProtocol(event.target.value as ManagedProtocol)}>{familyProtocols.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field></div> : <ErrorState message="当前授权没有可由面板创建的协议组合，请联系管理员调整授权。" />}

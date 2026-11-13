@@ -78,6 +78,7 @@ export interface NodeItem {
   parsed_config: string;
   managed_multi_user?: boolean;
   direct_grant_eligible?: boolean;
+  package_eligible?: boolean;
   enabled: boolean;
   tag: string;
   tags?: string[];

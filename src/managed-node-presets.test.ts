@@ -4,6 +4,7 @@ import {
   buildManagedWireGuardClientProfile,
   buildManagedWireGuardClientConfig,
   buildManagedWireGuardInbound,
+  isPackageNodeEligible,
   managedInboundSupportsPublishing,
   managedProtocolOptions,
   newManagedInboundDraft,
@@ -383,6 +384,21 @@ describe("managed node protocol presets", () => {
     expect(managedInboundSupportsPublishing({ protocol: "shadowsocks", ssCipher: "2022-blake3-aes-128-gcm" })).toBe(true);
     expect(managedInboundSupportsPublishing({ protocol: "shadowsocks", ssCipher: "aes-128-gcm" })).toBe(true);
     expect(managedInboundSupportsPublishing({ protocol: "vmess-ws", ssCipher: "aes-128-gcm" })).toBe(true);
+  });
+
+  it("determines package node eligibility based on multi-user protocol capability", () => {
+    expect(isPackageNodeEligible({ protocol: "dokodemo-door", inbound_tag: "inbound-2133" })).toBe(false);
+    expect(isPackageNodeEligible({ protocol: "tunnel", inbound_tag: "anydoor-1234" })).toBe(false);
+    expect(isPackageNodeEligible({ protocol: "ss", parsed_config: JSON.stringify({ cipher: "chacha20-ietf-poly1305" }) })).toBe(false);
+    expect(isPackageNodeEligible({ protocol: "ss", parsed_config: JSON.stringify({ cipher: "aes-128-gcm" }), managed_multi_user: false })).toBe(false);
+    expect(isPackageNodeEligible({ protocol: "ss", parsed_config: JSON.stringify({ cipher: "aes-128-gcm" }), managed_multi_user: true })).toBe(true);
+    expect(isPackageNodeEligible({ protocol: "ss", parsed_config: JSON.stringify({ cipher: "2022-blake3-aes-128-gcm" }) })).toBe(true);
+    expect(isPackageNodeEligible({ protocol: "vless", inbound_tag: "vless-in" })).toBe(true);
+    expect(isPackageNodeEligible({ protocol: "trojan", inbound_tag: "tr-in" })).toBe(true);
+    expect(isPackageNodeEligible({ protocol: "chitanda", inbound_tag: "ch-in" })).toBe(true);
+    expect(isPackageNodeEligible({ protocol: "hysteria2", inbound_tag: "hy2-in" })).toBe(true);
+    expect(isPackageNodeEligible({ package_eligible: false, protocol: "vless" })).toBe(false);
+    expect(isPackageNodeEligible({ package_eligible: true, protocol: "tunnel" })).toBe(true);
   });
 
   it("separates the WireGuard runtime inbound from the encrypted client profile", () => {

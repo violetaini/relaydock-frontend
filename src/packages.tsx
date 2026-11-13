@@ -16,6 +16,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { api } from "./api";
+import { isPackageNodeEligible } from "./managed-node-presets";
 import type {
   ForwardingBillingMode,
   NodeItem,
@@ -340,7 +341,15 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
   onClose: () => void;
   onComplete: (message: string) => void;
 }) {
-  const [form, setForm] = useState<PackageFormState>(() => initialPackageForm(item, tunnels));
+  const eligibleNodes = useMemo(() => nodes.filter(isPackageNodeEligible), [nodes]);
+  const [form, setForm] = useState<PackageFormState>(() => {
+    const initial = initialPackageForm(item, tunnels);
+    const eligibleIDs = new Set(nodes.filter(isPackageNodeEligible).map((n) => n.id));
+    return {
+      ...initial,
+      nodes: initial.nodes.filter((id) => eligibleIDs.has(id)),
+    };
+  });
   const [nodeSearch, setNodeSearch] = useState("");
   const [templates, setTemplates] = useState<string[]>([]);
   const [showAdvanced, setShowAdvanced] = useState(Boolean(
@@ -360,11 +369,11 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
 
   const visibleNodes = useMemo(() => {
     const query = nodeSearch.trim().toLowerCase();
-    if (!query) return nodes;
-    return nodes.filter((node) => [node.node_name, node.protocol, node.original_server, node.tag]
+    if (!query) return eligibleNodes;
+    return eligibleNodes.filter((node) => [node.node_name, node.protocol, node.original_server, node.tag]
       .some((value) => value?.toLowerCase().includes(query)));
-  }, [nodeSearch, nodes]);
-  const knownIDs = useMemo(() => new Set(nodes.map((node) => node.id)), [nodes]);
+  }, [nodeSearch, eligibleNodes]);
+  const knownIDs = useMemo(() => new Set(eligibleNodes.map((node) => node.id)), [eligibleNodes]);
   const unavailableIDs = form.nodes.filter((id) => !knownIDs.has(id));
   const allVisibleSelected = visibleNodes.length > 0 && visibleNodes.every((node) => form.nodes.includes(node.id));
 
@@ -591,7 +600,7 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
             </div>
           ))}
           {visibleNodes.length === 0 && unavailableIDs.length === 0 ? (
-            <div><span className="muted">{nodes.length === 0 ? "当前没有可关联的节点" : "没有匹配的节点"}</span></div>
+            <div><span className="muted">{eligibleNodes.length === 0 ? "当前没有可关联的多用户节点" : "没有匹配的节点"}</span></div>
           ) : null}
         </div>
 

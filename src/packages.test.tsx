@@ -240,4 +240,31 @@ describe("package management", () => {
 
     await waitFor(() => expect(remove).toHaveBeenCalledWith("/api/admin/packages/9"));
   });
+  it("directly hides nodes that cannot multiplex ports from associated nodes list", async () => {
+    const mixedNodes: NodeItem[] = [
+      { id: 1, node_name: "香港 VLESS 01", protocol: "vless", raw_url: "", clash_config: "", parsed_config: "", enabled: true, tag: "hk", original_server: "edge-hk", inbound_tag: "in-a", node_type: "physical", updated_at: "" },
+      { id: 2, node_name: "东京 SS-2022", protocol: "ss", raw_url: "", clash_config: "", parsed_config: JSON.stringify({ cipher: "2022-blake3-aes-128-gcm" }), enabled: true, tag: "jp", original_server: "edge-jp", inbound_tag: "in-b", node_type: "physical", updated_at: "" },
+      { id: 3, node_name: "香港 转发 01", protocol: "dokodemo-door", raw_url: "", clash_config: "", parsed_config: "", enabled: true, tag: "tunnel", original_server: "edge-hk", inbound_tag: "anydoor-2001", node_type: "physical", updated_at: "" },
+      { id: 4, node_name: "韩国 SS-ChaCha20", protocol: "ss", raw_url: "", clash_config: "", parsed_config: JSON.stringify({ cipher: "chacha20-ietf-poly1305" }), enabled: true, tag: "kr", original_server: "edge-kr", inbound_tag: "in-c", node_type: "physical", updated_at: "" },
+    ];
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/packages") return { packages: [packageItem] } as T;
+      if (path === "/api/admin/nodes") return { nodes: mixedNodes } as T;
+      if (path === "/api/admin/remote-servers") return { servers: [{ id: 3, name: "香港入口", status: "online" }] } as T;
+      if (path === "/api/admin/tunnel-templates") return { tunnels: [{ id: 7, name: "香港转发", state: "active", billing_mode: "upload" }] } as T;
+      if (path === "/api/admin/rule-templates") return { templates: ["default.yaml"] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    render(<PackagesPage notify={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 标准套餐" }));
+
+    // Eligible multi-user nodes must be displayed
+    expect(screen.getByRole("checkbox", { name: /香港 VLESS 01/ })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /东京 SS-2022/ })).toBeInTheDocument();
+
+    // Ineligible nodes that cannot multiplex ports must NOT be displayed
+    expect(screen.queryByText(/香港 转发 01/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/韩国 SS-ChaCha20/)).not.toBeInTheDocument();
+  });
 });

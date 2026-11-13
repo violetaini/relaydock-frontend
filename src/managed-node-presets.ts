@@ -161,6 +161,51 @@ export function managedInboundSupportsPublishing(draft: Pick<ManagedInboundDraft
     || isShadowsocksClassicMultiUserCipher(draft.ssCipher);
 }
 
+export function isPackageNodeEligible(node: {
+  protocol?: string;
+  inbound_tag?: string;
+  node_type?: string;
+  managed_multi_user?: boolean;
+  parsed_config?: string;
+  clash_config?: string;
+  package_eligible?: boolean;
+}): boolean {
+  if (typeof node.package_eligible === "boolean") {
+    return node.package_eligible;
+  }
+  const tag = (node.inbound_tag || "").trim().toLowerCase();
+  if (tag.startsWith("anydoor-")) return false;
+
+  const proto = (node.protocol || "").trim().toLowerCase();
+  if (proto === "anydoor" || proto === "tunnel" || proto === "dokodemo-door") return false;
+
+  if (proto === "ss" || proto === "shadowsocks") {
+    let cipher = "";
+    if (node.parsed_config) {
+      try {
+        const parsed = JSON.parse(node.parsed_config) as Record<string, unknown>;
+        cipher = String(parsed?.cipher || parsed?.method || "").trim().toLowerCase();
+      } catch {
+        // ignore
+      }
+    }
+    if (!cipher && node.clash_config) {
+      try {
+        const parsed = JSON.parse(node.clash_config) as Record<string, unknown>;
+        cipher = String(parsed?.cipher || parsed?.method || "").trim().toLowerCase();
+      } catch {
+        const match = node.clash_config.match(/(?:cipher|method):\s*["']?([^"'\r\n]+)/i);
+        if (match) cipher = match[1].trim().toLowerCase();
+      }
+    }
+    if (cipher.startsWith("2022-")) return true;
+    if ((cipher === "aes-128-gcm" || cipher === "aes-256-gcm") && Boolean(node.managed_multi_user)) return true;
+    return false;
+  }
+
+  return true;
+}
+
 function randomBytes(length: number): Uint8Array {
   const bytes = new Uint8Array(length);
   if (globalThis.crypto?.getRandomValues) globalThis.crypto.getRandomValues(bytes);

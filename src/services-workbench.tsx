@@ -2634,21 +2634,21 @@ function ServerFormFields({ form, setForm, editing = false }: { form: CreateServ
         </select>
       </Field>
     </div>
-    <div className="form-grid">
-      <Field label="公网 IPv4 / 初始地址" hint="允许留空，Agent 首次连接后自动上报">
-        <input value={form.ipAddress} onChange={(event) => patch("ipAddress", event.target.value)} placeholder="203.0.113.10" disabled={editing} />
-      </Field>
-      <Field label="服务器地址 / DDNS 域名">
-        <input value={form.pullAddress} onChange={(event) => patch("pullAddress", event.target.value)} placeholder="edge.example.com" />
-      </Field>
-    </div>
 
     <details className="service-advanced-settings-accordion" open={editing}>
       <summary className="service-advanced-settings-summary">
-        <span className="summary-title"><SlidersHorizontal size={15} /> ⚙️ 高级与网络选项（端口 / DDNS / Nginx / 流量限额 / 伪装反代）</span>
+        <span className="summary-title"><SlidersHorizontal size={15} /> ⚙️ 高级与网络选项（IP / 域名 / 端口 / DDNS / Nginx / 流量限额 / 伪装反代）</span>
         <span className="summary-tip">{editing ? "编辑所有高级参数" : "已预设最优默认值，非特殊拓扑通常保持默认即可"}</span>
       </summary>
       <div className="service-advanced-settings-body">
+        <div className="form-grid">
+          <Field label="公网 IPv4 / 初始地址" hint="允许留空，Agent 首次连接后自动上报">
+            <input value={form.ipAddress} onChange={(event) => patch("ipAddress", event.target.value)} placeholder="203.0.113.10" disabled={editing} />
+          </Field>
+          <Field label="服务器地址 / DDNS 域名">
+            <input value={form.pullAddress} onChange={(event) => patch("pullAddress", event.target.value)} placeholder="edge.example.com" />
+          </Field>
+        </div>
         <div className="form-grid">
           <Field label="Agent 监听端口"><input type="number" min="1024" max="65534" value={form.listenPort} onChange={(event) => patch("listenPort", event.target.value)} disabled={editing} /></Field>
           <Field label="Pull 端口"><input type="number" min="1" max="65535" value={form.pullPort} onChange={(event) => patch("pullPort", event.target.value)} disabled={form.connectionMode !== "pull"} /></Field>

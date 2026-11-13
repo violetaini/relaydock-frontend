@@ -659,6 +659,8 @@
 .managed-node-wizard {
   display: grid;
   gap: 18px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .managed-stepper {
@@ -971,8 +973,8 @@
 }
 
 .managed-wizard-actions {
-  margin-inline: -22px;
-  padding-inline: 22px;
+  margin-inline: 0;
+  padding-inline: 0;
 }
 
 .nw-chain-preview {
@@ -1950,8 +1952,8 @@
   }
 
   .managed-wizard-actions {
-    margin-inline: -16px;
-    padding-inline: 16px;
+    margin-inline: 0;
+    padding-inline: 0;
   }
 
   .nw-command-surface {

@@ -402,7 +402,7 @@ td > strong { font-size: 11px; }
 .dialog-header { min-height: 69px; padding: 15px 17px 14px 20px; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--border); }
 .dialog-header h2 { font-size: 16px; }
 .dialog-header p { margin-top: 4px; color: var(--text-soft); font-size: 10px; }
-.dialog-body { padding: 20px; overflow-y: auto; }
+.dialog-body { padding: 20px; overflow-y: auto; overflow-x: hidden; }
 .dialog-actions { padding-top: 5px; display: flex; justify-content: flex-end; gap: 8px; }
 .command-box { min-height: 84px; padding: 13px; display: flex; align-items: flex-start; gap: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-muted); }
 .command-box code { min-width: 0; flex: 1; overflow-wrap: anywhere; color: var(--text); font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; line-height: 1.55; }

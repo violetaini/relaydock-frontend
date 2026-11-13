@@ -6,6 +6,7 @@ import {
   ArrowUp,
   ArrowUpFromLine,
   Check,
+  CheckCircle2,
   ChevronDown,
   Clipboard,
   Cloud,
@@ -27,12 +28,15 @@ import {
   Pencil,
   Play,
   Plus,
+  Radio,
   RefreshCw,
   RotateCw,
   Search,
   Server,
   Settings2,
   ShieldCheck,
+  SlidersHorizontal,
+  Sparkles,
   Square,
   TerminalSquare,
   Trash2,
@@ -2610,18 +2614,63 @@ function ServerFormFields({ form, setForm, editing = false }: { form: CreateServ
       ? "提供商列表读取失败；可保留当前配置或改用自动模式"
       : "自动模式会按 DDNS 域名匹配证书，并复用该证书的 DNS 提供商";
   return <>
-    <div className="form-grid"><Field label="服务器名称"><input required autoFocus value={form.name} onChange={(event) => patch("name", event.target.value)} placeholder="Hong Kong 01" /></Field><Field label="连接模式"><select value={form.connectionMode} onChange={(event) => patch("connectionMode", event.target.value)} disabled={editing}><option value="websocket">WebSocket（推荐）</option><option value="push">HTTP Push</option><option value="pull">HTTP Pull</option></select></Field></div>
-    <div className="form-grid"><Field label="公网 IPv4 / 初始地址" hint="允许留空，Agent 首次连接后自动上报"><input value={form.ipAddress} onChange={(event) => patch("ipAddress", event.target.value)} placeholder="203.0.113.10" disabled={editing} /></Field><Field label="服务器地址 / DDNS 域名"><input value={form.pullAddress} onChange={(event) => patch("pullAddress", event.target.value)} placeholder="edge.example.com" /></Field></div>
-    <div className="form-grid"><Field label="Agent 监听端口"><input type="number" min="1024" max="65534" value={form.listenPort} onChange={(event) => patch("listenPort", event.target.value)} disabled={editing} /></Field><Field label="Pull 端口"><input type="number" min="1" max="65535" value={form.pullPort} onChange={(event) => patch("pullPort", event.target.value)} disabled={form.connectionMode !== "pull"} /></Field></div>
-    {!editing && form.connectionMode === "pull" ? <Field label="可选 Agent 认证 Token" hint="留空时由控制端安全生成"><input value={form.pullToken} onChange={(event) => patch("pullToken", event.target.value)} /></Field> : null}
-    <div className="form-grid"><Field label="节点域名" hint={form.stealMode === "default" ? undefined : "Tunnel/Fallback 接管模式必填"}><input required={form.stealMode !== "default"} value={form.domain} onChange={(event) => patch("domain", event.target.value)} placeholder="hk.example.com" /></Field><Field label="Xray 模式" hint={form.xrayMode === "embedded" ? "推荐：由 RelayDock 全权管理 Xray 核心，支持多用户凭据隔离与自动限速" : "共存模式：仅接管现有 3x-ui / 裸 Xray，不碰原进程，仅作为管理员节点"}><select aria-label="Xray 模式" value={form.xrayMode} onChange={(event) => patch("xrayMode", event.target.value)}><option value="embedded">RelayDock 全托管（推荐 · 自带 Xray，支持多用户与限速）</option><option value="external">接管现有环境（3x-ui / 裸 Xray 共存 · 仅管理员自用）</option></select></Field></div>
-    <fieldset className="service-nginx-mode"><legend>Nginx 管理模式</legend><div className="service-nginx-mode-options" role="radiogroup" aria-label="Nginx 管理模式"><button type="button" role="radio" aria-checked={form.nginxMode === "managed"} className={form.nginxMode === "managed" ? "is-active" : ""} onClick={() => patch("nginxMode", "managed")}><Server size={18} /><span><strong>Arcway 管理 Nginx</strong><small>由面板安装、启停、更新配置</small></span></button><button type="button" role="radio" aria-checked={form.nginxMode === "reuse_existing"} className={form.nginxMode === "reuse_existing" ? "is-active" : ""} onClick={() => patch("nginxMode", "reuse_existing")}><ShieldCheck size={18} /><span><strong>复用系统已有 Nginx</strong><small>只下发独立站点配置，不接管服务</small></span></button></div>{form.nginxMode === "reuse_existing" ? <div className="service-nginx-mode-note" role="note"><ShieldCheck size={17} /><span><strong>现有 Nginx 保持系统托管</strong><small>Arcway 不会安装、卸载、覆盖主配置或控制服务启停；部署前会预检配置，失败时由服务端回滚。</small></span></div> : null}</fieldset>
-    <div className="form-grid"><Field label="流量限额（GB）" hint="0 或留空表示不限"><input type="number" min="0" step="0.01" value={form.trafficLimitGB} onChange={(event) => patch("trafficLimitGB", event.target.value)} /></Field><Field label={editing ? "已用流量校准（GB，可选）" : "初始已用流量（GB）"}><input type="number" min="0" step="0.01" value={form.trafficUsedGB} onChange={(event) => patch("trafficUsedGB", event.target.value)} placeholder={editing ? "留空保持不变" : "0"} /></Field></div>
-    <div className="form-grid"><Field label="每月重置日" hint="0 表示不自动重置"><input type="number" min="0" max="31" value={form.trafficResetDay} onChange={(event) => patch("trafficResetDay", event.target.value)} /></Field><Field label="服务器流量来源"><select value={form.trafficSource} onChange={(event) => patch("trafficSource", event.target.value)}><option value="system">系统网卡（VPS 计费口径）</option><option value="xray">Xray 节点聚合</option></select></Field></div>
-    <Field label="流量统计方向"><select value={form.trafficStatsMode} onChange={(event) => patch("trafficStatsMode", event.target.value)}><option value="both">上行 + 下行</option><option value="max">上行 / 下行取较大值</option><option value="upload">仅上行</option><option value="download">仅下行</option></select></Field>
-    <div className="service-toggle-grid"><Toggle checked={form.ipv6Enabled} onChange={(value) => patch("ipv6Enabled", value)} label="启用 IPv6" /><Toggle checked={form.ddnsEnabled} onChange={(value) => patch("ddnsEnabled", value)} label="自动同步 DDNS" /></div>
-    {form.ddnsEnabled ? <Field label="DDNS 提供商" hint={providerHint}><select aria-label="DDNS 提供商" value={form.ddnsProviderID} onChange={(event) => patch("ddnsProviderID", event.target.value)}><option value="0">自动（按证书）</option>{configuredProviderMissing ? <option value={form.ddnsProviderID}>当前配置 #{form.ddnsProviderID}（列表中不可用）</option> : null}{dnsProviders.map((provider) => <option key={provider.id} value={String(provider.id)}>{provider.name}（{provider.providerType}）</option>)}</select></Field> : null}
-    <details className="service-advanced-fields" open={editing && form.siteType === "proxy"}><summary>前置与伪装站高级选项（WSS / 443 伪装反代）</summary><div className="form-stack"><div className="form-grid"><Field label="接管模式"><select value={form.stealMode} onChange={(event) => patch("stealMode", event.target.value)} disabled={editing}><option value="default">不接管（纯 WSS / 标准）</option><option value="tunnel">Tunnel</option><option value="fallback">Fallback</option></select></Field><Field label="伪装站点类型"><select aria-label="伪装站点类型" value={form.siteType} onChange={(event) => patch("siteType", event.target.value)}><option value="static">静态目录 / 默认 404</option><option value="proxy">反向代理指定伪装网站</option></select></Field></div><Field label={form.siteType === "proxy" ? "反代伪装网站目标" : "静态目录"} hint={form.siteType === "proxy" ? "严禁反代套了 Cloudflare CDN 的网站，防止服务器被全网扫描当成免费 CF 优选节点" : "留空使用默认静态目录或 404"}><input aria-label="伪装站点目标" value={form.siteValue} onChange={(event) => patch("siteValue", event.target.value)} placeholder={form.siteType === "proxy" ? "https://origin.example.com" : "/var/www/html"} /></Field></div></details>
+    {!editing ? (
+      <div className="service-quick-banner">
+        <div className="service-quick-banner-icon"><Sparkles size={20} /></div>
+        <div className="service-quick-banner-content">
+          <strong>⚡ 极简接入模式（推荐）</strong>
+          <p>只需输入服务器名称，即可一键生成安装命令；公网 IP、系统架构与各项指标将在 Agent 首次连接后自动上报。</p>
+        </div>
+      </div>
+    ) : null}
+    <div className="form-grid">
+      <Field label="服务器名称">
+        <input required autoFocus value={form.name} onChange={(event) => patch("name", event.target.value)} placeholder="Hong Kong 01" />
+      </Field>
+      <Field label="Xray 模式" hint={form.xrayMode === "embedded" ? "推荐：由 RelayDock 全权管理 Xray 核心，支持多用户凭据隔离与自动限速" : "共存模式：仅接管现有 3x-ui / 裸 Xray，不碰原进程，仅作为管理员节点"}>
+        <select aria-label="Xray 模式" value={form.xrayMode} onChange={(event) => patch("xrayMode", event.target.value)}>
+          <option value="embedded">RelayDock 全托管（推荐 · 自带 Xray，支持多用户与限速）</option>
+          <option value="external">接管现有环境（3x-ui / 裸 Xray 共存 · 仅管理员自用）</option>
+        </select>
+      </Field>
+    </div>
+    <div className="form-grid">
+      <Field label="公网 IPv4 / 初始地址" hint="允许留空，Agent 首次连接后自动上报">
+        <input value={form.ipAddress} onChange={(event) => patch("ipAddress", event.target.value)} placeholder="203.0.113.10" disabled={editing} />
+      </Field>
+      <Field label="服务器地址 / DDNS 域名">
+        <input value={form.pullAddress} onChange={(event) => patch("pullAddress", event.target.value)} placeholder="edge.example.com" />
+      </Field>
+    </div>
+
+    <details className="service-advanced-settings-accordion" open={editing}>
+      <summary className="service-advanced-settings-summary">
+        <span className="summary-title"><SlidersHorizontal size={15} /> ⚙️ 高级与网络选项（端口 / DDNS / Nginx / 流量限额 / 伪装反代）</span>
+        <span className="summary-tip">{editing ? "编辑所有高级参数" : "已预设最优默认值，非特殊拓扑通常保持默认即可"}</span>
+      </summary>
+      <div className="service-advanced-settings-body">
+        <div className="form-grid">
+          <Field label="Agent 监听端口"><input type="number" min="1024" max="65534" value={form.listenPort} onChange={(event) => patch("listenPort", event.target.value)} disabled={editing} /></Field>
+          <Field label="Pull 端口"><input type="number" min="1" max="65535" value={form.pullPort} onChange={(event) => patch("pullPort", event.target.value)} disabled={form.connectionMode !== "pull"} /></Field>
+        </div>
+        <Field label="连接模式">
+          <select value={form.connectionMode} onChange={(event) => patch("connectionMode", event.target.value)} disabled={editing}>
+            <option value="websocket">WebSocket（推荐）</option>
+            <option value="push">HTTP Push</option>
+            <option value="pull">HTTP Pull</option>
+          </select>
+        </Field>
+        {!editing && form.connectionMode === "pull" ? <Field label="可选 Agent 认证 Token" hint="留空时由控制端安全生成"><input value={form.pullToken} onChange={(event) => patch("pullToken", event.target.value)} /></Field> : null}
+        <Field label="节点域名" hint={form.stealMode === "default" ? undefined : "Tunnel/Fallback 接管模式必填"}><input required={form.stealMode !== "default"} value={form.domain} onChange={(event) => patch("domain", event.target.value)} placeholder="hk.example.com" /></Field>
+        <fieldset className="service-nginx-mode"><legend>Nginx 管理模式</legend><div className="service-nginx-mode-options" role="radiogroup" aria-label="Nginx 管理模式"><button type="button" role="radio" aria-checked={form.nginxMode === "managed"} className={form.nginxMode === "managed" ? "is-active" : ""} onClick={() => patch("nginxMode", "managed")}><Server size={18} /><span><strong>Arcway 管理 Nginx</strong><small>由面板安装、启停、更新配置</small></span></button><button type="button" role="radio" aria-checked={form.nginxMode === "reuse_existing"} className={form.nginxMode === "reuse_existing" ? "is-active" : ""} onClick={() => patch("nginxMode", "reuse_existing")}><ShieldCheck size={18} /><span><strong>复用系统已有 Nginx</strong><small>只下发独立站点配置，不接管服务</small></span></button></div>{form.nginxMode === "reuse_existing" ? <div className="service-nginx-mode-note" role="note"><ShieldCheck size={17} /><span><strong>现有 Nginx 保持系统托管</strong><small>Arcway 不会安装、卸载、覆盖主配置或控制服务启停；部署前会预检配置，失败时由服务端回滚。</small></span></div> : null}</fieldset>
+        <div className="form-grid"><Field label="流量限额（GB）" hint="0 或留空表示不限"><input type="number" min="0" step="0.01" value={form.trafficLimitGB} onChange={(event) => patch("trafficLimitGB", event.target.value)} /></Field><Field label={editing ? "已用流量校准（GB，可选）" : "初始已用流量（GB）"}><input type="number" min="0" step="0.01" value={form.trafficUsedGB} onChange={(event) => patch("trafficUsedGB", event.target.value)} placeholder={editing ? "留空保持不变" : "0"} /></Field></div>
+        <div className="form-grid"><Field label="每月重置日" hint="0 表示不自动重置"><input type="number" min="0" max="31" value={form.trafficResetDay} onChange={(event) => patch("trafficResetDay", event.target.value)} /></Field><Field label="服务器流量来源"><select value={form.trafficSource} onChange={(event) => patch("trafficSource", event.target.value)}><option value="system">系统网卡（VPS 计费口径）</option><option value="xray">Xray 节点聚合</option></select></Field></div>
+        <Field label="流量统计方向"><select value={form.trafficStatsMode} onChange={(event) => patch("trafficStatsMode", event.target.value)}><option value="both">上行 + 下行</option><option value="max">上行 / 下行取较大值</option><option value="upload">仅上行</option><option value="download">仅下行</option></select></Field>
+        <div className="service-toggle-grid"><Toggle checked={form.ipv6Enabled} onChange={(value) => patch("ipv6Enabled", value)} label="启用 IPv6" /><Toggle checked={form.ddnsEnabled} onChange={(value) => patch("ddnsEnabled", value)} label="自动同步 DDNS" /></div>
+        {form.ddnsEnabled ? <Field label="DDNS 提供商" hint={providerHint}><select aria-label="DDNS 提供商" value={form.ddnsProviderID} onChange={(event) => patch("ddnsProviderID", event.target.value)}><option value="0">自动（按证书）</option>{configuredProviderMissing ? <option value={form.ddnsProviderID}>当前配置 #{form.ddnsProviderID}（列表中不可用）</option> : null}{dnsProviders.map((provider) => <option key={provider.id} value={String(provider.id)}>{provider.name}（{provider.providerType}）</option>)}</select></Field> : null}
+        <details className="service-advanced-fields" open={editing && form.siteType === "proxy"}><summary>前置与伪装站高级选项（WSS / 443 伪装反代）</summary><div className="form-stack"><div className="form-grid"><Field label="接管模式"><select value={form.stealMode} onChange={(event) => patch("stealMode", event.target.value)} disabled={editing}><option value="default">不接管（纯 WSS / 标准）</option><option value="tunnel">Tunnel</option><option value="fallback">Fallback</option></select></Field><Field label="伪装站点类型"><select aria-label="伪装站点类型" value={form.siteType} onChange={(event) => patch("siteType", event.target.value)}><option value="static">静态目录 / 默认 404</option><option value="proxy">反向代理指定伪装网站</option></select></Field></div><Field label={form.siteType === "proxy" ? "反代伪装网站目标" : "静态目录"} hint={form.siteType === "proxy" ? "严禁反代套了 Cloudflare CDN 的网站，防止服务器被全网扫描当成免费 CF 优选节点" : "留空使用默认静态目录或 404"}><input aria-label="伪装站点目标" value={form.siteValue} onChange={(event) => patch("siteValue", event.target.value)} placeholder={form.siteType === "proxy" ? "https://origin.example.com" : "/var/www/html"} /></Field></div></details>
+      </div>
+    </details>
   </>;
 }
 
@@ -2773,10 +2822,139 @@ function AddSharedServerDialog({ onClose, onCreated }: { onClose: () => void; on
 }
 
 function CredentialsDialog({ value, notify, onClose }: { value: Credentials; notify: Notify; onClose: () => void }) {
+  const [onlineServer, setOnlineServer] = useState<ManagedServer>(value.server);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    const poll = async () => {
+      try {
+        const response = await api.get<ServerListResponse>("/api/admin/remote-servers");
+        if (!active || !response) return;
+        const found = (response.servers ?? []).find((s) => s.id === value.server.id);
+        if (found) {
+          setOnlineServer(found);
+        }
+      } catch {
+        // quiet poll
+      }
+    };
+    const timer = setInterval(() => { void poll(); }, 2500);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [value.server.id]);
+
   const copy = async (text: string, label: string) => {
-    try { await navigator.clipboard.writeText(text); notify(`${label}已复制`); } catch { notify("复制失败，请手动选择", "error"); }
+    try {
+      await navigator.clipboard.writeText(text);
+      notify(`${label}已复制`);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    } catch {
+      notify("复制失败，请手动选择", "error");
+    }
   };
-  return <Dialog title={`${value.server.name} 接入凭据`} description="Token 具有服务器管理权限，只应保存在目标服务器" onClose={onClose} wide><div className="credential-warning"><ShieldCheck size={19} /><span><strong>敏感信息</strong><small>关闭弹窗后不会继续在列表中显示明文 Token。</small></span></div><Field label="Agent 安装命令"><div className="service-command"><code>{value.command}</code><IconButton label="复制 Agent 安装命令" onClick={() => void copy(value.command, "安装命令")}><Copy size={17} /></IconButton></div></Field><div className="form-grid"><Field label="服务器 Token"><div className="service-command compact"><code>{value.token || "仅创建时可见"}</code>{value.token ? <IconButton label="复制服务器 Token" onClick={() => void copy(value.token, "服务器 Token")}><Copy size={16} /></IconButton> : null}</div></Field><Field label="Agent Token"><div className="service-command compact"><code>{value.agentToken || value.pullToken || "未设置"}</code>{value.agentToken || value.pullToken ? <IconButton label="复制 Agent Token" onClick={() => void copy(value.agentToken || value.pullToken, "Agent Token")}><Copy size={16} /></IconButton> : null}</div></Field></div><div className="dialog-actions"><Button onClick={onClose}><Check size={16} />完成</Button></div></Dialog>;
+
+  const connected = isConnected(onlineServer);
+
+  return (
+    <Dialog
+      title={`${value.server.name} 接入凭据`}
+      description="在目标服务器粘贴执行命令，系统将在检测到心跳后自动点亮"
+      onClose={onClose}
+      wide
+    >
+      <div className={`service-live-radar ${connected ? "is-online" : ""}`} role="status">
+        <div className={`radar-icon-wrap ${connected ? "is-success" : ""}`}>
+          {connected ? (
+            <CheckCircle2 size={24} />
+          ) : (
+            <span className="radar-beacon">
+              <span className="radar-ping" />
+              <Radio size={20} className="radar-center-icon" />
+            </span>
+          )}
+        </div>
+        <div className="radar-info">
+          <div className="radar-title">
+            {connected ? "🎉 Agent 已成功连接上线！" : "📡 等待 Agent 首次回连上线..."}
+          </div>
+          <div className="radar-sub">
+            {connected ? (
+              <span className="radar-online-specs">
+                <span>公网 IP: <strong>{onlineServer.ip_address || "已上报"}</strong></span>
+                {onlineServer.country_code ? (
+                  <span>
+                    <CountryFlag countryCode={onlineServer.country_code} fallbackSize={13} />
+                    <strong>{onlineServer.country_code}</strong>
+                  </span>
+                ) : null}
+                <span>模式: <strong>{onlineServer.connection_mode || "websocket"}</strong></span>
+                <Badge tone="good">在线运行中</Badge>
+              </span>
+            ) : (
+              "在目标 VPS 执行下方一键安装命令后，Agent 会自动握手。检测到心跳后将立即更新。"
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="service-install-box">
+        <div className="service-install-header">
+          <div className="service-install-dots">
+            <span className="dot red" />
+            <span className="dot yellow" />
+            <span className="dot green" />
+          </div>
+          <span className="service-install-title">Linux 一键安装命令（推荐以 root 身份运行）</span>
+          <button
+            type="button"
+            className={`service-install-copy-btn ${copied ? "is-copied" : ""}`}
+            onClick={() => void copy(value.command, "安装命令")}
+          >
+            {copied ? <Check size={14} /> : <Copy size={14} />}
+            <span>{copied ? "已复制命令！" : "一键复制命令"}</span>
+          </button>
+        </div>
+        <div className="service-install-code-wrap">
+          <code>{value.command}</code>
+        </div>
+      </div>
+
+      <details className="service-tokens-accordion">
+        <summary>
+          <span>查看原始密钥凭据（服务器 Token & Agent Token）</span>
+          <ChevronDown size={14} />
+        </summary>
+        <div className="service-tokens-body">
+          <div className="credential-warning">
+            <ShieldCheck size={18} />
+            <span><strong>敏感凭据说明</strong><small>Token 具有控制端通信与节点管理权限，只保存在目标服务器配置文件中。</small></span>
+          </div>
+          <div className="form-grid">
+            <Field label="服务器 Token">
+              <div className="service-command compact">
+                <code>{value.token || "仅创建时可见"}</code>
+                {value.token ? <IconButton label="复制服务器 Token" onClick={() => void copy(value.token, "服务器 Token")}><Copy size={16} /></IconButton> : null}
+              </div>
+            </Field>
+            <Field label="Agent Token">
+              <div className="service-command compact">
+                <code>{value.agentToken || value.pullToken || "未设置"}</code>
+                {value.agentToken || value.pullToken ? <IconButton label="复制 Agent Token" onClick={() => void copy(value.agentToken || value.pullToken, "Agent Token")}><Copy size={16} /></IconButton> : null}
+              </div>
+            </Field>
+          </div>
+        </div>
+      </details>
+
+      <div className="dialog-actions">
+        <Button onClick={onClose}><Check size={16} />{connected ? "已就绪，完成" : "完成"}</Button>
+      </div>
+    </Dialog>
+  );
 }
 
 function UpgradeDialog({ state, servers, onClose }: { state: UpgradeState; servers: ManagedServer[]; onClose: () => void }) {

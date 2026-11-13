@@ -1,4 +1,4 @@
-import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useState, type ErrorInfo, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useState, useTransition, type ErrorInfo, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import QRCode from "qrcode";
 import "./user-portal.css";
 import {
@@ -102,6 +102,41 @@ const SettingsWorkbenchPage = lazy(() => import("./settings-workbench").then((mo
 const TrafficWorkbenchPage = lazy(() => import("./traffic-workbench").then((module) => ({ default: module.TrafficWorkbenchPage })));
 const UsersWorkbenchPage = lazy(() => import("./users-workbench").then((module) => ({ default: module.UsersWorkbenchPage })));
 
+const pageLoaders: Partial<Record<PageKey, () => Promise<unknown>>> = {
+  account: () => import("./account-workbench"),
+  certificates: contentWorkbench,
+  subscribeFiles: contentWorkbench,
+  generator: contentWorkbench,
+  subscriptions: contentWorkbench,
+  templates: contentWorkbench,
+  nodes: () => import("./nodes-workbench"),
+  packages: () => import("./packages"),
+  customRules: rulesWorkbench,
+  rulesConfig: rulesWorkbench,
+  forwarding: () => import("./forwarding-management"),
+  servers: () => import("./services-workbench"),
+  settings: () => import("./settings-workbench"),
+  traffic: () => import("./traffic-workbench"),
+  users: () => import("./users-workbench"),
+};
+
+export function preloadPageModule(page: PageKey): void {
+  const loader = pageLoaders[page];
+  if (loader) {
+    void loader();
+  }
+}
+
+export function preloadAllModules(): void {
+  Object.values(pageLoaders).forEach((loader) => {
+    try {
+      void loader?.();
+    } catch {
+      // ignore
+    }
+  });
+}
+
 const pageTitles: Record<PageKey, string> = {
   dashboard: "流量信息",
   subscriptions: "订阅链接",
@@ -152,11 +187,17 @@ function pageAllowed(page: PageKey, isAdmin: boolean, permissions: string[] | nu
   return Boolean(key && permissions?.includes(key));
 }
 
-class LazyPageBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+class LazyPageBoundary extends Component<{ pageKey: PageKey; children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
 
   static getDerivedStateFromError() {
     return { failed: true };
+  }
+
+  componentDidUpdate(prevProps: { pageKey: PageKey }) {
+    if (prevProps.pageKey !== this.props.pageKey && this.state.failed) {
+      this.setState({ failed: false });
+    }
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
@@ -171,10 +212,23 @@ class LazyPageBoundary extends Component<{ children: ReactNode }, { failed: bool
   }
 }
 
+function ModuleLoadingFallback({ label }: { label: string }) {
+  return (
+    <div className="module-loading-fallback" role="status" aria-live="polite">
+      <div className="module-loading-card">
+        <Spinner size={18} />
+        <span className="module-loading-text">{label}</span>
+      </div>
+    </div>
+  );
+}
+
 export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: Profile; onLogout: () => void; onBrandingChange?: (branding: Branding) => void }) {
   const branding = useBranding();
   const [page, setPage] = useState<PageKey>(() => resolvePage(profile.is_admin));
   const [usersScope, setUsersScope] = useState<UsersScope>(resolveUsersScope);
+  const [isPending, startTransition] = useTransition();
+  const [switchingTarget, setSwitchingTarget] = useState<PageKey | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => normalizeThemeMode(localStorage.getItem("arcway-theme")));
   const [theme, setTheme] = useState<Theme>(() => document.documentElement.dataset.theme === "dark" ? "dark" : "light");
@@ -193,6 +247,25 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: P
   }, []);
 
   useEffect(() => {
+    if (!isPending && switchingTarget !== null) {
+      setSwitchingTarget(null);
+    }
+  }, [isPending, switchingTarget]);
+
+  useEffect(() => {
+    const win = typeof window !== "undefined" ? (window as unknown as { requestIdleCallback?: (cb: () => void) => number }) : null;
+    let timer: number | undefined;
+    if (win?.requestIdleCallback) {
+      win.requestIdleCallback(() => preloadAllModules());
+    } else if (typeof window !== "undefined") {
+      timer = window.setTimeout(() => preloadAllModules(), 1500);
+    }
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, []);
+
+  useEffect(() => {
     const updateIdentity = (event: Event) => {
       const detail = (event as CustomEvent<Partial<Profile>>).detail;
       if (detail) setIdentity((current) => ({ ...current, ...detail }));
@@ -206,13 +279,18 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: P
       const nextPage = resolvePage(profile.is_admin);
       const nextUsersScope = resolveUsersScope();
       if (nextPage === page && nextUsersScope === usersScope) return;
+      preloadPageModule(nextPage);
+      setSwitchingTarget(nextPage);
       const targetHash = location.hash;
       const commit = () => {
-        if (location.hash !== targetHash) location.hash = targetHash;
-        setPage(nextPage);
-        setUsersScope(nextUsersScope);
+        startTransition(() => {
+          if (location.hash !== targetHash) location.hash = targetHash;
+          setPage(nextPage);
+          setUsersScope(nextUsersScope);
+        });
       };
       if (!requestNavigation(commit)) {
+        setSwitchingTarget(null);
         const currentUsersView = page === "users" && usersScope !== "all" ? `?view=${usersScope}` : "";
         history.replaceState(null, "", `${location.pathname}${location.search}#/${page}${currentUsersView}`);
       }
@@ -275,11 +353,16 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: P
 
   const navigate = (next: PageKey, options?: { usersScope?: UsersScope }) => {
     const usersView = next === "users" ? options?.usersScope ?? "all" : "all";
+    if (next === page && usersView === usersScope) return;
+    preloadPageModule(next);
+    setSwitchingTarget(next);
     requestNavigation(() => {
-      location.hash = `/${next}${usersView === "all" ? "" : `?view=${usersView}`}`;
-      setPage(next);
-      setUsersScope(usersView);
-      setSidebarOpen(false);
+      startTransition(() => {
+        location.hash = `/${next}${usersView === "all" ? "" : `?view=${usersView}`}`;
+        setPage(next);
+        setUsersScope(usersView);
+        setSidebarOpen(false);
+      });
     });
   };
 
@@ -324,31 +407,31 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: P
         <div className="sidebar-brand brand"><BrandMark size={24} /><span>{branding.name}</span><IconButton className="sidebar-layout-switch" label="切换到顶部栏" onClick={toggleLayout}><PanelTop size={19} /></IconButton><IconButton className="sidebar-close" label="关闭导航" onClick={() => setSidebarOpen(false)}><X size={19} /></IconButton></div>
         <nav className="sidebar-nav" aria-label="主导航">
           <NavGroup label="主导航" className="nav-primary">
-            <NavItem active={page === "dashboard"} icon={<Activity size={18} />} label="流量信息" onClick={() => navigate("dashboard")} />
-            {pageAllowed("subscriptions", profile.is_admin, userPages) ? <NavItem active={page === "subscriptions"} icon={<Link2 size={18} />} label="订阅链接" onClick={() => navigate("subscriptions")} /> : null}
-            {pageAllowed("generator", profile.is_admin, userPages) ? <NavItem active={page === "generator"} icon={<Wrench size={18} />} label="生成订阅" onClick={() => navigate("generator")} /> : null}
-            {pageAllowed("nodes", profile.is_admin, userPages) ? <NavItem active={page === "nodes"} icon={<Route size={18} />} label="节点管理" onClick={() => navigate("nodes")} /> : null}
-            {pageAllowed("forwarding", profile.is_admin, userPages) ? <NavItem active={page === "forwarding"} icon={<Network size={18} />} label="转发管理" onClick={() => navigate("forwarding")} /> : null}
-            <NavItem active={page === "traffic"} icon={<Gauge size={18} />} label="流量明细" onClick={() => navigate("traffic")} />
+            <NavItem active={page === "dashboard"} loading={switchingTarget === "dashboard"} icon={<Activity size={18} />} label="流量信息" onClick={() => navigate("dashboard")} onMouseEnter={() => preloadPageModule("dashboard")} />
+            {pageAllowed("subscriptions", profile.is_admin, userPages) ? <NavItem active={page === "subscriptions"} loading={switchingTarget === "subscriptions"} icon={<Link2 size={18} />} label="订阅链接" onClick={() => navigate("subscriptions")} onMouseEnter={() => preloadPageModule("subscriptions")} /> : null}
+            {pageAllowed("generator", profile.is_admin, userPages) ? <NavItem active={page === "generator"} loading={switchingTarget === "generator"} icon={<Wrench size={18} />} label="生成订阅" onClick={() => navigate("generator")} onMouseEnter={() => preloadPageModule("generator")} /> : null}
+            {pageAllowed("nodes", profile.is_admin, userPages) ? <NavItem active={page === "nodes"} loading={switchingTarget === "nodes"} icon={<Route size={18} />} label="节点管理" onClick={() => navigate("nodes")} onMouseEnter={() => preloadPageModule("nodes")} /> : null}
+            {pageAllowed("forwarding", profile.is_admin, userPages) ? <NavItem active={page === "forwarding"} loading={switchingTarget === "forwarding"} icon={<Network size={18} />} label="转发管理" onClick={() => navigate("forwarding")} onMouseEnter={() => preloadPageModule("forwarding")} /> : null}
+            <NavItem active={page === "traffic"} loading={switchingTarget === "traffic"} icon={<Gauge size={18} />} label="流量明细" onClick={() => navigate("traffic")} onMouseEnter={() => preloadPageModule("traffic")} />
             {profile.is_admin ? <>
-              <NavItem active={page === "servers"} icon={<Server size={18} />} label="服务管理" onClick={() => navigate("servers")} />
-              <NavItem active={page === "users"} icon={<Users size={18} />} label="用户管理" onClick={() => navigate("users")} />
-              <NavItem active={page === "packages"} icon={<Package size={18} />} label="套餐管理" onClick={() => navigate("packages")} />
+              <NavItem active={page === "servers"} loading={switchingTarget === "servers"} icon={<Server size={18} />} label="服务管理" onClick={() => navigate("servers")} onMouseEnter={() => preloadPageModule("servers")} />
+              <NavItem active={page === "users"} loading={switchingTarget === "users"} icon={<Users size={18} />} label="用户管理" onClick={() => navigate("users")} onMouseEnter={() => preloadPageModule("users")} />
+              <NavItem active={page === "packages"} loading={switchingTarget === "packages"} icon={<Package size={18} />} label="套餐管理" onClick={() => navigate("packages")} onMouseEnter={() => preloadPageModule("packages")} />
             </> : null}
           </NavGroup>
           <NavGroup label="常用管理" className="nav-utility">
             <a className="nav-item nav-probe-link" href={publicProbeURL} aria-label="返回探针" title="返回探针"><House size={18} /><span>返回探针</span></a>
-            {pageAllowed("certificates", profile.is_admin, userPages) ? <NavItem active={page === "certificates"} icon={<ShieldCheck size={18} />} label="证书管理" onClick={() => navigate("certificates")} /> : null}
-            {pageAllowed("templates", profile.is_admin, userPages) ? <NavItem active={page === "templates"} icon={<Clipboard size={18} />} label="模板管理" onClick={() => navigate("templates")} /> : null}
-            {pageAllowed("subscribeFiles", profile.is_admin, userPages) ? <NavItem active={page === "subscribeFiles"} icon={<FileText size={18} />} label="订阅管理" onClick={() => navigate("subscribeFiles")} /> : null}
-            {profile.is_admin ? <NavItem active={page === "settings"} icon={<Settings size={18} />} label="系统设置" onClick={() => navigate("settings")} /> : null}
+            {pageAllowed("certificates", profile.is_admin, userPages) ? <NavItem active={page === "certificates"} loading={switchingTarget === "certificates"} icon={<ShieldCheck size={18} />} label="证书管理" onClick={() => navigate("certificates")} onMouseEnter={() => preloadPageModule("certificates")} /> : null}
+            {pageAllowed("templates", profile.is_admin, userPages) ? <NavItem active={page === "templates"} loading={switchingTarget === "templates"} icon={<Clipboard size={18} />} label="模板管理" onClick={() => navigate("templates")} onMouseEnter={() => preloadPageModule("templates")} /> : null}
+            {pageAllowed("subscribeFiles", profile.is_admin, userPages) ? <NavItem active={page === "subscribeFiles"} loading={switchingTarget === "subscribeFiles"} icon={<FileText size={18} />} label="订阅管理" onClick={() => navigate("subscribeFiles")} onMouseEnter={() => preloadPageModule("subscribeFiles")} /> : null}
+            {profile.is_admin ? <NavItem active={page === "settings"} loading={switchingTarget === "settings"} icon={<Settings size={18} />} label="系统设置" onClick={() => navigate("settings")} onMouseEnter={() => preloadPageModule("settings")} /> : null}
           </NavGroup>
         </nav>
         <div className="sidebar-footer">
           <a className="icon-button sidebar-probe-link" href={publicProbeURL} aria-label="返回探针" title="返回探针"><House size={18} /></a>
           <IconButton className="top-layout-switch" label="切换到侧边栏" onClick={toggleLayout}><PanelLeft size={18} /></IconButton>
           <IconButton label={themeLabel} onClick={toggleTheme}>{themeIcon}</IconButton>
-          <button type="button" className={`account-block ${page === "account" ? "is-active" : ""}`} aria-label="账户中心" title="账户中心" onClick={() => navigate("account")}>
+          <button type="button" className={`account-block ${page === "account" ? "is-active" : ""}`} aria-label="账户中心" title="账户中心" onClick={() => navigate("account")} onMouseEnter={() => preloadPageModule("account")}>
             <span className="account-avatar">{(identity.nickname || identity.username).slice(0, 1).toUpperCase()}</span>
             <span><strong>{identity.nickname || identity.username}</strong><small>{profile.is_admin ? "管理员" : "用户"}</small></span>
           </button>
@@ -357,6 +440,12 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: P
       </aside>
 
       <div className="console-main">
+        <div
+          className={`module-progress-bar ${isPending || switchingTarget ? "is-active" : ""}`}
+          role="progressbar"
+          aria-label="正在切换模块"
+          aria-hidden={!isPending && !switchingTarget}
+        />
         <header className="topbar">
           <div className="topbar-leading">
             <span className="mobile-topbar-brand"><BrandMark size={22} /><strong>{branding.name}</strong></span>
@@ -369,7 +458,7 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: P
             <IconButton className="topbar-layout-switch" label="切换到顶部栏" onClick={toggleLayout}><PanelTop size={19} /></IconButton>
             <IconButton className="mobile-page-shortcut" label="返回流量信息" onClick={() => navigate("dashboard")}><Activity size={18} /></IconButton>
             <IconButton label={themeLabel} onClick={toggleTheme}>{themeIcon}</IconButton>
-            <button type="button" className="topbar-account" aria-label="账户中心" title="账户中心" onClick={() => navigate("account")}><span className="topbar-avatar">{(identity.nickname || identity.username).slice(0, 1).toUpperCase()}</span><span className="topbar-account-copy"><strong>{identity.nickname || identity.username}</strong><small>{profile.is_admin ? "管理员" : "用户"}</small></span></button>
+            <button type="button" className="topbar-account" aria-label="账户中心" title="账户中心" onClick={() => navigate("account")} onMouseEnter={() => preloadPageModule("account")}><span className="topbar-avatar">{(identity.nickname || identity.username).slice(0, 1).toUpperCase()}</span><span className="topbar-account-copy"><strong>{identity.nickname || identity.username}</strong><small>{profile.is_admin ? "管理员" : "用户"}</small></span></button>
           </div>
         </header>
         <main className={`page-content page-${page}`}>
@@ -377,24 +466,28 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: P
             permissionsError
               ? <ErrorState message={permissionsError} onRetry={() => setPermissionsRevision((value) => value + 1)} />
               : <div className="center-state"><Spinner label="正在加载页面权限" /></div>
-          ) : <LazyPageBoundary key={page}><Suspense fallback={<div className="center-state"><Spinner label="正在加载页面" /></div>}>
-          {page === "dashboard" ? <DashboardPage profile={profile} navigate={navigate} canNavigateNodes={pageAllowed("nodes", profile.is_admin, userPages)} /> : null}
-          {page === "subscriptions" && pageAllowed(page, profile.is_admin, userPages) ? <SubscriptionLinksPage notify={notify} /> : null}
-          {page === "generator" && pageAllowed(page, profile.is_admin, userPages) ? <SubscriptionGeneratorPage notify={notify} /> : null}
-          {page === "servers" && profile.is_admin ? <ServicesWorkbenchPage notify={notify} /> : null}
-          {page === "nodes" && pageAllowed(page, profile.is_admin, userPages) ? <NodesWorkbench isAdmin={profile.is_admin} notify={notify} /> : null}
-          {page === "forwarding" && pageAllowed(page, profile.is_admin, userPages) ? <ForwardingManagement isAdmin={profile.is_admin} notify={notify} /> : null}
-          {page === "traffic" ? <TrafficWorkbenchPage profile={profile} /> : null}
-          {page === "users" && profile.is_admin ? <UsersWorkbenchPage notify={notify} initialScope={usersScope} /> : null}
-          {page === "packages" && profile.is_admin ? <PackagesPage notify={notify} /> : null}
-          {page === "certificates" && pageAllowed(page, profile.is_admin, userPages) ? <CertificatesWorkbenchPage notify={notify} isAdmin={profile.is_admin} /> : null}
-          {page === "templates" && pageAllowed(page, profile.is_admin, userPages) ? <TemplatesWorkbenchPage notify={notify} /> : null}
-          {page === "subscribeFiles" && pageAllowed(page, profile.is_admin, userPages) ? <SubscribeFilesPage isAdmin={profile.is_admin} notify={notify} onOpenCustomRules={pageAllowed("customRules", profile.is_admin, userPages) ? () => navigate("customRules") : undefined} onOpenRulesConfig={profile.is_admin ? () => navigate("rulesConfig") : undefined} /> : null}
-          {page === "customRules" && pageAllowed(page, profile.is_admin, userPages) ? <CustomRulesWorkbenchPage notify={notify} /> : null}
-          {page === "rulesConfig" && profile.is_admin ? <RulesConfigWorkbenchPage notify={notify} /> : null}
-          {page === "settings" && profile.is_admin ? <SettingsWorkbenchPage notify={notify} onBrandingChange={onBrandingChange} /> : null}
-          {page === "account" ? <AccountWorkbenchPage notify={notify} /> : null}
-          </Suspense></LazyPageBoundary>}
+          ) : (
+            <LazyPageBoundary pageKey={page}>
+              <Suspense fallback={<ModuleLoadingFallback label={`正在载入${pageTitles[page] || "模块"}...`} />}>
+                {page === "dashboard" ? <DashboardPage profile={profile} navigate={navigate} canNavigateNodes={pageAllowed("nodes", profile.is_admin, userPages)} /> : null}
+                {page === "subscriptions" && pageAllowed(page, profile.is_admin, userPages) ? <SubscriptionLinksPage notify={notify} /> : null}
+                {page === "generator" && pageAllowed(page, profile.is_admin, userPages) ? <SubscriptionGeneratorPage notify={notify} /> : null}
+                {page === "servers" && profile.is_admin ? <ServicesWorkbenchPage notify={notify} /> : null}
+                {page === "nodes" && pageAllowed(page, profile.is_admin, userPages) ? <NodesWorkbench isAdmin={profile.is_admin} notify={notify} /> : null}
+                {page === "forwarding" && pageAllowed(page, profile.is_admin, userPages) ? <ForwardingManagement isAdmin={profile.is_admin} notify={notify} /> : null}
+                {page === "traffic" ? <TrafficWorkbenchPage profile={profile} /> : null}
+                {page === "users" && profile.is_admin ? <UsersWorkbenchPage notify={notify} initialScope={usersScope} /> : null}
+                {page === "packages" && profile.is_admin ? <PackagesPage notify={notify} /> : null}
+                {page === "certificates" && pageAllowed(page, profile.is_admin, userPages) ? <CertificatesWorkbenchPage notify={notify} isAdmin={profile.is_admin} /> : null}
+                {page === "templates" && pageAllowed(page, profile.is_admin, userPages) ? <TemplatesWorkbenchPage notify={notify} /> : null}
+                {page === "subscribeFiles" && pageAllowed(page, profile.is_admin, userPages) ? <SubscribeFilesPage isAdmin={profile.is_admin} notify={notify} onOpenCustomRules={pageAllowed("customRules", profile.is_admin, userPages) ? () => navigate("customRules") : undefined} onOpenRulesConfig={profile.is_admin ? () => navigate("rulesConfig") : undefined} /> : null}
+                {page === "customRules" && pageAllowed(page, profile.is_admin, userPages) ? <CustomRulesWorkbenchPage notify={notify} /> : null}
+                {page === "rulesConfig" && profile.is_admin ? <RulesConfigWorkbenchPage notify={notify} /> : null}
+                {page === "settings" && profile.is_admin ? <SettingsWorkbenchPage notify={notify} onBrandingChange={onBrandingChange} /> : null}
+                {page === "account" ? <AccountWorkbenchPage notify={notify} /> : null}
+              </Suspense>
+            </LazyPageBoundary>
+          )}
         </main>
       </div>
       <div className="floating-tools" aria-label="反馈工具">
@@ -409,8 +502,34 @@ function NavGroup({ label, className = "", children }: { label: string; classNam
   return <div className={`nav-group ${className}`.trim()}><span className="nav-label">{label}</span>{children}</div>;
 }
 
-function NavItem({ icon, label, active, onClick }: { icon: ReactNode; label: string; active: boolean; onClick: () => void }) {
-  return <button className={`nav-item ${active ? "is-active" : ""}`} aria-label={label} title={label} onClick={onClick}>{icon}<span>{label}</span><ChevronRight size={15} /></button>;
+function NavItem({
+  icon,
+  label,
+  active,
+  loading = false,
+  onClick,
+  onMouseEnter,
+}: {
+  icon: ReactNode;
+  label: string;
+  active: boolean;
+  loading?: boolean;
+  onClick: () => void;
+  onMouseEnter?: () => void;
+}) {
+  return (
+    <button
+      className={`nav-item ${active ? "is-active" : ""} ${loading ? "is-loading" : ""}`}
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      onMouseEnter={onMouseEnter}
+    >
+      {icon}
+      <span>{label}</span>
+      {loading ? <Spinner size={14} className="nav-item-spinner" label="" /> : <ChevronRight size={15} />}
+    </button>
+  );
 }
 
 type TrafficPeriod = "today" | "week" | "month";

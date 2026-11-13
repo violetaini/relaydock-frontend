@@ -33,8 +33,13 @@ export function Badge({
   );
 }
 
-export function Spinner({ label = "正在加载" }: { label?: string }) {
-  return <span className="spinner" role="status"><LoaderCircle size={16} />{label}</span>;
+export function Spinner({ label = "正在加载", size = 16, className = "" }: { label?: string; size?: number; className?: string }) {
+  return (
+    <span className={`spinner ${className}`.trim()} role="status">
+      <LoaderCircle size={size} />
+      {label ? label : null}
+    </span>
+  );
 }
 
 export function EmptyState({ icon, title, description, action }: { icon: ReactNode; title: string; description?: string; action?: ReactNode }) {

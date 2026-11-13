@@ -16,6 +16,28 @@ export interface RequestOptions {
   idempotencyKey?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  cacheTtlMs?: number;
+  skipCache?: boolean;
+}
+
+interface CacheRecord {
+  data: unknown;
+  expiresAt: number;
+}
+
+const apiGetCache = new Map<string, CacheRecord>();
+const inFlightGets = new Map<string, Promise<unknown>>();
+
+export function clearApiCache(prefix?: string): void {
+  if (!prefix) {
+    apiGetCache.clear();
+    return;
+  }
+  for (const key of apiGetCache.keys()) {
+    if (key.startsWith(prefix)) {
+      apiGetCache.delete(key);
+    }
+  }
 }
 
 export function getToken(): string {
@@ -23,6 +45,7 @@ export function getToken(): string {
 }
 
 export function setToken(token: string, remember = true): void {
+  clearApiCache();
   if (token) {
     if (remember) {
       localStorage.setItem(TOKEN_KEY, token);
@@ -146,23 +169,67 @@ export async function requestStream(path: string, init: RequestInit = {}, option
 }
 
 export const api = {
-  get: <T>(path: string, options?: RequestOptions) => request<T>(path, {}, options),
-  post: <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>(path, {
-    method: "POST",
-    body: body === undefined ? undefined : JSON.stringify(body),
-  }, options),
-  put: <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>(path, {
-    method: "PUT",
-    body: body === undefined ? undefined : JSON.stringify(body),
-  }, options),
-  patch: <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>(path, {
-    method: "PATCH",
-    body: body === undefined ? undefined : JSON.stringify(body),
-  }, options),
-  delete: <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>(path, {
-    method: "DELETE",
-    body: body === undefined ? undefined : JSON.stringify(body),
-  }, options),
+  get: <T>(path: string, options?: RequestOptions): Promise<T> => {
+    const defaultTtl = 15_000;
+    const ttl = options?.cacheTtlMs ?? (options?.skipCache ? 0 : defaultTtl);
+    const useCache = ttl > 0 && !options?.skipCache && !options?.signal;
+
+    if (useCache) {
+      const cached = apiGetCache.get(path);
+      if (cached && Date.now() < cached.expiresAt) {
+        return Promise.resolve(cached.data as T);
+      }
+      const inFlight = inFlightGets.get(path);
+      if (inFlight) {
+        return inFlight as Promise<T>;
+      }
+    }
+
+    const promise = request<T>(path, {}, options).then(
+      (data) => {
+        if (useCache) {
+          apiGetCache.set(path, {
+            data,
+            expiresAt: Date.now() + ttl,
+          });
+          inFlightGets.delete(path);
+        }
+        return data;
+      },
+      (error) => {
+        if (useCache) {
+          inFlightGets.delete(path);
+        }
+        throw error;
+      }
+    );
+
+    if (useCache) {
+      inFlightGets.set(path, promise);
+    }
+    return promise;
+  },
+  post: <T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> =>
+    request<T>(path, {
+      method: "POST",
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }, options).then((res) => { clearApiCache(); return res; }),
+  put: <T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> =>
+    request<T>(path, {
+      method: "PUT",
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }, options).then((res) => { clearApiCache(); return res; }),
+  patch: <T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> =>
+    request<T>(path, {
+      method: "PATCH",
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }, options).then((res) => { clearApiCache(); return res; }),
+  delete: <T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> =>
+    request<T>(path, {
+      method: "DELETE",
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }, options).then((res) => { clearApiCache(); return res; }),
+  clearCache: (prefix?: string) => clearApiCache(prefix),
 };
 
 interface DashboardSocketOptions {

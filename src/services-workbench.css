@@ -301,8 +301,8 @@
 .service-host-metric { position: relative; min-width: 0; min-height: 50px; padding: 7px 7px 9px; display: grid; grid-template-columns: 14px minmax(0, 1fr); column-gap: 5px; align-items: start; overflow: hidden; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); }
 .service-host-metric-icon { color: var(--blue); line-height: 0; }
 .service-host-metric-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.service-host-metric-copy small { overflow: hidden; color: var(--text-soft); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.service-host-metric-copy strong { overflow: hidden; color: var(--text); font: 700 11px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.service-host-metric-copy small { overflow: hidden; color: var(--text-soft); font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.service-host-metric-copy strong { overflow: hidden; color: var(--text); font: 700 13px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
 .service-host-metric > i { position: absolute; right: 7px; bottom: 5px; left: 7px; height: 3px; overflow: hidden; background: var(--surface-muted); }
 .service-host-metric > i::after { width: var(--service-host-meter); max-width: 100%; height: 100%; display: block; content: ""; background: var(--blue); transition: width .25s ease; }
 .service-host-metric.is-green .service-host-metric-icon { color: var(--green); }
@@ -310,23 +310,24 @@
 .service-host-metric.is-amber .service-host-metric-icon { color: var(--amber); }
 .service-host-metric.is-amber > i::after { background: var(--amber); }
 .service-speed-row { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.service-speed-row > span { display: flex; align-items: center; gap: 6px; color: var(--text-soft); font-size: 11px; font-weight: 700; }
+.service-speed-row > span { display: flex; align-items: center; gap: 6px; color: var(--text-soft); font-size: 12px; font-weight: 650; }
 .service-speed-row > span svg { color: var(--text-faint); }
-.service-speed-row > strong { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 10px; font: 10px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.service-speed-row > strong { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 10px; font: 700 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .service-speed-row i { font-style: normal; white-space: nowrap; }
 .service-speed-row .is-up { color: var(--green); }
 .service-speed-row .is-down { color: var(--accent); }
 .service-traffic { display: flex; flex-direction: column; gap: 7px; }
 .service-traffic > div { min-width: 0; display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-.service-traffic > div small { font-size: 10px; }
-.service-traffic > div strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.service-traffic > div small { font-size: 12px; font-weight: 600; color: var(--text-soft); }
+.service-traffic > div strong { overflow: hidden; font-size: 13px; font-weight: 700; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
 .service-traffic > span,
 .upgrade-progress > span { height: 7px; display: block; overflow: hidden; border-radius: 3px; background: var(--surface); border: 1px solid var(--border); }
 .service-traffic > span i,
 .upgrade-progress > span i { height: 100%; display: block; background: linear-gradient(90deg, var(--accent), var(--green) 45%, var(--amber) 74%, var(--red)); transition: width .25s ease; }
 .service-traffic > span.is-unlimited i { background-size: 220% 100%; animation: service-traffic-flow 3s linear infinite; }
-.service-traffic-caption { color: var(--text-faint); }
-.service-heartbeat { padding-top: 8px; display: flex; align-items: center; gap: 6px; border-top: 1px solid var(--border); color: var(--text-soft); font-size: 10px; }
+.service-traffic-caption { color: var(--text-soft); font-size: 12px; }
+.service-traffic-caption small { font-size: 12px; }
+.service-heartbeat { padding-top: 8px; display: flex; align-items: center; gap: 6px; border-top: 1px solid var(--border); color: var(--text-soft); font-size: 12px; }
 .service-heartbeat svg { color: var(--green); }
 .service-card-actions { margin: 0 -5px -5px; padding-top: 11px; display: grid; grid-template-columns: minmax(0, 1fr) repeat(3, auto); align-items: center; gap: 4px; border-top: 1px solid var(--border); }
 .service-card-primary-actions { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }

@@ -286,11 +286,32 @@ export function PackagesPage({ notify }: PackagesPageProps) {
                     <span>天授权周期</span>
                   </div>
                   <div className="package-meta">
-                    <span><CircleUserRound size={15} />{item.device_limit ? `${item.device_limit} 台` : "设备不限"}</span>
-                    <span title={names.join("、")}><Route size={15} />{itemNodes.length} 个节点</span>
-                    <span><Server size={15} />{item.server_grants?.length ?? 0} 台服务器</span>
-                    <span><Network size={15} />{item.forwarding_grants?.length ?? 0} 条线路</span>
-                    <span><CalendarDays size={15} />{packageNodeTrafficResetSummary(item)}</span>
+                    <span>
+                      <CircleUserRound size={16} />
+                      {item.device_limit ? (
+                        <>
+                          <strong className="package-meta-count">{item.device_limit}</strong> 台
+                        </>
+                      ) : (
+                        "设备不限"
+                      )}
+                    </span>
+                    <span title={names.join("、")}>
+                      <Route size={16} />
+                      <strong className="package-meta-count">{itemNodes.length}</strong> 个节点
+                    </span>
+                    <span>
+                      <Server size={16} />
+                      <strong className="package-meta-count">{item.server_grants?.length ?? 0}</strong> 台服务器
+                    </span>
+                    <span>
+                      <Network size={16} />
+                      <strong className="package-meta-count">{item.forwarding_grants?.length ?? 0}</strong> 条线路
+                    </span>
+                    <span>
+                      <CalendarDays size={16} />
+                      {packageNodeTrafficResetSummary(item)}
+                    </span>
                   </div>
                 </Surface>
               );

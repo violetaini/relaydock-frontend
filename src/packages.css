@@ -31,6 +31,29 @@
   min-width: 930px;
 }
 
+.package-resources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.package-resources span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.package-resources .package-meta-count,
+.package-resources strong {
+  color: var(--accent-readable);
+  font-weight: 700;
+  font-size: 13px;
+}
+
 .page-packages .package-stack,
 .page-packages .package-grid,
 .page-packages .packages-list-surface {

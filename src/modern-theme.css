@@ -303,7 +303,7 @@
 :root[data-style-theme="flat"] .metric-copy small {
   overflow: hidden;
   color: var(--text-soft);
-  font-size: 10px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -957,7 +957,7 @@
   }
 
   :root[data-style-theme="flat"] .metric-copy small {
-    font-size: 9px;
+    font-size: 11px;
   }
 
   :root[data-style-theme="flat"] .metric > strong {

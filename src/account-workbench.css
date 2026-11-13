@@ -31,7 +31,7 @@
 }
 
 .account-panel-title h2 { font-size: 14px; }
-.account-panel-title p { margin-top: 3px; color: var(--text-soft); font-size: 10px; }
+.account-panel-title p { margin-top: 3px; color: var(--text-soft); font-size: 12px; }
 .account-panel-trailing { flex: none; }
 
 .account-loading {
@@ -73,7 +73,7 @@
 .account-avatar-preview img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .account-identity > span:last-child { min-width: 0; display: flex; flex-direction: column; }
 .account-identity strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-.account-identity small { margin-top: 4px; font-size: 10px; }
+.account-identity small { margin-top: 4px; font-size: 12px; }
 
 .account-panel-actions { display: flex; justify-content: flex-end; gap: 9px; }
 .account-password-footer { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
@@ -106,7 +106,7 @@
 }
 
 .account-effective-code > span { min-width: 0; flex: 1; display: flex; flex-direction: column; }
-.account-effective-code small { font-size: 10px; }
+.account-effective-code small { font-size: 12px; }
 .account-effective-code code { margin-top: 5px; overflow-wrap: anywhere; font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; }
 .account-effective-code .icon-button { border-color: var(--border); background: var(--surface); }
 
@@ -145,7 +145,7 @@
 .account-token-main strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .account-token-main small { margin-top: 4px; display: flex; align-items: center; gap: 4px; font-size: 9px; }
 .account-token-used small { font-size: 9px; }
-.account-token-used strong { margin-top: 4px; font-size: 10px; font-weight: 650; }
+.account-token-used strong { margin-top: 4px; font-size: 12px; font-weight: 650; }
 
 .account-one-time-warning {
   padding: 13px 14px;

@@ -96,8 +96,8 @@
 .fm-metric small,
 .fm-metric span {
   overflow: hidden;
-  color: var(--text-faint);
-  font-size: 10px;
+  color: var(--text-soft);
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -164,7 +164,7 @@
 }
 
 .fm-toolbar strong { color: var(--text); font-size: 14px; }
-.fm-toolbar span { font-size: 10px; }
+.fm-toolbar span { font-size: 12px; }
 
 .fm-filter-toolbar { align-items: end; }
 
@@ -222,7 +222,7 @@
 
 .fm-primary-cell strong { color: var(--text); font-size: 12px; }
 .fm-primary-cell small,
-.fm-cell-note { margin-top: 4px; font-size: 9px; }
+.fm-cell-note { margin-top: 4px; font-size: 11px; }
 
 .fm-row-actions {
   justify-content: flex-end;
@@ -389,9 +389,9 @@
 .fm-grant-card dl div,
 .fm-review dl div { display: grid; gap: 3px; }
 .fm-grant-card dt,
-.fm-review dt { color: var(--text-faint); font-size: 9px; }
+.fm-review dt { color: var(--text-soft); font-size: 11px; }
 .fm-grant-card dd,
-.fm-review dd { margin: 0; color: var(--text-soft); font-size: 10px; font-weight: 700; }
+.fm-review dd { margin: 0; color: var(--text); font-size: 12px; font-weight: 700; }
 
 .fm-usage { display: grid; gap: 7px; }
 .fm-usage > span { justify-content: space-between; gap: 8px; }

@@ -21,6 +21,7 @@ import {
 import { api } from "./api";
 import { TwoFactorSettings } from "./two-factor";
 import type { Profile } from "./types";
+import { GitHubIcon, GoogleIcon, OIDCIcon } from "./oauth-icons";
 import {
   Badge,
   Button,
@@ -108,6 +109,7 @@ export function AccountWorkbenchPage({ notify }: { notify: Notify }) {
       <div className="account-workbench">
         <ProfilePanel notify={notify} refreshKey={refreshKey} />
         <PasswordPanel notify={notify} />
+        <OAuthIdentitiesPanel notify={notify} refreshKey={refreshKey} />
         <SubscriptionCredentialsPanel notify={notify} refreshKey={refreshKey} />
         <PersonalAPITokensPanel notify={notify} refreshKey={refreshKey} />
         <TwoFactorSettings key={refreshKey} notify={notify} />
@@ -292,6 +294,159 @@ function PasswordPanel({ notify }: { notify: Notify }) {
 
 function PasswordInput({ label, value, onChange, show, autoComplete, minLength }: { label: string; value: string; onChange: (value: string) => void; show: boolean; autoComplete: string; minLength?: number }) {
   return <input aria-label={label} required type={show ? "text" : "password"} autoComplete={autoComplete} minLength={minLength} value={value} onChange={(event) => onChange(event.target.value)} />;
+}
+
+interface OAuthIdentityItem {
+  id: number;
+  username: string;
+  provider: string;
+  oauth_id: string;
+  email: string;
+  name: string;
+  avatar_url: string;
+  created_at: string;
+}
+
+function OAuthIdentitiesPanel({ notify, refreshKey }: { notify: Notify; refreshKey: number }) {
+  const [identities, setIdentities] = useState<OAuthIdentityItem[]>([]);
+  const [providers, setProviders] = useState<{ id: string; name: string }[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [binding, setBinding] = useState<string | null>(null);
+  const [unbinding, setUnbinding] = useState<string | null>(null);
+  const [confirmUnbind, setConfirmUnbind] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [pubRes, identRes] = await Promise.all([
+        api.get<{ providers: { id: string; name: string }[] }>("/api/public/oauth/providers").catch(() => ({ providers: [] })),
+        api.get<OAuthIdentityItem[]>("/api/user/oauth/identities").catch(() => []),
+      ]);
+      setProviders(pubRes?.providers ?? []);
+      setIdentities(Array.isArray(identRes) ? identRes : []);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load, refreshKey]);
+
+  const bindProvider = async (provider: string) => {
+    setBinding(provider);
+    try {
+      const res = await api.post<{ url: string }>("/api/user/oauth/prepare-bind", { provider });
+      if (res?.url) {
+        window.location.href = res.url;
+      }
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "发起绑定失败", "error");
+      setBinding(null);
+    }
+  };
+
+  const executeUnbind = async (provider: string) => {
+    setUnbinding(provider);
+    try {
+      await api.post("/api/user/oauth/unbind", { provider });
+      notify("已解除绑定", "success");
+      setConfirmUnbind(null);
+      await load();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "解除绑定失败", "error");
+    } finally {
+      setUnbinding(null);
+    }
+  };
+
+  const allProviderIDs = Array.from(new Set([
+    ...providers.map((p) => p.id),
+    ...identities.map((i) => i.provider),
+  ]));
+
+  return (
+    <Surface className="account-panel account-oauth-panel">
+      <PanelHeading
+        icon={<Link2 size={19} />}
+        title="第三方快捷登录"
+        description="绑定或解绑 GitHub、Google 与 OIDC 账号"
+      />
+      {loading ? (
+        <Spinner label="正在读取第三方绑定信息" />
+      ) : allProviderIDs.length === 0 ? (
+        <EmptyState icon={<Link2 size={24} />} title="未配置第三方快捷登录" description="当前控制端暂未启用任何第三方 OAuth/SSO 登录通道。" />
+      ) : (
+        <div className="account-oauth-list">
+          {allProviderIDs.map((providerId) => {
+            const bound = identities.find((i) => i.provider === providerId);
+            const providerMeta = providers.find((p) => p.id === providerId);
+            const displayName = providerMeta?.name || (providerId === "github" ? "GitHub" : providerId === "google" ? "Google" : "OIDC");
+
+            return (
+              <div key={providerId} className="account-oauth-row">
+                <div className="account-oauth-info">
+                  <span className={`oauth-icon-wrapper oauth-icon-${providerId}`}>
+                    {providerId === "github" ? <GitHubIcon size={20} /> : providerId === "google" ? <GoogleIcon size={20} /> : <OIDCIcon size={20} />}
+                  </span>
+                  <div className="account-oauth-details">
+                    <div className="account-oauth-name">
+                      <strong>{displayName}</strong>
+                      <Badge tone={bound ? "good" : "neutral"}>{bound ? "已绑定" : "未绑定"}</Badge>
+                    </div>
+                    {bound ? (
+                      <p className="account-oauth-meta">
+                        {bound.name || bound.email ? (
+                          <>
+                            {bound.name ? <span>{bound.name}</span> : null}
+                            {bound.email ? <span className="meta-email">({bound.email})</span> : null}
+                          </>
+                        ) : (
+                          <span>ID: {bound.oauth_id}</span>
+                        )}
+                      </p>
+                    ) : (
+                      <p className="account-oauth-meta">暂未绑定该第三方账号</p>
+                    )}
+                  </div>
+                </div>
+                <div className="account-oauth-action">
+                  {bound ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => setConfirmUnbind(providerId)}
+                      disabled={unbinding === providerId}
+                    >
+                      {unbinding === providerId ? <Spinner label="正在解绑" /> : "解除绑定"}
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => void bindProvider(providerId)}
+                      disabled={binding === providerId}
+                    >
+                      {binding === providerId ? <Spinner label="正在跳转" /> : "立即绑定"}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {confirmUnbind ? (
+        <ConfirmDialog
+          title="解除第三方账号绑定"
+          description={`确定要解除与 ${confirmUnbind} 的绑定关系吗？解除后将无法直接通过该第三方账号单点登录。`}
+          confirmLabel="确认解除"
+          working={unbinding === confirmUnbind}
+          onConfirm={() => void executeUnbind(confirmUnbind)}
+          onCancel={() => setConfirmUnbind(null)}
+        />
+      ) : null}
+    </Surface>
+  );
 }
 
 function SubscriptionCredentialsPanel({ notify, refreshKey }: { notify: Notify; refreshKey: number }) {

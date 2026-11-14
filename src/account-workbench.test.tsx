@@ -213,4 +213,32 @@ describe("account workbench", () => {
     expect(await screen.findByText("deploy-bot")).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: "启用 2FA" })).toBeInTheDocument();
   });
+
+  it("displays bound oauth identity and supports unbinding with confirmation", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/user/profile") return normalProfile as T;
+      if (path === "/api/user/token") return { token: "token", user_short_code: "a1" } as T;
+      if (path === "/api/user/api-tokens") return { success: true, tokens: [] } as T;
+      if (path === "/api/user/2fa/status") return { enabled: false } as T;
+      if (path === "/api/public/oauth/providers") return { providers: [{ id: "github", name: "GitHub" }] } as T;
+      if (path === "/api/user/oauth/identities") return [{ id: 1, provider: "github", oauth_id: "gh_123", email: "alice@github.com", name: "Alice GitHub", avatar_url: "", created_at: "2026-11-15T00:00:00Z" }] as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/user/oauth/unbind") return { status: "unbound" } as T;
+      throw new Error(`unexpected POST ${path}`);
+    });
+    const notify = vi.fn();
+    render(<AccountWorkbenchPage notify={notify} />);
+
+    expect(await screen.findByText("Alice GitHub")).toBeInTheDocument();
+    expect(screen.getByText("已绑定")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "解除绑定" }));
+    expect(screen.getByRole("dialog", { name: "解除第三方账号绑定" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认解除" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/user/oauth/unbind", { provider: "github" }));
+    expect(notify).toHaveBeenCalledWith("已解除绑定", "success");
+  });
 });

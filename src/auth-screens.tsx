@@ -34,6 +34,7 @@ import {
 import { api, ApiError, setToken } from "./api";
 import { BRAND_NAME, BrandMark, brandLogoURL, useBranding } from "./brand";
 import { CountryFlag, normalizeCountryCode } from "./country-flag";
+import { GitHubIcon, GoogleIcon, OIDCIcon } from "./oauth-icons";
 import type { Session } from "./types";
 import { Button, ErrorState, Field, Spinner, formatBytes } from "./ui";
 
@@ -830,6 +831,13 @@ export function LoginScreen({ onLogin, wallpaper = "", notice = "" }: { onLogin:
   const [captchaAttempt, setCaptchaAttempt] = useState(0);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [oauthProviders, setOAuthProviders] = useState<{ id: string; name: string }[]>([]);
+
+  useEffect(() => {
+    api.get<{ providers: { id: string; name: string }[] }>("/api/public/oauth/providers")
+      .then((res) => { if (Array.isArray(res?.providers)) setOAuthProviders(res.providers); })
+      .catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     api.get<{ enabled: boolean; site_key: string }>("/api/captcha/config").then(setCaptcha).catch(() => undefined);
@@ -925,6 +933,28 @@ export function LoginScreen({ onLogin, wallpaper = "", notice = "" }: { onLogin:
               <label className="checkbox-row"><input type="checkbox" checked={form.remember_me} onChange={(e) => setForm({ ...form, remember_me: e.target.checked })} /><span>保持登录</span></label>
               {captcha.enabled && captcha.site_key ? <Turnstile key={`${captcha.site_key}-${captchaAttempt}`} siteKey={captcha.site_key} onToken={setCaptchaToken} /> : null}
               <Button type="submit" disabled={submitting || (captcha.enabled && !captchaToken)}>{submitting ? <Spinner label="正在登录" /> : <>登录<ArrowRight size={17} /></>}</Button>
+              {oauthProviders.length > 0 ? (
+                <div className="oauth-login-section">
+                  <div className="oauth-divider">
+                    <span>或使用第三方账号登录</span>
+                  </div>
+                  <div className="oauth-buttons-list">
+                    {oauthProviders.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        className={`oauth-button oauth-btn-${p.id}`}
+                        onClick={() => {
+                          window.location.href = `/api/oauth/${p.id}/login`;
+                        }}
+                      >
+                        {p.id === "github" ? <GitHubIcon size={18} /> : p.id === "google" ? <GoogleIcon size={18} /> : <OIDCIcon size={18} />}
+                        <span>使用 {p.name} 登录</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </form>
           )}
           <div className="auth-security"><ShieldCheck size={16} /><span>会话由控制端本地签发</span></div>

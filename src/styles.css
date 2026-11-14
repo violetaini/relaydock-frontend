@@ -2717,3 +2717,59 @@ td { min-height: 62px; }
   color: var(--accent);
 }
 
+
+.oauth-login-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+}
+.oauth-divider {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  margin: 8px 0 4px;
+}
+.oauth-divider::before,
+.oauth-divider::after {
+  content: "";
+  flex: 1;
+  border-bottom: 1px solid var(--border);
+}
+.oauth-divider span {
+  padding: 0 10px;
+}
+.oauth-buttons-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.oauth-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  height: 42px;
+  padding: 0 16px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  cursor: pointer;
+  transition: all 0.15s ease-in-out;
+}
+.oauth-button:hover {
+  background: var(--surface-hover, rgba(0, 0, 0, 0.04));
+  border-color: var(--border-hover, var(--text-muted));
+}
+.oauth-btn-github:hover {
+  border-color: #24292f;
+}
+.oauth-btn-google:hover {
+  border-color: #4285f4;
+}

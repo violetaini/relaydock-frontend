@@ -38,6 +38,7 @@ import { BackupPanel, DebugLogsPanel } from "./system-maintenance-panels";
 import { TwoFactorSettings } from "./two-factor";
 import type { RemoteServer, ServerListResponse } from "./types";
 import { Badge, Button, ConfirmDialog, Dialog, ErrorState, Field, IconButton, PageHeader, Spinner, Surface, Toggle } from "./ui";
+import { GitHubIcon, GoogleIcon, OIDCIcon } from "./oauth-icons";
 import "./settings-workbench.css";
 
 type Notify = (message: string, tone?: "success" | "error") => void;
@@ -623,11 +624,52 @@ const SETTINGS_GROUPS = [
   { id: "settings-subscription", label: "订阅" },
   { id: "settings-security", label: "安全" },
   { id: "settings-permissions", label: "权限" },
+  { id: "settings-oauth", label: "快捷登录" },
   { id: "settings-tgbot", label: "Telegram Bot" },
   { id: "settings-notifications", label: "通知" },
   { id: "settings-maintenance", label: "维护" },
   { id: "settings-account", label: "账户" },
 ] as const;
+
+interface OAuthConfigState {
+  github_enabled: boolean;
+  github_client_id: string;
+  github_client_secret: string;
+
+  google_enabled: boolean;
+  google_client_id: string;
+  google_client_secret: string;
+
+  oidc_enabled: boolean;
+  oidc_issuer: string;
+  oidc_client_id: string;
+  oidc_client_secret: string;
+  oidc_display_name: string;
+
+  auto_register: boolean;
+  auto_link_email: boolean;
+
+  callback_urls?: Record<string, string>;
+}
+
+const defaultOAuthConfig: OAuthConfigState = {
+  github_enabled: false,
+  github_client_id: "",
+  github_client_secret: "",
+
+  google_enabled: false,
+  google_client_id: "",
+  google_client_secret: "",
+
+  oidc_enabled: false,
+  oidc_issuer: "",
+  oidc_client_id: "",
+  oidc_client_secret: "",
+  oidc_display_name: "OIDC",
+
+  auto_register: true,
+  auto_link_email: true,
+};
 
 type SettingsGroupID = typeof SETTINGS_GROUPS[number]["id"];
 
@@ -673,6 +715,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
   const [tgBotAdminIDDraft, setTGBotAdminIDDraft] = useState("");
   const tgBotPreviewURL = localMiniAppPreviewURL();
   const [userSubscription, setUserSubscription] = useState<UserSubscriptionConfig>(defaultUserSubscription);
+  const [oauthConfig, setOAuthConfig] = useState<OAuthConfigState>(defaultOAuthConfig);
   const [apiToken, setApiToken] = useState("");
   const [confirmTokenReset, setConfirmTokenReset] = useState(false);
   const [showMigration, setShowMigration] = useState(false);
@@ -757,7 +800,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
           return fallback;
         }
       };
-      const [master, themeData, wall, brandingData, intervalData, refreshData, probeData, serverData, shortData, prefixData, overrideData, formatData, silentData, featureData, rootLinksData, logData, templateData, defaultTemplateData, redeemData, secData, encryptData, permissionData, notifyData, tgBotData, tokenData, userSubscriptionData] = await Promise.all([
+      const [master, themeData, wall, brandingData, intervalData, refreshData, probeData, serverData, shortData, prefixData, overrideData, formatData, silentData, featureData, rootLinksData, logData, templateData, defaultTemplateData, redeemData, secData, encryptData, permissionData, notifyData, tgBotData, tokenData, userSubscriptionData, oauthData] = await Promise.all([
         tolerant("公开 URL", api.get<{ master_url: string }>("/api/admin/system-settings/master-url"), { master_url: location.origin }),
         tolerant("默认主题", api.get<{ default_theme: string }>("/api/admin/system-settings/default-theme"), { default_theme: "flat" }),
         tolerant("登录壁纸", api.get<{ login_wallpaper: string }>("/api/admin/system-settings/login-wallpaper"), { login_wallpaper: "" }),
@@ -784,6 +827,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
         tolerant("Telegram Bot", api.get<TGBotSettings>("/api/admin/system-settings/tgbot"), defaultTGBot),
         tolerant("API Token", api.get<{ token: string }>("/api/admin/system-settings/api-token"), { token: "" }),
         tolerant("用户订阅", api.get<UserSubscriptionConfig>("/api/user/config"), defaultUserSubscription),
+        tolerant("快捷登录", api.get<OAuthConfigState>("/api/admin/oauth/config"), defaultOAuthConfig),
       ]);
       const loadedServers = serverData.servers ?? [];
       const loadedProbe = normalizeProbeDisguise(probeData);
@@ -803,7 +847,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
       setTemplates(templateData.templates ?? []); setDefaultTemplate(defaultTemplateData.default_template_filename); setRedeemTemplate(redeemData.redeem_template);
       setSecurity(secData); setRequireEncryption(encryptData.require_encryption); setPermissions(permissionData.config); setNotifications(notifyData);
       setTGBot({ ...defaultTGBot, ...tgBotData, admin_tg_ids: tgBotData.admin_tg_ids ?? [] }); setTGBotAdminIDs(tgBotData.admin_tg_ids ?? []); setTGBotAdminIDDraft("");
-      setApiToken(tokenData.token); setUserSubscription(userSubscriptionData);
+      setApiToken(tokenData.token); setUserSubscription(userSubscriptionData); setOAuthConfig(oauthData);
       setLoaded(successes > 0);
       setLoadFailures(failures);
       if (failures.length) {
@@ -962,6 +1006,11 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
   const savePermissions = (event: FormEvent) => {
     event.preventDefault();
     void save("permissions", () => api.put("/api/admin/system-settings/user-permissions", permissions), "普通用户权限已更新");
+  };
+
+  const saveOAuth = (event: FormEvent) => {
+    event.preventDefault();
+    void save("oauth", () => api.post("/api/admin/oauth/config", oauthConfig), "快捷登录设置已保存");
   };
 
   const saveTGBot = (event: FormEvent) => {
@@ -1263,6 +1312,55 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
         <SettingSection icon={<FileJson size={19} />} title="资源配额" description="0 表示不限数量"><div className="settings-fields-grid"><NumberField label="模板数量" min={0} value={permissions.quota_template} onChange={(value) => setPermissions({ ...permissions, quota_template: value })} /><NumberField label="覆写数量" min={0} value={permissions.quota_override} onChange={(value) => setPermissions({ ...permissions, quota_override: value })} /><NumberField label="订阅数量" min={0} value={permissions.quota_subscribe} onChange={(value) => setPermissions({ ...permissions, quota_subscribe: value })} /></div></SettingSection>
         <SettingSection icon={<Network size={19} />} title="私有路由出站" description="每次操作都会让对应 Agent 重载 Xray"><Toggle checked={permissions.routed_outbound_enabled} onChange={(routed_outbound_enabled) => setPermissions({ ...permissions, routed_outbound_enabled })} label="允许普通用户创建路由出站" /><div className="settings-fields-grid"><NumberField label="每用户数量" min={1} value={permissions.quota_routed_outbound} onChange={(value) => setPermissions({ ...permissions, quota_routed_outbound: value })} /><NumberField label="每日操作次数" min={1} value={permissions.daily_limit_routed_outbound} onChange={(value) => setPermissions({ ...permissions, daily_limit_routed_outbound: value })} /></div></SettingSection>
         <SaveRow label="保存用户权限" saving={saving.has("permissions")} disabled={saving.size > 0 || loadFailures.length > 0} />
+      </form>
+
+      <form id="settings-oauth" className="settings-settings-group" role="tabpanel" aria-labelledby={settingsTabID("settings-oauth")} hidden={activeGroup !== "settings-oauth"} tabIndex={0} onSubmit={saveOAuth}>
+        <SettingsGroupHeading icon={<KeyRound size={18} />} title="第三方快捷登录" description="配置 GitHub、Google 与 Generic OIDC (OpenID Connect) 登录与单点登录" />
+
+        <SettingSection icon={<Users size={19} />} title="登录策略" description="控制新账号自动注册与已有账号邮箱关联">
+          <Toggle checked={oauthConfig.auto_register} onChange={(auto_register) => setOAuthConfig({ ...oauthConfig, auto_register })} label="允许新用户首次登录自动注册账号" />
+          <Toggle checked={oauthConfig.auto_link_email} onChange={(auto_link_email) => setOAuthConfig({ ...oauthConfig, auto_link_email })} label="第三方邮箱与已有账号一致时自动关联绑定" />
+        </SettingSection>
+
+        <SettingSection icon={<GitHubIcon size={19} />} title="GitHub OAuth" description="支持通过 GitHub 账号快捷登录与身份绑定">
+          <Toggle checked={oauthConfig.github_enabled} onChange={(github_enabled) => setOAuthConfig({ ...oauthConfig, github_enabled })} label="启用 GitHub 快捷登录" />
+          <Field label="Client ID"><input autoComplete="off" value={oauthConfig.github_client_id} onChange={(e) => setOAuthConfig({ ...oauthConfig, github_client_id: e.target.value })} placeholder="例如 Ov23li..." /></Field>
+          <Field label="Client Secret" hint="已配置时显示掩码；不修改可原样保存"><input type="password" autoComplete="new-password" value={oauthConfig.github_client_secret} onChange={(e) => setOAuthConfig({ ...oauthConfig, github_client_secret: e.target.value })} /></Field>
+          <Field label="回调地址 (Authorization callback URL)" hint="在 GitHub OAuth App 设置中填入此完整地址">
+            <div className="settings-oauth-callback-row">
+              <code>{oauthConfig.callback_urls?.github || `${location.origin}/api/oauth/github/callback`}</code>
+              <IconButton label="复制回调地址" onClick={() => void navigator.clipboard.writeText(oauthConfig.callback_urls?.github || `${location.origin}/api/oauth/github/callback`).then(() => notify("GitHub 回调地址已复制"))}><Copy size={16} /></IconButton>
+            </div>
+          </Field>
+        </SettingSection>
+
+        <SettingSection icon={<GoogleIcon size={19} />} title="Google OAuth" description="支持通过 Google 账号快捷登录与身份绑定">
+          <Toggle checked={oauthConfig.google_enabled} onChange={(google_enabled) => setOAuthConfig({ ...oauthConfig, google_enabled })} label="启用 Google 快捷登录" />
+          <Field label="Client ID"><input autoComplete="off" value={oauthConfig.google_client_id} onChange={(e) => setOAuthConfig({ ...oauthConfig, google_client_id: e.target.value })} placeholder="例如 xxx.apps.googleusercontent.com" /></Field>
+          <Field label="Client Secret" hint="已配置时显示掩码；不修改可原样保存"><input type="password" autoComplete="new-password" value={oauthConfig.google_client_secret} onChange={(e) => setOAuthConfig({ ...oauthConfig, google_client_secret: e.target.value })} /></Field>
+          <Field label="已获授权的重定向 URI" hint="在 Google Cloud Console 凭据设置中填入此完整地址">
+            <div className="settings-oauth-callback-row">
+              <code>{oauthConfig.callback_urls?.google || `${location.origin}/api/oauth/google/callback`}</code>
+              <IconButton label="复制回调地址" onClick={() => void navigator.clipboard.writeText(oauthConfig.callback_urls?.google || `${location.origin}/api/oauth/google/callback`).then(() => notify("Google 回调地址已复制"))}><Copy size={16} /></IconButton>
+            </div>
+          </Field>
+        </SettingSection>
+
+        <SettingSection icon={<OIDCIcon size={19} />} title="通用 OIDC (OpenID Connect)" description="对接 Keycloak, Authentik, Authelia, Cloudflare Access 等统一身份认证">
+          <Toggle checked={oauthConfig.oidc_enabled} onChange={(oidc_enabled) => setOAuthConfig({ ...oauthConfig, oidc_enabled })} label="启用 OIDC 快捷登录" />
+          <Field label="登录按钮显示名称" hint="默认为 OIDC，可自定义为 Authentik、企业 SSO 等"><input autoComplete="off" value={oauthConfig.oidc_display_name} onChange={(e) => setOAuthConfig({ ...oauthConfig, oidc_display_name: e.target.value })} placeholder="OIDC" /></Field>
+          <Field label="Issuer URL (签发者地址)" hint="必须支持 /.well-known/openid-configuration 元数据端点"><input autoComplete="off" value={oauthConfig.oidc_issuer} onChange={(e) => setOAuthConfig({ ...oauthConfig, oidc_issuer: e.target.value })} placeholder="https://sso.example.com" /></Field>
+          <Field label="Client ID"><input autoComplete="off" value={oauthConfig.oidc_client_id} onChange={(e) => setOAuthConfig({ ...oauthConfig, oidc_client_id: e.target.value })} /></Field>
+          <Field label="Client Secret" hint="已配置时显示掩码；不修改可原样保存"><input type="password" autoComplete="new-password" value={oauthConfig.oidc_client_secret} onChange={(e) => setOAuthConfig({ ...oauthConfig, oidc_client_secret: e.target.value })} /></Field>
+          <Field label="重定向 URI (Redirect URI)" hint="在 OIDC 客户端设置中填入此完整地址">
+            <div className="settings-oauth-callback-row">
+              <code>{oauthConfig.callback_urls?.oidc || `${location.origin}/api/oauth/oidc/callback`}</code>
+              <IconButton label="复制回调地址" onClick={() => void navigator.clipboard.writeText(oauthConfig.callback_urls?.oidc || `${location.origin}/api/oauth/oidc/callback`).then(() => notify("OIDC 回调地址已复制"))}><Copy size={16} /></IconButton>
+            </div>
+          </Field>
+        </SettingSection>
+
+        <SaveRow label="保存快捷登录设置" saving={saving.has("oauth")} disabled={saving.size > 0 || loadFailures.length > 0} />
       </form>
 
       <form id="settings-tgbot" className="settings-settings-group" role="tabpanel" aria-labelledby={settingsTabID("settings-tgbot")} hidden={activeGroup !== "settings-tgbot"} tabIndex={0} onSubmit={saveTGBot}>

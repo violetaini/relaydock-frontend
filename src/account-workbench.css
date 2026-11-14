@@ -201,3 +201,66 @@
   .account-copy-field { grid-template-columns: minmax(0, 1fr) 36px 36px; }
   .account-panel-actions .button { width: 100%; }
 }
+
+.account-oauth-panel {
+  grid-column: 1 / -1;
+}
+.account-oauth-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 14px;
+}
+.account-oauth-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  background: var(--surface-subtle, rgba(0, 0, 0, 0.02));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  gap: 16px;
+}
+.account-oauth-info {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+.oauth-icon-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.oauth-icon-github { color: var(--text); }
+.oauth-icon-oidc { color: var(--accent); }
+.account-oauth-details {
+  min-width: 0;
+}
+.account-oauth-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.account-oauth-name strong {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+.account-oauth-meta {
+  margin: 3px 0 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.meta-email {
+  margin-left: 6px;
+  color: var(--text-secondary);
+}
+.account-oauth-action {
+  flex-shrink: 0;
+}

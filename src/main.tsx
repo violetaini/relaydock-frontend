@@ -96,6 +96,33 @@ function publicBrandingFrame(value: unknown): Branding {
   return normalizeBranding(nested as Partial<Branding> | undefined);
 }
 
+function mapOAuthError(code: string): string {
+  switch (code) {
+    case "access_denied":
+      return "第三方授权已取消";
+    case "invalid_state":
+    case "csrf_validation_failed":
+      return "登录校验超时或防重放校验失败，请重试";
+    case "state_expired":
+      return "登录请求已过期，请重新登录";
+    case "provider_disabled":
+      return "该第三方登录通道当前未开启";
+    case "exchange_failed":
+    case "profile_not_found":
+      return "与第三方身份提供商通信失败，请稍后重试";
+    case "registration_disabled":
+      return "系统暂未开启第三方账号快捷注册，请联系管理员";
+    case "account_disabled":
+      return "该用户账号已被禁用，请联系管理员";
+    case "already_bound_to_other_user":
+      return "该第三方账号已绑定至其他用户";
+    case "login_required_to_bind":
+      return "绑定第三方账号前请先登录";
+    default:
+      return code ? `第三方登录失败: ${code}` : "第三方登录失败";
+  }
+}
+
 export function App() {
   const [loginRequested, setLoginRequested] = useState(() => {
     if (typeof location === "undefined") return false;
@@ -119,6 +146,36 @@ export function App() {
   const [branding, setBranding] = useState<Branding>(DEFAULT_BRANDING);
 
   const bootstrap = useCallback(async () => {
+    if (typeof location !== "undefined" && location.search) {
+      const searchParams = new URLSearchParams(location.search);
+      const oauthToken = searchParams.get("oauth_token");
+      const oauthError = searchParams.get("oauth_error");
+      const oauthSuccess = searchParams.get("oauth_success");
+
+      if (oauthToken) {
+        setToken(oauthToken, true);
+        searchParams.delete("oauth_token");
+        searchParams.delete("oauth_username");
+        const remaining = searchParams.toString();
+        const cleanUrl = location.pathname + (remaining ? `?${remaining}` : "") + location.hash;
+        history.replaceState(null, "", cleanUrl);
+      } else if (oauthError) {
+        searchParams.delete("oauth_error");
+        const remaining = searchParams.toString();
+        const cleanUrl = location.pathname + (remaining ? `?${remaining}` : "") + (location.hash || "#/login");
+        history.replaceState(null, "", cleanUrl);
+        setLogoutNotice(mapOAuthError(oauthError));
+        location.hash = "/login";
+        setLoginRequested(true);
+      } else if (oauthSuccess === "bound") {
+        searchParams.delete("oauth_success");
+        searchParams.delete("provider");
+        const remaining = searchParams.toString();
+        const cleanUrl = location.pathname + (remaining ? `?${remaining}` : "") + (location.hash || "#/account");
+        history.replaceState(null, "", cleanUrl);
+      }
+    }
+
     if (getToken() || location.hash.replace(/^#\/?/, "") === "login") {
       setState("loading");
     }

@@ -40,6 +40,26 @@ function mockCompleteSettings(overrides: Record<string, unknown> = {}, failingPa
     "/api/admin/system-settings/user-permissions": { config: { pages: [], quota_template: 0, quota_override: 0, quota_subscribe: 0, routed_outbound_enabled: false, quota_routed_outbound: 2, daily_limit_routed_outbound: 5 } },
     "/api/admin/notify-config": { notify_enabled: false },
     "/api/admin/system-settings/tgbot": { enabled: false, bot_token: "", admin_tg_ids: [], webapp_dev_preview: false, running: false, bot_url: "" },
+    "/api/admin/oauth/config": {
+      github_enabled: false,
+      github_client_id: "",
+      github_client_secret: "",
+      google_enabled: false,
+      google_client_id: "",
+      google_client_secret: "",
+      oidc_enabled: false,
+      oidc_issuer: "",
+      oidc_client_id: "",
+      oidc_client_secret: "",
+      oidc_display_name: "OIDC",
+      auto_register: true,
+      auto_link_email: true,
+      callback_urls: {
+        github: "https://old.example.com/api/oauth/github/callback",
+        google: "https://old.example.com/api/oauth/google/callback",
+        oidc: "https://old.example.com/api/oauth/oidc/callback",
+      },
+    },
     "/api/admin/system-settings/api-token": { token: "" },
     "/api/admin/update/check": {
       current_version: "0.5.0", latest_version: "0.5.0", has_update: false,
@@ -745,5 +765,25 @@ describe("settings workbench", () => {
 
     expect(await screen.findByText("更新包校验失败", { selector: ".system-update-error" })).toBeInTheDocument();
     expect(notify).toHaveBeenCalledWith("更新包校验失败", "error");
+  });
+
+  it("loads and saves oauth / sso configuration", async () => {
+    mockCompleteSettings();
+    const post = vi.spyOn(api, "post").mockResolvedValue({ status: "saved" });
+    const notify = vi.fn();
+    render(<SettingsWorkbenchPage notify={notify} />);
+
+    await openSettingsGroup("快捷登录");
+    expect(await screen.findByRole("heading", { name: "第三方快捷登录" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("启用 GitHub 快捷登录"));
+
+    fireEvent.click(screen.getByRole("button", { name: "保存快捷登录设置" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/oauth/config", expect.objectContaining({
+      github_enabled: true,
+      auto_register: true,
+      auto_link_email: true,
+    })));
+    expect(notify).toHaveBeenCalledWith("快捷登录设置已保存");
   });
 });

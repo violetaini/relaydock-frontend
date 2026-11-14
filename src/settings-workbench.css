@@ -149,3 +149,22 @@
   .system-update-actions .button { width: 100%; flex-basis: 100%; }
   .tgbot-status-row { align-items: flex-start; flex-direction: column; }
 }
+
+.settings-oauth-callback-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface-subtle, rgba(0, 0, 0, 0.04));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  padding: 6px 10px;
+}
+.settings-oauth-callback-row code {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: all;
+}

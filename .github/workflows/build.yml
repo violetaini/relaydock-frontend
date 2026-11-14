@@ -1,10 +1,15 @@
-name: Frontend CI
+name: Frontend CI and Release
 
 on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   verify:
@@ -32,10 +37,34 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Upload production bundle
+      - name: Upload production bundle artifact
         uses: actions/upload-artifact@v4
         with:
           name: relaydock-frontend-dist
           path: dist/
           if-no-files-found: error
           retention-days: 7
+
+      - name: Prepare Release Assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          mkdir -p release
+          tar -czf release/relaydock-web.tar.gz -C dist .
+          cd dist && zip -r ../release/relaydock-frontend-dist.zip . && cd ..
+          cd release
+          sha256sum relaydock-web.tar.gz relaydock-frontend-dist.zip > checksums.txt
+          cd ..
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            release/relaydock-web.tar.gz
+            release/relaydock-frontend-dist.zip
+            release/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

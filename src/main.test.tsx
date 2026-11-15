@@ -14,9 +14,24 @@ describe("application bootstrap", () => {
     document.title = "RelayDock Console";
     const favicon = document.querySelector<HTMLLinkElement>("#app-favicon");
     if (favicon) favicon.href = "/brand.png";
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
   });
 
   afterEach(() => {
+    window.history.pushState({}, "", "/");
     cleanup();
     vi.restoreAllMocks();
   });
@@ -154,6 +169,56 @@ describe("application bootstrap", () => {
     expect(screen.queryByText("CPU")).not.toBeInTheDocument();
     expect(screen.queryByText("内存")).not.toBeInTheDocument();
     expect(screen.queryByText("磁盘")).not.toBeInTheDocument();
+  });
+
+  it("exchanges oauth_code for a session token and cleans URL search params", async () => {
+    window.history.pushState({}, "", "/?oauth_code=rd_auth_mock_code&oauth_username=alice");
+    const replaceState = vi.spyOn(window.history, "replaceState");
+
+    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string, body?: unknown): Promise<T> => {
+      if (path === "/api/public/oauth/exchange") {
+        expect(body).toEqual({ code: "rd_auth_mock_code" });
+        return { token: "exchanged-jwt-token", username: "alice" } as T;
+      }
+      throw new Error(`unexpected POST ${path}`);
+    });
+
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/setup/status") return { needs_setup: false } as T;
+      if (path === "/api/user/profile") return { username: "alice", role: "admin", display_name: "Alice" } as T;
+      if (path === "/api/public/branding") return {} as T;
+      if (path === "/api/public/login-wallpaper") return { login_wallpaper: "" } as T;
+      if (path === "/api/public/probe-servers") return { enabled: false, servers: [] } as T;
+      if (path === "/api/captcha/config") return { enabled: false, site_key: "" } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/public/oauth/exchange", { code: "rd_auth_mock_code" }));
+    expect(getToken()).toBe("exchanged-jwt-token");
+    expect(replaceState).toHaveBeenCalled();
+  });
+
+  it("handles sso_silent=guest by staying on the login screen quietly", async () => {
+    window.history.pushState({}, "", "/?sso_silent=guest");
+    const replaceState = vi.spyOn(window.history, "replaceState");
+
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/setup/status") return { needs_setup: false } as T;
+      if (path === "/api/public/branding") return {} as T;
+      if (path === "/api/public/login-wallpaper") return { login_wallpaper: "" } as T;
+      if (path === "/api/public/probe-servers") return { enabled: false, servers: [] } as T;
+      if (path === "/api/captcha/config") return { enabled: false, site_key: "" } as T;
+      if (path === "/api/public/oauth/providers") return { providers: [], auto_register: true } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "进入控制台" })).toBeInTheDocument();
+    expect(screen.queryByText(/第三方登录失败/)).not.toBeInTheDocument();
+    expect(replaceState).toHaveBeenCalled();
   });
 });
 

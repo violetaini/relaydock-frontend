@@ -118,6 +118,9 @@ function mapOAuthError(code: string): string {
       return "该第三方账号已绑定至其他用户";
     case "login_required_to_bind":
       return "绑定第三方账号前请先登录";
+    case "login_required":
+    case "interaction_required":
+      return "第三方身份服务提示需要交互登录，请点击对应按钮重新登录";
     default:
       return code ? `第三方登录失败: ${code}` : "第三方登录失败";
   }
@@ -148,17 +151,45 @@ export function App() {
   const bootstrap = useCallback(async () => {
     if (typeof location !== "undefined" && location.search) {
       const searchParams = new URLSearchParams(location.search);
+      const oauthCode = searchParams.get("oauth_code");
       const oauthToken = searchParams.get("oauth_token");
       const oauthError = searchParams.get("oauth_error");
       const oauthSuccess = searchParams.get("oauth_success");
+      const ssoSilent = searchParams.get("sso_silent");
 
-      if (oauthToken) {
+      if (oauthCode) {
+        searchParams.delete("oauth_code");
+        searchParams.delete("oauth_username");
+        const remaining = searchParams.toString();
+        const cleanUrl = location.pathname + (remaining ? `?${remaining}` : "") + (location.hash || "#/");
+        history.replaceState(null, "", cleanUrl);
+
+        try {
+          const res = await api.post<{ token: string; username?: string }>("/api/public/oauth/exchange", { code: oauthCode });
+          if (res && res.token) {
+            setToken(res.token, true);
+          } else {
+            throw new Error("Empty token received");
+          }
+        } catch {
+          setLogoutNotice("快捷登录授权码兑换失败或已失效，请重新登录");
+          location.hash = "/login";
+          setLoginRequested(true);
+        }
+      } else if (oauthToken) {
         setToken(oauthToken, true);
         searchParams.delete("oauth_token");
         searchParams.delete("oauth_username");
         const remaining = searchParams.toString();
         const cleanUrl = location.pathname + (remaining ? `?${remaining}` : "") + location.hash;
         history.replaceState(null, "", cleanUrl);
+      } else if (ssoSilent) {
+        searchParams.delete("sso_silent");
+        const remaining = searchParams.toString();
+        const cleanUrl = location.pathname + (remaining ? `?${remaining}` : "") + (location.hash || "#/login");
+        history.replaceState(null, "", cleanUrl);
+        setLoginRequested(true);
+        setState("login");
       } else if (oauthError) {
         searchParams.delete("oauth_error");
         const remaining = searchParams.toString();

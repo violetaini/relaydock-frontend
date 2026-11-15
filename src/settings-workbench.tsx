@@ -628,7 +628,6 @@ const SETTINGS_GROUPS = [
   { id: "settings-tgbot", label: "Telegram Bot" },
   { id: "settings-notifications", label: "通知" },
   { id: "settings-maintenance", label: "维护" },
-  { id: "settings-account", label: "账户" },
 ] as const;
 
 interface OAuthConfigState {
@@ -1314,13 +1313,17 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
         <SaveRow label="保存安全设置" saving={saving.has("security")} disabled={saving.size > 0 || loadFailures.length > 0} />
       </form>
 
-      <form id="settings-permissions" className="settings-settings-group" role="tabpanel" aria-labelledby={settingsTabID("settings-permissions")} hidden={activeGroup !== "settings-permissions"} tabIndex={0} onSubmit={savePermissions}>
-        <SettingsGroupHeading icon={<Users size={18} />} title="用户权限" description="普通用户可访问页面与资源配额" />
-        <SettingSection icon={<Users size={19} />} title="普通用户页面" description="管理员始终拥有全部页面"><div className="settings-check-list permission-pages">{[["subscription", "订阅链接"], ["generator", "生成订阅"], ["nodes", "节点管理"], ["certificates", "证书管理"], ["templates", "模板管理"], ["subscribe-files", "订阅管理"], ["custom-rules", "覆写管理"]].map(([key, label]) => <label className="checkbox-row" key={key}><input type="checkbox" checked={permissions.pages.includes(key)} onChange={() => setPermissions({ ...permissions, pages: permissions.pages.includes(key) ? permissions.pages.filter((page) => page !== key) : [...permissions.pages, key] })} /><span>{label}</span></label>)}</div></SettingSection>
-        <SettingSection icon={<FileJson size={19} />} title="资源配额" description="0 表示不限数量"><div className="settings-fields-grid"><NumberField label="模板数量" min={0} value={permissions.quota_template} onChange={(value) => setPermissions({ ...permissions, quota_template: value })} /><NumberField label="覆写数量" min={0} value={permissions.quota_override} onChange={(value) => setPermissions({ ...permissions, quota_override: value })} /><NumberField label="订阅数量" min={0} value={permissions.quota_subscribe} onChange={(value) => setPermissions({ ...permissions, quota_subscribe: value })} /></div></SettingSection>
-        <SettingSection icon={<Network size={19} />} title="私有路由出站" description="每次操作都会让对应 Agent 重载 Xray"><Toggle checked={permissions.routed_outbound_enabled} onChange={(routed_outbound_enabled) => setPermissions({ ...permissions, routed_outbound_enabled })} label="允许普通用户创建路由出站" /><div className="settings-fields-grid"><NumberField label="每用户数量" min={1} value={permissions.quota_routed_outbound} onChange={(value) => setPermissions({ ...permissions, quota_routed_outbound: value })} /><NumberField label="每日操作次数" min={1} value={permissions.daily_limit_routed_outbound} onChange={(value) => setPermissions({ ...permissions, daily_limit_routed_outbound: value })} /></div></SettingSection>
-        <SaveRow label="保存用户权限" saving={saving.has("permissions")} disabled={saving.size > 0 || loadFailures.length > 0} />
-      </form>
+      <section id="settings-permissions" className="settings-settings-group" role="tabpanel" aria-labelledby={settingsTabID("settings-permissions")} hidden={activeGroup !== "settings-permissions"} tabIndex={0}>
+        <SettingsGroupHeading icon={<Users size={18} />} title="权限与账户" description="普通用户页面、资源配额、接口凭据与双因素认证" />
+        <form className="settings-settings-group" onSubmit={savePermissions}>
+          <SettingSection icon={<Users size={19} />} title="普通用户页面" description="管理员始终拥有全部页面"><div className="settings-check-list permission-pages">{[["subscription", "订阅链接"], ["generator", "生成订阅"], ["nodes", "节点管理"], ["certificates", "证书管理"], ["templates", "模板管理"], ["subscribe-files", "订阅管理"], ["custom-rules", "覆写管理"]].map(([key, label]) => <label className="checkbox-row" key={key}><input type="checkbox" checked={permissions.pages.includes(key)} onChange={() => setPermissions({ ...permissions, pages: permissions.pages.includes(key) ? permissions.pages.filter((page) => page !== key) : [...permissions.pages, key] })} /><span>{label}</span></label>)}</div></SettingSection>
+          <SettingSection icon={<FileJson size={19} />} title="资源配额" description="0 表示不限数量"><div className="settings-fields-grid"><NumberField label="模板数量" min={0} value={permissions.quota_template} onChange={(value) => setPermissions({ ...permissions, quota_template: value })} /><NumberField label="覆写数量" min={0} value={permissions.quota_override} onChange={(value) => setPermissions({ ...permissions, quota_override: value })} /><NumberField label="订阅数量" min={0} value={permissions.quota_subscribe} onChange={(value) => setPermissions({ ...permissions, quota_subscribe: value })} /></div></SettingSection>
+          <SettingSection icon={<Network size={19} />} title="私有路由出站" description="每次操作都会让对应 Agent 重载 Xray"><Toggle checked={permissions.routed_outbound_enabled} onChange={(routed_outbound_enabled) => setPermissions({ ...permissions, routed_outbound_enabled })} label="允许普通用户创建路由出站" /><div className="settings-fields-grid"><NumberField label="每用户数量" min={1} value={permissions.quota_routed_outbound} onChange={(value) => setPermissions({ ...permissions, quota_routed_outbound: value })} /><NumberField label="每日操作次数" min={1} value={permissions.daily_limit_routed_outbound} onChange={(value) => setPermissions({ ...permissions, daily_limit_routed_outbound: value })} /></div></SettingSection>
+          <SaveRow label="保存用户权限" saving={saving.has("permissions")} disabled={saving.size > 0 || loadFailures.length > 0} />
+        </form>
+        <SettingSection icon={<KeyRound size={19} />} title="管理 API Token" description="用于可信自动化调用；重新生成后旧 Token 立即失效"><div className="api-token-row"><code>{apiToken || "尚未生成"}</code><IconButton label="复制 API Token" disabled={!apiToken} onClick={() => void navigator.clipboard.writeText(apiToken).then(() => notify("API Token 已复制"))}><Copy size={16} /></IconButton></div><Button type="button" variant="danger" disabled={loadFailures.length > 0 || saving.size > 0} onClick={() => setConfirmTokenReset(true)}>重新生成 Token</Button></SettingSection>
+        <TwoFactorSettings notify={notify} />
+      </section>
 
       <form id="settings-oauth" className="settings-settings-group" role="tabpanel" aria-labelledby={settingsTabID("settings-oauth")} hidden={activeGroup !== "settings-oauth"} tabIndex={0} onSubmit={saveOAuth}>
         <SettingsGroupHeading icon={<KeyRound size={18} />} title="第三方快捷登录" description="配置 GitHub、Google 与 Generic OIDC (OpenID Connect) 登录与单点登录" />
@@ -1448,12 +1451,6 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
         />
         <BackupPanel notify={notify} />
         <DebugLogsPanel notify={notify} />
-      </section>
-
-      <section id="settings-account" className="settings-settings-group settings-account-group" role="tabpanel" aria-labelledby={settingsTabID("settings-account")} hidden={activeGroup !== "settings-account"} tabIndex={0}>
-        <SettingsGroupHeading icon={<KeyRound size={18} />} title="账户与 API" description="管理接口凭据与双因素认证" />
-        <SettingSection icon={<KeyRound size={19} />} title="管理 API Token" description="用于可信自动化调用；重新生成后旧 Token 立即失效"><div className="api-token-row"><code>{apiToken || "尚未生成"}</code><IconButton label="复制 API Token" disabled={!apiToken} onClick={() => void navigator.clipboard.writeText(apiToken).then(() => notify("API Token 已复制"))}><Copy size={16} /></IconButton></div><Button type="button" variant="danger" disabled={loadFailures.length > 0 || saving.size > 0} onClick={() => setConfirmTokenReset(true)}>重新生成 Token</Button></SettingSection>
-        <TwoFactorSettings notify={notify} />
       </section>
     </div> : null}
     {confirmTokenReset ? <ConfirmDialog title="重新生成 API Token" description="所有使用当前 Token 的脚本和集成都会立即失效，需要逐一替换。" confirmLabel="确认重新生成" working={saving.has("token")} onCancel={() => setConfirmTokenReset(false)} onConfirm={() => void regenerateToken()} /> : null}

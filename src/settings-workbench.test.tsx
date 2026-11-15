@@ -517,7 +517,8 @@ describe("settings workbench", () => {
     const generalTab = within(tablist).getByRole("tab", { name: "基础" });
     const securityTab = within(tablist).getByRole("tab", { name: "安全" });
     const permissionsTab = within(tablist).getByRole("tab", { name: "权限" });
-    const accountTab = within(tablist).getByRole("tab", { name: "账户" });
+    const maintenanceTab = within(tablist).getByRole("tab", { name: "维护" });
+    expect(within(tablist).queryByRole("tab", { name: "账户" })).not.toBeInTheDocument();
     expect(generalTab).toHaveAttribute("aria-selected", "true");
     expect(generalTab).toHaveAttribute("aria-controls", "settings-general");
     expect(generalTab).toHaveAttribute("tabindex", "0");
@@ -537,12 +538,12 @@ describe("settings workbench", () => {
     expect(permissionsTab).toHaveFocus();
     expect(permissionsTab).toHaveAttribute("aria-selected", "true");
     fireEvent.keyDown(permissionsTab, { key: "End" });
-    expect(accountTab).toHaveFocus();
-    fireEvent.keyDown(accountTab, { key: "ArrowRight" });
+    expect(maintenanceTab).toHaveFocus();
+    fireEvent.keyDown(maintenanceTab, { key: "ArrowRight" });
     expect(generalTab).toHaveFocus();
     fireEvent.keyDown(generalTab, { key: "ArrowLeft" });
-    expect(accountTab).toHaveFocus();
-    fireEvent.keyDown(accountTab, { key: "Home" });
+    expect(maintenanceTab).toHaveFocus();
+    fireEvent.keyDown(maintenanceTab, { key: "Home" });
     expect(generalTab).toHaveFocus();
     expect(screen.getByRole("textbox", { name: "公开 URL" })).toHaveValue("https://draft.example.com");
     expect(location.hash).toBe("#/settings");
@@ -787,5 +788,33 @@ describe("settings workbench", () => {
       auto_link_email: true,
     })));
     expect(notify).toHaveBeenCalledWith("快捷登录设置已保存");
+  });
+
+  it("merges account and API credentials into the permissions group", async () => {
+    mockCompleteSettings({
+      "/api/admin/system-settings/api-token": { token: "token-sample-123" },
+      "/api/user/2fa/status": { success: true, enabled: false },
+    });
+    const put = vi.spyOn(api, "put").mockResolvedValue({ status: "saved" });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ token: "token-new-456" });
+    const notify = vi.fn();
+    render(<SettingsWorkbenchPage notify={notify} />);
+
+    await openSettingsGroup("权限");
+    expect(await screen.findByRole("heading", { name: "权限与账户" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "普通用户页面" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "管理 API Token" })).toBeInTheDocument();
+    expect(screen.getByText("token-sample-123")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "账号安全" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "重新生成 Token" }));
+    const confirmDialog = await screen.findByRole("dialog", { name: "重新生成 API Token" });
+    fireEvent.click(within(confirmDialog).getByRole("button", { name: "确认重新生成" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/system-settings/api-token/regenerate"));
+    expect(await screen.findByText("token-new-456")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "保存用户权限" }));
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/system-settings/user-permissions", expect.any(Object)));
+    expect(notify).toHaveBeenCalledWith("普通用户权限已更新");
   });
 });

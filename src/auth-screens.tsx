@@ -835,9 +835,14 @@ export function LoginScreen({ onLogin, wallpaper = "", notice = "" }: { onLogin:
 
   useEffect(() => {
     api.get<{ providers: { id: string; name: string }[] }>("/api/public/oauth/providers")
-      .then((res) => { if (Array.isArray(res?.providers)) setOAuthProviders(res.providers); })
+      .then((res) => { if (Array.isArray(res?.providers)) {
+ setOAuthProviders(res.providers);
+ if(branding.auto_sso && res.providers.some(p=>p.id==="oidc") && !notice && Date.now()-Number(sessionStorage.getItem("oidc-silent-checked")||0)>15000){
+ sessionStorage.setItem("oidc-silent-checked",String(Date.now()));window.location.replace("/api/oauth/oidc/login?silent=true");
+ }
+ } })
       .catch(() => undefined);
-  }, []);
+  }, [branding.auto_sso,notice]);
 
   useEffect(() => {
     api.get<{ enabled: boolean; site_key: string }>("/api/captcha/config").then(setCaptcha).catch(() => undefined);
@@ -907,14 +912,14 @@ export function LoginScreen({ onLogin, wallpaper = "", notice = "" }: { onLogin:
   };
 
   return (
-    <main className={`auth-layout ${wallpaper ? "has-wallpaper" : ""}`} style={wallpaper ? { backgroundImage: `url(${JSON.stringify(wallpaper).slice(1, -1)})` } : undefined}>
-      <AuthVisual mode="login" />
+    <main className={`auth-layout ${branding.login_theme === "glass" ? "glass-login" : ""} ${wallpaper ? "has-wallpaper" : ""}`} style={wallpaper ? { backgroundImage: `url(${JSON.stringify(wallpaper).slice(1, -1)})` } : undefined}>
+      {branding.login_theme !== "glass" ? <AuthVisual mode="login" /> : null}
       <section className="auth-panel">
         <div className="auth-form-wrap">
           <div className="mobile-brand brand"><BrandMark size={24} /><span>{projectName}</span></div>
-          <span className="auth-step">安全登录</span>
-          <h2>{pending2FA ? "验证第二因素" : "进入控制台"}</h2>
-          <p className="auth-subtitle">{pending2FA ? "输入验证器代码或恢复码。" : "使用管理端账号继续。"}</p>
+          {branding.login_theme === "glass" ? <img className="glass-login-avatar" src={brandLogoURL(branding)} alt={projectName} /> : null}<span className="auth-step">{branding.login_kicker || "安全登录"}</span>
+          <h2>{pending2FA ? "验证第二因素" : (branding.login_title || "进入控制台")}</h2>
+          <p className="auth-subtitle">{pending2FA ? "输入验证器代码或恢复码。" : (branding.login_subtitle || "使用管理端账号继续。")}</p>
           {notice ? <ErrorState message={notice} /> : null}
           {error ? <ErrorState message={error} /> : null}
           {pending2FA ? (
@@ -949,7 +954,7 @@ export function LoginScreen({ onLogin, wallpaper = "", notice = "" }: { onLogin:
                         }}
                       >
                         {p.id === "github" ? <GitHubIcon size={18} /> : p.id === "google" ? <GoogleIcon size={18} /> : <OIDCIcon size={18} />}
-                        <span>使用 {p.name} 登录</span>
+                        <span>{p.name}</span>
                       </button>
                     ))}
                   </div>

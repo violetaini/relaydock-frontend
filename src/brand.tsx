@@ -9,6 +9,7 @@ export const BRAND_NAME = "RelayDock";
 export const DEFAULT_BRAND_LOGO = "/brand.png";
 
 export interface Branding {
+ login_theme?: string; login_title?: string; login_subtitle?: string; login_kicker?: string; font_preset?: string; auto_sso?: boolean;
   name: string;
   logo: string;
   favicon: string;
@@ -26,7 +27,9 @@ export function normalizeBranding(value: Partial<Branding> | null | undefined): 
   const name = typeof value?.name === "string" ? value.name.trim() : "";
   const logo = typeof value?.logo === "string" ? value.logo.trim() : "";
   const favicon = typeof value?.favicon === "string" ? value.favicon.trim() : "";
-  return { name: name || BRAND_NAME, logo, favicon };
+  return { name: name || BRAND_NAME, logo, favicon,
+ login_theme:value?.login_theme==="glass"?"glass":"default",font_preset:value?.font_preset==="classic-serif"?"classic-serif":"default",
+ login_title:typeof value?.login_title==="string"?value.login_title:"",login_subtitle:typeof value?.login_subtitle==="string"?value.login_subtitle:"",login_kicker:typeof value?.login_kicker==="string"?value.login_kicker:"",auto_sso:value?.auto_sso===true };
 }
 
 export function brandLogoURL(branding: Branding): string {
@@ -56,6 +59,7 @@ export function applyBrandingDocument(value: Partial<Branding> | null | undefine
   if (typeof document === "undefined") return;
   const branding = normalizeBranding(value);
   document.title = `${branding.name} Console`;
+ document.documentElement.dataset.fontPreset=branding.font_preset||"default";
 
   let favicon = document.querySelector<HTMLLinkElement>("#app-favicon");
   if (!favicon) {

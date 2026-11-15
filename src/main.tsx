@@ -152,7 +152,7 @@ export function App() {
     if (typeof location !== "undefined" && location.search) {
       const searchParams = new URLSearchParams(location.search);
       const oauthCode = searchParams.get("oauth_code");
-      const oauthToken = searchParams.get("oauth_token");
+
       const oauthError = searchParams.get("oauth_error");
       const oauthSuccess = searchParams.get("oauth_success");
       const ssoSilent = searchParams.get("sso_silent");
@@ -176,14 +176,8 @@ export function App() {
           location.hash = "/login";
           setLoginRequested(true);
         }
-      } else if (oauthToken) {
-        setToken(oauthToken, true);
-        searchParams.delete("oauth_token");
-        searchParams.delete("oauth_username");
-        const remaining = searchParams.toString();
-        const cleanUrl = location.pathname + (remaining ? `?${remaining}` : "") + location.hash;
-        history.replaceState(null, "", cleanUrl);
       } else if (ssoSilent) {
+        sessionStorage.setItem("oidc-silent-checked",String(Date.now()));
         searchParams.delete("sso_silent");
         const remaining = searchParams.toString();
         const cleanUrl = location.pathname + (remaining ? `?${remaining}` : "") + (location.hash || "#/login");
@@ -470,3 +464,4 @@ export function revokeCurrentSession(): Promise<unknown> {
 
 const rootElement = document.getElementById("root");
 if (rootElement) createRoot(rootElement).render(<StrictMode><App /></StrictMode>);
+import "./login-appearance.css";

@@ -126,16 +126,23 @@ function mapOAuthError(code: string): string {
   }
 }
 
+function isLoginReturn(): boolean {
+  if (typeof location === "undefined") return false;
+  const params = new URLSearchParams(location.search);
+  return ["oauth_code", "oauth_error", "sso_silent"].some(key => params.has(key));
+}
+
 export function App() {
   const [loginRequested, setLoginRequested] = useState(() => {
     if (typeof location === "undefined") return false;
-    return location.hash.replace(/^#\/?/, "") === "login";
+    return isLoginReturn() || location.hash.replace(/^#\/?/, "") === "login";
   });
   const [probePreview, setProbePreview] = useState(() => {
     if (typeof location === "undefined") return false;
-    return new URLSearchParams(location.search).get("probe") === "1";
+    return !isLoginReturn() && new URLSearchParams(location.search).get("probe") === "1";
   });
   const [state, setState] = useState<BootState>(() => {
+    if (isLoginReturn()) return "loading";
     if (typeof window !== "undefined" && !getToken() && location.hash.replace(/^#\/?/, "") !== "login") {
       return "login";
     }
@@ -158,10 +165,14 @@ export function App() {
       const ssoSilent = searchParams.get("sso_silent");
 
       if (oauthCode) {
+        setState("loading");
+        setLoginRequested(true);
+        setProbePreview(false);
+        searchParams.delete("probe");
         searchParams.delete("oauth_code");
         searchParams.delete("oauth_username");
         const remaining = searchParams.toString();
-        const cleanUrl = location.pathname + (remaining ? `?${remaining}` : "") + (location.hash || "#/");
+        const cleanUrl = location.pathname + (remaining ? `?${remaining}` : "") + "#/dashboard";
         history.replaceState(null, "", cleanUrl);
 
         try {
@@ -250,7 +261,11 @@ export function App() {
   useEffect(() => { applyBrandingDocument(branding); }, [branding]);
   useEffect(() => {
     if (location.hash.replace(/^#\/?/, "") === "portal") {
-      location.hash = "/dashboard";
+      const target = new URL(location.href);
+    target.searchParams.delete("probe");
+    target.hash = "/dashboard";
+    history.replaceState(null, "", `${target.pathname}${target.search}${target.hash}`);
+    setProbePreview(false);
     }
     const onHash = () => {
       const cleanHash = location.hash.replace(/^#\/?/, "");

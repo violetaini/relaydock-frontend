@@ -9,6 +9,7 @@ export const BRAND_NAME = "RelayDock";
 export const DEFAULT_BRAND_LOGO = "/brand.png";
 
 export interface Branding {
+ login_background_mode?: string; login_background_urls?: string[];
  login_theme?: string; login_title?: string; login_subtitle?: string; login_kicker?: string; font_preset?: string; auto_sso?: boolean;
   name: string;
   logo: string;
@@ -16,6 +17,7 @@ export interface Branding {
 }
 
 export const DEFAULT_BRANDING: Branding = {
+  login_theme:"glass",
   name: BRAND_NAME,
   logo: "",
   favicon: "",
@@ -28,7 +30,8 @@ export function normalizeBranding(value: Partial<Branding> | null | undefined): 
   const logo = typeof value?.logo === "string" ? value.logo.trim() : "";
   const favicon = typeof value?.favicon === "string" ? value.favicon.trim() : "";
   return { name: name || BRAND_NAME, logo, favicon,
- login_theme:value?.login_theme==="glass"?"glass":"default",font_preset:value?.font_preset==="classic-serif"?"classic-serif":"default",
+ login_background_mode:value?.login_background_mode||"fixed",login_background_urls:Array.isArray(value?.login_background_urls)?value.login_background_urls.filter(v=>typeof v==="string"):[],
+ login_theme:value?.login_theme==="default"?"default":"glass",font_preset:value?.font_preset==="classic-serif"?"classic-serif":"default",
  login_title:typeof value?.login_title==="string"?value.login_title:"",login_subtitle:typeof value?.login_subtitle==="string"?value.login_subtitle:"",login_kicker:typeof value?.login_kicker==="string"?value.login_kicker:"",auto_sso:value?.auto_sso===true };
 }
 

@@ -116,7 +116,7 @@ describe("application bootstrap", () => {
     expect(document.querySelector(".public-probe-grid")).toHaveClass("is-list");
     fireEvent.click(screen.getByRole("button", { name: "登录" }));
     expect(await screen.findByRole("heading", { name: "进入控制台" })).toBeInTheDocument();
-    expect(document.querySelector(".auth-layout")).toHaveStyle({ backgroundImage: "url(https://images.example/login.jpg)" });
+    expect(document.querySelector(".login-background-image")).toHaveAttribute("src", "https://images.example/login.jpg");
   });
 
   it("uses public branding for the browser title and favicon", async () => {
@@ -172,7 +172,7 @@ describe("application bootstrap", () => {
   });
 
   it("exchanges oauth_code for a session token and cleans URL search params", async () => {
-    window.history.pushState({}, "", "/?oauth_code=rd_auth_mock_code&oauth_username=alice");
+    window.history.pushState({}, "", "/?oauth_code=rd_auth_mock_code&oauth_username=alice&probe=1");
     const replaceState = vi.spyOn(window.history, "replaceState");
 
     const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string, body?: unknown): Promise<T> => {
@@ -194,6 +194,10 @@ describe("application bootstrap", () => {
     });
 
     render(<App />);
+    expect(document.querySelector(".public-probe-layout")).toBeNull();
+    expect(screen.queryByText("ちちゃんの探針")).not.toBeInTheDocument();
+    expect(location.hash).toBe("#/dashboard");
+    expect(location.search).not.toContain("probe=");
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/public/oauth/exchange", { code: "rd_auth_mock_code" }));
     expect(getToken()).toBe("exchanged-jwt-token");

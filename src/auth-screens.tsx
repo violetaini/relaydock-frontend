@@ -822,6 +822,18 @@ function Turnstile({ siteKey, onToken }: { siteKey: string; onToken: (token: str
 export function LoginScreen({ onLogin, wallpaper = "", notice = "" }: { onLogin: (session: Session) => void; wallpaper?: string; notice?: string }) {
   const branding = useBranding();
   const projectName = branding.name?.trim() || BRAND_NAME;
+  const backgroundKey=JSON.stringify(branding.login_background_urls||[]);
+  const background=useMemo(()=>{
+    const mode=branding.login_background_mode||"fixed";
+    if(mode==="gradient")return "";
+    if(mode!=="random")return wallpaper;
+    const urls=JSON.parse(backgroundKey) as string[];
+    if(!urls.length)return "";
+    const random=crypto.getRandomValues(new Uint32Array(1))[0];
+    try{const url=new URL(urls[random%urls.length],location.origin);url.searchParams.set("_bg",String(random));return url.href}catch{return ""}
+  },[backgroundKey,branding.login_background_mode,wallpaper]);
+  const [backgroundFailed,setBackgroundFailed]=useState(false);
+  useEffect(()=>setBackgroundFailed(false),[background]);
   const [form, setForm] = useState({ username: "", password: "", remember_me: true });
   const [pending2FA, setPending2FA] = useState("");
   const [code, setCode] = useState("");
@@ -912,12 +924,13 @@ export function LoginScreen({ onLogin, wallpaper = "", notice = "" }: { onLogin:
   };
 
   return (
-    <main className={`auth-layout ${branding.login_theme === "glass" ? "glass-login" : ""} ${wallpaper ? "has-wallpaper" : ""}`} style={wallpaper ? { backgroundImage: `url(${JSON.stringify(wallpaper).slice(1, -1)})` } : undefined}>
-      {branding.login_theme !== "glass" ? <AuthVisual mode="login" /> : null}
+    <main className={`auth-layout ${branding.login_theme === "default" ? "" : "glass-login"} ${background && !backgroundFailed ? "has-login-background" : ""}`}>
+      {background && !backgroundFailed ? <><img className="login-background-image" src={background} alt="" referrerPolicy="no-referrer" onError={()=>setBackgroundFailed(true)} /><div className="login-background-shade" /></> : null}
+      {branding.login_theme === "default" ? <AuthVisual mode="login" /> : null}
       <section className="auth-panel">
         <div className="auth-form-wrap">
           <div className="mobile-brand brand"><BrandMark size={24} /><span>{projectName}</span></div>
-          {branding.login_theme === "glass" ? <img className="glass-login-avatar" src={brandLogoURL(branding)} alt={projectName} /> : null}<span className="auth-step">{branding.login_kicker || "安全登录"}</span>
+          {branding.login_theme !== "default" ? <img className="glass-login-avatar" src={brandLogoURL(branding)} alt={projectName} /> : null}<span className="auth-step">{branding.login_kicker || "安全登录"}</span>
           <h2>{pending2FA ? "验证第二因素" : (branding.login_title || "进入控制台")}</h2>
           <p className="auth-subtitle">{pending2FA ? "输入验证器代码或恢复码。" : (branding.login_subtitle || "使用管理端账号继续。")}</p>
           {notice ? <ErrorState message={notice} /> : null}

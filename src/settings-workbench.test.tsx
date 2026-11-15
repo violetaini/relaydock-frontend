@@ -298,13 +298,13 @@ describe("settings workbench", () => {
       name: "Northstar",
       logo: "/assets/northstar-logo.svg",
       favicon: "https://assets.example/northstar.ico",
-      login_theme:"default",login_title:"",login_subtitle:"",login_kicker:"",auto_sso:false,font_preset:"default",
+      login_background_mode:"fixed",login_background_urls:[],login_theme:"glass",login_title:"",login_subtitle:"",login_kicker:"",auto_sso:false,font_preset:"default",
     }));
     expect(onBrandingChange).toHaveBeenCalledWith({
       name: "Northstar",
       logo: "/assets/northstar-logo.svg",
       favicon: "https://assets.example/northstar.ico",
-      login_theme:"default",login_title:"",login_subtitle:"",login_kicker:"",auto_sso:false,font_preset:"default",
+      login_background_mode:"fixed",login_background_urls:[],login_theme:"glass",login_title:"",login_subtitle:"",login_kicker:"",auto_sso:false,font_preset:"default",
     });
   });
 
@@ -330,7 +330,7 @@ describe("settings workbench", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存基础设置" }));
 
     await waitFor(() => expect(screen.getByText(/采集间隔保存失败/)).toBeInTheDocument());
-    expect(onBrandingChange).toHaveBeenCalledWith({ name: "Northstar", logo: "", favicon: "",login_theme:"default",login_title:"",login_subtitle:"",login_kicker:"",auto_sso:false,font_preset:"default" });
+    expect(onBrandingChange).toHaveBeenCalledWith({ name: "Northstar", logo: "", favicon: "",login_background_mode:"fixed",login_background_urls:[],login_theme:"glass",login_title:"",login_subtitle:"",login_kicker:"",auto_sso:false,font_preset:"default" });
     expect(document.documentElement.dataset.styleTheme).toBe("pixel");
   });
 

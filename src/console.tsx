@@ -48,6 +48,7 @@ import { BrandMark, useBranding, type Branding } from "./brand";
 import { requestNavigation } from "./navigation-guard";
 import { nextThemeMode, normalizeThemeMode, resolveThemeMode, type ThemeMode } from "./theme";
 import { TwoFactorSettings } from "./two-factor";
+import { DailyTrafficBarChart } from "./traffic-chart";
 import type {
   NodeItem,
   NodeListResponse,
@@ -661,10 +662,7 @@ function AdminDashboardPage({ profile, navigate, canNavigateNodes }: { profile: 
           </div>
         </div>
         {loading ? <div className="center-state"><Spinner /></div> : history.length === 0 ? <EmptyState icon={<Activity size={22} />} title="暂无历史记录" /> : (
-          <div id="dashboard-traffic-chart" className={`bar-chart period-${period}`} role="tabpanel" aria-label="每日流量消耗图">
-            <span className="sr-only">{history.map((item) => `${item.date} ${item.used_gb} GB`).join("；")}</span>
-            {history.map((item) => <div className="bar-column" key={item.date} title={`${item.date}: ${item.used_gb} GB`}><span className="bar-value">{item.used_gb > 0 ? item.used_gb : ""}</span><span className="bar" style={{ height: `${Math.max(4, item.used_gb / maxHistory * 100)}%` }} /><small>{item.date.slice(-2)}</small></div>)}
-          </div>
+          <DailyTrafficBarChart id="dashboard-traffic-chart" period={period} history={history} />
         )}
       </Surface>
 
@@ -993,10 +991,7 @@ function UserDashboardPage({ profile, navigate }: { profile: Profile; navigate: 
           </div>
         </div>
         {loading ? <div className="center-state"><Spinner /></div> : history.length === 0 ? <EmptyState icon={<Activity size={22} />} title="暂无历史记录" /> : (
-          <div id="dashboard-traffic-chart" className={`bar-chart period-${period}`} role="tabpanel" aria-label="每日流量消耗图">
-            <span className="sr-only">{history.map((item) => `${item.date} ${item.used_gb} GB`).join("；")}</span>
-            {history.map((item) => <div className="bar-column" key={item.date} title={`${item.date}: ${item.used_gb} GB`}><span className="bar-value">{item.used_gb > 0 ? item.used_gb : ""}</span><span className="bar" style={{ height: `${Math.max(4, item.used_gb / maxHistory * 100)}%` }} /><small>{item.date.slice(-2)}</small></div>)}
-          </div>
+          <DailyTrafficBarChart id="dashboard-traffic-chart" period={period} history={history} />
         )}
       </Surface>
 
@@ -1218,7 +1213,7 @@ function TrafficPage({ profile }: { profile: Profile }) {
   const load = useCallback(async () => { setLoading(true); setError(""); try { const results = await Promise.all([api.get<TrafficSummary>("/api/traffic/summary"), profile.is_admin ? api.get<{ users: typeof userTraffic }>("/api/admin/traffic/users") : Promise.resolve({ users: [] })]); setSummary(results[0]); setUserTraffic(results[1].users ?? []); } catch (reason) { setError(reason instanceof Error ? reason.message : "流量数据加载失败"); } finally { setLoading(false); } }, [profile.is_admin]);
   useEffect(() => { void load(); }, [load]);
   const history = summary?.history ?? []; const max = Math.max(1, ...history.map((item) => item.used_gb));
-  return <><PageHeader title="流量明细" description="当前计费周期" actions={<IconButton label="刷新" onClick={() => void load()}><RefreshCw size={18} /></IconButton>} />{error ? <ErrorState message={error} onRetry={() => void load()} /> : null}<div className="metric-grid traffic-metrics"><Metric icon={<Gauge size={18} />} label="已用" value={loading ? "--" : `${summary?.metrics.total_used_gb ?? 0} GB`} detail={summary?.metrics.total_limit_gb === 0 ? "全部不限额服务器" : summary?.metrics.unlimited_used_gb ? `含不限额服务器 ${summary.metrics.unlimited_used_gb} GB` : "限额服务器已用"} /><Metric icon={<Activity size={18} />} label="剩余" value={loading ? "--" : summary?.metrics.total_limit_gb === 0 ? "不限" : `${summary?.metrics.total_remaining_gb ?? 0} GB`} detail={summary?.metrics.total_limit_gb === 0 ? "无总限额限制" : `总限额 ${summary?.metrics.total_limit_gb ?? 0} GB`} /><Metric icon={<Gauge size={18} />} label="使用率" value={loading ? "--" : summary?.metrics.total_limit_gb === 0 ? "不限额" : `${summary?.metrics.usage_percentage ?? 0}%`} detail="当前周期" /></div><Surface className="chart-surface traffic-chart"><div className="surface-heading"><div><h2>30 日用量</h2></div></div>{loading ? <div className="center-state"><Spinner /></div> : history.length === 0 ? <EmptyState icon={<Activity size={22} />} title="暂无历史记录" /> : <div className="bar-chart bar-chart-wide">{history.map((item) => <div className="bar-column" key={item.date} title={`${item.date}: ${item.used_gb} GB`}><span className="bar" style={{ height: `${Math.max(3, item.used_gb / max * 100)}%` }} /><small>{item.date.slice(8)}</small></div>)}</div>}</Surface>{profile.is_admin ? <Surface className="table-surface"><div className="surface-heading table-title"><div><h2>用户流量</h2></div></div>{userTraffic.length === 0 ? <EmptyState icon={<Users size={22} />} title="暂无用户流量" /> : <div className="table-wrap"><table><thead><tr><th>用户</th><th>周期上行</th><th>周期下行</th><th>历史总量</th></tr></thead><tbody>{userTraffic.map((item) => <tr key={item.username}><td><strong>{item.username}</strong></td><td>{formatBytes(item.cycle_uplink)}</td><td>{formatBytes(item.cycle_downlink)}</td><td>{formatBytes(item.total_uplink + item.total_downlink)}</td></tr>)}</tbody></table></div>}</Surface> : null}</>;
+  return <><PageHeader title="流量明细" description="当前计费周期" actions={<IconButton label="刷新" onClick={() => void load()}><RefreshCw size={18} /></IconButton>} />{error ? <ErrorState message={error} onRetry={() => void load()} /> : null}<div className="metric-grid traffic-metrics"><Metric icon={<Gauge size={18} />} label="已用" value={loading ? "--" : `${summary?.metrics.total_used_gb ?? 0} GB`} detail={summary?.metrics.total_limit_gb === 0 ? "全部不限额服务器" : summary?.metrics.unlimited_used_gb ? `含不限额服务器 ${summary.metrics.unlimited_used_gb} GB` : "限额服务器已用"} /><Metric icon={<Activity size={18} />} label="剩余" value={loading ? "--" : summary?.metrics.total_limit_gb === 0 ? "不限" : `${summary?.metrics.total_remaining_gb ?? 0} GB`} detail={summary?.metrics.total_limit_gb === 0 ? "无总限额限制" : `总限额 ${summary?.metrics.total_limit_gb ?? 0} GB`} /><Metric icon={<Gauge size={18} />} label="使用率" value={loading ? "--" : summary?.metrics.total_limit_gb === 0 ? "不限额" : `${summary?.metrics.usage_percentage ?? 0}%`} detail="当前周期" /></div><Surface className="chart-surface traffic-chart"><div className="surface-heading"><div><h2>30 日用量</h2></div></div>{loading ? <div className="center-state"><Spinner /></div> : history.length === 0 ? <EmptyState icon={<Activity size={22} />} title="暂无历史记录" /> : <DailyTrafficBarChart className="bar-chart-wide" ariaLabel="30 日用量图" history={history} formatDate={(d) => d.slice(8)} />}</Surface>{profile.is_admin ? <Surface className="table-surface"><div className="surface-heading table-title"><div><h2>用户流量</h2></div></div>{userTraffic.length === 0 ? <EmptyState icon={<Users size={22} />} title="暂无用户流量" /> : <div className="table-wrap"><table><thead><tr><th>用户</th><th>周期上行</th><th>周期下行</th><th>历史总量</th></tr></thead><tbody>{userTraffic.map((item) => <tr key={item.username}><td><strong>{item.username}</strong></td><td>{formatBytes(item.cycle_uplink)}</td><td>{formatBytes(item.cycle_downlink)}</td><td>{formatBytes(item.total_uplink + item.total_downlink)}</td></tr>)}</tbody></table></div>}</Surface> : null}</>;
 }
 
 function SettingsPage({ notify }: { notify: (message: string, tone?: ToastState["tone"]) => void }) {

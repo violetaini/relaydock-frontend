@@ -24,6 +24,7 @@ import {
   Surface,
   formatBytes,
 } from "./ui";
+import { DailyTrafficBarChart } from "./traffic-chart";
 import "./traffic-workbench.css";
 
 type TrafficRange = "cycle" | "today" | "week" | "month";
@@ -358,12 +359,13 @@ export function TrafficWorkbenchPage({ profile }: { profile: Profile }) {
           {loading ? <div className="center-state"><Spinner /></div> : history.length === 0 ? <EmptyState icon={<Activity size={23} />} title="暂无历史记录" description="采集到每日快照后会在这里形成趋势" /> : (
             <>
               <span id="traffic-history-description" className="sr-only">每日流量趋势图。{historyDescription}</span>
-              <div className="traffic-history-chart" role="img" aria-labelledby="traffic-history-description">
-              {history.map((item) => {
-                const height = Math.max(3, (Number(item.used_gb) || 0) / maxHistory * 100);
-                return <div className="traffic-history-column" key={item.date} title={`${item.date}: ${item.used_gb} GB`}><span>{item.used_gb > 0 ? `${item.used_gb}` : ""}</span><i style={{ height: `${height}%` }} /><small>{item.date.slice(5)}</small></div>;
-              })}
-              </div>
+              <DailyTrafficBarChart
+                className="traffic-workbench-chart"
+                role="img"
+                ariaLabelledBy="traffic-history-description"
+                history={history}
+                formatDate={(d) => d.slice(5)}
+              />
             </>
           )}
         </div>

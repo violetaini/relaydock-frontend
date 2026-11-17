@@ -512,6 +512,27 @@
   font-size: 9px;
 }
 
+.nw-traffic-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.nw-traffic-cell strong {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.2;
+}
+
+.nw-traffic-cell small,
+.nw-traffic-cell .cell-note {
+  font-size: 11px;
+  color: var(--text-soft);
+  line-height: 1.2;
+}
+
 .nw-status-button {
   display: inline-flex;
   align-items: center;

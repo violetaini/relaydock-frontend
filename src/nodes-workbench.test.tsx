@@ -27,6 +27,7 @@ import {
   inferCountryCode,
   type WorkbenchNode,
 } from "./nodes-workbench";
+import type { RemoteServer } from "./types";
 
 vi.mock("qrcode", () => ({
   default: { toDataURL: vi.fn().mockResolvedValue("data:image/png;base64,node-qr") },
@@ -850,6 +851,83 @@ describe("node any-door forwarding", () => {
     expect(within(row as HTMLTableRowElement).getByText("DD")).toBeInTheDocument();
     expect(within(row as HTMLTableRowElement).getByText("DD")).toHaveAttribute("title", "TUNNEL");
     expect(within(row as HTMLTableRowElement).getByText(/目标协议 VLESS/)).toBeInTheDocument();
+  });
+
+  it("renders server traffic consumption instead of speedtest result in the node table and allows sorting by traffic", async () => {
+    const nodeA = { ...node(41, "日本节点", "vless", "jp.example.com"), original_server: "Tokyo Server" };
+    const nodeB = { ...node(42, "香港节点", "trojan", "hk.example.com"), original_server: "HK Server" };
+    const servers: RemoteServer[] = [
+      {
+        id: 10,
+        name: "Tokyo Server",
+        status: "online",
+        ipv6_enabled: false,
+        connection_mode: "agent",
+        current_upload_speed: 100,
+        current_download_speed: 200,
+        xray_running: true,
+        xray_mode: "managed",
+        traffic_limit: 107374182400,
+        traffic_used: 5368709120,
+        traffic_stats_mode: "both",
+        traffic_source: "xray",
+        ws_connected: false,
+        encrypted: false,
+        inbounds: [],
+      },
+      {
+        id: 11,
+        name: "HK Server",
+        status: "online",
+        ipv6_enabled: false,
+        connection_mode: "agent",
+        current_upload_speed: 300,
+        current_download_speed: 400,
+        xray_running: true,
+        xray_mode: "managed",
+        traffic_limit: 0,
+        traffic_used: 21474836480,
+        traffic_stats_mode: "both",
+        traffic_source: "xray",
+        ws_connected: false,
+        encrypted: false,
+        inbounds: [],
+      },
+    ];
+
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [nodeA, nodeB] } as T;
+      if (path === "/api/admin/speedtest/results?latest=1") return { results: [] } as T;
+      if (path === "/api/user/config") return userConfig([41, 42]) as T;
+      if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
+      if (path === "/api/admin/remote-servers") return { servers } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    render(<NodesWorkbench isAdmin notify={vi.fn()} />);
+
+    expect(await screen.findByRole("columnheader", { name: "流量消耗" })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "测速结果" })).not.toBeInTheDocument();
+
+    const rowA = (await screen.findByText("日本节点")).closest("tr");
+    const rowB = (await screen.findByText("香港节点")).closest("tr");
+    expect(rowA).not.toBeNull();
+    expect(rowB).not.toBeNull();
+
+    expect(within(rowA as HTMLTableRowElement).getByText("5.0 GB")).toBeInTheDocument();
+    expect(within(rowA as HTMLTableRowElement).getByText("限额 100 GB")).toBeInTheDocument();
+
+    expect(within(rowB as HTMLTableRowElement).getByText("20.0 GB")).toBeInTheDocument();
+    expect(within(rowB as HTMLTableRowElement).getByText("不限额")).toBeInTheDocument();
+
+    const sortSelect = screen.getByRole("combobox", { name: "节点排序" });
+    fireEvent.change(sortSelect, { target: { value: "traffic" } });
+
+    const rows = screen.getAllByRole("row");
+    const hkIndex = rows.findIndex((r) => r.textContent?.includes("香港节点"));
+    const jpIndex = rows.findIndex((r) => r.textContent?.includes("日本节点"));
+    expect(hkIndex).toBeGreaterThan(0);
+    expect(jpIndex).toBeGreaterThan(0);
+    expect(hkIndex).toBeLessThan(jpIndex);
   });
 
   it("exposes any-door forwarding from an administrator node row", async () => {

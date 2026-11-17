@@ -275,7 +275,7 @@ interface TempSubscriptionResponse {
   expire_at: string;
 }
 
-type SortMode = "recent" | "custom" | "name" | "protocol" | "server" | "latency" | "speed";
+type SortMode = "recent" | "custom" | "name" | "protocol" | "server" | "traffic" | "latency" | "speed";
 type SourceFilter = "all" | "managed" | "imported" | "routed";
 type WorkbenchDialog =
   | { kind: "managed-create"; initialServerID?: number }
@@ -1041,6 +1041,37 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
   useEffect(() => {
     if (tag !== "all" && !allTags.includes(tag)) setTag("all");
   }, [allTags, tag]);
+  const serverByNameOrHost = useMemo(() => {
+    const map = new Map<string, RemoteServer>();
+    for (const s of remoteServers) {
+      if (s.name) map.set(s.name.trim().toLowerCase(), s);
+      if (s.domain) map.set(s.domain.trim().toLowerCase(), s);
+      if (s.ip_address) map.set(s.ip_address.trim().toLowerCase(), s);
+    }
+    return map;
+  }, [remoteServers]);
+
+  const getServerForNode = useCallback((node: WorkbenchNode): RemoteServer | undefined => {
+    const srvName = node.original_server?.trim().toLowerCase();
+    if (srvName && serverByNameOrHost.has(srvName)) {
+      return serverByNameOrHost.get(srvName);
+    }
+    const addr = nodeAddress(node);
+    if (addr.host) {
+      const hostLower = addr.host.trim().toLowerCase();
+      if (serverByNameOrHost.has(hostLower)) {
+        return serverByNameOrHost.get(hostLower);
+      }
+    }
+    if (node.original_domain) {
+      const domLower = node.original_domain.trim().toLowerCase();
+      if (serverByNameOrHost.has(domLower)) {
+        return serverByNameOrHost.get(domLower);
+      }
+    }
+    return undefined;
+  }, [serverByNameOrHost]);
+
   const visible = useMemo(() => {
     const query = search.trim().toLowerCase();
     const filtered = nodes.filter((node) => {
@@ -1060,11 +1091,17 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       if (sort === "name") return a.node_name.localeCompare(b.node_name, "zh-CN");
       if (sort === "protocol") return displayedNodeProtocol(a).localeCompare(displayedNodeProtocol(b)) || a.node_name.localeCompare(b.node_name, "zh-CN");
       if (sort === "server") return nodeAddress(a).host.localeCompare(nodeAddress(b).host) || a.node_name.localeCompare(b.node_name, "zh-CN");
+      if (sort === "traffic") {
+        const trafficA = getServerForNode(a)?.traffic_used || 0;
+        const trafficB = getServerForNode(b)?.traffic_used || 0;
+        if (trafficB !== trafficA) return trafficB - trafficA;
+        return a.node_name.localeCompare(b.node_name, "zh-CN");
+      }
       if (sort === "latency") return (latest[a.id]?.latency_ms || Number.MAX_SAFE_INTEGER) - (latest[b.id]?.latency_ms || Number.MAX_SAFE_INTEGER);
       if (sort === "speed") return (latest[b.id]?.down_mbps || -1) - (latest[a.id]?.down_mbps || -1);
       return new Date(b.updated_at || b.created_at || 0).getTime() - new Date(a.updated_at || a.created_at || 0).getTime();
     });
-  }, [enabledOnly, latest, manualOrder, nodes, protocol, search, server, sort, source, tag]);
+  }, [enabledOnly, getServerForNode, latest, manualOrder, nodes, protocol, search, server, sort, source, tag]);
 
   const selectedNodes = useMemo(() => nodes.filter((node) => selected.has(node.id)), [nodes, selected]);
   const canCreateOnGrantedServer = !isAdmin && Boolean(userCreationContext?.servers?.some((server) => userCreationGrant(server)?.state === "active"));
@@ -1299,7 +1336,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
               <th>标签与归属</th>
               <th>服务器地址</th>
               <th>连通性</th>
-              <th>测速结果</th>
+              <th>流量消耗</th>
               <th>状态</th>
               <th aria-label="操作" />
             </tr>
@@ -1355,15 +1392,29 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
                       {tcpingResultLabel(ping)}
                     </button>
                   </td>
-                  <td className="nw-cell-speed" data-label="测速">
-                    {isAdmin ? (
-                      <button className="nw-speed-cell" title={speed?.error || "打开节点测速"} onClick={() => setDialog({ kind: "speed", nodeIDs: [node.id] })}>
-                        <Badge tone={speedTone(speed)}>{resultLabel(speed)}</Badge>
-                        {speed?.egress_ip ? <small>{speed.egress_ip}</small> : null}
-                      </button>
-                    ) : (
-                      <Badge tone="neutral">管理员功能</Badge>
-                    )}
+                  <td className="nw-cell-traffic nw-cell-speed" data-label="流量">
+                    {(() => {
+                      const srv = getServerForNode(node);
+                      if (srv) {
+                        return (
+                          <div
+                            className="nw-traffic-cell"
+                            title={`服务器：${srv.name}\nXray 累计跑量：${formatBytes(srv.traffic_used || 0)}${srv.traffic_limit > 0 ? `\n限额：${formatBytes(srv.traffic_limit)}` : "\n限额：不限额"}`}
+                          >
+                            <strong>{formatBytes(srv.traffic_used || 0)}</strong>
+                            <small className="cell-note">
+                              {srv.traffic_limit > 0 ? `限额 ${formatBytes(srv.traffic_limit)}` : "不限额"}
+                            </small>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="nw-traffic-cell">
+                          <span className="muted">-</span>
+                          <small className="cell-note">{node.node_type === "routed" ? "出站路由" : "外部导入"}</small>
+                        </div>
+                      );
+                    })()}
                   </td>
                   <td className="nw-cell-status" data-label="状态">
                     {isAdmin ? (
@@ -1457,7 +1508,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
             </button>
           </div>
           {viewMode === "nodes" ? (
-            <Field label="排序"><select aria-label="节点排序" value={sort} onChange={(event) => setSort(event.target.value as SortMode)}><option value="recent">最近更新</option><option value="custom">自定义顺序</option><option value="name">节点名称</option><option value="protocol">协议</option><option value="server">服务器地址</option><option value="latency">延迟</option><option value="speed">下载速度</option></select></Field>
+            <Field label="排序"><select aria-label="节点排序" value={sort} onChange={(event) => setSort(event.target.value as SortMode)}><option value="recent">最近更新</option><option value="custom">自定义顺序</option><option value="name">节点名称</option><option value="protocol">协议</option><option value="server">服务器地址</option><option value="traffic">流量消耗</option><option value="latency">延迟</option><option value="speed">下载速度</option></select></Field>
           ) : null}
           <label className="nw-compact-check"><input type="checkbox" checked={enabledOnly} onChange={(event) => setEnabledOnly(event.target.checked)} />仅启用</label>
           <div className="nw-tool-menu" ref={toolMenuRef}>

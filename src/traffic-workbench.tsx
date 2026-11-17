@@ -340,7 +340,7 @@ export function TrafficWorkbenchPage({ profile }: { profile: Profile }) {
       {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
 
       <div className="metric-grid traffic-workbench-metrics">
-        <TrafficMetric icon={<Activity size={19} />} label="本周期用量" value={loading ? "--" : `${summary?.metrics.total_used_gb ?? 0} GB`} detail={summary?.metrics.total_limit_gb === 0 ? "全部服务器流量" : "累计计费流量"} tone="accent" />
+        <TrafficMetric icon={<Activity size={19} />} label="本周期用量" value={loading ? "--" : `${summary?.metrics.total_used_gb ?? 0} GB`} detail={summary?.metrics.total_limit_gb === 0 ? "全部服务器流量" : summary?.metrics.unlimited_used_gb ? `含不限额 ${summary.metrics.unlimited_used_gb} GB` : "累计计费流量"} tone="accent" />
         <TrafficMetric icon={<CalendarDays size={19} />} label="今日用量" value={loading ? "--" : `${todayUsed} GB`} detail="今天 00:00 起" tone="info" />
         <TrafficMetric icon={<Gauge size={19} />} label="近 7 日用量" value={loading ? "--" : `${weekUsed.toFixed(2)} GB`} detail="每日用量汇总" tone="good" />
         <TrafficMetric icon={<Network size={19} />} label={profile.is_admin ? "实时连接" : "用量记录"} value={loading ? "--" : profile.is_admin ? String(activeConnections) : String(allHistory.length)} detail={profile.is_admin ? `${activeUsers} 个活跃用户` : "最近 30 日记录天数"} tone="warn" />

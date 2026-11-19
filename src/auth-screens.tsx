@@ -892,7 +892,17 @@ export function LoginScreen({ onLogin, wallpaper = "", notice = "" }: { onLogin:
         setCaptchaToken("");
         setCaptchaAttempt((value) => value + 1);
       }
-      setError(reason instanceof ApiError && reason.status === 401 ? "账号或密码错误" : reason instanceof Error ? reason.message : "登录失败");
+      if (reason instanceof ApiError) {
+        if (reason.status === 403 || reason.message === "account is disabled" || reason.message === "user is disabled") {
+          setError("账号已停用，请联系管理员");
+          return;
+        }
+        if (reason.status === 401) {
+          setError("账号或密码错误");
+          return;
+        }
+      }
+      setError(reason instanceof Error ? reason.message : "登录失败");
     } finally {
       setSubmitting(false);
     }
@@ -917,7 +927,11 @@ export function LoginScreen({ onLogin, wallpaper = "", notice = "" }: { onLogin:
         : { two_factor_token: pending2FA, code };
       finish(await api.post<Session>(path, body));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "验证失败");
+      if (reason instanceof ApiError && (reason.status === 403 || reason.message === "account is disabled" || reason.message === "user is disabled")) {
+        setError("账号已停用，请联系管理员");
+      } else {
+        setError(reason instanceof Error ? reason.message : "验证失败");
+      }
     } finally {
       setSubmitting(false);
     }

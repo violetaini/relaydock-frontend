@@ -113,7 +113,7 @@ function mapOAuthError(code: string): string {
     case "registration_disabled":
       return "系统暂未开启第三方账号快捷注册，请联系管理员";
     case "account_disabled":
-      return "该用户账号已被禁用，请联系管理员";
+      return "账号已停用，请联系管理员";
     case "already_bound_to_other_user":
       return "该第三方账号已绑定至其他用户";
     case "login_required_to_bind":

@@ -132,4 +132,16 @@ describe("login screen resilience", () => {
     expect(post).toHaveBeenNthCalledWith(1, "/api/login", expect.objectContaining({ turnstile_token: "consumed-token" }));
     expect(post).toHaveBeenNthCalledWith(2, "/api/login", expect.objectContaining({ turnstile_token: "fresh-token" }));
   });
+
+  it("shows disabled account prompt when account is deactivated", async () => {
+    vi.spyOn(api, "post").mockRejectedValue(new ApiError("account is disabled", 403));
+    const onLogin = vi.fn();
+    render(<LoginScreen onLogin={onLogin} />);
+
+    fireEvent.change(await screen.findByRole("textbox", { name: "账号" }), { target: { value: "disabled-user" } });
+    fireEvent.change(screen.getByLabelText("密码"), { target: { value: "some-password" } });
+    fireEvent.click(screen.getByRole("button", { name: "登录" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("账号已停用，请联系管理员");
+  });
 });

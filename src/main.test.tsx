@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError, getToken, setToken } from "./api";
 import { App, recoverFromPreloadError, revokeCurrentSession } from "./main";
@@ -34,6 +34,32 @@ describe("application bootstrap", () => {
     window.history.pushState({}, "", "/");
     cleanup();
     vi.restoreAllMocks();
+  });
+
+  it("waits for appearance and providers before painting the complete login form", async () => {
+    location.hash = "/login";
+    sessionStorage.setItem("oidc-silent-checked", String(Date.now()));
+    let resolveBrand!: (value: unknown) => void, resolveProviders!: (value: unknown) => void;
+    const branding = new Promise(resolve => { resolveBrand = resolve; });
+    const providers = new Promise(resolve => { resolveProviders = resolve; });
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/setup/status") return { needs_setup: false } as T;
+      if (path === "/api/public/branding") return await branding as T;
+      if (path === "/api/public/oauth/providers") return await providers as T;
+      if (path === "/api/public/login-wallpaper") return { login_wallpaper: "https://images.example/official.jpg" } as T;
+      if (path === "/api/captcha/config") return { enabled: false, site_key: "" } as T;
+      return { enabled: false, servers: [] } as T;
+    });
+    render(<App />);
+    expect(screen.queryByLabelText("账号")).not.toBeInTheDocument();
+    await act(async () => resolveBrand({ name: "Configured", login_title: "官方登录", login_kicker: "CHITANDA SSO", auto_sso: true }));
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/api/public/oauth/providers"));
+    expect(screen.queryByLabelText("账号")).not.toBeInTheDocument();
+    await act(async () => resolveProviders({ providers: [{ id: "oidc", name: "Unified login" }] }));
+    expect(await screen.findByRole("heading", { name: "官方登录" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Unified login" })).toBeInTheDocument();
+    expect(screen.getByLabelText("账号")).toBeInTheDocument();
+    expect(document.querySelector(".login-background-image")).toHaveAttribute("src", "https://images.example/official.jpg");
   });
 
   it.each([

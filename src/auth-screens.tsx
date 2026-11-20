@@ -819,6 +819,10 @@ function Turnstile({ siteKey, onToken }: { siteKey: string; onToken: (token: str
   return <div className="turnstile-field"><div className="turnstile-slot" ref={ref} />{loadError ? <ErrorState message={loadError} onRetry={retry} /> : null}</div>;
 }
 
+export function LoginPendingScreen() {
+  return <main className="login-pending-screen"><div className="login-pending-card"><Spinner label="正在连接控制端" /></div></main>;
+}
+
 export function LoginScreen({ onLogin, wallpaper = "", notice = "" }: { onLogin: (session: Session) => void; wallpaper?: string; notice?: string }) {
   const branding = useBranding();
   const projectName = branding.name?.trim() || BRAND_NAME;
@@ -844,20 +848,39 @@ export function LoginScreen({ onLogin, wallpaper = "", notice = "" }: { onLogin:
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [oauthProviders, setOAuthProviders] = useState<{ id: string; name: string }[]>([]);
+  const [providersReady, setProvidersReady] = useState(false);
+  const [captchaReady, setCaptchaReady] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
+    setProvidersReady(false);
     api.get<{ providers: { id: string; name: string }[] }>("/api/public/oauth/providers")
-      .then((res) => { if (Array.isArray(res?.providers)) {
- setOAuthProviders(res.providers);
- if(branding.auto_sso && res.providers.some(p=>p.id==="oidc") && !notice && Date.now()-Number(sessionStorage.getItem("oidc-silent-checked")||0)>15000){
- sessionStorage.setItem("oidc-silent-checked",String(Date.now()));window.location.replace("/api/oauth/oidc/login?silent=true");
- }
- } })
-      .catch(() => undefined);
+      .then((res) => {
+        if (cancelled) return;
+        const providers = Array.isArray(res?.providers) ? res.providers : [];
+        setOAuthProviders(providers);
+        if (branding.auto_sso && providers.some(p => p.id === "oidc") && !notice) {
+          try {
+            if (Date.now() - Number(sessionStorage.getItem("oidc-silent-checked") || 0) > 15000) {
+              sessionStorage.setItem("oidc-silent-checked", String(Date.now()));
+              window.location.replace("/api/oauth/oidc/login?silent=true");
+              return; // Keep the waiting surface until the silent callback.
+            }
+          } catch { /* Storage unavailable: offer explicit login instead. */ }
+        }
+        setProvidersReady(true);
+      })
+      .catch(() => { if (!cancelled) setProvidersReady(true); });
+    return () => { cancelled = true; };
   }, [branding.auto_sso,notice]);
 
   useEffect(() => {
-    api.get<{ enabled: boolean; site_key: string }>("/api/captcha/config").then(setCaptcha).catch(() => undefined);
+    let cancelled = false;
+    api.get<{ enabled: boolean; site_key: string }>("/api/captcha/config")
+      .then(value => { if (!cancelled) setCaptcha(value); })
+      .catch(() => undefined)
+      .finally(() => { if (!cancelled) setCaptchaReady(true); });
+    return () => { cancelled = true; };
   }, []);
 
   const finish = (session: Session) => {
@@ -893,7 +916,7 @@ export function LoginScreen({ onLogin, wallpaper = "", notice = "" }: { onLogin:
         setCaptchaAttempt((value) => value + 1);
       }
       if (reason instanceof ApiError) {
-        if (reason.status === 403 || reason.message === "account is disabled" || reason.message === "user is disabled") {
+        if (reason.message === "account is disabled" || reason.message === "user is disabled") {
           setError("账号已停用，请联系管理员");
           return;
         }
@@ -927,7 +950,7 @@ export function LoginScreen({ onLogin, wallpaper = "", notice = "" }: { onLogin:
         : { two_factor_token: pending2FA, code };
       finish(await api.post<Session>(path, body));
     } catch (reason) {
-      if (reason instanceof ApiError && (reason.status === 403 || reason.message === "account is disabled" || reason.message === "user is disabled")) {
+      if (reason instanceof ApiError && (reason.message === "account is disabled" || reason.message === "user is disabled")) {
         setError("账号已停用，请联系管理员");
       } else {
         setError(reason instanceof Error ? reason.message : "验证失败");
@@ -936,6 +959,8 @@ export function LoginScreen({ onLogin, wallpaper = "", notice = "" }: { onLogin:
       setSubmitting(false);
     }
   };
+
+  if (!providersReady || !captchaReady) return <LoginPendingScreen />;
 
   return (
     <main className={`auth-layout ${branding.login_theme === "default" ? "" : "glass-login"} ${background && !backgroundFailed ? "has-login-background" : ""}`}>

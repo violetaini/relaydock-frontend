@@ -1,7 +1,7 @@
 import { StrictMode, useCallback, useEffect, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { api, ApiError, getToken, setToken } from "./api";
-import { LoginScreen, PublicProbeScreen, SetupScreen, emptyPublicProbeState, normalizePublicProbeState, type PublicProbeState } from "./auth-screens";
+import { LoginPendingScreen, LoginScreen, PublicProbeScreen, SetupScreen, emptyPublicProbeState, normalizePublicProbeState, type PublicProbeState } from "./auth-screens";
 import { BrandMark, BrandingProvider, DEFAULT_BRANDING, applyBrandingDocument, normalizeBranding, type Branding } from "./brand";
 import { ConsoleApp } from "./console";
 import type { Profile, Session } from "./types";
@@ -141,19 +141,14 @@ export function App() {
     if (typeof location === "undefined") return false;
     return !isLoginReturn() && new URLSearchParams(location.search).get("probe") === "1";
   });
-  const [state, setState] = useState<BootState>(() => {
-    if (isLoginReturn()) return "loading";
-    if (typeof window !== "undefined" && !getToken() && location.hash.replace(/^#\/?/, "") !== "login") {
-      return "login";
-    }
-    return "loading";
-  });
+  const [state, setState] = useState<BootState>("loading");
   const [profile, setProfile] = useState<Profile | null>(null);
   const [error, setError] = useState("");
   const [wallpaper, setWallpaper] = useState("");
   const [logoutNotice, setLogoutNotice] = useState("");
   const [probe, setProbe] = useState<PublicProbeState>(loadCachedProbe);
   const [branding, setBranding] = useState<Branding>(DEFAULT_BRANDING);
+  const [brandingReady, setBrandingReady] = useState(false);
 
   const bootstrap = useCallback(async () => {
     if (typeof location !== "undefined" && location.search) {
@@ -253,9 +248,15 @@ export function App() {
   useEffect(() => { void bootstrap(); }, [bootstrap]);
   useEffect(() => {
     let cancelled = false;
-    api.get<unknown>("/api/public/branding")
-      .then((response) => { if (!cancelled) setBranding(publicBrandingFrame(response)); })
-      .catch(() => { if (!cancelled) setBranding(DEFAULT_BRANDING); });
+    Promise.all([
+      api.get<unknown>("/api/public/branding").catch(() => DEFAULT_BRANDING),
+      api.get<{ login_wallpaper?: string }>("/api/public/login-wallpaper").catch(() => ({ login_wallpaper: "" })),
+    ]).then(([response, wallpaperResponse]) => {
+      if (cancelled) return;
+      setBranding(publicBrandingFrame(response));
+      setWallpaper(wallpaperResponse.login_wallpaper?.trim() ?? "");
+      setBrandingReady(true);
+    });
     return () => { cancelled = true; };
   }, []);
   useEffect(() => { applyBrandingDocument(branding); }, [branding]);
@@ -281,12 +282,8 @@ export function App() {
   useEffect(() => {
     if (state !== "login" && !probePreview) return;
     let cancelled = false;
-    Promise.all([
-      api.get<{ login_wallpaper?: string }>("/api/public/login-wallpaper").catch(() => ({ login_wallpaper: "" })),
-      api.get<unknown>("/api/public/probe-servers").catch(() => emptyPublicProbeState()),
-    ]).then(([wallpaperResponse, probeResponse]) => {
+    api.get<unknown>("/api/public/probe-servers").catch(() => emptyPublicProbeState()).then((probeResponse) => {
       if (cancelled) return;
-      setWallpaper(wallpaperResponse.login_wallpaper?.trim() ?? "");
       const nextProbe = publicProbeFrame(probeResponse) ?? emptyPublicProbeState();
       setProbe(nextProbe);
       if (nextProbe.enabled) {
@@ -447,8 +444,8 @@ export function App() {
   };
 
   let content: ReactNode = null;
-  if (state === "loading") {
-    content = <main className="boot-screen"><BrandMark className="brand-mark-large" size={32} /><strong>{branding.name}</strong><Spinner label="正在连接控制端" /></main>;
+  if (state === "loading" || (state === "login" && !brandingReady)) {
+    content = !getToken() ? <LoginPendingScreen /> : <main className="boot-screen"><BrandMark className="brand-mark-large" size={32} /><strong>{branding.name}</strong><Spinner label="正在连接控制端" /></main>;
   } else if (state === "error") {
     content = <main className="boot-screen boot-error"><BrandMark className="brand-mark-large" size={32} /><ErrorState message={error} /><Button onClick={() => void bootstrap()}>重新连接</Button></main>;
   } else if (state === "setup") {

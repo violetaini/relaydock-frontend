@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError } from "./api";
 import { LoginScreen } from "./auth-screens";
+import { BrandingProvider, DEFAULT_BRANDING } from "./brand";
 
 vi.hoisted(() => {
   (globalThis as unknown as { process: { env: { NODE_ENV?: string } } }).process.env.NODE_ENV = "test";
@@ -15,6 +16,28 @@ afterEach(() => {
 });
 
 describe("login screen resilience", () => {
+  it("keeps the form hidden while automatic SSO detection leaves for its callback", async () => {
+    sessionStorage.clear();
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => (
+      path === "/api/public/oauth/providers" ? { providers: [{ id: "oidc", name: "Unified login" }] } : { enabled: false, site_key: "" }
+    ) as T);
+    render(<BrandingProvider branding={{ ...DEFAULT_BRANDING, auto_sso: true }}><LoginScreen onLogin={vi.fn()} /></BrandingProvider>);
+    await waitFor(() => expect(sessionStorage.getItem("oidc-silent-checked")).not.toBeNull());
+    expect(screen.queryByLabelText("账号")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "登录" })).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("正在连接控制端");
+  });
+
+  it("shows complete explicit login after the anonymous silent callback cooldown", async () => {
+    sessionStorage.setItem("oidc-silent-checked", String(Date.now()));
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => (
+      path === "/api/public/oauth/providers" ? { providers: [{ id: "oidc", name: "Unified login" }] } : { enabled: false, site_key: "" }
+    ) as T);
+    render(<BrandingProvider branding={{ ...DEFAULT_BRANDING, auto_sso: true }}><LoginScreen onLogin={vi.fn()} /></BrandingProvider>);
+    expect(await screen.findByRole("button", { name: "Unified login" })).toBeInTheDocument();
+    expect(screen.getByLabelText("账号")).toBeInTheDocument();
+  });
+
   it("shows a retryable Turnstile script error and remains fail-closed until a token arrives", async () => {
     vi.spyOn(api, "get").mockResolvedValue({ enabled: true, site_key: "site-key" });
     const renderWidget = vi.fn();
@@ -134,6 +157,7 @@ describe("login screen resilience", () => {
   });
 
   it("shows disabled account prompt when account is deactivated", async () => {
+    vi.spyOn(api, "get").mockResolvedValue({ providers: [], enabled: false, site_key: "" });
     vi.spyOn(api, "post").mockRejectedValue(new ApiError("account is disabled", 403));
     const onLogin = vi.fn();
     render(<LoginScreen onLogin={onLogin} />);
@@ -143,5 +167,16 @@ describe("login screen resilience", () => {
     fireEvent.click(screen.getByRole("button", { name: "登录" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("账号已停用，请联系管理员");
+  });
+
+  it("keeps unrelated forbidden errors distinct from disabled accounts", async () => {
+    vi.spyOn(api, "get").mockResolvedValue({ providers: [], enabled: false, site_key: "" });
+    vi.spyOn(api, "post").mockRejectedValue(new ApiError("access policy denied", 403));
+    render(<LoginScreen onLogin={vi.fn()} />);
+    fireEvent.change(await screen.findByLabelText("账号"), { target: { value: "fixture-user" } });
+    fireEvent.change(screen.getByLabelText("密码"), { target: { value: "fixture-password" } });
+    fireEvent.click(screen.getByRole("button", { name: /^登录$/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("access policy denied");
+    expect(screen.queryByText("账号已停用，请联系管理员")).not.toBeInTheDocument();
   });
 });

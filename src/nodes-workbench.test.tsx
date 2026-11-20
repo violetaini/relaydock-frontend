@@ -290,6 +290,68 @@ describe("WireGuard nodes", () => {
 });
 
 describe("managed offer protocol guard", () => {
+  it("edits a forwarding entry without changing inherited client credentials or type", async () => {
+    const target = node(41, "friend", "shadowsocks");
+    const config = { name: "friend | Tunnel", type: "ss", server: "entry.example.test", port: 20335, cipher: "aes-128-gcm", password: "fixture-shared" };
+    const entry = { ...node(42, config.name, "shadowsocks"), node_type: "forwarded", inbound_tag: "custom-entry", forward_node_id: 41, parsed_config: JSON.stringify(config), clash_config: JSON.stringify(config) };
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<NodeEditor node={entry} forwardTarget={target} onClose={vi.fn()} onComplete={vi.fn()} />);
+    expect(screen.getByLabelText("节点类型")).toHaveValue("任意门转发（TCP + UDP）");
+    expect(screen.getByLabelText("转发目标")).toHaveValue("41");
+    expect(screen.queryByRole("combobox", { name: "协议" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("服务器地址")).toHaveAttribute("readonly");
+    expect(screen.queryByRole("textbox", { name: "标准 Clash 节点配置 (YAML)" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("节点名称"), { target: { value: "renamed forwarding entry" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存节点" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/forward-nodes/42/target", {
+      target_node_id: 41, expected_target_node_id: 41, node_name: "renamed forwarding entry", enabled: true, tags: [],
+      target_host: "", expected_target_host: "",
+      use_server_domain: false, expected_server_domain: undefined,
+    }, { timeoutMs: 90000 }));
+  });
+  it("previews a different target and retains the dialog when the server rejects the switch", async () => {
+    const target = node(41, "friend", "ss"), next = node(43, "next", "trojan");
+    const entry = { ...node(42, "friend | Tunnel", "ss"), node_type: "forwarded", forward_node_id: 41 };
+    const complete = vi.fn();
+    const post = vi.spyOn(api, "post").mockRejectedValue(new Error("服务器未确认切换，已恢复原转发目标"));
+    render(<NodeEditor node={entry} forwardTarget={target} availableNodes={[target, entry, next]} onClose={vi.fn()} onComplete={complete} />);
+    fireEvent.change(screen.getByLabelText("转发目标"), { target: { value: "43" } });
+    expect(screen.getByLabelText("节点名称")).toHaveValue("next | Tunnel");
+    expect(screen.getByRole("status")).toHaveTextContent("next");
+    expect(screen.getByText(/客户端协议：TROJAN/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存节点" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/forward-nodes/42/target", expect.objectContaining({ target_node_id: 43, expected_target_node_id: 41 }), { timeoutMs: 90000 }));
+    expect(await screen.findByText("服务器未确认切换，已恢复原转发目标")).toBeInTheDocument();
+    expect(complete).not.toHaveBeenCalled();
+  });
+  it("edits and restores a DDNS hostname while keeping the selected node binding", async () => {
+    const target = node(41, "friend", "ss");
+    const entry = { ...node(42, "friend | Tunnel", "ss"), node_type: "forwarded", forward_node_id: 41, forward_target_host: "old.example.test" };
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<NodeEditor node={entry} forwardTarget={target} availableServers={[{ id: 1, name: "Edge A", domain: "", ip_address: "192.0.2.1" }]} onClose={vi.fn()} onComplete={vi.fn()} />);
+    expect(screen.getByLabelText("转发地址")).toHaveValue("domain");
+    expect(screen.getByLabelText("目标域名")).toHaveValue("old.example.test");
+    expect(screen.getByLabelText("目标域名")).not.toHaveAttribute("readonly");
+    expect(screen.getByText(/保存后将同步到服务器管理的/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("目标域名"), { target: { value: "ddns.example.test" } });
+    expect(screen.getByRole("status")).toHaveTextContent("ddns.example.test:443");
+    fireEvent.click(screen.getByRole("button", { name: "保存节点" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/forward-nodes/42/target", expect.objectContaining({ target_node_id: 41, target_host: "ddns.example.test", expected_target_host: "old.example.test" }), { timeoutMs: 90000 }));
+  });
+  it("uses a configured server node domain without allowing a separate forwarding override", async () => {
+    const target = node(41, "friend", "ss");
+    const entry = { ...node(42, "friend | Tunnel", "ss"), node_type: "forwarded", forward_node_id: 41 };
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<NodeEditor node={entry} forwardTarget={target} availableServers={[{ id: 7, name: "Edge A", domain: "configured.example.test", ip_address: "192.0.2.8" }]} onClose={vi.fn()} onComplete={vi.fn()} />);
+    expect(screen.getByLabelText("转发地址")).toHaveValue("node");
+    expect(screen.getByRole("status")).toHaveTextContent("192.0.2.8:443");
+    fireEvent.change(screen.getByLabelText("转发地址"), { target: { value: "domain" } });
+    expect(screen.getByLabelText("目标域名")).toHaveValue("configured.example.test");
+    expect(screen.getByLabelText("目标域名")).toHaveAttribute("readonly");
+    expect(screen.getByText(/来自服务器管理 · Edge A/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存节点" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/forward-nodes/42/target", expect.objectContaining({ use_server_domain: true, target_host: "configured.example.test", expected_server_domain: "configured.example.test" }), { timeoutMs: 90000 }));
+  });
   it("edits node tags with reusable choices and custom chips", async () => {
     const tagged = node(6, "香港线路");
     tagged.tag = "香港";
@@ -835,8 +897,27 @@ describe("node any-door forwarding", () => {
     expect(notify).toHaveBeenCalledWith("任意门转发已创建");
   });
 
-  it("shows managed AnyDoor clones as TUNNEL in the node table", async () => {
-    const tunnel = { ...node(41, "A-B-C Tunnel", "vless", "edge.example.com"), inbound_tag: "anydoor-node-7" };
+  it("keeps a forwarding entry directly below its target and preserves filtered results", async () => {
+    const target = node(41, "friend", "shadowsocks");
+    const entry = { ...node(42, "friend | Tunnel", "shadowsocks"), node_type: "forwarded", inbound_tag: "custom-entry", forward_node_id: 41 };
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [entry, node(43, "unrelated"), target] } as T;
+      if (path === "/api/user/config") return userConfig([42, 43, 41]) as T;
+      return { results: [], offers: [], servers: [] } as T;
+    });
+    render(<NodesWorkbench isAdmin notify={vi.fn()} />);
+    const parentRow = (await screen.findByText("friend", { exact: true })).closest("tr");
+    const entryRow = screen.getByText("friend | Tunnel", { exact: true }).closest("tr");
+    expect(parentRow?.nextElementSibling).toBe(entryRow);
+    expect(entryRow).toHaveClass("nw-forward-child");
+    expect(within(parentRow!).getByText(/1 个转发入口/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("搜索节点"), { target: { value: "friend | Tunnel" } });
+    expect(screen.queryByText("friend", { exact: true })).not.toBeInTheDocument();
+    expect(screen.getByText(/任意门转发 → friend/)).toBeInTheDocument();
+  });
+
+  it.each(["vless", "shadowsocks", "dokodemo-door", "tunnel"])("labels an AnyDoor entry independently of its %s client protocol", async (protocol) => {
+    const tunnel = { ...node(41, "A-B-C Tunnel", protocol, "edge.example.com"), inbound_tag: "anydoor-node-7" };
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
       if (path === "/api/admin/nodes") return { nodes: [tunnel] } as T;
       if (path === "/api/admin/speedtest/results?latest=1") return { results: [] } as T;
@@ -850,7 +931,10 @@ describe("node any-door forwarding", () => {
     expect(row).not.toBeNull();
     expect(within(row as HTMLTableRowElement).getByText("DD")).toBeInTheDocument();
     expect(within(row as HTMLTableRowElement).getByText("DD")).toHaveAttribute("title", "TUNNEL");
-    expect(within(row as HTMLTableRowElement).getByText(/目标协议 VLESS/)).toBeInTheDocument();
+    const description = within(row as HTMLTableRowElement).getByText(/任意门转发/);
+    expect(description).toHaveTextContent("#41 · 任意门转发");
+    if (["vless", "shadowsocks"].includes(protocol)) expect(description).toHaveAttribute("title", `目标客户端协议：${protocol.toUpperCase()}（订阅沿用目标节点的协议与凭据）`);
+    else expect(description).not.toHaveAttribute("title");
   });
 
   it("renders server traffic consumption instead of speedtest result in the node table and allows sorting by traffic", async () => {
@@ -1733,7 +1817,7 @@ describe("single node QR import", () => {
     render(<NodeShareQRCodeDialog node={selected} notify={notify} onClose={vi.fn()} />);
 
     expect(await screen.findByRole("img", { name: "美国 Reality 节点二维码" })).toHaveAttribute("src", "data:image/png;base64,node-qr");
-    expect(api.get).toHaveBeenCalledWith("/api/admin/nodes/7/uri");
+    expect(api.get).toHaveBeenCalledWith("/api/admin/nodes/7/uri", { skipCache: true });
     expect(QRCode.toDataURL).toHaveBeenCalledWith(uri, expect.objectContaining({ width: 320, margin: 2 }));
     fireEvent.click(screen.getByRole("button", { name: "复制链接" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(uri));
@@ -1759,7 +1843,7 @@ describe("single node QR import", () => {
     render(<NodeShareQRCodeDialog node={selected} notify={vi.fn()} onClose={vi.fn()} />);
 
     expect(await screen.findByRole("img", { name: "办公室 WireGuard 节点二维码" })).toHaveAttribute("src", "data:image/png;base64,node-qr");
-    expect(api.get).toHaveBeenCalledWith("/api/admin/nodes/12/uri");
+    expect(api.get).toHaveBeenCalledWith("/api/admin/nodes/12/uri", { skipCache: true });
     expect(QRCode.toDataURL).toHaveBeenCalledWith(uri, expect.objectContaining({ width: 320, margin: 2 }));
   });
 

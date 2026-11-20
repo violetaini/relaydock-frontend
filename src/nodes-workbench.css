@@ -578,6 +578,10 @@
   transform-origin: right bottom;
 }
 
+.dialog-medium:has(.nw-node-qr) {
+  max-height: min(92dvh, 900px);
+}
+
 .nw-qr-canvas {
   display: grid;
   width: min(100%, 352px);
@@ -614,19 +618,22 @@
   min-width: 0;
   align-items: center;
   gap: 8px;
-  padding: 10px 12px 5px;
+  padding: 14px 16px 8px;
 }
 
 .nw-qr-uri > code {
   grid-column: 1;
-  max-height: 86px;
+  min-height: 112px;
+  max-height: 220px;
   overflow: auto;
   overflow-wrap: anywhere;
-  color: var(--text-soft);
-  padding: 4px 12px 11px;
+  color: var(--text);
+  padding: 6px 16px 16px;
   font-family: SFMono-Regular, Consolas, monospace;
-  font-size: 10px;
-  line-height: 1.5;
+  font-size: 14px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  user-select: text;
 }
 
 .nw-qr-uri > .icon-button {
@@ -2488,3 +2495,9 @@
   white-space: nowrap;
   background: transparent !important;
 }
+.nw-forward-branch{color:var(--muted);flex:0 0 auto;font-size:20px;line-height:1}
+.nw-forward-child .nw-cell-primary{border-inline-start:2px solid var(--border)}
+.nw-forward-config{border:1px solid var(--border);border-radius:10px;padding:14px}
+.nw-forward-config summary{cursor:pointer;color:var(--text);font-weight:500}
+.nw-forward-config p{color:var(--muted);line-height:1.6}
+.nw-forward-config pre{max-height:320px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--font-mono,monospace);font-size:12px}

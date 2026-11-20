@@ -55,6 +55,7 @@ import {
   Zap,
 } from "lucide-react";
 import { api } from "./api";
+import { forwardingOrderGroups, forwardingRows, forwardingTargetID, isForwardingEntry } from "./node-forwarding-view";
 import {
   PortCheckHint,
   isPortCheckBlocking,
@@ -147,6 +148,8 @@ export interface WorkbenchNode {
   chain_proxy_node_id?: number | null;
   node_type?: string;
   parent_node_id?: number | null;
+  forward_node_id?: number | null;
+  forward_target_host?: string;
   routed_outbound_tag?: string;
   routed_owner?: string;
   created_by?: string;
@@ -561,10 +564,7 @@ function nodeProtocolKey(protocol: string): string {
 }
 
 function isTunnelNode(node: WorkbenchNode | undefined): boolean {
-  if (!node || node.node_type === "routed") return false;
-  const tag = (node.inbound_tag || "").trim().toLowerCase();
-  const proto = (node.protocol || "").trim().toLowerCase();
-  return tag.startsWith("anydoor-") || proto === "dokodemo-door" || proto === "tunnel" || proto === "anydoor";
+  return isForwardingEntry(node);
 }
 
 function displayedNodeProtocol(node: WorkbenchNode): string {
@@ -1129,12 +1129,14 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
     orderDirtyRef.current = true;
     setOrderDirty(true);
     setManualOrder((current) => {
-      const index = current.indexOf(id);
+      const byID = new Map(nodes.map(node => [node.id, node]));
+      const groups = forwardingOrderGroups(current.flatMap(key => byID.has(key) ? [byID.get(key)!] : []));
+      const index = groups.findIndex(group => group.some(node => node.id === id));
       const target = index + direction;
-      if (index < 0 || target < 0 || target >= current.length) return current;
-      const next = [...current];
+      if (index < 0 || target < 0 || target >= groups.length) return current;
+      const next = [...groups];
       [next[index], next[target]] = [next[target], next[index]];
-      return next;
+      return next.flatMap(group => group.map(node => node.id));
     });
   };
 
@@ -1290,6 +1292,8 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
   };
 
   const renderNodeTable = (rowNodes: WorkbenchNode[], isCompact = false) => {
+    const byID = new Map(nodes.map(node => [node.id, node]));
+    const orderGroups = forwardingOrderGroups(manualOrder.flatMap(id => byID.has(id) ? [byID.get(id)!] : []));
     const isAllSelected = rowNodes.length > 0 && rowNodes.every((node) => selected.has(node.id));
     const toggleVisibleScope = () => {
       setSelected((current) => {
@@ -1342,14 +1346,17 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
             </tr>
           </thead>
           <tbody>
-            {rowNodes.map((node) => {
+            {forwardingRows(rowNodes).map(({node, depth}) => {
+              const targetID = forwardingTargetID(node);
+              const forwardTarget = nodes.find(item => item.id === targetID);
+              const childCount = rowNodes.filter(item => forwardingTargetID(item) === node.id).length;
               const address = nodeAddress(node);
               const ping = tcping[node.id];
               const speed = latest[node.id];
               const offer = offers.find((item) => item.node_id === node.id);
-              const orderIndex = manualOrder.indexOf(node.id);
+              const orderIndex = orderGroups.findIndex(group => group[0]?.id === node.id);
               return (
-                <tr key={node.id} className={selected.has(node.id) ? "is-selected" : ""}>
+                <tr key={node.id} data-forward-target={targetID} className={`${selected.has(node.id) ? "is-selected" : ""} ${depth ? "nw-forward-child" : ""}`}>
                   <td className="nw-cell-check">
                     <input
                       aria-label={`选择 ${node.node_name}`}
@@ -1360,17 +1367,18 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
                   </td>
                   {sort === "custom" && viewMode === "nodes" && !isCompact ? (
                     <td className="nw-order-col nw-cell-order" data-label="顺序">
-                      <span>{orderIndex + 1}</span>
+                      <span>{orderIndex < 0 ? "↳" : orderIndex + 1}</span>
                       <IconButton label={`上移 ${node.node_name}`} disabled={orderIndex <= 0} onClick={() => moveManualNode(node.id, -1)}><ArrowUp size={14} /></IconButton>
-                      <IconButton label={`下移 ${node.node_name}`} disabled={orderIndex < 0 || orderIndex >= manualOrder.length - 1} onClick={() => moveManualNode(node.id, 1)}><ArrowDown size={14} /></IconButton>
+                      <IconButton label={`下移 ${node.node_name}`} disabled={orderIndex < 0 || orderIndex >= orderGroups.length - 1} onClick={() => moveManualNode(node.id, 1)}><ArrowDown size={14} /></IconButton>
                     </td>
                   ) : null}
                   <td className="nw-cell-primary">
-                    <div className="nw-node-primary">
+                    <div className="nw-node-primary" style={depth ? {paddingInlineStart: Math.min(depth, 4) * 20} : undefined}>
+                      {depth ? <span className="nw-forward-branch" aria-hidden="true">↳</span> : null}
                       <Badge tone="info" className="nw-protocol-badge" title={displayedNodeProtocol(node) === "tunnel" ? "TUNNEL" : node.protocol.toUpperCase() || "UNKNOWN"}>{protocolBadgeText(displayedNodeProtocol(node))}</Badge>
                       <span>
                         <strong>{node.node_name}</strong>
-                        <small>#{node.id}{isTunnelNode(node) ? (node.protocol.toLowerCase() === "dokodemo-door" || node.protocol.toLowerCase() === "tunnel" ? " · 端口转发" : ` · 目标协议 ${node.protocol.toUpperCase()}`) : node.node_type === "routed" ? " · 路由出站" : ""}{node.relay_orig_server ? " · 已中转" : ""}</small>
+                        <small title={isTunnelNode(node) && nodeProtocolKey(node.protocol) !== "tunnel" ? `目标客户端协议：${node.protocol.toUpperCase()}（订阅沿用目标节点的协议与凭据）` : undefined}>#{node.id}{isTunnelNode(node) ? " · 任意门转发" : node.node_type === "routed" ? " · 路由出站" : ""}{forwardTarget ? ` → ${forwardTarget.node_name}` : targetID ? ` → 节点 #${targetID}` : ""}{childCount ? ` · ${childCount} 个转发入口` : ""}{node.relay_orig_server ? " · 已中转" : ""}</small>
                       </span>
                       {node.credential_state === "pending" ? <Badge tone="warn">凭据待下发</Badge> : null}
                     </div>
@@ -1784,7 +1792,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       </>}
 
       {dialog?.kind === "managed-create" ? <ManagedNodeWizard nodes={nodes} isAdmin={isAdmin} initialServerID={dialog.initialServerID} userContext={userCreationContext ?? undefined} onClose={closeDialog} onComplete={async (message, tone) => { closeDialog(); if (tone) notify(message, tone); else notify(message); await load(true); }} /> : null}
-      {dialog?.kind === "edit" ? <NodeEditor node={dialog.node} offer={offers.find((item) => item.node_id === dialog.node.id)} availableTags={knownTags} onClose={closeDialog} onComplete={async (message) => { closeDialog(); notify(message); await load(true); }} /> : null}
+      {dialog?.kind === "edit" ? <NodeEditor node={dialog.node} forwardTarget={nodes.find(item => item.id === forwardingTargetID(dialog.node))} availableNodes={nodes} availableServers={remoteServers} offer={offers.find((item) => item.node_id === dialog.node.id)} availableTags={knownTags} onClose={closeDialog} onComplete={async (message) => { closeDialog(); notify(message); await load(true); }} /> : null}
       {dialog?.kind === "config" ? <ConfigDialog node={dialog.node} editable={isAdmin} onClose={closeDialog} onComplete={async () => { closeDialog(); notify("节点配置已更新"); await load(true); }} /> : null}
       {dialog?.kind === "import" ? <ImportDialog onClose={closeDialog} onComplete={async (count) => { closeDialog(); notify(`已导入 ${count} 个节点`); await load(true); }} /> : null}
       {dialog?.kind === "relay" ? <RelayDialog node={dialog.node} onClose={closeDialog} onComplete={async () => { closeDialog(); notify("节点中转已更新"); await load(true); }} /> : null}
@@ -1979,7 +1987,7 @@ function NodeActions({ node, isAdmin, userRouted, userManagedCreation, onEdit, o
   </div>;
 }
 
-export function NodeEditor({ node, offer, availableTags = [], onClose, onComplete }: { node?: WorkbenchNode; offer?: ManagedNodeOffer; availableTags?: string[]; onClose: () => void; onComplete: (message: string) => void }) {
+export function NodeEditor({ node, forwardTarget, availableNodes = [], availableServers = [], offer, availableTags = [], onClose, onComplete }: { node?: WorkbenchNode; forwardTarget?: WorkbenchNode; availableNodes?: WorkbenchNode[]; availableServers?: Array<Pick<RemoteServer, "id" | "name" | "domain" | "ip_address">>; offer?: ManagedNodeOffer; availableTags?: string[]; onClose: () => void; onComplete: (message: string) => void }) {
   const initial = node ? readConfig(node) : { name: "", type: "vless", server: "", port: 443 };
   const [configFormat, setConfigFormat] = useState<"yaml" | "json">("yaml");
   const [form, setForm] = useState({
@@ -1998,6 +2006,28 @@ export function NodeEditor({ node, offer, availableTags = [], onClose, onComplet
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
   const tunnelNode = isTunnelNode(node);
+  const [targetID, setTargetID] = useState(node?.forward_node_id || forwardTarget?.id || 0);
+  const [targetAddressMode, setTargetAddressMode] = useState(node?.forward_target_host ? "domain" : "node");
+  const [targetDomain, setTargetDomain] = useState(node?.forward_target_host || "");
+  const targetCandidates = [...new Map([...availableNodes, ...(forwardTarget ? [forwardTarget] : [])].map(item => [item.id, item])).values()].filter(item => item.id !== node?.id && item.enabled && item.original_server && item.inbound_tag && item.node_type !== "routed" && !isTunnelNode(item) && nodeProtocolKey(item.protocol) !== "wireguard");
+  const selectedTarget = targetCandidates.find(item => item.id === targetID);
+  const selectedTargetServer = availableServers.find(item => item.name === selectedTarget?.original_server);
+  const configuredTargetDomain = selectedTargetServer?.domain?.trim() || "";
+  const effectiveTargetDomain = configuredTargetDomain || targetDomain.trim();
+  const effectiveTargetIP = selectedTargetServer?.ip_address || (selectedTarget ? String(readConfig(selectedTarget).server || "") : "");
+  const chooseTarget = (id: number) => {
+    setTargetID(id); setError("");
+    setTargetAddressMode("node"); setTargetDomain("");
+    const target = targetCandidates.find(item => item.id === id);
+    if (!target) return;
+    const inherited = readConfig(target);
+    delete inherited["x-arcway-managed-users"];
+    setForm(current => {
+      const previous = targetCandidates.find(item => item.id === targetID);
+      const name = previous && current.name === `${previous.node_name} | Tunnel` ? `${target.node_name} | Tunnel` : current.name;
+      return { ...current, name, protocol: target.protocol, config: formatProxyToClashYAML({ ...inherited, name, server: current.server, port: Number(current.port) }) };
+    });
+  };
   const protocolOptions = form.protocol && !protocols.includes(form.protocol.toLowerCase()) ? [form.protocol, ...protocols] : protocols;
   const managedMultiUser = node?.managed_multi_user === true;
   const selfServiceProtocolReady = !tunnelNode && managedSelfServiceConfigSupported(form.protocol, form.config, managedMultiUser);
@@ -2020,10 +2050,25 @@ export function NodeEditor({ node, offer, availableTags = [], onClose, onComplet
     setWorking(true);
     setError("");
     try {
+      if (tunnelNode && node) {
+        if (!selectedTarget) throw new Error("请选择已启用的受管代理节点作为转发目标");
+        if (!form.name.trim()) throw new Error("请填写节点名称");
+        if (targetAddressMode === "domain" && !selectedTargetServer) throw new Error("未读取到目标服务器信息，请刷新后重试");
+        if (targetAddressMode === "domain" && !effectiveTargetDomain) throw new Error("请填写目标域名，保存后将同步到服务器管理");
+        const result = await api.post<{ success?: boolean; warning?: string }>(`/api/admin/forward-nodes/${node.id}/target`, {
+          target_node_id: targetID, expected_target_node_id: node.forward_node_id || forwardTarget?.id || 0,
+          target_host: targetAddressMode === "domain" ? effectiveTargetDomain : "", expected_target_host: node.forward_target_host || "",
+          use_server_domain: targetAddressMode === "domain", expected_server_domain: selectedTargetServer?.domain,
+          node_name: form.name.trim(), tags, enabled: form.enabled,
+        }, { timeoutMs: 90000 });
+        if (result.success !== true) throw new Error("服务器未确认转发目标已更新，请刷新后检查");
+        onComplete(result.warning || "转发目标与绑定关系已更新");
+        return;
+      }
       const config = parseClashProxyInput(form.config || "{}");
       const portNum = Number(form.port);
       config.name = form.name.trim();
-      config.type = form.protocol.trim().toLowerCase();
+      if (!tunnelNode) config.type = form.protocol.trim().toLowerCase();
       config.server = form.server.trim();
       config.port = portNum;
       if (!config.name || !config.type || !config.server || !portNum) throw new Error("名称、协议、服务器地址和端口均为必填项");
@@ -2067,20 +2112,21 @@ export function NodeEditor({ node, offer, availableTags = [], onClose, onComplet
     if (clean && !tags.includes(clean)) setTags((current) => [...current, clean]);
     setTagInput("");
   };
-  return <Dialog title={node ? `编辑 ${node.node_name}` : "手工添加节点"} description="基础字段会同步写回完整 Clash 节点配置" onClose={onClose} wide>
+  return <Dialog title={node ? `编辑 ${node.node_name}` : "手工添加节点"} description={tunnelNode ? "任意门转发入口，客户端协议与凭据沿用目标节点" : "基础字段会同步写回完整 Clash 节点配置"} onClose={onClose} wide>
     <form className="form-stack" onSubmit={submit}>
       {error ? <ErrorState message={error} /> : null}
-      <div className="form-grid"><Field label="节点名称"><input autoFocus required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field><Field label="协议"><select value={form.protocol} onChange={(event) => setForm({ ...form, protocol: event.target.value })}>{protocolOptions.map((item) => <option value={item} key={item}>{item.toUpperCase()}</option>)}</select></Field></div>
-      <div className="form-grid"><Field label="服务器地址"><input required value={form.server} onChange={(event) => setForm({ ...form, server: event.target.value })} placeholder="example.com 或 IP" /></Field><Field label="端口"><input required type="number" min="1" max="65535" value={form.port} onChange={(event) => setForm({ ...form, port: event.target.value })} /></Field></div>
+      <div className="form-grid"><Field label="节点名称"><input autoFocus required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field>{tunnelNode ? <Field label="节点类型"><input readOnly value="任意门转发（TCP + UDP）" /></Field> : <Field label="协议"><select value={form.protocol} onChange={(event) => setForm({ ...form, protocol: event.target.value })}>{protocolOptions.map((item) => <option value={item} key={item}>{item.toUpperCase()}</option>)}</select></Field>}</div>
+      {tunnelNode ? <><Field label="转发目标" hint="选择现有受管代理节点；保存后同步切换实际转发、订阅配置和列表分组。"><select aria-label="转发目标" required disabled={working} value={targetID} onChange={event => chooseTarget(Number(event.target.value))}>{!selectedTarget ? <option value={targetID}>{targetID ? `节点 #${targetID}（不可用，请重新选择）` : "请选择转发目标"}</option> : null}{targetCandidates.map(item => <option key={item.id} value={item.id}>{item.node_name} · #{item.id} · {item.protocol.toUpperCase()} · {item.original_server}</option>)}</select></Field><div className="form-grid"><Field label="转发地址" hint="目标节点的端口、协议和凭据保持继承。"><select aria-label="转发地址" value={targetAddressMode} disabled={working} onChange={event => setTargetAddressMode(event.target.value)}><option value="node">使用服务器 IP（默认）</option><option value="domain">使用服务器节点域名（DDNS）</option></select></Field>{targetAddressMode === "domain" ? <Field label="目标域名" hint={configuredTargetDomain ? `来自服务器管理 · ${selectedTargetServer?.name}；如需修改，请前往服务器管理。` : selectedTargetServer ? "服务器尚未填写节点域名；保存后将同步到服务器管理的“节点域名”。" : "未读取到目标服务器信息，请刷新后重试。"}><input aria-label="目标域名" required readOnly={Boolean(configuredTargetDomain)} disabled={working || !selectedTargetServer} type="text" spellCheck={false} autoCapitalize="none" value={configuredTargetDomain || targetDomain} onChange={event => setTargetDomain(event.target.value)} placeholder="例如 node.example.com" /></Field> : null}</div>{selectedTarget ? <div className="nw-inline-note" role="status"><Link2 size={16} /><span>转发至：<strong>{selectedTarget.node_name}</strong> · {targetAddressMode === "domain" ? effectiveTargetDomain || "待填写域名" : effectiveTargetIP}:{String(readConfig(selectedTarget).port || "")} · {selectedTarget.protocol.toUpperCase()}{targetID !== node?.forward_node_id || (targetAddressMode === "domain" ? effectiveTargetDomain : "") !== (node?.forward_target_host || "") ? "（保存后生效）" : ""}</span></div> : null}</> : null}
+      <div className="form-grid"><Field label="服务器地址" hint={tunnelNode ? "入口地址与端口由服务器上的任意门入站维护" : undefined}><input aria-label="服务器地址" required readOnly={tunnelNode} value={form.server} onChange={(event) => setForm({ ...form, server: event.target.value })} placeholder="example.com 或 IP" /></Field><Field label="端口"><input required readOnly={tunnelNode} type="number" min="1" max="65535" value={form.port} onChange={(event) => setForm({ ...form, port: event.target.value })} /></Field></div>
       <Field label="标签" hint="选择已有标签，或输入新标签后按回车"><div className="nw-chip-input">{tags.map((item) => <span key={item}>{item}<button type="button" aria-label={`移除标签 ${item}`} onClick={() => setTags((current) => current.filter((tag) => tag !== item))}><X size={12} /></button></span>)}<input aria-label="添加标签" value={tagInput} onChange={(event) => setTagInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === ",") { event.preventDefault(); addTag(tagInput); } }} onBlur={() => addTag(tagInput)} placeholder={tags.length ? "继续输入" : "输入标签后按回车"} /></div></Field>
       {availableTags.length ? <div className="nw-tag-choices" aria-label="已有标签">{availableTags.map((item) => <button type="button" key={item} className={tags.includes(item) ? "is-active" : ""} aria-pressed={tags.includes(item)} onClick={() => setTags((current) => current.includes(item) ? current.filter((tag) => tag !== item) : [...current, item])}>{item}</button>)}</div> : null}
-      <Field label="原始 URI（可选）"><input value={form.rawURL} onChange={(event) => setForm({ ...form, rawURL: event.target.value })} placeholder="vless://..." /></Field>
+      {!tunnelNode ? <Field label="原始 URI（可选）"><input value={form.rawURL} onChange={(event) => setForm({ ...form, rawURL: event.target.value })} placeholder="vless://..." /></Field> : null}
       {node?.original_server ? <div className="nw-inline-note"><Server size={16} /><span>受管服务器：<strong>{node.original_server}</strong>{node.inbound_tag ? ` · 入站 ${node.inbound_tag}` : ""}</span></div> : null}
-      <div className="nw-tabs" role="tablist" aria-label="节点配置格式">
+      {tunnelNode ? <details className="nw-forward-config"><summary>客户端订阅配置（继承目标节点）</summary><p>客户端协议：{form.protocol.toUpperCase()}。这是供客户端连接转发入口的配置，任意门入口本身不会变成该协议。</p><pre>{form.config}</pre></details> : <><div className="nw-tabs" role="tablist" aria-label="节点配置格式">
         <button type="button" role="tab" aria-selected={configFormat === "yaml"} className={configFormat === "yaml" ? "is-active" : ""} onClick={() => switchConfigFormat("yaml")}>标准 Clash YAML</button>
         <button type="button" role="tab" aria-selected={configFormat === "json"} className={configFormat === "json" ? "is-active" : ""} onClick={() => switchConfigFormat("json")}>JSON</button>
       </div>
-      <Field label={configFormat === "yaml" ? "标准 Clash 节点配置 (YAML)" : "Clash JSON 配置"} hint="支持标准 Clash YAML（proxies: - ...）或 JSON 格式，保存前自动以顶部基础字段覆盖 name/type/server/port"><textarea className="nw-code-editor" rows={14} spellCheck={false} value={form.config} onChange={(event) => setForm({ ...form, config: event.target.value })} /></Field>
+      <Field label={configFormat === "yaml" ? "标准 Clash 节点配置 (YAML)" : "Clash JSON 配置"} hint="支持标准 Clash YAML（proxies: - ...）或 JSON 格式，保存前自动以顶部基础字段覆盖 name/type/server/port"><textarea className="nw-code-editor" rows={14} spellCheck={false} value={form.config} onChange={(event) => setForm({ ...form, config: event.target.value })} /></Field></>}
       <Toggle checked={form.enabled} onChange={(enabled) => setForm({ ...form, enabled })} label="启用节点" />
       {node ? <div className="nw-managed-offer"><Toggle checked={form.selfService} disabled={(!offer && (!node.original_server || !node.inbound_tag)) || (!selfServiceProtocolReady && !form.selfService)} onChange={(selfService) => setForm({ ...form, selfService })} label="允许获授权用户自助开通" />{form.selfService ? <Field label="目录排序" hint="数值越小越靠前"><input type="number" min="0" step="1" value={form.offerOrder} onChange={(event) => setForm({ ...form, offerOrder: event.target.value })} /></Field> : null}{!node.original_server || !node.inbound_tag ? <small>需要受管服务器和入站标识（Tag）后才能发布。</small> : tunnelNode ? <small>Tunnel 转发节点复用目标节点凭据，不能单独发布到用户目录。</small> : !selfServiceProtocolReady ? <small>{nodeProtocolKey(form.protocol) === "wireguard" ? "WireGuard 暂不支持按用户自助开通；管理员创建的普通节点仍可分配到套餐和订阅。" : "经典 Shadowsocks 只有共享密码，不能安全分配给独立用户；请改用 Shadowsocks 2022。"}</small> : <small>保存时会校验 Agent 的开通、到期和限速能力。</small>}</div> : null}
       <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose} disabled={working}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />保存节点</>}</Button></div>
@@ -4032,7 +4078,7 @@ export function NodeShareQRCodeDialog({ node, notify, onClose }: { node: Workben
     setItem(null);
     setDataURL("");
     try {
-      const response = await api.get<{ item?: NodeURI }>(`/api/admin/nodes/${node.id}/uri`);
+      const response = await api.get<{ item?: NodeURI }>(`/api/admin/nodes/${node.id}/uri`, { skipCache: true });
       if (!response.item?.uri) throw new Error("服务端没有返回可用的节点分享链接");
       setItem(response.item);
     } catch (reason) {
@@ -4069,8 +4115,8 @@ export function NodeShareQRCodeDialog({ node, notify, onClose }: { node: Workben
     }
   };
 
-  return <Dialog title="节点二维码" description={`${node.node_name} · ${displayedNodeProtocol(node).toUpperCase()}`} onClose={onClose}>
-    <div className="form-stack">
+  return <Dialog title="节点二维码" description={`${node.node_name} · ${displayedNodeProtocol(node).toUpperCase()}`} onClose={onClose} medium>
+    <div className="form-stack nw-node-qr">
       <div className="nw-inline-note nw-qr-warning"><KeyRound size={17} /><span>二维码包含节点凭据，请勿转发或公开截图。</span></div>
       {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
       {!error ? <div className="nw-qr-canvas">
@@ -4078,7 +4124,7 @@ export function NodeShareQRCodeDialog({ node, notify, onClose }: { node: Workben
       </div> : null}
       {item ? <div className="nw-qr-uri">
         <span><Badge tone="info" className="nw-protocol-badge" title={item.protocol.toUpperCase()}>{protocolBadgeText(item.protocol)}</Badge><strong>{item.node_name}</strong></span>
-        <code aria-label="节点分享 URI">{item.uri}</code>
+        <code aria-label="节点分享 URI" tabIndex={0}>{item.uri}</code>
         <IconButton label="复制节点分享链接" onClick={() => void copy()}><Copy size={17} /></IconButton>
       </div> : null}
       <div className="dialog-actions">

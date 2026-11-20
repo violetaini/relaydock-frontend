@@ -1,9 +1,14 @@
 import {render,cleanup,fireEvent,screen} from '@testing-library/react';
 import {afterEach,it,expect,vi} from 'vitest';
 import {LoginScreen} from './auth-screens';
-import {BrandingProvider,DEFAULT_BRANDING} from './brand';
+import {BrandingProvider,DEFAULT_BRANDING,normalizeBranding} from './brand';
 import {api} from './api';
 afterEach(()=>{cleanup();vi.restoreAllMocks()});
+it('inherits the Bing source only when no instance list was supplied',()=>{
+ expect(normalizeBranding({name:'Demo'}).login_background_urls).toEqual(['https://api.timelessq.com/bing/random']);
+ expect(normalizeBranding({name:'Demo',login_background_urls:['https://images.example/custom']}).login_background_urls).toEqual(['https://images.example/custom']);
+ expect(normalizeBranding({name:'Demo',login_background_urls:[]}).login_background_urls).toEqual([]);
+});
 it('uses the official glass layout by default',async()=>{
  vi.spyOn(api,'get').mockResolvedValue({providers:[],enabled:false});
  const {container}=render(<LoginScreen onLogin={()=>{}} />);

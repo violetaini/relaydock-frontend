@@ -2629,7 +2629,7 @@ function ServerFormFields({ form, setForm, editing = false }: { form: CreateServ
 
   const certsWithProvider = validCertificates.filter((c) => c.dns_provider_id > 0);
   const matchedCert = form.domain.trim()
-    ? certsWithProvider.find((c) => {
+    ? (certsWithProvider.find((c) => {
         const pattern = c.domain.toLowerCase().trim();
         const target = form.domain.toLowerCase().trim();
         if (pattern === target) return true;
@@ -2638,14 +2638,27 @@ function ServerFormFields({ form, setForm, editing = false }: { form: CreateServ
           return target.endsWith("." + suffix) || target === suffix;
         }
         return false;
-      })
-    : certsWithProvider[0];
-  const matchedProvider = matchedCert ? dnsProviders.find((p) => p.id === matchedCert.dns_provider_id) : null;
+      }) || validCertificates.find((c) => {
+        const pattern = c.domain.toLowerCase().trim();
+        const target = form.domain.toLowerCase().trim();
+        if (pattern === target) return true;
+        if (pattern.startsWith("*.")) {
+          const suffix = pattern.slice(2);
+          return target.endsWith("." + suffix) || target === suffix;
+        }
+        return false;
+      }))
+    : (certsWithProvider[0] || validCertificates[0]);
+  const matchedProvider = (matchedCert && matchedCert.dns_provider_id > 0)
+    ? dnsProviders.find((p) => p.id === matchedCert.dns_provider_id)
+    : (dnsProviders.length === 1 ? dnsProviders[0] : null);
 
   const certDomainOptionLabel = matchedCert
-    ? `证书域名：${matchedCert.domain}（${matchedProvider ? matchedProvider.name : `提供商 #${matchedCert.dns_provider_id}`}）`
-    : certsWithProvider.length > 0
-      ? `已签发证书域名：${certsWithProvider[0].domain}（${dnsProviders.find((p) => p.id === certsWithProvider[0].dns_provider_id)?.name || "DNS"}）`
+    ? matchedProvider
+      ? `证书域名：${matchedCert.domain}（${matchedProvider.name}）`
+      : `证书域名：${matchedCert.domain}（未关联 DNS · 请选择下方提供商）`
+    : validCertificates.length > 0
+      ? `已签发证书域名：${validCertificates[0].domain}（${dnsProviders[0]?.name || "DNS"}）`
       : "证书域名匹配（当前未匹配到证书域名 · 请选择提供商）";
 
   const targetDomainName = form.domain.trim() ? `「${form.domain.trim()}」` : "此节点域名";

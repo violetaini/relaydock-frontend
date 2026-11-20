@@ -1899,7 +1899,7 @@ function EditCertificateDialog({ item, providers, onClose, onComplete }: { item:
         provider,
         challenge_mode: manual ? "manual" : "dns",
         webroot_path: "",
-        dns_provider_id: !manual ? Number(dnsProviderID) : 0,
+        dns_provider_id: Number(dnsProviderID) || 0,
         remote_server_id: item.remote_server_id || 0,
         auto_renew: !manual && autoRenew,
       }), "更新证书设置失败");
@@ -1916,7 +1916,12 @@ function EditCertificateDialog({ item, providers, onClose, onComplete }: { item:
         <Field label="联系邮箱"><input required={!manual} type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="admin@example.com" /></Field>
         <Field label="证书颁发机构" hint={issued ? "已签发证书不能更改 CA" : undefined}><select aria-label="证书颁发机构" disabled={issued} value={provider} onChange={(event) => { const value = event.target.value; setProvider(value); if (value === "manual") setAutoRenew(false); }}>{!providerIsKnown ? <option value={provider}>{formatCertProvider(provider)}</option> : null}<option value="letsencrypt">Let's Encrypt</option><option value="letsencrypt-staging">Let's Encrypt Staging</option><option value="manual">手动上传</option></select></Field>
         {!manual ? <Field label="验证方式"><input aria-label="验证方式" readOnly value="DNS-01（DNS TXT 验证）" /></Field> : null}
-        {!manual ? <Field label="DNS 提供商"><select required aria-label="DNS 提供商" value={dnsProviderID} onChange={(event) => setDNSProviderID(event.target.value)}><option value="">请选择 DNS 提供商</option>{providers.map((providerItem) => <option key={providerItem.id} value={String(providerItem.id)}>{providerItem.name} · {providerItem.provider_type}</option>)}</select></Field> : null}
+        <Field label={!manual ? "DNS 提供商" : "关联 DNS 提供商（可选 · 用于 DDNS 自动复用）"}>
+          <select required={!manual} aria-label="DNS 提供商" value={dnsProviderID} onChange={(event) => setDNSProviderID(event.target.value)}>
+            <option value="">{manual ? "未关联 DNS 提供商" : "请选择 DNS 提供商"}</option>
+            {providers.map((providerItem) => <option key={providerItem.id} value={String(providerItem.id)}>{providerItem.name} · {providerItem.provider_type}</option>)}
+          </select>
+        </Field>
       </div>
       <div className="cw-checkboxes">{!manual ? <Toggle checked={autoRenew} onChange={setAutoRenew} label="到期前自动续期" /> : null}</div>
       <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在保存" /> : <><Save size={16} />保存设置</>}</Button></div>

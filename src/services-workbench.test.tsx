@@ -457,18 +457,59 @@ describe("service management workbench", () => {
     fireEvent.click(screen.getByRole("button", { name: "添加服务器" }));
     const dialog = screen.getByRole("dialog", { name: "添加服务器" });
     fireEvent.change(within(dialog).getByRole("textbox", { name: "服务器名称" }), { target: { value: "Edge DDNS" } });
-    fireEvent.change(within(dialog).getByRole("textbox", { name: "服务器地址 / DDNS 域名" }), { target: { value: "edge-ddns.example.com" } });
-    fireEvent.click(within(dialog).getByRole("switch", { name: "自动同步 DDNS" }));
+    fireEvent.click(within(dialog).getByRole("radio", { name: /启用本面板 DDNS 服务的域名/ }));
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "节点域名" }), { target: { value: "edge-ddns.example.com" } });
     const provider = await within(dialog).findByRole("combobox", { name: "DDNS 提供商" });
-    expect(within(provider).getByRole("option", { name: "自动（按证书）" })).toBeInTheDocument();
+    expect(within(provider).getByRole("option", { name: "证书域名匹配（当前未匹配到证书域名 · 请选择提供商）" })).toBeInTheDocument();
     expect(within(provider).getByRole("option", { name: "DNSPod 备用（dnspod）" })).toBeInTheDocument();
     fireEvent.change(provider, { target: { value: "8" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "创建并生成命令" }));
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote-servers/create", expect.objectContaining({
+      domain: "edge-ddns.example.com",
       pull_address: "edge-ddns.example.com",
       ddns_enabled: true,
       ddns_provider_id: 8,
+    })));
+  });
+
+  it("shows matched certificate domain directly in DDNS provider selection instead of auto mode", async () => {
+    mockServerReads([onlineServer], {
+      certificates: [{ id: 101, domain: "*.example.com", dns_provider_id: 8 }],
+    });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    await screen.findByText("Edge Hong Kong");
+    fireEvent.click(screen.getByRole("button", { name: "添加服务器" }));
+    const dialog = screen.getByRole("dialog", { name: "添加服务器" });
+    fireEvent.click(within(dialog).getByRole("radio", { name: /启用本面板 DDNS 服务的域名/ }));
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "节点域名" }), { target: { value: "edge-ddns.example.com" } });
+    const provider = await within(dialog).findByRole("combobox", { name: "DDNS 提供商" });
+    expect(within(provider).getByRole("option", { name: /证书域名：\*\.example\.com/ })).toBeInTheDocument();
+  });
+
+  it("saves an existing domain without DDNS when creating a server with manual domain", async () => {
+    mockServerReads([onlineServer]);
+    const post = vi.spyOn(api, "post").mockResolvedValue({
+      success: true,
+      server: { ...onlineServer, id: 14, name: "Edge Manual", ddns_enabled: false, ddns_provider_id: 0 },
+      install_command: "safe installer",
+    });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    await screen.findByText("Edge Hong Kong");
+    fireEvent.click(screen.getByRole("button", { name: "添加服务器" }));
+    const dialog = screen.getByRole("dialog", { name: "添加服务器" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "服务器名称" }), { target: { value: "Edge Manual" } });
+    fireEvent.click(within(dialog).getByRole("radio", { name: /输入现成域名/ }));
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "节点域名" }), { target: { value: "manual.example.com" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "创建并生成命令" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote-servers/create", expect.objectContaining({
+      domain: "manual.example.com",
+      pull_address: "manual.example.com",
+      ddns_enabled: false,
+      ddns_provider_id: 0,
     })));
   });
 

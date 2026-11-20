@@ -780,18 +780,30 @@
 .service-ddns-actions { display: flex; justify-content: flex-end; padding-top: 2px; }
 
 .service-control-stack { display: flex; flex-direction: column; gap: 10px; }
-.service-nginx-mode { min-width: 0; margin: 0; padding: 0; border: 0; }
-.service-nginx-mode legend { margin-bottom: 7px; color: var(--text-soft); font-size: 11px; font-weight: 700; }
-.service-nginx-mode-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: var(--surface-muted); }
-.service-nginx-mode-options button { min-width: 0; min-height: 64px; padding: 11px 13px; display: flex; align-items: center; gap: 10px; border: 0; border-right: 1px solid var(--border); color: var(--text-soft); background: transparent; text-align: left; cursor: pointer; }
-.service-nginx-mode-options button:last-child { border-right: 0; }
-.service-nginx-mode-options button:hover { color: var(--text); background: var(--surface); }
-.service-nginx-mode-options button.is-active { color: var(--text); box-shadow: inset 3px 0 0 var(--accent); background: var(--surface); }
-.service-nginx-mode-options button.is-active > svg { color: var(--accent); }
-.service-nginx-mode-options button > svg { flex: 0 0 auto; }
-.service-nginx-mode-options button > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.service-nginx-mode-options strong { font-size: 12px; }
-.service-nginx-mode-options small { color: var(--text-soft); font-size: 10px; line-height: 1.45; }
+.service-nginx-mode,
+.service-domain-mode { min-width: 0; margin: 0; padding: 0; border: 0; }
+.service-nginx-mode legend,
+.service-domain-mode legend { margin-bottom: 7px; color: var(--text-soft); font-size: 11px; font-weight: 700; }
+.service-nginx-mode-options,
+.service-domain-mode-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: var(--surface-muted); }
+.service-nginx-mode-options button,
+.service-domain-mode-options button { min-width: 0; min-height: 64px; padding: 11px 13px; display: flex; align-items: center; gap: 10px; border: 0; border-right: 1px solid var(--border); color: var(--text-soft); background: transparent; text-align: left; cursor: pointer; }
+.service-nginx-mode-options button:last-child,
+.service-domain-mode-options button:last-child { border-right: 0; }
+.service-nginx-mode-options button:hover,
+.service-domain-mode-options button:hover { color: var(--text); background: var(--surface); }
+.service-nginx-mode-options button.is-active,
+.service-domain-mode-options button.is-active { color: var(--text); box-shadow: inset 3px 0 0 var(--accent); background: var(--surface); }
+.service-nginx-mode-options button.is-active > svg,
+.service-domain-mode-options button.is-active > svg { color: var(--accent); }
+.service-nginx-mode-options button > svg,
+.service-domain-mode-options button > svg { flex: 0 0 auto; }
+.service-nginx-mode-options button > span,
+.service-domain-mode-options button > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.service-nginx-mode-options strong,
+.service-domain-mode-options strong { font-size: 12px; }
+.service-nginx-mode-options small,
+.service-domain-mode-options small { color: var(--text-soft); font-size: 10px; line-height: 1.45; }
 .service-nginx-mode-note,
 .service-nginx-reuse-notice { min-width: 0; margin-top: 9px; padding: 11px 12px; display: flex; align-items: flex-start; gap: 9px; border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border)); border-radius: 6px; background: color-mix(in srgb, var(--accent) 7%, var(--surface)); }
 .service-nginx-reuse-notice { margin-top: 0; }
@@ -1234,9 +1246,12 @@
   .services-card-grid { grid-template-columns: 1fr; }
   .service-overview-grid { grid-template-columns: 1fr; }
   .service-control-summary { align-items: flex-start; }
-  .service-nginx-mode-options { grid-template-columns: 1fr; }
-  .service-nginx-mode-options button { border-right: 0; border-bottom: 1px solid var(--border); }
-  .service-nginx-mode-options button:last-child { border-bottom: 0; }
+  .service-nginx-mode-options,
+  .service-domain-mode-options { grid-template-columns: 1fr; }
+  .service-nginx-mode-options button,
+  .service-domain-mode-options button { border-right: 0; border-bottom: 1px solid var(--border); }
+  .service-nginx-mode-options button:last-child,
+  .service-domain-mode-options button:last-child { border-bottom: 0; }
   .service-control-main { min-width: calc(100% - 54px); }
   .service-control-actions { width: 100%; justify-content: flex-end; }
   .service-speedtest-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }

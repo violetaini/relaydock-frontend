@@ -17,6 +17,7 @@ import {
   Eye,
   FileKey2,
   Gauge,
+  Globe,
   Grid2X2,
   GripVertical,
   HardDrive,
@@ -268,9 +269,11 @@ interface DNSProvidersResponse extends ActionResponse {
 interface DDNSStatusResponse extends ActionResponse {
   id?: number;
   name?: string;
+  domain?: string;
   ddns_enabled: boolean;
   ddns_provider_id: number;
   ddns_provider_name?: string;
+  matched_domain?: string;
   ddns_last_synced_at?: string;
   ddns_last_error?: string;
   ddns_pending: boolean;
@@ -2587,32 +2590,74 @@ function ServerFormFields({ form, setForm, editing = false }: { form: CreateServ
   const [dnsProviders, setDNSProviders] = useState<DNSProviderOption[]>([]);
   const [dnsProvidersLoading, setDNSProvidersLoading] = useState(true);
   const [dnsProvidersError, setDNSProvidersError] = useState("");
+  const [validCertificates, setValidCertificates] = useState<Array<{ id: number; domain: string; dns_provider_id: number }>>([]);
   const patch = <K extends keyof CreateServerForm>(key: K, value: CreateServerForm[K]) => setForm({ ...form, [key]: value });
 
   useEffect(() => {
     let active = true;
-    const loadProviders = async () => {
+    const loadProvidersAndCerts = async () => {
       setDNSProvidersLoading(true);
       setDNSProvidersError("");
       try {
-        const result = assertSuccess(await api.get<DNSProvidersResponse>("/api/admin/dns-providers"), "读取 DNS 提供商失败");
-        if (active) setDNSProviders(normalizeDNSProviders(result.providers));
+        const [provRes, certRes] = await Promise.allSettled([
+          api.get<DNSProvidersResponse>("/api/admin/dns-providers"),
+          api.get<{ success?: boolean; certificates?: Array<{ id: number; domain: string; dns_provider_id?: number }> }>("/api/admin/certificates/valid"),
+        ]);
+        if (active && provRes.status === "fulfilled") {
+          const result = assertSuccess(provRes.value, "读取 DNS 提供商失败");
+          setDNSProviders(normalizeDNSProviders(result.providers));
+        }
+        if (active && certRes.status === "fulfilled" && certRes.value?.certificates) {
+          setValidCertificates(certRes.value.certificates.map((c) => ({
+            id: c.id,
+            domain: c.domain,
+            dns_provider_id: Number(c.dns_provider_id) || 0,
+          })));
+        }
       } catch (reason) {
         if (active) setDNSProvidersError(messageFrom(reason, "读取 DNS 提供商失败"));
       } finally {
         if (active) setDNSProvidersLoading(false);
       }
     };
-    void loadProviders();
+    void loadProvidersAndCerts();
     return () => { active = false; };
   }, []);
 
   const configuredProviderMissing = Number(form.ddnsProviderID) > 0 && !dnsProviders.some((provider) => provider.id === Number(form.ddnsProviderID));
+  const selectedProvider = dnsProviders.find((provider) => provider.id === Number(form.ddnsProviderID));
+
+  const certsWithProvider = validCertificates.filter((c) => c.dns_provider_id > 0);
+  const matchedCert = form.domain.trim()
+    ? certsWithProvider.find((c) => {
+        const pattern = c.domain.toLowerCase().trim();
+        const target = form.domain.toLowerCase().trim();
+        if (pattern === target) return true;
+        if (pattern.startsWith("*.")) {
+          const suffix = pattern.slice(2);
+          return target.endsWith("." + suffix) || target === suffix;
+        }
+        return false;
+      })
+    : certsWithProvider[0];
+  const matchedProvider = matchedCert ? dnsProviders.find((p) => p.id === matchedCert.dns_provider_id) : null;
+
+  const certDomainOptionLabel = matchedCert
+    ? `证书域名：${matchedCert.domain}（${matchedProvider ? matchedProvider.name : `提供商 #${matchedCert.dns_provider_id}`}）`
+    : certsWithProvider.length > 0
+      ? `已签发证书域名：${certsWithProvider[0].domain}（${dnsProviders.find((p) => p.id === certsWithProvider[0].dns_provider_id)?.name || "DNS"}）`
+      : "证书域名匹配（当前未匹配到证书域名 · 请选择提供商）";
+
+  const targetDomainName = form.domain.trim() ? `「${form.domain.trim()}」` : "此节点域名";
   const providerHint = dnsProvidersLoading
-    ? "正在读取证书管理中的 DNS 提供商"
+    ? "正在读取 DNS 提供商"
     : dnsProvidersError
-      ? "提供商列表读取失败；可保留当前配置或改用自动模式"
-      : "自动模式会按 DDNS 域名匹配证书，并复用该证书的 DNS 提供商";
+      ? "提供商列表读取失败；可保留当前配置"
+      : selectedProvider
+        ? `✔ 已选「${selectedProvider.name}」(${selectedProvider.providerType})：IP 变动时将自动更新 ${targetDomainName} 的 A/AAAA 解析`
+        : matchedCert && matchedProvider
+          ? `✔ 已匹配证书域名「${matchedCert.domain}」：IP 变动时将复用「${matchedProvider.name}」更新 ${targetDomainName} 的 A/AAAA 解析`
+          : "未匹配到证书域名，请直接选择具体的 DNS 提供商（如华为云、Cloudflare 等）";
   return <>
     {!editing ? (
       <div className="service-quick-banner">
@@ -2641,14 +2686,20 @@ function ServerFormFields({ form, setForm, editing = false }: { form: CreateServ
         <span className="summary-tip">{editing ? "编辑所有高级参数" : "已预设最优默认值，非特殊拓扑通常保持默认即可"}</span>
       </summary>
       <div className="service-advanced-settings-body">
-        <div className="form-grid">
+        {form.connectionMode === "pull" ? (
+          <div className="form-grid">
+            <Field label="公网 IPv4 / 初始地址" hint="允许留空，Agent 首次连接后自动上报">
+              <input value={form.ipAddress} onChange={(event) => patch("ipAddress", event.target.value)} placeholder="203.0.113.10" disabled={editing} />
+            </Field>
+            <Field label="Pull 抓取地址" hint="留空时默认使用下方节点域名或公网 IPv4">
+              <input value={form.pullAddress} onChange={(event) => patch("pullAddress", event.target.value)} placeholder="留空默认使用节点域名" />
+            </Field>
+          </div>
+        ) : (
           <Field label="公网 IPv4 / 初始地址" hint="允许留空，Agent 首次连接后自动上报">
             <input value={form.ipAddress} onChange={(event) => patch("ipAddress", event.target.value)} placeholder="203.0.113.10" disabled={editing} />
           </Field>
-          <Field label="服务器地址 / DDNS 域名">
-            <input value={form.pullAddress} onChange={(event) => patch("pullAddress", event.target.value)} placeholder="edge.example.com" />
-          </Field>
-        </div>
+        )}
         <div className="form-grid">
           <Field label="Agent 监听端口"><input type="number" min="1024" max="65534" value={form.listenPort} onChange={(event) => patch("listenPort", event.target.value)} disabled={editing} /></Field>
           <Field label="Pull 端口"><input type="number" min="1" max="65535" value={form.pullPort} onChange={(event) => patch("pullPort", event.target.value)} disabled={form.connectionMode !== "pull"} /></Field>
@@ -2661,13 +2712,95 @@ function ServerFormFields({ form, setForm, editing = false }: { form: CreateServ
           </select>
         </Field>
         {!editing && form.connectionMode === "pull" ? <Field label="可选 Agent 认证 Token" hint="留空时由控制端安全生成"><input value={form.pullToken} onChange={(event) => patch("pullToken", event.target.value)} /></Field> : null}
-        <Field label="节点域名" hint={form.stealMode === "default" ? undefined : "Tunnel/Fallback 接管模式必填"}><input required={form.stealMode !== "default"} value={form.domain} onChange={(event) => patch("domain", event.target.value)} placeholder="hk.example.com" /></Field>
+
+        <fieldset className="service-domain-mode">
+          <legend>域名与 DDNS 解析模式</legend>
+          <div className="service-domain-mode-options" role="radiogroup" aria-label="域名与 DDNS 解析模式">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={!form.ddnsEnabled}
+              className={!form.ddnsEnabled ? "is-active" : ""}
+              onClick={() => patch("ddnsEnabled", false)}
+            >
+              <Globe size={18} />
+              <span>
+                <strong>输入现成域名</strong>
+                <small>使用已有外部解析或固定公网域名，面板不自动更新 DNS 记录</small>
+              </span>
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={form.ddnsEnabled}
+              className={form.ddnsEnabled ? "is-active" : ""}
+              onClick={() => patch("ddnsEnabled", true)}
+            >
+              <Cloud size={18} />
+              <span>
+                <strong>启用本面板 DDNS 服务的域名</strong>
+                <small>动态公网 IP 变动时，由本面板自动调用 DNS API 更新 A/AAAA 解析</small>
+              </span>
+            </button>
+          </div>
+        </fieldset>
+
+        {!form.ddnsEnabled ? (
+          <Field
+            label="节点域名（现成域名）"
+            hint={form.stealMode === "default" ? "输入该节点已在外部解析好的域名（如 edge.example.com）" : "Tunnel/Fallback 接管模式必填"}
+          >
+            <input
+              aria-label="节点域名"
+              required={form.stealMode !== "default"}
+              value={form.domain}
+              onChange={(event) => {
+                const val = event.target.value;
+                setForm({ ...form, domain: val, pullAddress: form.connectionMode === "pull" && form.pullAddress ? form.pullAddress : val });
+              }}
+              placeholder="edge.example.com"
+            />
+          </Field>
+        ) : (
+          <div className="form-grid">
+            <Field
+              label="节点域名（DDNS 动态域名）"
+              hint={form.stealMode === "default" ? "公网 IP 变动时将自动更新此域名的 A/AAAA 解析" : "Tunnel/Fallback 接管模式必填"}
+            >
+              <input
+                aria-label="节点域名"
+                required
+                value={form.domain}
+                onChange={(event) => {
+                  const val = event.target.value;
+                  setForm({ ...form, domain: val, pullAddress: form.connectionMode === "pull" && form.pullAddress ? form.pullAddress : val });
+                }}
+                placeholder="edge.example.com"
+              />
+            </Field>
+            <Field label="DDNS 提供商" hint={providerHint}>
+              <select
+                aria-label="DDNS 提供商"
+                value={form.ddnsProviderID}
+                onChange={(event) => patch("ddnsProviderID", event.target.value)}
+              >
+                <option value="0">{certDomainOptionLabel}</option>
+                {configuredProviderMissing ? <option value={form.ddnsProviderID}>当前配置 #{form.ddnsProviderID}（列表中不可用）</option> : null}
+                {dnsProviders.map((provider) => (
+                  <option key={provider.id} value={String(provider.id)}>
+                    {provider.name}（{provider.providerType}）
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+        )}
+
         <fieldset className="service-nginx-mode"><legend>Nginx 管理模式</legend><div className="service-nginx-mode-options" role="radiogroup" aria-label="Nginx 管理模式"><button type="button" role="radio" aria-checked={form.nginxMode === "managed"} className={form.nginxMode === "managed" ? "is-active" : ""} onClick={() => patch("nginxMode", "managed")}><Server size={18} /><span><strong>Arcway 管理 Nginx</strong><small>由面板安装、启停、更新配置</small></span></button><button type="button" role="radio" aria-checked={form.nginxMode === "reuse_existing"} className={form.nginxMode === "reuse_existing" ? "is-active" : ""} onClick={() => patch("nginxMode", "reuse_existing")}><ShieldCheck size={18} /><span><strong>复用系统已有 Nginx</strong><small>只下发独立站点配置，不接管服务</small></span></button></div>{form.nginxMode === "reuse_existing" ? <div className="service-nginx-mode-note" role="note"><ShieldCheck size={17} /><span><strong>现有 Nginx 保持系统托管</strong><small>Arcway 不会安装、卸载、覆盖主配置或控制服务启停；部署前会预检配置，失败时由服务端回滚。</small></span></div> : null}</fieldset>
         <div className="form-grid"><Field label="流量限额（GB）" hint="0 或留空表示不限"><input type="number" min="0" step="0.01" value={form.trafficLimitGB} onChange={(event) => patch("trafficLimitGB", event.target.value)} /></Field><Field label={editing ? "已用流量校准（GB，可选）" : "初始已用流量（GB）"}><input type="number" min="0" step="0.01" value={form.trafficUsedGB} onChange={(event) => patch("trafficUsedGB", event.target.value)} placeholder={editing ? "留空保持不变" : "0"} /></Field></div>
         <div className="form-grid"><Field label="每月重置日" hint="0 表示不自动重置"><input type="number" min="0" max="31" value={form.trafficResetDay} onChange={(event) => patch("trafficResetDay", event.target.value)} /></Field><Field label="服务器流量来源"><select value={form.trafficSource} onChange={(event) => patch("trafficSource", event.target.value)}><option value="system">系统网卡（VPS 计费口径）</option><option value="xray">Xray 节点聚合</option></select></Field></div>
         <Field label="流量统计方向"><select value={form.trafficStatsMode} onChange={(event) => patch("trafficStatsMode", event.target.value)}><option value="both">上行 + 下行</option><option value="max">上行 / 下行取较大值</option><option value="upload">仅上行</option><option value="download">仅下行</option></select></Field>
-        <div className="service-toggle-grid"><Toggle checked={form.ipv6Enabled} onChange={(value) => patch("ipv6Enabled", value)} label="启用 IPv6" /><Toggle checked={form.ddnsEnabled} onChange={(value) => patch("ddnsEnabled", value)} label="自动同步 DDNS" /></div>
-        {form.ddnsEnabled ? <Field label="DDNS 提供商" hint={providerHint}><select aria-label="DDNS 提供商" value={form.ddnsProviderID} onChange={(event) => patch("ddnsProviderID", event.target.value)}><option value="0">自动（按证书）</option>{configuredProviderMissing ? <option value={form.ddnsProviderID}>当前配置 #{form.ddnsProviderID}（列表中不可用）</option> : null}{dnsProviders.map((provider) => <option key={provider.id} value={String(provider.id)}>{provider.name}（{provider.providerType}）</option>)}</select></Field> : null}
+        <div className="service-toggle-grid"><Toggle checked={form.ipv6Enabled} onChange={(value) => patch("ipv6Enabled", value)} label="启用 IPv6（支持双栈 DDNS 与节点解析）" /></div>
         <details className="service-advanced-fields" open={editing && form.siteType === "proxy"}><summary>前置与伪装站高级选项（WSS / 443 伪装反代）</summary><div className="form-stack"><div className="form-grid"><Field label="接管模式"><select value={form.stealMode} onChange={(event) => patch("stealMode", event.target.value)} disabled={editing}><option value="default">不接管（纯 WSS / 标准）</option><option value="tunnel">Tunnel</option><option value="fallback">Fallback</option></select></Field><Field label="伪装站点类型"><select aria-label="伪装站点类型" value={form.siteType} onChange={(event) => patch("siteType", event.target.value)}><option value="static">静态目录 / 默认 404</option><option value="proxy">反向代理指定伪装网站</option></select></Field></div><Field label={form.siteType === "proxy" ? "反代伪装网站目标" : "静态目录"} hint={form.siteType === "proxy" ? "严禁反代套了 Cloudflare CDN 的网站，防止服务器被全网扫描当成免费 CF 优选节点" : "留空使用默认静态目录或 404"}><input aria-label="伪装站点目标" value={form.siteValue} onChange={(event) => patch("siteValue", event.target.value)} placeholder={form.siteType === "proxy" ? "https://origin.example.com" : "/var/www/html"} /></Field></div></details>
       </div>
     </details>
@@ -2686,15 +2819,17 @@ function CreateServerDialog({ onClose, onCreated }: { onClose: () => void; onCre
       if (form.siteType === "proxy" && form.siteValue.trim()) {
         validateWSSCamouflageProxyTarget(form.siteValue);
       }
+      const effectiveDomain = form.domain.trim();
+      const effectivePull = form.pullAddress.trim() || effectiveDomain;
       const response = assertSuccess(await api.post<ActionResponse & { server?: ManagedServer; install_command?: string }>("/api/admin/remote-servers/create", {
         name: form.name.trim(),
         ip_address: form.ipAddress.trim(),
-        pull_address: form.pullAddress.trim(),
+        pull_address: effectivePull,
         pull_port: Number(form.pullPort) || 23889,
         pull_token: form.pullToken.trim(),
         connection_mode: form.connectionMode,
         listen_port: Number(form.listenPort) || 0,
-        domain: form.domain.trim(),
+        domain: effectiveDomain,
         xray_mode: form.xrayMode,
         nginx_mode: form.nginxMode,
         traffic_limit: gbToBytes(form.trafficLimitGB),
@@ -2732,7 +2867,7 @@ function formFromServer(server: ManagedServer): CreateServerForm {
     pullPort: String(server.pull_port || 23889),
     connectionMode: server.connection_mode || "websocket",
     listenPort: String(server.listen_port || 23889),
-    domain: server.domain ?? "",
+    domain: server.domain ?? (server.pull_address ?? ""),
     xrayMode: server.xray_mode || "embedded",
     nginxMode: server.nginx_mode || "managed",
     trafficLimitGB: bytesToGB(server.traffic_limit),
@@ -2761,7 +2896,9 @@ function EditServerDialog({ server, onClose, onSaved }: { server: ManagedServer;
       if (form.siteType === "proxy") {
         validateWSSCamouflageProxyTarget(form.siteValue);
       }
-      const updatesPullConfig = Boolean(form.pullAddress.trim()) || form.connectionMode === "pull";
+      const effectiveDomain = form.domain.trim();
+      const effectivePull = form.pullAddress.trim() || effectiveDomain;
+      const updatesPullConfig = Boolean(effectivePull) || form.connectionMode === "pull";
       let pullToken = "";
       if (updatesPullConfig) {
         const credentials = assertSuccess(await api.get<ActionResponse & { pull_token?: string; agent_token?: string }>(`/api/admin/remote-servers/reveal-token?server_id=${server.id}`), "读取现有 Agent Token 失败");
@@ -2771,12 +2908,12 @@ function EditServerDialog({ server, onClose, onSaved }: { server: ManagedServer;
       const payload: Record<string, unknown> = {
         id: server.id,
         name: form.name.trim(),
-        domain: form.domain.trim(),
+        domain: effectiveDomain,
         traffic_limit: gbToBytes(form.trafficLimitGB),
         traffic_reset_day: Number(form.trafficResetDay) || 0,
         connection_mode: form.connectionMode,
         listen_port: Number(form.listenPort) || 0,
-        pull_address: updatesPullConfig ? form.pullAddress.trim() : "",
+        pull_address: updatesPullConfig ? effectivePull : "",
         pull_port: updatesPullConfig ? Number(form.pullPort) || 23889 : 0,
         pull_token: pullToken,
         xray_mode: form.xrayMode,
@@ -2976,9 +3113,11 @@ function DDNSOverviewPanel({ status, working, onRetry }: { status: DDNSStatusRes
   const enabled = Boolean(status?.ddns_enabled);
   const provider = status?.ddns_provider_id
     ? status.ddns_provider_name || `提供商 #${status.ddns_provider_id}`
-    : status?.ddns_provider_name
-      ? `${status.ddns_provider_name}（自动匹配）`
-      : "自动（按证书）";
+    : status?.matched_domain
+      ? `证书域名：${status.matched_domain}${status.ddns_provider_name ? ` (${status.ddns_provider_name})` : ""}`
+      : status?.ddns_provider_name
+        ? status.ddns_provider_name
+        : "未关联提供商（请在编辑中选择 DNS 提供商）";
   const state = !status
     ? { label: "状态未知", tone: "neutral" as const }
     : !enabled
@@ -2995,7 +3134,7 @@ function DDNSOverviewPanel({ status, working, onRetry }: { status: DDNSStatusRes
     <div className="service-ddns-head"><span><Cloud size={17} /><span><strong>动态 DNS</strong><small>{enabled ? "Agent 地址变化后自动更新解析记录" : "在编辑服务器中启用自动同步"}</small></span></span><Badge tone={state.tone}>{state.label}</Badge></div>
     <dl>
       <div><dt>提供商</dt><dd>{enabled ? provider : "未配置"}</dd></div>
-      <div><dt>更新域名</dt><dd>{status?.pull_address || "未设置"}</dd></div>
+      <div><dt>更新域名</dt><dd>{status?.domain || status?.pull_address || "未设置"}</dd></div>
       <div><dt>最近同步</dt><dd>{status?.ddns_last_synced_at ? relativeTime(status.ddns_last_synced_at) : "尚未同步"}</dd></div>
       <div><dt>最近错误</dt><dd className={status?.ddns_last_error ? "is-error" : ""}>{status?.ddns_last_error || "无"}</dd></div>
     </dl>

@@ -1235,8 +1235,12 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
         <SettingSection icon={<Palette size={19} />} title="界面外观" description="新会话的默认主题与登录背景">
           <Field label="默认主题"><select value={theme} onChange={(e) => setTheme(e.target.value)}><option value="flat">扁平</option><option value="pixel">像素</option><option value="anime">动漫</option></select></Field>
           <Field label="登录背景模式"><select value={branding.login_background_mode || "fixed"} onChange={e=>setBranding({...branding,login_background_mode:e.target.value})}><option value="gradient">内置渐变</option><option value="fixed">固定壁纸</option><option value="random">随机背景</option></select></Field>
-          <Field label="随机背景图片地址" hint="未配置时默认使用必应随机接口；自定义地址优先。每行一张，最多 30 张，也支持直接返回图片的 HTTPS 接口。清空或加载失败时使用内置渐变。"><textarea rows={5} placeholder="https://api.timelessq.com/bing/random" value={(branding.login_background_urls || []).join("\n")} onChange={e=>setBranding({...branding,login_background_urls:e.target.value.split("\n")})} onBlur={()=>setBranding({...branding,login_background_urls:(branding.login_background_urls||[]).map(v=>v.trim()).filter(Boolean)})} /></Field>
-          <Field label="登录页壁纸 URL" hint="留空使用内置背景"><input type="url" value={wallpaper} onChange={(e) => setWallpaper(e.target.value)} placeholder="https://..." /></Field>
+          {branding.login_background_mode === "random" ? (
+            <Field label="随机背景图片地址" hint="每次打开登录页随机选择。每行一个图片地址或随机图片接口，最多 30 个；未配置时默认使用必应接口，自定义地址优先。清空或加载失败时使用内置渐变。"><textarea rows={5} placeholder="https://api.timelessq.com/bing/random" value={(branding.login_background_urls || []).join("\n")} onChange={e=>setBranding({...branding,login_background_urls:e.target.value.split("\n")})} onBlur={()=>setBranding({...branding,login_background_urls:(branding.login_background_urls||[]).map(v=>v.trim()).filter(Boolean)})} /></Field>
+          ) : null}
+          {(branding.login_background_mode || "fixed") === "fixed" ? (
+            <Field label="固定背景图片地址" hint="始终使用这一张图片；留空或加载失败时使用内置渐变。"><input type="url" value={wallpaper} onChange={(e) => setWallpaper(e.target.value)} placeholder="https://..." /></Field>
+          ) : null}
         </SettingSection>
         <SettingSection icon={<Eye size={19} />} title="伪装" description="公开状态页只暴露所选服务器的脱敏运行指标">
           <Toggle checked={probe.enabled} onChange={(enabled) => setProbe({ ...probe, enabled })} label="启用公开探针伪装" />

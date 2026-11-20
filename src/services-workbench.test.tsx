@@ -460,7 +460,7 @@ describe("service management workbench", () => {
     fireEvent.click(within(dialog).getByRole("radio", { name: /启用本面板 DDNS 服务的域名/ }));
     fireEvent.change(within(dialog).getByRole("textbox", { name: "节点域名" }), { target: { value: "edge-ddns.example.com" } });
     const provider = await within(dialog).findByRole("combobox", { name: "DDNS 提供商" });
-    expect(within(provider).getByRole("option", { name: "证书域名匹配（当前未匹配到证书域名 · 请选择提供商）" })).toBeInTheDocument();
+    expect(within(provider).getByRole("option", { name: /根据域名自动匹配/ })).toBeInTheDocument();
     expect(within(provider).getByRole("option", { name: "DNSPod 备用（dnspod）" })).toBeInTheDocument();
     fireEvent.change(provider, { target: { value: "8" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "创建并生成命令" }));
@@ -485,7 +485,29 @@ describe("service management workbench", () => {
     fireEvent.click(within(dialog).getByRole("radio", { name: /启用本面板 DDNS 服务的域名/ }));
     fireEvent.change(within(dialog).getByRole("textbox", { name: "节点域名" }), { target: { value: "edge-ddns.example.com" } });
     const provider = await within(dialog).findByRole("combobox", { name: "DDNS 提供商" });
-    expect(within(provider).getByRole("option", { name: /证书域名：\*\.example\.com/ })).toBeInTheDocument();
+    expect(within(provider).getByRole("option", { name: /根据域名自动匹配：\*\.example\.com/ })).toBeInTheDocument();
+  });
+
+  it("warns when user enters an IP address for DDNS and allows quick filling from certificate chips", async () => {
+    mockServerReads([onlineServer], {
+      certificates: [{ id: 101, domain: "*.chitanda.net", dns_provider_id: 8 }],
+    });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    await screen.findByText("Edge Hong Kong");
+    fireEvent.click(screen.getByRole("button", { name: "添加服务器" }));
+    const dialog = screen.getByRole("dialog", { name: "添加服务器" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "服务器名称" }), { target: { value: "DDPS JP" } });
+    fireEvent.click(within(dialog).getByRole("radio", { name: /启用本面板 DDNS 服务的域名/ }));
+    const domainInput = within(dialog).getByRole("textbox", { name: "节点域名" });
+    fireEvent.change(domainInput, { target: { value: "158.51.111.32" } });
+
+    expect(within(dialog).getByText(/当前填写的是 IP 地址（158\.51\.111\.32）/)).toBeInTheDocument();
+
+    const chip = within(dialog).getByRole("button", { name: "*.chitanda.net" });
+    fireEvent.click(chip);
+    expect(domainInput).toHaveValue("ddpsjp.chitanda.net");
+    expect(within(dialog).getByText(/已智能匹配泛域名证书/)).toBeInTheDocument();
   });
 
   it("saves an existing domain without DDNS when creating a server with manual domain", async () => {

@@ -2591,6 +2591,8 @@ function ServerFormFields({ form, setForm, editing = false }: { form: CreateServ
   const [dnsProvidersLoading, setDNSProvidersLoading] = useState(true);
   const [dnsProvidersError, setDNSProvidersError] = useState("");
   const [validCertificates, setValidCertificates] = useState<Array<{ id: number; domain: string; dns_provider_id: number }>>([]);
+  const [certPickerOpen, setCertPickerOpen] = useState(false);
+  const [certSearchQuery, setCertSearchQuery] = useState("");
   const patch = <K extends keyof CreateServerForm>(key: K, value: CreateServerForm[K]) => setForm({ ...form, [key]: value });
 
   useEffect(() => {
@@ -2627,39 +2629,64 @@ function ServerFormFields({ form, setForm, editing = false }: { form: CreateServ
   const configuredProviderMissing = Number(form.ddnsProviderID) > 0 && !dnsProviders.some((provider) => provider.id === Number(form.ddnsProviderID));
   const selectedProvider = dnsProviders.find((provider) => provider.id === Number(form.ddnsProviderID));
 
+  const isIPAddress = (val: string) => {
+    const trimmed = val.trim();
+    return /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(trimmed) || trimmed.includes(":");
+  };
+
+  const inputDomain = form.domain.trim().toLowerCase();
+  const isDomainIP = isIPAddress(inputDomain);
+  const hasRealDomain = Boolean(inputDomain) && !isDomainIP;
+
   const certsWithProvider = validCertificates.filter((c) => c.dns_provider_id > 0);
-  const matchedCert = form.domain.trim()
+  const matchedCert = hasRealDomain
     ? (certsWithProvider.find((c) => {
         const pattern = c.domain.toLowerCase().trim();
-        const target = form.domain.toLowerCase().trim();
-        if (pattern === target) return true;
+        if (pattern === inputDomain) return true;
         if (pattern.startsWith("*.")) {
           const suffix = pattern.slice(2);
-          return target.endsWith("." + suffix) || target === suffix;
+          return inputDomain.endsWith("." + suffix) || inputDomain === suffix;
         }
         return false;
       }) || validCertificates.find((c) => {
         const pattern = c.domain.toLowerCase().trim();
-        const target = form.domain.toLowerCase().trim();
-        if (pattern === target) return true;
+        if (pattern === inputDomain) return true;
         if (pattern.startsWith("*.")) {
           const suffix = pattern.slice(2);
-          return target.endsWith("." + suffix) || target === suffix;
+          return inputDomain.endsWith("." + suffix) || inputDomain === suffix;
         }
         return false;
       }))
-    : (certsWithProvider[0] || validCertificates[0]);
+    : null;
+
   const matchedProvider = (matchedCert && matchedCert.dns_provider_id > 0)
     ? dnsProviders.find((p) => p.id === matchedCert.dns_provider_id)
     : (dnsProviders.length === 1 ? dnsProviders[0] : null);
 
   const certDomainOptionLabel = matchedCert
     ? matchedProvider
-      ? `证书域名：${matchedCert.domain}（${matchedProvider.name}）`
-      : `证书域名：${matchedCert.domain}（未关联 DNS · 请选择下方提供商）`
-    : validCertificates.length > 0
-      ? `已签发证书域名：${validCertificates[0].domain}（${dnsProviders[0]?.name || "DNS"}）`
-      : "证书域名匹配（当前未匹配到证书域名 · 请选择提供商）";
+      ? `根据域名自动匹配：${matchedCert.domain}（${matchedProvider.name}）`
+      : `根据域名自动匹配：${matchedCert.domain}（未关联 DNS · 请指定下方提供商）`
+    : "根据域名自动匹配（推荐 · 复用证书关联的 DNS 提供商）";
+
+  const applyCertDomain = (certDomain: string) => {
+    const base = certDomain.replace(/^\*\./, "").trim();
+    const current = form.domain.trim();
+    let prefix = "";
+    if (current && !isIPAddress(current) && current.includes(".")) {
+      prefix = current.split(".")[0];
+    }
+    if (!prefix || prefix === base) {
+      prefix = form.name.toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 10) || "node";
+    }
+    const newDomain = `${prefix}.${base}`;
+    setForm({
+      ...form,
+      domain: newDomain,
+      pullAddress: form.connectionMode === "pull" && form.pullAddress ? form.pullAddress : newDomain,
+    });
+    setCertPickerOpen(false);
+  };
 
   const targetDomainName = form.domain.trim() ? `「${form.domain.trim()}」` : "此节点域名";
   const providerHint = dnsProvidersLoading
@@ -2667,10 +2694,10 @@ function ServerFormFields({ form, setForm, editing = false }: { form: CreateServ
     : dnsProvidersError
       ? "提供商列表读取失败；可保留当前配置"
       : selectedProvider
-        ? `✔ 已选「${selectedProvider.name}」(${selectedProvider.providerType})：IP 变动时将自动更新 ${targetDomainName} 的 A/AAAA 解析`
+        ? `✔ 已手动指定「${selectedProvider.name}」(${selectedProvider.providerType})：IP 变动时更新 ${targetDomainName} 的 A/AAAA 解析`
         : matchedCert && matchedProvider
-          ? `✔ 已匹配证书域名「${matchedCert.domain}」：IP 变动时将复用「${matchedProvider.name}」更新 ${targetDomainName} 的 A/AAAA 解析`
-          : "未匹配到证书域名，请直接选择具体的 DNS 提供商（如华为云、Cloudflare 等）";
+          ? `✔ 自动匹配证书「${matchedCert.domain}」：IP 变动时复用「${matchedProvider.name}」更新 ${targetDomainName} 解析`
+          : "按节点域名后缀自动查找证书；若无匹配证书可从下方手动指定具体的 DNS 提供商";
   return <>
     {!editing ? (
       <div className="service-quick-banner">
@@ -2790,6 +2817,67 @@ function ServerFormFields({ form, setForm, editing = false }: { form: CreateServ
                 }}
                 placeholder="edge.example.com"
               />
+              {validCertificates.length > 0 ? (
+                <div className="service-cert-helper">
+                  {validCertificates.length <= 3 ? (
+                    <div className="service-cert-chips">
+                      <span className="service-cert-chips-label"><Sparkles size={12} /> 快捷填入根域名：</span>
+                      {validCertificates.map((cert) => (
+                        <button
+                          key={cert.id}
+                          type="button"
+                          className="service-cert-chip"
+                          onClick={() => applyCertDomain(cert.domain)}
+                          title={`点击快捷设置基于 ${cert.domain} 的子域名`}
+                        >
+                          {cert.domain}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="service-cert-picker-wrap">
+                      <button
+                        type="button"
+                        className="service-cert-picker-trigger"
+                        onClick={() => setCertPickerOpen(!certPickerOpen)}
+                      >
+                        <Sparkles size={12} /> 从已签发证书选取 ({validCertificates.length}) <ChevronDown size={12} />
+                      </button>
+                      {certPickerOpen ? (
+                        <div className="service-cert-popover">
+                          <div className="service-cert-search">
+                            <Search size={13} />
+                            <input
+                              autoFocus
+                              placeholder="搜索证书域名或 DNS..."
+                              value={certSearchQuery}
+                              onChange={(e) => setCertSearchQuery(e.target.value)}
+                            />
+                          </div>
+                          <div className="service-cert-list">
+                            {validCertificates
+                              .filter((c) => !certSearchQuery.trim() || c.domain.toLowerCase().includes(certSearchQuery.toLowerCase()))
+                              .map((cert) => {
+                                const prov = dnsProviders.find((p) => p.id === cert.dns_provider_id);
+                                return (
+                                  <button
+                                    key={cert.id}
+                                    type="button"
+                                    className="service-cert-item"
+                                    onClick={() => applyCertDomain(cert.domain)}
+                                  >
+                                    <span>{cert.domain}</span>
+                                    <small>{prov ? prov.name : "未关联 DNS"}</small>
+                                  </button>
+                                );
+                              })}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
+              ) : null}
             </Field>
             <Field label="DDNS 提供商" hint={providerHint}>
               <select
@@ -2806,6 +2894,26 @@ function ServerFormFields({ form, setForm, editing = false }: { form: CreateServ
                 ))}
               </select>
             </Field>
+            {isDomainIP ? (
+              <div className="service-ddns-status-banner is-warning">
+                <TriangleAlert size={15} />
+                <span>当前填写的是 IP 地址（{form.domain.trim()}）。DDNS 必须使用完整域名（如 node.chitanda.net），动态公网 IP 变动时面板才能更新解析。</span>
+              </div>
+            ) : matchedCert ? (
+              <div className="service-ddns-status-banner is-success">
+                <CheckCircle2 size={15} />
+                <span>
+                  已智能匹配泛域名证书「<strong>{matchedCert.domain}</strong>」
+                  {matchedProvider ? `，动态 IP 变动时将调用「${matchedProvider.name}」` : "（未关联 DNS，请在右侧选择提供商）"}
+                  自动更新「{targetDomainName}」解析。
+                </span>
+              </div>
+            ) : form.domain.trim() ? (
+              <div className="service-ddns-status-banner is-info">
+                <Globe size={15} />
+                <span>当前域名「{targetDomainName}」未匹配到本地泛域名证书；可直接在右侧指定要使用的 DNS 提供商（如华为云）。</span>
+              </div>
+            ) : null}
           </div>
         )}
 

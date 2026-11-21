@@ -676,7 +676,7 @@ function settingsTabID(groupID: SettingsGroupID): string {
   return `${groupID}-tab`;
 }
 
-export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: Notify; onBrandingChange?: (branding: Branding) => void }) {
+export function SettingsWorkbenchPage({ notify, onBrandingChange, onWallpaperChange }: { notify: Notify; onBrandingChange?: (branding: Branding) => void; onWallpaperChange?: (wallpaper: string) => void }) {
   const [loading, setLoading] = useState(true);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState<Set<string>>(() => new Set());
@@ -835,6 +835,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
       setMasterURL(master.master_url || location.origin); setTheme(themeData.default_theme); setWallpaper(wall.login_wallpaper); setBranding(loadedBranding);
       if (!failures.includes("默认主题")) document.documentElement.dataset.styleTheme = themeData.default_theme;
       if (!failures.includes("项目品牌")) onBrandingChange?.(loadedBranding);
+      if (!failures.includes("登录壁纸")) onWallpaperChange?.(wall.login_wallpaper);
       setIntervals(intervalData); setDashboardRefreshMs(refreshData.refetch_interval_ms); setProbe({
         ...loadedProbe,
         server_ids: loadedProbe.server_ids_default
@@ -858,7 +859,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
       setLoadFailures(["全部设置"]);
       setError(messageOf(reason, "设置加载失败"));
     } finally { setLoading(false); }
-  }, [onBrandingChange]);
+  }, [onBrandingChange, onWallpaperChange]);
 
   const checkUpdate = useCallback(async (): Promise<UpdateInfo | null> => {
     setUpdateChecking(true);
@@ -962,6 +963,7 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
       document.documentElement.dataset.styleTheme = theme;
       setBranding(savedBranding);
       onBrandingChange?.(savedBranding);
+      onWallpaperChange?.(wallpaper.trim());
     }, "基础设置已保存");
   };
 
@@ -1232,11 +1234,11 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange }: { notify: No
           <BrandAssetField label="项目 Logo" value={branding.logo} preview={brandLogoURL(branding)} onValueChange={(logo) => setBranding({ ...branding, logo })} onUpload={(file) => void uploadBrandAsset("logo", file)} onReset={() => setBranding({ ...branding, logo: "" })} />
           <BrandAssetField label="浏览器图标" value={branding.favicon} preview={brandFaviconURL(branding)} onValueChange={(favicon) => setBranding({ ...branding, favicon })} onUpload={(file) => void uploadBrandAsset("favicon", file)} onReset={() => setBranding({ ...branding, favicon: "" })} />
         </SettingSection>
-        <SettingSection icon={<Palette size={19} />} title="界面外观" description="新会话的默认主题与登录背景">
+        <SettingSection icon={<Palette size={19} />} title="界面外观" description="新会话的默认主题；登录页与伪装探针共用背景配置">
           <Field label="默认主题"><select value={theme} onChange={(e) => setTheme(e.target.value)}><option value="flat">扁平</option><option value="pixel">像素</option><option value="anime">动漫</option></select></Field>
-          <Field label="登录背景模式"><select value={branding.login_background_mode || "fixed"} onChange={e=>setBranding({...branding,login_background_mode:e.target.value})}><option value="gradient">内置渐变</option><option value="fixed">固定壁纸</option><option value="random">随机背景</option></select></Field>
+          <Field label="页面背景模式"><select value={branding.login_background_mode || "fixed"} onChange={e=>setBranding({...branding,login_background_mode:e.target.value})}><option value="gradient">内置渐变</option><option value="fixed">固定壁纸</option><option value="random">随机背景</option></select></Field>
           {branding.login_background_mode === "random" ? (
-            <Field label="随机背景图片地址" hint="每次打开登录页随机选择。每行一个图片地址或随机图片接口，最多 30 个；未配置时默认使用必应接口，自定义地址优先。清空或加载失败时使用内置渐变。"><textarea rows={5} placeholder="https://api.timelessq.com/bing/random" value={(branding.login_background_urls || []).join("\n")} onChange={e=>setBranding({...branding,login_background_urls:e.target.value.split("\n")})} onBlur={()=>setBranding({...branding,login_background_urls:(branding.login_background_urls||[]).map(v=>v.trim()).filter(Boolean)})} /></Field>
+            <Field label="随机背景图片地址" hint="登录页与伪装探针共用，每次打开随机选择。每行一个图片地址或随机图片接口，最多 30 个；未配置时默认使用必应接口，自定义地址优先。清空或加载失败时使用内置渐变。"><textarea rows={5} placeholder="https://api.timelessq.com/bing/random" value={(branding.login_background_urls || []).join("\n")} onChange={e=>setBranding({...branding,login_background_urls:e.target.value.split("\n")})} onBlur={()=>setBranding({...branding,login_background_urls:(branding.login_background_urls||[]).map(v=>v.trim()).filter(Boolean)})} /></Field>
           ) : null}
           {(branding.login_background_mode || "fixed") === "fixed" ? (
             <Field label="固定背景图片地址" hint="始终使用这一张图片；留空或加载失败时使用内置渐变。"><input type="url" value={wallpaper} onChange={(e) => setWallpaper(e.target.value)} placeholder="https://..." /></Field>

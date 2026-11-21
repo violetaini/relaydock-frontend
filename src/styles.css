@@ -1251,9 +1251,8 @@ td { min-height: 62px; }
   width: 100vw;
   height: 100vh;
   z-index: 0;
-  background-size: cover;
-  background-position: center top;
-  background-repeat: no-repeat;
+  object-fit: cover;
+  object-position: center top;
   pointer-events: none;
   transform: translateZ(0);
 }
@@ -1898,6 +1897,11 @@ td { min-height: 62px; }
   transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+.public-probe-metric .public-probe-meter.is-unlimited {
+  background: repeating-linear-gradient(135deg, transparent 0 4px, color-mix(in srgb, var(--probe-text-muted) 22%, transparent) 4px 8px);
+  border: 1px solid color-mix(in srgb, var(--probe-text-muted) 25%, transparent);
+}
+
 /* Default / Tone Gradients */
 .public-probe-metric.tone-cpu .public-probe-meter i {
   background: linear-gradient(90deg, #38bdf8, #818cf8);
@@ -2062,6 +2066,29 @@ td { min-height: 62px; }
 }
 
 @media (max-width: 680px) {
+  .public-probe-header {
+    height: auto;
+  }
+  .public-probe-header-inner {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 10px 0;
+  }
+  .public-probe-brand {
+    min-width: 0;
+    max-width: 100%;
+    flex: 1 1 100%;
+  }
+  .public-probe-brand-logo {
+    flex-shrink: 0;
+  }
+  .public-probe-brand-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .public-probe-controls {
+    margin-left: auto;
+  }
   .public-probe-header-inner,
   .public-probe-content {
     width: min(calc(100% - 28px), 1360px);

@@ -129,6 +129,7 @@ describe("application bootstrap", () => {
 
     expect(await screen.findByRole("heading", { name: "Edge Service Status" })).toBeInTheDocument();
     expect(screen.getByText("Hong Kong Edge")).toBeInTheDocument();
+    expect(document.querySelector(".public-probe-bg")).toHaveAttribute("src", "https://images.example/login.jpg");
     const flag = screen.getByTitle("HK");
     await waitFor(() => expect(flag.querySelector("img")).toHaveAttribute("src", expect.stringMatching(/(?:data:image\/svg\+xml|\.svg(?:\?|$))/)));
     expect(flag).not.toHaveTextContent("HK");

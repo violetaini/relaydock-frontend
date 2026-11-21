@@ -21,7 +21,7 @@ it('selects a random background once and falls back on image failure',async()=>{
  const view=render(<BrandingProvider branding={branding}><LoginScreen onLogin={()=>{}} /></BrandingProvider>);
  await screen.findByLabelText('账号');
  const image=view.container.querySelector('.login-background-image')!;
- const source=image.getAttribute('src');expect(source).toMatch(/^https:\/\/images.example\/(one|two)\.jpg\?_bg=\d+$/);
+ const source=image.getAttribute('src');expect(source).toMatch(/^https:\/\/images.example\/(one|two)\.jpg\?_bg=\d+-\d+$/);
  fireEvent.change(view.container.querySelector('input[autocomplete=username]')!,{target:{value:'example'}});
  expect(image.getAttribute('src')).toBe(source);
  fireEvent.error(image);expect(view.container.querySelector('.login-background-image')).toBeNull();

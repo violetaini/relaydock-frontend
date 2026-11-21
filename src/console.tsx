@@ -224,7 +224,7 @@ function ModuleLoadingFallback({ label }: { label: string }) {
   );
 }
 
-export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: Profile; onLogout: () => void; onBrandingChange?: (branding: Branding) => void }) {
+export function ConsoleApp({ profile, onLogout, onBrandingChange, onWallpaperChange }: { profile: Profile; onLogout: () => void; onBrandingChange?: (branding: Branding) => void; onWallpaperChange?: (wallpaper: string) => void }) {
   const branding = useBranding();
   const [page, setPage] = useState<PageKey>(() => resolvePage(profile.is_admin));
   const [usersScope, setUsersScope] = useState<UsersScope>(resolveUsersScope);
@@ -484,7 +484,7 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange }: { profile: P
                 {page === "subscribeFiles" && pageAllowed(page, profile.is_admin, userPages) ? <SubscribeFilesPage isAdmin={profile.is_admin} notify={notify} onOpenCustomRules={pageAllowed("customRules", profile.is_admin, userPages) ? () => navigate("customRules") : undefined} onOpenRulesConfig={profile.is_admin ? () => navigate("rulesConfig") : undefined} /> : null}
                 {page === "customRules" && pageAllowed(page, profile.is_admin, userPages) ? <CustomRulesWorkbenchPage notify={notify} /> : null}
                 {page === "rulesConfig" && profile.is_admin ? <RulesConfigWorkbenchPage notify={notify} /> : null}
-                {page === "settings" && profile.is_admin ? <SettingsWorkbenchPage notify={notify} onBrandingChange={onBrandingChange} /> : null}
+                {page === "settings" && profile.is_admin ? <SettingsWorkbenchPage notify={notify} onBrandingChange={onBrandingChange} onWallpaperChange={onWallpaperChange} /> : null}
                 {page === "account" ? <AccountWorkbenchPage notify={notify} /> : null}
               </Suspense>
             </LazyPageBoundary>

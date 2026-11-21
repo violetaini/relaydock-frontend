@@ -451,9 +451,9 @@ export function App() {
   } else if (state === "setup") {
     content = <SetupScreen onComplete={() => setState("login")} />;
   } else if (probePreview && probe.enabled) {
-    content = <PublicProbeScreen probe={probe} onLogin={leaveProbePreview} loginLabel="返回控制台" />;
+    content = <PublicProbeScreen probe={probe} wallpaper={wallpaper} onLogin={leaveProbePreview} loginLabel="返回控制台" />;
   } else if (state === "login" && probe.enabled && !loginRequested) {
-    content = <PublicProbeScreen probe={probe} onLogin={() => { location.hash = "/login"; setLoginRequested(true); }} />;
+    content = <PublicProbeScreen probe={probe} wallpaper={wallpaper} onLogin={() => { location.hash = "/login"; setLoginRequested(true); }} />;
   } else if (state === "login") {
     content = <LoginScreen wallpaper={wallpaper} notice={logoutNotice} onLogin={onLogin} />;
   } else if (profile) {
@@ -462,6 +462,7 @@ export function App() {
         profile={profile}
         onLogout={logout}
         onBrandingChange={setBranding}
+        onWallpaperChange={setWallpaper}
       />
     );
   }

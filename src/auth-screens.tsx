@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import { api, ApiError, setToken } from "./api";
 import { BRAND_NAME, BrandMark, brandLogoURL, useBranding } from "./brand";
+import { useAppearanceBackground } from "./appearance-background";
 import { CountryFlag, normalizeCountryCode } from "./country-flag";
 import { GitHubIcon, GoogleIcon, OIDCIcon } from "./oauth-icons";
 import type { Session } from "./types";
@@ -281,6 +282,7 @@ function ProbeMetric({
   label,
   value,
   progress,
+  unlimited = false,
   detail,
   tone = "default",
 }: {
@@ -288,6 +290,7 @@ function ProbeMetric({
   label: string;
   value: string;
   progress?: number;
+  unlimited?: boolean;
   detail?: string;
   tone?: "cpu" | "mem" | "disk" | "traffic" | "default";
 }) {
@@ -303,16 +306,17 @@ function ProbeMetric({
         <small className="public-probe-metric-label">{label}</small>
         <strong className="public-probe-metric-value">{value}</strong>
       </div>
-      {progress !== undefined ? (
+      {progress !== undefined || unlimited ? (
         <span
-          className="public-probe-meter"
+          className={`public-probe-meter${unlimited ? " is-unlimited" : ""}`}
           aria-label={`${label} ${value}`}
           role="progressbar"
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={progress}
+          aria-valuetext={unlimited ? "不限额" : undefined}
         >
-          <i style={{ width: `${progress}%` }} />
+          <i style={{ width: `${progress ?? 0}%` }} />
         </span>
       ) : null}
       {detail ? <small className="public-probe-metric-detail">{detail}</small> : null}
@@ -324,10 +328,12 @@ export function PublicProbeScreen({
   probe,
   onLogin,
   loginLabel = "登录",
+  wallpaper = "",
 }: {
   probe: PublicProbeState;
   onLogin: () => void;
   loginLabel?: string;
+  wallpaper?: string;
 }) {
   const branding = useBranding();
   const servers = probe.servers ?? [];
@@ -335,7 +341,7 @@ export function PublicProbeScreen({
   const [query, setQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState<"all" | "online" | "offline">("all");
   const [sortBy, setSortBy] = useState<"default" | "speed" | "traffic" | "cpu">("default");
-  const [bgKey, setBgKey] = useState(() => Date.now());
+  const { background, canRefresh, refresh, onError: onBackgroundError } = useAppearanceBackground(wallpaper);
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     if (typeof document !== "undefined" && document.documentElement.dataset.theme === "light") {
       return "light";
@@ -408,11 +414,15 @@ export function PublicProbeScreen({
 
   return (
     <main className="public-probe">
-      <div
+      {background ? <img
+        key={background}
         className="public-probe-bg"
-        style={{ backgroundImage: `url("https://api.chitanda.net/img?t=${bgKey}")` }}
+        src={background}
+        alt=""
+        referrerPolicy="no-referrer"
+        onError={onBackgroundError}
         aria-hidden="true"
-      />
+      /> : null}
       <div className="public-probe-bg-overlay" aria-hidden="true" />
       <header className="public-probe-header">
         <div className="public-probe-header-inner">
@@ -471,15 +481,15 @@ export function PublicProbeScreen({
             >
               {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
             </button>
-            <button
+            {canRefresh ? <button
               type="button"
               className="public-probe-icon-btn"
               aria-label="随机换壁纸"
               title="随机换壁纸"
-              onClick={() => setBgKey(Date.now())}
+              onClick={refresh}
             >
               <Sparkles size={18} />
-            </button>
+            </button> : null}
             {!probe.block_login ? (
               <button
                 type="button"
@@ -614,9 +624,9 @@ export function PublicProbeScreen({
         {filteredServers.length ? (
           <div className={`public-probe-grid ${layout === "list" ? "is-list" : ""}`}>
             {filteredServers.map((server, index) => {
-              const used = Math.max(0, Number(server.traffic_used) || 0);
-              const limit = Math.max(0, Number(server.traffic_limit) || 0);
-              const trafficPercent = limit > 0 ? percent(used, limit) : undefined;
+              const used = Number.isFinite(server.traffic_used) ? Math.max(0, server.traffic_used!) : 0;
+              const limit = Number.isFinite(server.traffic_limit) ? Math.max(0, server.traffic_limit!) : 0;
+              const trafficPercent = limit > 0 ? Math.min(100, used / limit * 100) : undefined;
               const cpuPercent = server.online ? percent(server.cpu_pct) : undefined;
               const memoryPercent = server.online ? percent(server.mem_used, server.mem_total) : undefined;
               const diskPercent = server.online ? percent(server.disk_used, server.disk_total) : undefined;
@@ -688,7 +698,8 @@ export function PublicProbeScreen({
                         label="流量"
                         value={formatBytes(used)}
                         progress={trafficPercent}
-                        detail={limit > 0 ? `配额 ${formatBytes(limit)}` : undefined}
+                        unlimited={limit === 0}
+                        detail={limit > 0 ? `配额 ${formatBytes(limit)}` : "不限额"}
                         tone="traffic"
                       />
                     ) : null}
@@ -826,18 +837,7 @@ export function LoginPendingScreen() {
 export function LoginScreen({ onLogin, wallpaper = "", notice = "" }: { onLogin: (session: Session) => void; wallpaper?: string; notice?: string }) {
   const branding = useBranding();
   const projectName = branding.name?.trim() || BRAND_NAME;
-  const backgroundKey=JSON.stringify(branding.login_background_urls||[]);
-  const background=useMemo(()=>{
-    const mode=branding.login_background_mode||"fixed";
-    if(mode==="gradient")return "";
-    if(mode!=="random")return wallpaper;
-    const urls=JSON.parse(backgroundKey) as string[];
-    if(!urls.length)return "";
-    const random=crypto.getRandomValues(new Uint32Array(1))[0];
-    try{const url=new URL(urls[random%urls.length],location.origin);url.searchParams.set("_bg",String(random));return url.href}catch{return ""}
-  },[backgroundKey,branding.login_background_mode,wallpaper]);
-  const [backgroundFailed,setBackgroundFailed]=useState(false);
-  useEffect(()=>setBackgroundFailed(false),[background]);
+  const { background, onError: onBackgroundError } = useAppearanceBackground(wallpaper);
   const [form, setForm] = useState({ username: "", password: "", remember_me: true });
   const [pending2FA, setPending2FA] = useState("");
   const [code, setCode] = useState("");
@@ -963,8 +963,8 @@ export function LoginScreen({ onLogin, wallpaper = "", notice = "" }: { onLogin:
   if (!providersReady || !captchaReady) return <LoginPendingScreen />;
 
   return (
-    <main className={`auth-layout ${branding.login_theme === "default" ? "" : "glass-login"} ${background && !backgroundFailed ? "has-login-background" : ""}`}>
-      {background && !backgroundFailed ? <><img className="login-background-image" src={background} alt="" referrerPolicy="no-referrer" onError={()=>setBackgroundFailed(true)} /><div className="login-background-shade" /></> : null}
+    <main className={`auth-layout ${branding.login_theme === "default" ? "" : "glass-login"} ${background ? "has-login-background" : ""}`}>
+      {background ? <><img key={background} className="login-background-image" src={background} alt="" referrerPolicy="no-referrer" onError={onBackgroundError} /><div className="login-background-shade" /></> : null}
       {branding.login_theme === "default" ? <AuthVisual mode="login" /> : null}
       <section className="auth-panel">
         <div className="auth-form-wrap">

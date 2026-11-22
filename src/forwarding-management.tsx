@@ -780,24 +780,22 @@ function TemplateDialog({ servers, onClose, onComplete }: { servers: RemoteServe
       <fieldset className="fm-route-editor"><legend>服务器路线</legend><div className="fm-route-add"><Field label="添加受管服务器"><select value={nextServer} onChange={(event) => setNextServer(event.target.value)} disabled={!available.length || draft.serverIDs.length >= 8}><option value="">选择服务器</option>{available.map((server) => <option key={server.id} value={server.id}>{server.name} · {isServerOnline(server) ? "在线" : "离线"}</option>)}</select></Field><Button type="button" variant="secondary" onClick={addServer} disabled={!nextServer || draft.serverIDs.length >= 8}><Plus size={16} />加入路线</Button></div>
         {selectedServers.length ? <ol className="fm-route-editor-list">{selectedServers.map((server, index) => <li key={server.id}><span className="fm-hop-index">{index + 1}</span><span><strong>{server.name}</strong><small>{index === 0 ? "入口服务器" : index === selectedServers.length - 1 ? "出口服务器" : `中转第 ${index} 跳`} · {isServerOnline(server) ? "Agent 在线" : "Agent 离线"}</small></span><div><IconButton type="button" label={`上移 ${server.name}`} disabled={index === 0} onClick={() => moveServer(index, -1)}><ArrowUp size={15} /></IconButton><IconButton type="button" label={`下移 ${server.name}`} disabled={index === selectedServers.length - 1} onClick={() => moveServer(index, 1)}><ArrowDown size={15} /></IconButton><IconButton type="button" label={`移除 ${server.name}`} onClick={() => update("serverIDs", draft.serverIDs.filter((id) => id !== server.id))}><X size={15} /></IconButton></div></li>)}</ol> : <EmptyState icon={<Server size={22} />} title="尚未选择服务器" description="第一台为用户入口，最后一台连接目标节点" />}
       </fieldset>
-      <div className="fm-form-grid">
-        <Field label="路线方向" hint={isBidirectional ? `将同时创建正向与反向两条独立隧道模板` : "单向：仅从首台到末台"}>
-          <select
-            value={draft.directionMode}
-            onChange={(event) => update("directionMode", event.target.value as TemplateDraft["directionMode"])}
-          >
-            <option value="single">单向隧道（仅从首台到末台）</option>
-            <option value="bidirectional" disabled={draft.serverIDs.length < 2}>
-              双向对称（一键同时生成反向镜像）
-            </option>
-          </select>
+      <Field label="路线方向" hint={isBidirectional ? `将同时创建正向与反向两条独立隧道模板` : "单向：仅从首台到末台"}>
+        <select
+          value={draft.directionMode}
+          onChange={(event) => update("directionMode", event.target.value as TemplateDraft["directionMode"])}
+        >
+          <option value="single">单向隧道（仅从首台到末台）</option>
+          <option value="bidirectional" disabled={draft.serverIDs.length < 2}>
+            双向对称（一键同时生成反向镜像）
+          </option>
+        </select>
+      </Field>
+      {isBidirectional ? (
+        <Field label="反向模板名称预览" hint={`反向路线：${reverseServerIDs.map((id) => eligible.find((s) => s.id === id)?.name || id).join(" → ")}`}>
+          <input readOnly value={reverseName} />
         </Field>
-        {isBidirectional ? (
-          <Field label="反向模板名称预览" hint={`反向路线：${reverseServerIDs.map((id) => eligible.find((s) => s.id === id)?.name || id).join(" → ")}`}>
-            <input readOnly value={reverseName} />
-          </Field>
-        ) : null}
-      </div>
+      ) : null}
       <div className="fm-form-grid fm-form-grid-four"><Field label="计费方向"><select value={draft.billingMode} onChange={(event) => update("billingMode", event.target.value as TemplateDraft["billingMode"])}><option value="both">双向</option><option value="upload">仅算上行</option><option value="download">仅算下行</option></select></Field><Field label="流量倍率"><input type="number" min="0.01" step="0.01" value={draft.multiplier} onChange={(event) => update("multiplier", event.target.value)} /></Field><Field label="最大总转发数" hint="0 表示不限"><input type="number" min="0" value={draft.maxForwards} onChange={(event) => update("maxForwards", event.target.value)} /></Field><Field label="网络类型"><select value="tcp_udp" disabled><option value="tcp_udp">TCP + UDP</option></select></Field></div>
       <div className="fm-form-grid"><Field label="端口范围起点" hint="仅限制可选端口，不会预占整段范围"><input type="number" min="1024" max="65535" value={draft.portStart} onChange={(event) => update("portStart", event.target.value)} /></Field><Field label="端口范围终点" hint="未被实际转发使用的端口仍可用于节点"><input type="number" min="1024" max="65535" value={draft.portEnd} onChange={(event) => update("portEnd", event.target.value)} /></Field></div>
       {preflight ? <div className={`fm-preflight ${preflight.success === false || preflight.ready === false ? "is-bad" : "is-good"}`}><ShieldCheck size={18} /><span><strong>{preflight.success === false || preflight.ready === false ? "预检未通过" : "路线预检通过"}</strong><small>{preflight.message || "服务器、TCP/UDP 能力与端口范围均可用"}</small>{preflight.warnings?.map((warning) => <small key={warning}>{warning}</small>)}</span></div> : null}

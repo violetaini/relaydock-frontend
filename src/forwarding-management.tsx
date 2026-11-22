@@ -423,28 +423,6 @@ function forwardRoute(forward: ForwardRule): string[] {
     .map((hop) => hop.server_name || `服务器 #${hop.server_id ?? "-"}`);
 }
 
-export function reverseTunnelName(name: string, servers: RemoteServer[], serverIDs: number[]): string {
-  const trimmed = name.trim();
-  if (!trimmed) return "";
-  const separators = [" -> ", "->", " - ", "-", " _ ", "_", " 到 ", " 至 "];
-  for (const sep of separators) {
-    if (trimmed.includes(sep)) {
-      const parts = trimmed.split(sep);
-      if (parts.length >= 2 && parts.every((p) => p.trim())) {
-        return parts.slice().reverse().map((p) => p.trim()).join(sep);
-      }
-    }
-  }
-  if (serverIDs.length >= 2) {
-    const first = servers.find((s) => s.id === serverIDs[0]);
-    const last = servers.find((s) => s.id === serverIDs[serverIDs.length - 1]);
-    if (first && last && trimmed.includes(first.name) && trimmed.includes(last.name)) {
-      return trimmed.replace(first.name, "___SWAP___").replace(last.name, first.name).replace("___SWAP___", last.name);
-    }
-  }
-  return `${trimmed} (反向)`;
-}
-
 function defaultTemplateDraft(): TemplateDraft {
   return {
     name: "",
@@ -702,14 +680,13 @@ function TemplateDialog({ servers, onClose, onComplete }: { servers: RemoteServe
   const isBidirectional = draft.directionMode === "bidirectional";
   const hasMinBidirectionalServers = draft.serverIDs.length >= 2;
   const reverseServerIDs = useMemo(() => [...draft.serverIDs].reverse(), [draft.serverIDs]);
-  const reverseName = useMemo(() => reverseTunnelName(draft.name, eligible, draft.serverIDs), [draft.name, eligible, draft.serverIDs]);
 
   const validHops = isBidirectional ? hasMinBidirectionalServers : draft.serverIDs.length >= 1;
   const valid = draft.name.trim().length > 0 && validHops && draft.serverIDs.length <= 8 && validPorts && Number(draft.multiplier) > 0;
 
   const payload = (reverse = false) => ({
-    name: reverse ? reverseName : draft.name.trim(),
-    description: draft.description.trim() ? (reverse ? `${draft.description.trim()}（反向镜像）` : draft.description.trim()) : "",
+    name: draft.name.trim(),
+    description: draft.description.trim(),
     billing_mode: draft.billingMode,
     traffic_multiplier_milli: Math.round(Number(draft.multiplier) * 1000),
     max_total_forwards: Math.max(0, Number(draft.maxForwards) || 0),
@@ -787,7 +764,7 @@ function TemplateDialog({ servers, onClose, onComplete }: { servers: RemoteServe
         hint={
           isBidirectional
             ? hasMinBidirectionalServers
-              ? "将同时创建正向与反向两条独立隧道模板"
+              ? "将同时创建正向与反向两条独立隧道模板（共用相同名称）"
               : "双向对称模式至少需要添加 2 台服务器（用于首尾互换）"
             : "单向：仅从首台到末台"
         }
@@ -800,22 +777,6 @@ function TemplateDialog({ servers, onClose, onComplete }: { servers: RemoteServe
           <option value="bidirectional">双向对称（一键同时生成反向镜像）</option>
         </select>
       </Field>
-      {isBidirectional ? (
-        <Field
-          label="反向模板名称预览"
-          hint={
-            hasMinBidirectionalServers
-              ? `反向路线：${reverseServerIDs.map((id) => eligible.find((s) => s.id === id)?.name || id).join(" → ")}`
-              : "请先在上方路线中添加至少 2 台服务器"
-          }
-        >
-          <input
-            readOnly
-            value={hasMinBidirectionalServers ? reverseName : ""}
-            placeholder={hasMinBidirectionalServers ? "" : "需添加 2 台及以上服务器"}
-          />
-        </Field>
-      ) : null}
       <div className="fm-form-grid fm-form-grid-four"><Field label="计费方向"><select value={draft.billingMode} onChange={(event) => update("billingMode", event.target.value as TemplateDraft["billingMode"])}><option value="both">双向</option><option value="upload">仅算上行</option><option value="download">仅算下行</option></select></Field><Field label="流量倍率"><input type="number" min="0.01" step="0.01" value={draft.multiplier} onChange={(event) => update("multiplier", event.target.value)} /></Field><Field label="最大总转发数" hint="0 表示不限"><input type="number" min="0" value={draft.maxForwards} onChange={(event) => update("maxForwards", event.target.value)} /></Field><Field label="网络类型"><select value="tcp_udp" disabled><option value="tcp_udp">TCP + UDP</option></select></Field></div>
       <div className="fm-form-grid"><Field label="端口范围起点" hint="仅限制可选端口，不会预占整段范围"><input type="number" min="1024" max="65535" value={draft.portStart} onChange={(event) => update("portStart", event.target.value)} /></Field><Field label="端口范围终点" hint="未被实际转发使用的端口仍可用于节点"><input type="number" min="1024" max="65535" value={draft.portEnd} onChange={(event) => update("portEnd", event.target.value)} /></Field></div>
       {preflight ? <div className={`fm-preflight ${preflight.success === false || preflight.ready === false ? "is-bad" : "is-good"}`}><ShieldCheck size={18} /><span><strong>{preflight.success === false || preflight.ready === false ? "预检未通过" : "路线预检通过"}</strong><small>{preflight.message || "服务器、TCP/UDP 能力与端口范围均可用"}</small>{preflight.warnings?.map((warning) => <small key={warning}>{warning}</small>)}</span></div> : null}

@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
-import { extractList, ForwardingManagement, reverseTunnelName } from "./forwarding-management";
+import { extractList, ForwardingManagement } from "./forwarding-management";
 import type { RemoteServer } from "./types";
 
 vi.hoisted(() => {
@@ -318,21 +318,7 @@ describe("administrator tunnel composition", () => {
     ));
   });
 
-  it("correctly reverses tunnel names for various formats", () => {
-    const servers = [
-      { id: 1, name: "香港" } as RemoteServer,
-      { id: 2, name: "台湾" } as RemoteServer,
-    ];
-    expect(reverseTunnelName("hk-tw", servers, [1, 2])).toBe("tw-hk");
-    expect(reverseTunnelName("hk_tw", servers, [1, 2])).toBe("tw_hk");
-    expect(reverseTunnelName("hk -> tw", servers, [1, 2])).toBe("tw -> hk");
-    expect(reverseTunnelName("香港 到 台湾", servers, [1, 2])).toBe("台湾 到 香港");
-    expect(reverseTunnelName("香港 至 台湾", servers, [1, 2])).toBe("台湾 至 香港");
-    expect(reverseTunnelName("香港专线", servers, [1, 2])).toBe("香港专线 (反向)");
-    expect(reverseTunnelName("香港-日本-台湾", servers, [1, 2])).toBe("台湾-日本-香港");
-  });
-
-  it("creates bidirectional tunnel templates when bidirectional mode is selected", async () => {
+  it("creates bidirectional tunnel templates with the same name when bidirectional mode is selected", async () => {
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
       if (path === "/api/admin/tunnel-templates") return { templates: [] } as T;
       if (path === "/api/admin/remote-servers") return { servers: [
@@ -361,7 +347,7 @@ describe("administrator tunnel composition", () => {
     expect(directionSelect).toBeInTheDocument();
     fireEvent.change(directionSelect, { target: { value: "bidirectional" } });
 
-    expect(within(dialog).getByRole("textbox", { name: /反向模板名称预览/ })).toHaveValue("tw-hk");
+    expect(within(dialog).queryByRole("textbox", { name: /反向模板名称预览/ })).not.toBeInTheDocument();
 
     fireEvent.click(within(dialog).getByRole("button", { name: "预检路线" }));
     expect(await screen.findByText("路线预检通过（正反双向均已验证可用）")).toBeInTheDocument();
@@ -371,7 +357,7 @@ describe("administrator tunnel composition", () => {
       server_ids: [11, 12],
     }), { idempotencyKey: expect.any(String) });
     expect(post).toHaveBeenCalledWith("/api/admin/tunnel-templates/preflight", expect.objectContaining({
-      name: "tw-hk",
+      name: "hk-tw",
       server_ids: [12, 11],
     }), { idempotencyKey: expect.any(String) });
 
@@ -382,7 +368,7 @@ describe("administrator tunnel composition", () => {
         server_ids: [11, 12],
       }), { idempotencyKey: expect.any(String) });
       expect(post).toHaveBeenCalledWith("/api/admin/tunnel-templates", expect.objectContaining({
-        name: "tw-hk",
+        name: "hk-tw",
         server_ids: [12, 11],
       }), { idempotencyKey: expect.any(String) });
     });
@@ -411,16 +397,15 @@ describe("administrator tunnel composition", () => {
     fireEvent.change(directionSelect, { target: { value: "bidirectional" } });
     expect(directionSelect).toHaveValue("bidirectional");
     expect(within(dialog).getByText(/双向对称模式至少需要添加 2 台服务器/)).toBeInTheDocument();
-    expect(within(dialog).getByPlaceholderText("需添加 2 台及以上服务器")).toBeInTheDocument();
+    expect(within(dialog).queryByRole("textbox", { name: /反向模板名称预览/ })).not.toBeInTheDocument();
 
     // Add only 1 server
     fireEvent.click(screen.getByRole("button", { name: "加入路线" }));
     expect(within(dialog).getByText(/双向对称模式至少需要添加 2 台服务器/)).toBeInTheDocument();
 
-    // Add 2nd server -> updates to reverse preview
+    // Add 2nd server -> hint updates to both templates sharing name
     fireEvent.change(screen.getByRole("textbox", { name: "隧道名称" }), { target: { value: "东京-洛杉矶" } });
     fireEvent.click(screen.getByRole("button", { name: "加入路线" }));
-    expect(within(dialog).getByDisplayValue("洛杉矶-东京")).toBeInTheDocument();
-    expect(within(dialog).getByText(/反向路线：洛杉矶出口 → 东京入口/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/将同时创建正向与反向两条独立隧道模板（共用相同名称）/)).toBeInTheDocument();
   });
 });

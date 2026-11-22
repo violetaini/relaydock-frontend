@@ -83,7 +83,7 @@ describe("user forwarding workflow", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     fireEvent.change(screen.getByRole("textbox", { name: "转发名称" }), { target: { value: "东京入口" } });
-    fireEvent.change(screen.getByRole("spinbutton", { name: /全链路端口/ }), { target: { value: "2033" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: /入口端口/ }), { target: { value: "2033" } });
     expect(screen.getByRole("combobox", { name: "网络类型" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
 

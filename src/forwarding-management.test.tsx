@@ -1,7 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
-import { extractList, ForwardingManagement } from "./forwarding-management";
+import { extractList, ForwardingManagement, reverseTunnelName } from "./forwarding-management";
+import type { RemoteServer } from "./types";
 
 vi.hoisted(() => {
   (globalThis as unknown as { process: { env: { NODE_ENV?: string } } }).process.env.NODE_ENV = "test";
@@ -315,5 +316,75 @@ describe("administrator tunnel composition", () => {
       expect.objectContaining({ billing_mode_override: "upload", version: 3 }),
       { idempotencyKey: expect.any(String) },
     ));
+  });
+
+  it("correctly reverses tunnel names for various formats", () => {
+    const servers = [
+      { id: 1, name: "香港" } as RemoteServer,
+      { id: 2, name: "台湾" } as RemoteServer,
+    ];
+    expect(reverseTunnelName("hk-tw", servers, [1, 2])).toBe("tw-hk");
+    expect(reverseTunnelName("hk_tw", servers, [1, 2])).toBe("tw_hk");
+    expect(reverseTunnelName("hk -> tw", servers, [1, 2])).toBe("tw -> hk");
+    expect(reverseTunnelName("香港 到 台湾", servers, [1, 2])).toBe("台湾 到 香港");
+    expect(reverseTunnelName("香港 至 台湾", servers, [1, 2])).toBe("台湾 至 香港");
+    expect(reverseTunnelName("香港专线", servers, [1, 2])).toBe("香港专线 (反向)");
+    expect(reverseTunnelName("香港-日本-台湾", servers, [1, 2])).toBe("台湾-日本-香港");
+  });
+
+  it("creates bidirectional tunnel templates when bidirectional mode is selected", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/tunnel-templates") return { templates: [] } as T;
+      if (path === "/api/admin/remote-servers") return { servers: [
+        { id: 11, name: "东京入口", status: "online", ws_connected: true, is_federated: false },
+        { id: 12, name: "洛杉矶出口", status: "online", ws_connected: true, is_federated: false },
+      ] } as T;
+      if (path === "/api/admin/users") return { users: [] } as T;
+      if (path === "/api/admin/forwards") return { forwards: [] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string, body: unknown): Promise<T> => {
+      if (path === "/api/admin/tunnel-templates/preflight") return { preflight: { success: true, ready: true } } as T;
+      if (path === "/api/admin/tunnel-templates") return { tunnel: { ...tunnel, name: (body as { name: string }).name } } as T;
+      throw new Error(`unexpected POST ${path}`);
+    });
+    render(<ForwardingManagement isAdmin notify={vi.fn()} />);
+
+    await screen.findByText("暂无隧道模板");
+    fireEvent.click(screen.getByRole("button", { name: "创建第一条隧道" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "隧道名称" }), { target: { value: "hk-tw" } });
+    fireEvent.click(screen.getByRole("button", { name: "加入路线" }));
+    fireEvent.click(screen.getByRole("button", { name: "加入路线" }));
+
+    const dialog = screen.getByRole("dialog", { name: "创建隧道模板" });
+    const directionSelect = within(dialog).getByRole("combobox", { name: /路线方向/ });
+    expect(directionSelect).toBeInTheDocument();
+    fireEvent.change(directionSelect, { target: { value: "bidirectional" } });
+
+    expect(within(dialog).getByRole("textbox", { name: /反向模板名称预览/ })).toHaveValue("tw-hk");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "预检路线" }));
+    expect(await screen.findByText("路线预检通过（正反双向均已验证可用）")).toBeInTheDocument();
+
+    expect(post).toHaveBeenCalledWith("/api/admin/tunnel-templates/preflight", expect.objectContaining({
+      name: "hk-tw",
+      server_ids: [11, 12],
+    }), { idempotencyKey: expect.any(String) });
+    expect(post).toHaveBeenCalledWith("/api/admin/tunnel-templates/preflight", expect.objectContaining({
+      name: "tw-hk",
+      server_ids: [12, 11],
+    }), { idempotencyKey: expect.any(String) });
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "创建隧道" }));
+    await waitFor(() => {
+      expect(post).toHaveBeenCalledWith("/api/admin/tunnel-templates", expect.objectContaining({
+        name: "hk-tw",
+        server_ids: [11, 12],
+      }), { idempotencyKey: expect.any(String) });
+      expect(post).toHaveBeenCalledWith("/api/admin/tunnel-templates", expect.objectContaining({
+        name: "tw-hk",
+        server_ids: [12, 11],
+      }), { idempotencyKey: expect.any(String) });
+    });
   });
 });

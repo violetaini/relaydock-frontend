@@ -699,11 +699,13 @@ function TemplateDialog({ servers, onClose, onComplete }: { servers: RemoteServe
   const portStart = Number(draft.portStart);
   const portEnd = Number(draft.portEnd);
   const validPorts = Number.isInteger(portStart) && Number.isInteger(portEnd) && portStart >= 1024 && portEnd <= 65535 && portStart <= portEnd;
-  const valid = draft.name.trim().length > 0 && draft.serverIDs.length >= 1 && draft.serverIDs.length <= 8 && validPorts && Number(draft.multiplier) > 0;
-  
-  const isBidirectional = draft.directionMode === "bidirectional" && draft.serverIDs.length >= 2;
+  const isBidirectional = draft.directionMode === "bidirectional";
+  const hasMinBidirectionalServers = draft.serverIDs.length >= 2;
   const reverseServerIDs = useMemo(() => [...draft.serverIDs].reverse(), [draft.serverIDs]);
   const reverseName = useMemo(() => reverseTunnelName(draft.name, eligible, draft.serverIDs), [draft.name, eligible, draft.serverIDs]);
+
+  const validHops = isBidirectional ? hasMinBidirectionalServers : draft.serverIDs.length >= 1;
+  const valid = draft.name.trim().length > 0 && validHops && draft.serverIDs.length <= 8 && validPorts && Number(draft.multiplier) > 0;
 
   const payload = (reverse = false) => ({
     name: reverse ? reverseName : draft.name.trim(),
@@ -740,7 +742,7 @@ function TemplateDialog({ servers, onClose, onComplete }: { servers: RemoteServe
         setPreflight(forwardResult);
         return;
       }
-      if (isBidirectional) {
+      if (isBidirectional && hasMinBidirectionalServers) {
         const reverseResponse = await api.post<unknown>("/api/admin/tunnel-templates/preflight", payload(true), { idempotencyKey: idempotencyKey() });
         const reverseResult = responseObject<PreflightResult>(reverseResponse, "preflight", "result");
         if (reverseResult.success === false || reverseResult.ready === false) {
@@ -766,7 +768,7 @@ function TemplateDialog({ servers, onClose, onComplete }: { servers: RemoteServe
     setWorking("create"); setError("");
     try {
       await api.post("/api/admin/tunnel-templates", payload(false), { idempotencyKey: idempotencyKey() });
-      if (isBidirectional) {
+      if (isBidirectional && hasMinBidirectionalServers) {
         await api.post("/api/admin/tunnel-templates", payload(true), { idempotencyKey: idempotencyKey() });
       }
       await onComplete();
@@ -780,20 +782,38 @@ function TemplateDialog({ servers, onClose, onComplete }: { servers: RemoteServe
       <fieldset className="fm-route-editor"><legend>服务器路线</legend><div className="fm-route-add"><Field label="添加受管服务器"><select value={nextServer} onChange={(event) => setNextServer(event.target.value)} disabled={!available.length || draft.serverIDs.length >= 8}><option value="">选择服务器</option>{available.map((server) => <option key={server.id} value={server.id}>{server.name} · {isServerOnline(server) ? "在线" : "离线"}</option>)}</select></Field><Button type="button" variant="secondary" onClick={addServer} disabled={!nextServer || draft.serverIDs.length >= 8}><Plus size={16} />加入路线</Button></div>
         {selectedServers.length ? <ol className="fm-route-editor-list">{selectedServers.map((server, index) => <li key={server.id}><span className="fm-hop-index">{index + 1}</span><span><strong>{server.name}</strong><small>{index === 0 ? "入口服务器" : index === selectedServers.length - 1 ? "出口服务器" : `中转第 ${index} 跳`} · {isServerOnline(server) ? "Agent 在线" : "Agent 离线"}</small></span><div><IconButton type="button" label={`上移 ${server.name}`} disabled={index === 0} onClick={() => moveServer(index, -1)}><ArrowUp size={15} /></IconButton><IconButton type="button" label={`下移 ${server.name}`} disabled={index === selectedServers.length - 1} onClick={() => moveServer(index, 1)}><ArrowDown size={15} /></IconButton><IconButton type="button" label={`移除 ${server.name}`} onClick={() => update("serverIDs", draft.serverIDs.filter((id) => id !== server.id))}><X size={15} /></IconButton></div></li>)}</ol> : <EmptyState icon={<Server size={22} />} title="尚未选择服务器" description="第一台为用户入口，最后一台连接目标节点" />}
       </fieldset>
-      <Field label="路线方向" hint={isBidirectional ? `将同时创建正向与反向两条独立隧道模板` : "单向：仅从首台到末台"}>
+      <Field
+        label="路线方向"
+        hint={
+          isBidirectional
+            ? hasMinBidirectionalServers
+              ? "将同时创建正向与反向两条独立隧道模板"
+              : "双向对称模式至少需要添加 2 台服务器（用于首尾互换）"
+            : "单向：仅从首台到末台"
+        }
+      >
         <select
           value={draft.directionMode}
           onChange={(event) => update("directionMode", event.target.value as TemplateDraft["directionMode"])}
         >
           <option value="single">单向隧道（仅从首台到末台）</option>
-          <option value="bidirectional" disabled={draft.serverIDs.length < 2}>
-            双向对称（一键同时生成反向镜像）
-          </option>
+          <option value="bidirectional">双向对称（一键同时生成反向镜像）</option>
         </select>
       </Field>
       {isBidirectional ? (
-        <Field label="反向模板名称预览" hint={`反向路线：${reverseServerIDs.map((id) => eligible.find((s) => s.id === id)?.name || id).join(" → ")}`}>
-          <input readOnly value={reverseName} />
+        <Field
+          label="反向模板名称预览"
+          hint={
+            hasMinBidirectionalServers
+              ? `反向路线：${reverseServerIDs.map((id) => eligible.find((s) => s.id === id)?.name || id).join(" → ")}`
+              : "请先在上方路线中添加至少 2 台服务器"
+          }
+        >
+          <input
+            readOnly
+            value={hasMinBidirectionalServers ? reverseName : ""}
+            placeholder={hasMinBidirectionalServers ? "" : "需添加 2 台及以上服务器"}
+          />
         </Field>
       ) : null}
       <div className="fm-form-grid fm-form-grid-four"><Field label="计费方向"><select value={draft.billingMode} onChange={(event) => update("billingMode", event.target.value as TemplateDraft["billingMode"])}><option value="both">双向</option><option value="upload">仅算上行</option><option value="download">仅算下行</option></select></Field><Field label="流量倍率"><input type="number" min="0.01" step="0.01" value={draft.multiplier} onChange={(event) => update("multiplier", event.target.value)} /></Field><Field label="最大总转发数" hint="0 表示不限"><input type="number" min="0" value={draft.maxForwards} onChange={(event) => update("maxForwards", event.target.value)} /></Field><Field label="网络类型"><select value="tcp_udp" disabled><option value="tcp_udp">TCP + UDP</option></select></Field></div>

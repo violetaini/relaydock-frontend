@@ -387,4 +387,40 @@ describe("administrator tunnel composition", () => {
       }), { idempotencyKey: expect.any(String) });
     });
   });
+
+  it("allows selecting bidirectional mode with zero or one server and prompts to add servers", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/tunnel-templates") return { templates: [] } as T;
+      if (path === "/api/admin/remote-servers") return { servers: [
+        { id: 11, name: "东京入口", status: "online", ws_connected: true, is_federated: false },
+        { id: 12, name: "洛杉矶出口", status: "online", ws_connected: true, is_federated: false },
+      ] } as T;
+      if (path === "/api/admin/users") return { users: [] } as T;
+      if (path === "/api/admin/forwards") return { forwards: [] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    render(<ForwardingManagement isAdmin notify={vi.fn()} />);
+    await screen.findByText("暂无隧道模板");
+    fireEvent.click(screen.getByRole("button", { name: "创建第一条隧道" }));
+
+    const dialog = screen.getByRole("dialog", { name: "创建隧道模板" });
+    const directionSelect = within(dialog).getByRole("combobox", { name: /路线方向/ });
+
+    // Select bidirectional before adding servers
+    fireEvent.change(directionSelect, { target: { value: "bidirectional" } });
+    expect(directionSelect).toHaveValue("bidirectional");
+    expect(within(dialog).getByText(/双向对称模式至少需要添加 2 台服务器/)).toBeInTheDocument();
+    expect(within(dialog).getByPlaceholderText("需添加 2 台及以上服务器")).toBeInTheDocument();
+
+    // Add only 1 server
+    fireEvent.click(screen.getByRole("button", { name: "加入路线" }));
+    expect(within(dialog).getByText(/双向对称模式至少需要添加 2 台服务器/)).toBeInTheDocument();
+
+    // Add 2nd server -> updates to reverse preview
+    fireEvent.change(screen.getByRole("textbox", { name: "隧道名称" }), { target: { value: "东京-洛杉矶" } });
+    fireEvent.click(screen.getByRole("button", { name: "加入路线" }));
+    expect(within(dialog).getByDisplayValue("洛杉矶-东京")).toBeInTheDocument();
+    expect(within(dialog).getByText(/反向路线：洛杉矶出口 → 东京入口/)).toBeInTheDocument();
+  });
 });

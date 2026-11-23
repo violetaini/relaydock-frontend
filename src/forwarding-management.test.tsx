@@ -478,6 +478,47 @@ describe("administrator tunnel composition", () => {
     expect(screen.getAllByText("双向")).toHaveLength(2); // One for badge, one for billing mode
     expect(screen.getByText(/2 跳 · 双向 · TCP \+ UDP/)).toBeInTheDocument();
 
+    // Verify duplicate emergency button (Zap) is removed, leaving only pause/resume, edit, and delete
+    expect(screen.queryByRole("button", { name: /紧急停用/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "编辑 港台" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "停止 港台 新建" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除 港台" })).toBeInTheDocument();
+
+    // Test Edit opens prefilled dialog and updates BOTH mirror templates
+    fireEvent.click(screen.getByRole("button", { name: "编辑 港台" }));
+    const editDialog = await screen.findByRole("dialog", { name: "编辑双向隧道" });
+    expect(editDialog).toBeInTheDocument();
+    const nameInput = within(editDialog).getByRole("textbox", { name: "隧道名称" });
+    expect(nameInput).toHaveValue("港台");
+
+    fireEvent.change(nameInput, { target: { value: "港台专线" } });
+    fireEvent.change(within(editDialog).getByRole("spinbutton", { name: "流量倍率" }), { target: { value: "1.5" } });
+    fireEvent.click(within(editDialog).getByRole("button", { name: "保存修改" }));
+
+    await waitFor(() => {
+      expect(put).toHaveBeenCalledWith(
+        "/api/admin/tunnel-templates/tun_tw_hk",
+        expect.objectContaining({
+          name: "港台专线",
+          traffic_multiplier_milli: 1500,
+          server_ids: [11, 12],
+          version: 1,
+        }),
+        { idempotencyKey: expect.any(String) },
+      );
+      expect(put).toHaveBeenCalledWith(
+        "/api/admin/tunnel-templates/tun_hk_tw",
+        expect.objectContaining({
+          name: "港台专线",
+          traffic_multiplier_milli: 1500,
+          server_ids: [12, 11],
+          version: 1,
+        }),
+        { idempotencyKey: expect.any(String) },
+      );
+      expect(notify).toHaveBeenCalledWith("双向隧道已更新");
+    });
+
     // Test Pause (停止新建) triggers state update on BOTH templates
     const pauseButton = screen.getByRole("button", { name: "停止 港台 新建" });
     fireEvent.click(pauseButton);

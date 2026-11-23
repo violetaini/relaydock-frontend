@@ -11,6 +11,7 @@ import {
   Copy,
   Gauge,
   Network,
+  Pencil,
   Plus,
   RefreshCw,
   Route,
@@ -554,6 +555,28 @@ function defaultTemplateDraft(): TemplateDraft {
   };
 }
 
+function templateDraftFrom(group: TunnelTemplateGroup): TemplateDraft {
+  const hops = group.hops || [];
+  let serverIDs = hops.map((hop) => hop.id).filter((id): id is number => typeof id === "number" && id > 0);
+  if (!serverIDs.length && Array.isArray(group.primary.hops)) {
+    serverIDs = group.primary.hops.map((h) => h.server_id).filter((id): id is number => typeof id === "number" && id > 0);
+  }
+  if (!serverIDs.length && Array.isArray(group.primary.server_ids)) {
+    serverIDs = [...group.primary.server_ids];
+  }
+  return {
+    name: group.name,
+    description: group.description || "",
+    directionMode: group.isBidirectional ? "bidirectional" : "single",
+    serverIDs,
+    billingMode: (group.billing_mode as TemplateDraft["billingMode"]) || "both",
+    multiplier: group.traffic_multiplier_milli ? (group.traffic_multiplier_milli / 1000).toString() : "1",
+    maxForwards: group.primary.max_total_forwards ? String(group.primary.max_total_forwards) : "0",
+    portStart: String(group.port_range_start || 1024),
+    portEnd: String(group.port_range_end || 65535),
+  };
+}
+
 function defaultGrantDraft(users: UserItem[], templates: TunnelTemplate[]): GrantDraft {
   const firstCustomUser = users.find((user) => {
     return user.role !== "admin" && !isPackageAuthorization(user);
@@ -599,6 +622,7 @@ function AdminForwarding({ notify }: { notify: Notify }) {
   const [loadErrors, setLoadErrors] = useState<Partial<Record<AdminLoadSection, string>>>({});
   const [dialog, setDialog] = useState<"template" | "grant" | null>(null);
   const [editingGrant, setEditingGrant] = useState<TunnelGrant | undefined>();
+  const [editingTemplate, setEditingTemplate] = useState<TunnelTemplateGroup | undefined>();
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [working, setWorking] = useState(false);
 
@@ -755,7 +779,7 @@ function AdminForwarding({ notify }: { notify: Notify }) {
 
     {visibleLoadErrors.length ? <ErrorState message={`部分数据未能刷新：${visibleLoadErrors.join("；")}。已保留其余成功数据，可继续操作。`} onRetry={() => void load(true)} /> : null}
     {loading ? <div className="center-state"><Spinner label="正在加载转发管理" /></div> : null}
-    {!loading && tab === "templates" ? <TemplatePanel groups={templateGroups} servers={servers} onCreate={() => setDialog("template")} onState={changeTemplateGroupState} onDelete={deleteTemplateGroup} /> : null}
+    {!loading && tab === "templates" ? <TemplatePanel groups={templateGroups} servers={servers} onCreate={() => { setEditingTemplate(undefined); setDialog("template"); }} onEdit={(group) => { setEditingTemplate(group); setDialog("template"); }} onState={changeTemplateGroupState} onDelete={deleteTemplateGroup} /> : null}
     {!loading && tab === "grants" ? <GrantPanel grants={grants} templates={templates} onCreate={() => { setEditingGrant(undefined); setDialog("grant"); }} onEdit={(grant) => { setEditingGrant(grant); setDialog("grant"); }} onAction={async (grant, action) => {
       await api.post(`/api/admin/users/${encodeURIComponent(grant.username)}/tunnel-grants/${encodeURIComponent(resourceID(grant))}/${action}`, {}, { idempotencyKey: idempotencyKey() });
       notify(action === "suspend" ? "隧道授权已暂停" : "隧道授权已恢复");
@@ -773,7 +797,7 @@ function AdminForwarding({ notify }: { notify: Notify }) {
       run: async () => { await api.delete(`/api/admin/forwards/${encodeURIComponent(resourceID(forward))}`, undefined, { idempotencyKey: idempotencyKey() }); notify("转发删除任务已提交"); },
     })} /> : null}
 
-    {dialog === "template" ? <TemplateDialog servers={servers} onClose={() => setDialog(null)} onComplete={async () => { setDialog(null); notify("隧道模板已创建"); await load(true); }} /> : null}
+    {dialog === "template" ? <TemplateDialog templateGroup={editingTemplate} servers={servers} onClose={() => { setDialog(null); setEditingTemplate(undefined); }} onComplete={async () => { setDialog(null); notify(editingTemplate ? (editingTemplate.isBidirectional ? "双向隧道已更新" : "隧道模板已更新") : "隧道模板已创建"); setEditingTemplate(undefined); await load(true); }} /> : null}
     {dialog === "grant" ? <GrantDialog grant={editingGrant} users={users} templates={templates} servers={servers} onClose={() => setDialog(null)} onComplete={async () => { setDialog(null); notify(editingGrant ? "隧道授权已更新" : "隧道授权已创建"); await load(true); }} /> : null}
     {confirm ? <ConfirmDialog title={confirm.title} description={confirm.description} confirmLabel={confirm.confirmLabel} working={working} onCancel={() => !working && setConfirm(null)} onConfirm={() => void runConfirmed()} /> : null}
   </section>;
@@ -783,10 +807,11 @@ function Metric({ icon, label, value, note }: { icon: ReactNode; label: string; 
   return <div className="fm-metric"><span className="fm-metric-icon">{icon}</span><div><small>{label}</small><strong>{value}</strong><span>{note}</span></div></div>;
 }
 
-function TemplatePanel({ groups, servers, onCreate, onState, onDelete }: {
+function TemplatePanel({ groups, servers, onCreate, onEdit, onState, onDelete }: {
   groups: TunnelTemplateGroup[];
   servers: RemoteServer[];
   onCreate: () => void;
+  onEdit: (group: TunnelTemplateGroup) => void;
   onState: (group: TunnelTemplateGroup, state: string) => Promise<void>;
   onDelete: (group: TunnelTemplateGroup) => void;
 }) {
@@ -801,7 +826,7 @@ function TemplatePanel({ groups, servers, onCreate, onState, onDelete }: {
       const hops = group.hops;
       const id = group.id;
       const isWorking = workingKey === group.key;
-      return <tr key={group.key}><td className="fm-primary-cell"><div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><strong>{group.name}</strong>{group.isBidirectional ? <Badge tone="info">双向</Badge> : null}</div><small>{group.description || `#${id}`}</small></td><td><RouteLine hops={hops.map((hop) => ({ name: hop.name, tone: hop.status && ["online", "connected"].includes(hop.status) ? "good" : undefined }))} bidirectional={group.isBidirectional} /><small className="fm-cell-note">{hops.length} 跳 · {group.isBidirectional ? "双向 · " : ""}TCP + UDP</small></td><td><span>{forwardingBillingModeLabel(group.billing_mode)}</span><small className="fm-cell-note">{((group.traffic_multiplier_milli ?? 1000) / 1000).toFixed(2)} 倍 · {group.port_range_start || "-"}–{group.port_range_end || "-"}</small></td><td><span>{group.max_total_forwards ? `${group.active_forwards}/${group.max_total_forwards} 条转发` : "不限制"}</span><small className="fm-cell-note">{group.grant_count} 份授权</small></td><td><Badge tone={stateTone(group.state)}>{stateLabel(group.state)}</Badge></td><td><div className="fm-row-actions">{group.state !== "active" ? <IconButton label={`恢复 ${group.name}`} disabled={isWorking} onClick={() => void changeState(group, "active")}><CirclePlay size={16} /></IconButton> : <IconButton label={`停止 ${group.name} 新建`} disabled={isWorking} onClick={() => void changeState(group, "draining")}><CirclePause size={16} /></IconButton>}<IconButton label={`紧急停用 ${group.name}`} disabled={group.state === "suspended" || isWorking} onClick={() => void changeState(group, "suspended")}><Zap size={16} /></IconButton><IconButton label={`删除 ${group.name}`} disabled={isWorking} onClick={() => onDelete(group)}><Trash2 size={16} /></IconButton></div></td></tr>;
+      return <tr key={group.key}><td className="fm-primary-cell"><div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><strong>{group.name}</strong>{group.isBidirectional ? <Badge tone="info">双向</Badge> : null}</div><small>{group.description || `#${id}`}</small></td><td><RouteLine hops={hops.map((hop) => ({ name: hop.name, tone: hop.status && ["online", "connected"].includes(hop.status) ? "good" : undefined }))} bidirectional={group.isBidirectional} /><small className="fm-cell-note">{hops.length} 跳 · {group.isBidirectional ? "双向 · " : ""}TCP + UDP</small></td><td><span>{forwardingBillingModeLabel(group.billing_mode)}</span><small className="fm-cell-note">{((group.traffic_multiplier_milli ?? 1000) / 1000).toFixed(2)} 倍 · {group.port_range_start || "-"}–{group.port_range_end || "-"}</small></td><td><span>{group.max_total_forwards ? `${group.active_forwards}/${group.max_total_forwards} 条转发` : "不限制"}</span><small className="fm-cell-note">{group.grant_count} 份授权</small></td><td><Badge tone={stateTone(group.state)}>{stateLabel(group.state)}</Badge></td><td><div className="fm-row-actions"><IconButton label={`编辑 ${group.name}`} disabled={isWorking} onClick={() => onEdit(group)}><Pencil size={16} /></IconButton>{group.state !== "active" ? <IconButton label={`恢复 ${group.name}`} disabled={isWorking} onClick={() => void changeState(group, "active")}><CirclePlay size={16} /></IconButton> : <IconButton label={`停止 ${group.name} 新建`} disabled={isWorking} onClick={() => void changeState(group, "draining")}><CirclePause size={16} /></IconButton>}<IconButton label={`删除 ${group.name}`} disabled={isWorking} onClick={() => onDelete(group)}><Trash2 size={16} /></IconButton></div></td></tr>;
     })}</tbody></table></div></Surface>}
   </div>;
 }
@@ -810,13 +835,13 @@ function RouteLine({ hops, bidirectional = false }: { hops: Array<{ name: string
   return <div className="fm-route-line">{hops.map((hop, index) => <span key={`${hop.name}-${index}`}><span className={`fm-hop ${hop.tone ? `is-${hop.tone}` : ""}`} title={hop.name}>{hop.name}</span>{index < hops.length - 1 ? (bidirectional ? <ArrowLeftRight size={14} /> : <ArrowRight size={14} />) : null}</span>)}</div>;
 }
 
-function TemplateDialog({ servers, onClose, onComplete }: { servers: RemoteServer[]; onClose: () => void; onComplete: () => Promise<void> }) {
+function TemplateDialog({ templateGroup, servers, onClose, onComplete }: { templateGroup?: TunnelTemplateGroup; servers: RemoteServer[]; onClose: () => void; onComplete: () => Promise<void> }) {
   const eligible = servers.filter((server) => !server.is_federated);
-  const [draft, setDraft] = useState(defaultTemplateDraft);
+  const [draft, setDraft] = useState<TemplateDraft>(() => templateGroup ? templateDraftFrom(templateGroup) : defaultTemplateDraft());
   const [nextServer, setNextServer] = useState(String(eligible[0]?.id || ""));
   const [preflight, setPreflight] = useState<PreflightResult | null>(null);
   const [error, setError] = useState("");
-  const [working, setWorking] = useState<"preflight" | "create" | "">("");
+  const [working, setWorking] = useState<"preflight" | "create" | "update" | "">("");
   const selectedServers = draft.serverIDs.map((id) => eligible.find((server) => server.id === id)).filter((server): server is RemoteServer => Boolean(server));
   const available = eligible.filter((server) => !draft.serverIDs.includes(server.id));
   const portStart = Number(draft.portStart);
@@ -829,15 +854,17 @@ function TemplateDialog({ servers, onClose, onComplete }: { servers: RemoteServe
   const validHops = isBidirectional ? hasMinBidirectionalServers : draft.serverIDs.length >= 1;
   const valid = draft.name.trim().length > 0 && validHops && draft.serverIDs.length <= 8 && validPorts && Number(draft.multiplier) > 0;
 
-  const payload = (reverse = false) => ({
+  const payload = (reverse = false, template?: TunnelTemplate) => ({
     name: draft.name.trim(),
     description: draft.description.trim(),
+    state: template?.state || "active",
     billing_mode: draft.billingMode,
     traffic_multiplier_milli: Math.round(Number(draft.multiplier) * 1000),
     max_total_forwards: Math.max(0, Number(draft.maxForwards) || 0),
     port_range_start: Number(draft.portStart),
     port_range_end: Number(draft.portEnd),
     server_ids: reverse ? reverseServerIDs : draft.serverIDs,
+    ...(template ? { version: template.version ?? 1 } : {}),
   });
   const update = <K extends keyof TemplateDraft>(key: K, value: TemplateDraft[K]) => { setDraft((current) => ({ ...current, [key]: value })); setPreflight(null); };
   const addServer = () => {
@@ -886,18 +913,26 @@ function TemplateDialog({ servers, onClose, onComplete }: { servers: RemoteServe
   };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!valid || !preflight || preflight.success === false || preflight.ready === false) return;
-    setWorking("create"); setError("");
+    if (!valid) return;
+    if (!templateGroup && (!preflight || preflight.success === false || preflight.ready === false)) return;
+    setWorking(templateGroup ? "update" : "create"); setError("");
     try {
-      await api.post("/api/admin/tunnel-templates", payload(false), { idempotencyKey: idempotencyKey() });
-      if (isBidirectional && hasMinBidirectionalServers) {
-        await api.post("/api/admin/tunnel-templates", payload(true), { idempotencyKey: idempotencyKey() });
+      if (templateGroup) {
+        await api.put(`/api/admin/tunnel-templates/${encodeURIComponent(resourceID(templateGroup.primary))}`, payload(false, templateGroup.primary), { idempotencyKey: idempotencyKey() });
+        if (templateGroup.isBidirectional && templateGroup.partner) {
+          await api.put(`/api/admin/tunnel-templates/${encodeURIComponent(resourceID(templateGroup.partner))}`, payload(true, templateGroup.partner), { idempotencyKey: idempotencyKey() });
+        }
+      } else {
+        await api.post("/api/admin/tunnel-templates", payload(false), { idempotencyKey: idempotencyKey() });
+        if (isBidirectional && hasMinBidirectionalServers) {
+          await api.post("/api/admin/tunnel-templates", payload(true), { idempotencyKey: idempotencyKey() });
+        }
       }
       await onComplete();
     }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "隧道创建失败"); setWorking(""); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : (templateGroup ? "隧道修改失败" : "隧道创建失败")); setWorking(""); }
   };
-  return <Dialog title="创建隧道模板" description="按真实流量方向，从入口到出口排列 1 至 8 台服务器。" onClose={onClose} wide dismissible={!working}>
+  return <Dialog title={templateGroup ? (templateGroup.isBidirectional ? "编辑双向隧道" : "编辑隧道模板") : "创建隧道模板"} description={templateGroup ? "修改隧道名称、服务器路线、倍率与端口范围等配置。" : "按真实流量方向，从入口到出口排列 1 至 8 台服务器。"} onClose={onClose} wide dismissible={!working}>
     <form className="fm-form" onSubmit={(event) => void submit(event)}>
       {error ? <ErrorState message={error} /> : null}
       <div className="fm-form-grid"><Field label="隧道名称"><input required value={draft.name} onChange={(event) => update("name", event.target.value)} placeholder="例如：香港-日本-洛杉矶" /></Field><Field label="备注"><input value={draft.description} onChange={(event) => update("description", event.target.value)} placeholder="用途或线路说明" /></Field></div>
@@ -907,15 +942,18 @@ function TemplateDialog({ servers, onClose, onComplete }: { servers: RemoteServe
       <Field
         label="路线方向"
         hint={
-          isBidirectional
-            ? hasMinBidirectionalServers
-              ? "将同时创建正向与反向两条独立隧道模板（共用相同名称）"
-              : "双向对称模式至少需要添加 2 台服务器（用于首尾互换）"
-            : "单向：仅从首台到末台"
+          templateGroup
+            ? (templateGroup.isBidirectional ? "双向对称模式（正反镜像将同步修改保存）" : "单向隧道模式")
+            : (isBidirectional
+              ? (hasMinBidirectionalServers
+                ? "将同时创建正向与反向两条独立隧道模板（共用相同名称）"
+                : "双向对称模式至少需要添加 2 台服务器（用于首尾互换）")
+              : "单向：仅从首台到末台")
         }
       >
         <select
           value={draft.directionMode}
+          disabled={Boolean(templateGroup)}
           onChange={(event) => update("directionMode", event.target.value as TemplateDraft["directionMode"])}
         >
           <option value="single">单向隧道（仅从首台到末台）</option>
@@ -925,7 +963,7 @@ function TemplateDialog({ servers, onClose, onComplete }: { servers: RemoteServe
       <div className="fm-form-grid fm-form-grid-four"><Field label="计费方向"><select value={draft.billingMode} onChange={(event) => update("billingMode", event.target.value as TemplateDraft["billingMode"])}><option value="both">双向</option><option value="upload">仅算上行</option><option value="download">仅算下行</option></select></Field><Field label="流量倍率"><input type="number" min="0.01" step="0.01" value={draft.multiplier} onChange={(event) => update("multiplier", event.target.value)} /></Field><Field label="最大总转发数" hint="0 表示不限"><input type="number" min="0" value={draft.maxForwards} onChange={(event) => update("maxForwards", event.target.value)} /></Field><Field label="网络类型"><select value="tcp_udp" disabled><option value="tcp_udp">TCP + UDP</option></select></Field></div>
       <div className="fm-form-grid"><Field label="端口范围起点" hint="仅限制可选端口，不会预占整段范围"><input type="number" min="1024" max="65535" value={draft.portStart} onChange={(event) => update("portStart", event.target.value)} /></Field><Field label="端口范围终点" hint="未被实际转发使用的端口仍可用于节点"><input type="number" min="1024" max="65535" value={draft.portEnd} onChange={(event) => update("portEnd", event.target.value)} /></Field></div>
       {preflight ? <div className={`fm-preflight ${preflight.success === false || preflight.ready === false ? "is-bad" : "is-good"}`}><ShieldCheck size={18} /><span><strong>{preflight.success === false || preflight.ready === false ? "预检未通过" : "路线预检通过"}</strong><small>{preflight.message || "服务器、TCP/UDP 能力与端口范围均可用"}</small>{preflight.warnings?.map((warning) => <small key={warning}>{warning}</small>)}</span></div> : null}
-      <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose} disabled={Boolean(working)}>取消</Button><Button type="button" variant="secondary" disabled={!valid || Boolean(working)} onClick={() => void runPreflight()}>{working === "preflight" ? <Spinner label="正在预检" /> : <><Zap size={16} />预检路线</>}</Button><Button type="submit" disabled={!valid || !preflight || preflight.success === false || preflight.ready === false || Boolean(working)}>{working === "create" ? <Spinner label="正在创建" /> : <><Check size={16} />创建隧道</>}</Button></div>
+      <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose} disabled={Boolean(working)}>取消</Button><Button type="button" variant="secondary" disabled={!valid || Boolean(working)} onClick={() => void runPreflight()}>{working === "preflight" ? <Spinner label="正在预检" /> : <><Zap size={16} />预检路线</>}</Button><Button type="submit" disabled={!valid || Boolean(working) || (!templateGroup && (!preflight || preflight.success === false || preflight.ready === false)) || (Boolean(preflight) && (preflight?.success === false || preflight?.ready === false))}>{working === "create" || working === "update" ? <Spinner label="正在保存" /> : templateGroup ? <><Check size={16} />保存修改</> : <><Check size={16} />创建隧道</>}</Button></div>
     </form>
   </Dialog>;
 }

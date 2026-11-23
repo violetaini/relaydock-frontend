@@ -1313,10 +1313,13 @@
 .fm-tunnel-option-title {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-weight: 600;
   font-size: 13px;
   line-height: 1.3;
+}
+.fm-tunnel-option-title .badge {
+  margin-left: 6px;
 }
 .fm-tunnel-option-title > span {
   overflow: hidden;

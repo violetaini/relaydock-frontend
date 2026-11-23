@@ -824,8 +824,8 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
                   onChange={() => toggleTunnelGroup(group)}
                 />
                 <span>
-                  <strong>
-                    {group.name}{routeText}
+                  <strong className="package-tunnel-title">
+                    <span>{group.name}{routeText}</span>
                     {group.isBidirectional ? <Badge tone="info" className="package-bidirectional-badge">双向对称</Badge> : null}
                   </strong>
                   <small>{group.description || `${group.isBidirectional ? "双向" : ""}${hops.length ? `${hops.length} 跳线路` : "直连线路"}`}</small>

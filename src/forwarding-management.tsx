@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNo
 import {
   Activity,
   ArrowDown,
+  ArrowLeftRight,
   ArrowRight,
   ArrowUp,
   Check,
@@ -77,6 +78,26 @@ export interface TunnelTemplate {
   route?: Array<TunnelHop | string>;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface TunnelTemplateGroup {
+  id: ResourceID;
+  key: string;
+  name: string;
+  description?: string;
+  isBidirectional: boolean;
+  primary: TunnelTemplate;
+  partner?: TunnelTemplate;
+  templates: TunnelTemplate[];
+  hops: Array<{ id: number; name: string; status?: string }>;
+  billing_mode?: ForwardingBillingMode;
+  traffic_multiplier_milli?: number;
+  port_range_start?: number;
+  port_range_end?: number;
+  max_total_forwards: number;
+  active_forwards: number;
+  grant_count: number;
+  state: string;
 }
 
 export function UserForwardingGrantsPanel({ username, notify }: { username: string; notify: Notify }) {
@@ -377,6 +398,102 @@ function routeHops(template: TunnelTemplate | undefined, servers: RemoteServer[]
   return (template.server_ids ?? []).map((id) => ({ id, name: serverMap.get(id)?.name || `服务器 #${id}`, status: serverMap.get(id)?.status }));
 }
 
+export function isReverseHops(
+  leftHops: Array<{ id: number; name: string }>,
+  rightHops: Array<{ id: number; name: string }>
+): boolean {
+  if (leftHops.length < 2 || leftHops.length !== rightHops.length) {
+    return false;
+  }
+  const len = leftHops.length;
+  for (let i = 0; i < len; i++) {
+    const left = leftHops[i];
+    const right = rightHops[len - 1 - i];
+    const matchId = Boolean(left.id && right.id && left.id === right.id);
+    const matchName = Boolean(left.name && right.name && left.name === right.name);
+    if (!matchId && !matchName) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function groupTunnelTemplates(
+  templates: TunnelTemplate[],
+  servers: RemoteServer[] = []
+): TunnelTemplateGroup[] {
+  const groups: TunnelTemplateGroup[] = [];
+  const used = new Set<string>();
+
+  for (let i = 0; i < templates.length; i++) {
+    const primary = templates[i];
+    const primaryID = String(resourceID(primary));
+    if (used.has(primaryID)) continue;
+
+    const primaryHops = routeHops(primary, servers);
+    let partner: TunnelTemplate | undefined;
+
+    if (primaryHops.length >= 2) {
+      for (let j = i + 1; j < templates.length; j++) {
+        const candidate = templates[j];
+        const candidateID = String(resourceID(candidate));
+        if (used.has(candidateID)) continue;
+
+        if (primary.name.trim() === candidate.name.trim()) {
+          const candidateHops = routeHops(candidate, servers);
+          if (isReverseHops(primaryHops, candidateHops)) {
+            partner = candidate;
+            used.add(candidateID);
+            break;
+          }
+        }
+      }
+    }
+
+    used.add(primaryID);
+
+    const isBidirectional = Boolean(partner);
+    const templatesInGroup = partner ? [primary, partner] : [primary];
+
+    let groupState = primary.state;
+    if (partner) {
+      if (primary.state === "suspended" || partner.state === "suspended") {
+        groupState = "suspended";
+      } else if (primary.state === "draining" || partner.state === "draining") {
+        groupState = "draining";
+      } else {
+        groupState = "active";
+      }
+    }
+
+    const activeForwards = (primary.active_forwards ?? 0) + (partner?.active_forwards ?? 0);
+    const maxTotalForwards = (primary.max_total_forwards ?? 0) + (partner?.max_total_forwards ?? 0);
+    const grantCount = (primary.grant_count ?? 0) + (partner?.grant_count ?? 0);
+
+    groups.push({
+      id: resourceID(primary),
+      key: partner ? `${primaryID}-${String(resourceID(partner))}` : primaryID,
+      name: primary.name,
+      description: primary.description || partner?.description,
+      isBidirectional,
+      primary,
+      partner,
+      templates: templatesInGroup,
+      hops: primaryHops,
+      billing_mode: primary.billing_mode,
+      traffic_multiplier_milli: primary.traffic_multiplier_milli,
+      port_range_start: primary.port_range_start,
+      port_range_end: primary.port_range_end,
+      max_total_forwards: maxTotalForwards,
+      active_forwards: activeForwards,
+      grant_count: grantCount,
+      state: groupState,
+    });
+  }
+
+  return groups;
+}
+
 function tunnelForGrant(grant: TunnelGrant, templates: TunnelTemplate[]): TunnelTemplate | undefined {
   if (grant.tunnel) return grant.tunnel;
   const matched = templates.find((template) => sameID(resourceID(template), grant.tunnel_id) || sameID(template.id, grant.tunnel_id));
@@ -561,15 +678,45 @@ function AdminForwarding({ notify }: { notify: Notify }) {
       await load(true);
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : "操作失败", "error");
+      await load(true);
     } finally {
       setWorking(false);
     }
   };
 
-  const changeTemplateState = async (template: TunnelTemplate, state: string) => {
-    await api.put(`/api/admin/tunnel-templates/${encodeURIComponent(resourceID(template))}/state`, { state, version: template.version ?? 1 }, { idempotencyKey: idempotencyKey() });
-    notify(state === "active" ? "隧道已恢复运行" : state === "draining" ? "隧道已停止新建" : "隧道已紧急停用");
+  const changeTemplateGroupState = async (group: TunnelTemplateGroup, state: string) => {
+    for (const template of group.templates) {
+      await api.put(`/api/admin/tunnel-templates/${encodeURIComponent(resourceID(template))}/state`, { state, version: template.version ?? 1 }, { idempotencyKey: idempotencyKey() });
+    }
+    const label = group.isBidirectional ? "双向隧道" : "隧道";
+    notify(state === "active" ? `${label}已恢复运行` : state === "draining" ? `${label}已停止新建` : `${label}已紧急停用`);
     await load(true);
+  };
+
+  const deleteTemplateGroup = (group: TunnelTemplateGroup) => {
+    if (group.isBidirectional) {
+      setConfirm({
+        title: "删除双向隧道模板",
+        description: `将同时删除“${group.name}”的正反两条隧道模板。存在转发时后端会拒绝删除，不会留下未托管配置。`,
+        confirmLabel: "确认删除",
+        run: async () => {
+          for (const template of group.templates) {
+            await api.delete(`/api/admin/tunnel-templates/${encodeURIComponent(resourceID(template))}`, undefined, { idempotencyKey: idempotencyKey() });
+          }
+          notify("双向隧道模板已删除");
+        },
+      });
+    } else {
+      setConfirm({
+        title: "删除隧道模板",
+        description: `将删除“${group.name}”。存在转发时后端会拒绝删除，不会留下未托管配置。`,
+        confirmLabel: "确认删除",
+        run: async () => {
+          await api.delete(`/api/admin/tunnel-templates/${encodeURIComponent(resourceID(group.primary))}`, undefined, { idempotencyKey: idempotencyKey() });
+          notify("隧道模板已删除");
+        },
+      });
+    }
   };
 
   const runForwardAction = async (forward: ForwardRule, action: "suspend" | "resume" | "retry") => {
@@ -577,6 +724,8 @@ function AdminForwarding({ notify }: { notify: Notify }) {
     notify(action === "suspend" ? "转发已暂停" : action === "resume" ? "转发恢复任务已提交" : "已重新下发转发");
     await load(true);
   };
+
+  const templateGroups = useMemo(() => groupTunnelTemplates(templates, servers), [templates, servers]);
 
   const visibleLoadErrors = (tab === "templates"
     ? [loadErrors.general, loadErrors.templates, loadErrors.servers]
@@ -592,26 +741,21 @@ function AdminForwarding({ notify }: { notify: Notify }) {
     </div>
 
     <div className="fm-metrics" aria-label="转发运行摘要">
-      <Metric icon={<Route size={18} />} label="隧道模板" value={templates.length} note={`${templates.filter((item) => item.state === "active").length} 条可新建`} />
+      <Metric icon={<Route size={18} />} label="隧道模板" value={templateGroups.length} note={`${templateGroups.filter((item) => item.state === "active").length} 条可新建`} />
       <Metric icon={<Users size={18} />} label="用户授权" value={grants.length} note={`${grants.filter((item) => (item.effective_state || item.state) === "active").length} 份生效`} />
       <Metric icon={<Activity size={18} />} label="全部转发" value={forwards.length} note={`${forwards.filter((item) => forwardState(item) === "active").length} 条运行中`} />
       <Metric icon={<Server size={18} />} label="可用服务器" value={servers.filter(isServerOnline).length} note={`共 ${servers.filter((item) => !item.is_federated).length} 台受管服务器`} />
     </div>
 
     <div className="fm-tabs" role="tablist" aria-label="管理员转发视图">
-      <button role="tab" aria-selected={tab === "templates"} className={tab === "templates" ? "is-active" : ""} onClick={() => setTab("templates")}><Route size={16} />隧道模板 <span>{templates.length}</span></button>
+      <button role="tab" aria-selected={tab === "templates"} className={tab === "templates" ? "is-active" : ""} onClick={() => setTab("templates")}><Route size={16} />隧道模板 <span>{templateGroups.length}</span></button>
       <button role="tab" aria-selected={tab === "grants"} className={tab === "grants" ? "is-active" : ""} onClick={() => setTab("grants")}><ShieldCheck size={16} />用户授权 <span>{grants.length}</span></button>
       <button role="tab" aria-selected={tab === "forwards"} className={tab === "forwards" ? "is-active" : ""} onClick={() => setTab("forwards")}><Network size={16} />全部转发 <span>{forwards.length}</span></button>
     </div>
 
     {visibleLoadErrors.length ? <ErrorState message={`部分数据未能刷新：${visibleLoadErrors.join("；")}。已保留其余成功数据，可继续操作。`} onRetry={() => void load(true)} /> : null}
     {loading ? <div className="center-state"><Spinner label="正在加载转发管理" /></div> : null}
-    {!loading && tab === "templates" ? <TemplatePanel templates={templates} servers={servers} onCreate={() => setDialog("template")} onState={changeTemplateState} onDelete={(template) => setConfirm({
-      title: "删除隧道模板",
-      description: `将删除“${template.name}”。存在转发时后端会拒绝删除，不会留下未托管配置。`,
-      confirmLabel: "确认删除",
-      run: async () => { await api.delete(`/api/admin/tunnel-templates/${encodeURIComponent(resourceID(template))}`, undefined, { idempotencyKey: idempotencyKey() }); notify("隧道模板已删除"); },
-    })} /> : null}
+    {!loading && tab === "templates" ? <TemplatePanel groups={templateGroups} servers={servers} onCreate={() => setDialog("template")} onState={changeTemplateGroupState} onDelete={deleteTemplateGroup} /> : null}
     {!loading && tab === "grants" ? <GrantPanel grants={grants} templates={templates} onCreate={() => { setEditingGrant(undefined); setDialog("grant"); }} onEdit={(grant) => { setEditingGrant(grant); setDialog("grant"); }} onAction={async (grant, action) => {
       await api.post(`/api/admin/users/${encodeURIComponent(grant.username)}/tunnel-grants/${encodeURIComponent(resourceID(grant))}/${action}`, {}, { idempotencyKey: idempotencyKey() });
       notify(action === "suspend" ? "隧道授权已暂停" : "隧道授权已恢复");
@@ -630,7 +774,7 @@ function AdminForwarding({ notify }: { notify: Notify }) {
     })} /> : null}
 
     {dialog === "template" ? <TemplateDialog servers={servers} onClose={() => setDialog(null)} onComplete={async () => { setDialog(null); notify("隧道模板已创建"); await load(true); }} /> : null}
-    {dialog === "grant" ? <GrantDialog grant={editingGrant} users={users} templates={templates} onClose={() => setDialog(null)} onComplete={async () => { setDialog(null); notify(editingGrant ? "隧道授权已更新" : "隧道授权已创建"); await load(true); }} /> : null}
+    {dialog === "grant" ? <GrantDialog grant={editingGrant} users={users} templates={templates} servers={servers} onClose={() => setDialog(null)} onComplete={async () => { setDialog(null); notify(editingGrant ? "隧道授权已更新" : "隧道授权已创建"); await load(true); }} /> : null}
     {confirm ? <ConfirmDialog title={confirm.title} description={confirm.description} confirmLabel={confirm.confirmLabel} working={working} onCancel={() => !working && setConfirm(null)} onConfirm={() => void runConfirmed()} /> : null}
   </section>;
 }
@@ -639,30 +783,31 @@ function Metric({ icon, label, value, note }: { icon: ReactNode; label: string; 
   return <div className="fm-metric"><span className="fm-metric-icon">{icon}</span><div><small>{label}</small><strong>{value}</strong><span>{note}</span></div></div>;
 }
 
-function TemplatePanel({ templates, servers, onCreate, onState, onDelete }: {
-  templates: TunnelTemplate[];
+function TemplatePanel({ groups, servers, onCreate, onState, onDelete }: {
+  groups: TunnelTemplateGroup[];
   servers: RemoteServer[];
   onCreate: () => void;
-  onState: (template: TunnelTemplate, state: string) => Promise<void>;
-  onDelete: (template: TunnelTemplate) => void;
+  onState: (group: TunnelTemplateGroup, state: string) => Promise<void>;
+  onDelete: (group: TunnelTemplateGroup) => void;
 }) {
-  const [workingID, setWorkingID] = useState<ResourceID | null>(null);
-  const changeState = async (template: TunnelTemplate, state: string) => {
-    setWorkingID(resourceID(template));
-    try { await onState(template, state); } finally { setWorkingID(null); }
+  const [workingKey, setWorkingKey] = useState<string | null>(null);
+  const changeState = async (group: TunnelTemplateGroup, state: string) => {
+    setWorkingKey(group.key);
+    try { await onState(group, state); } finally { setWorkingKey(null); }
   };
   return <div className="fm-panel">
     <div className="fm-toolbar"><div><strong>隧道模板</strong><span>服务器顺序由管理员固定，用户无法修改路线。</span></div><Button onClick={onCreate}><Plus size={16} />创建隧道</Button></div>
-    {templates.length === 0 ? <EmptyState icon={<Route size={25} />} title="暂无隧道模板" description="先选择 1 至 8 台在线受管服务器创建路线" action={<Button onClick={onCreate}><Plus size={16} />创建第一条隧道</Button>} /> : <Surface className="table-surface fm-table-surface"><div className="table-wrap"><table className="fm-table"><thead><tr><th>隧道</th><th>服务器路线</th><th>策略</th><th>使用情况</th><th>状态</th><th aria-label="操作" /></tr></thead><tbody>{templates.map((template) => {
-      const hops = routeHops(template, servers);
-      const id = resourceID(template);
-      return <tr key={String(id)}><td className="fm-primary-cell"><strong>{template.name}</strong><small>{template.description || `#${id}`}</small></td><td><RouteLine hops={hops.map((hop) => ({ name: hop.name, tone: hop.status && ["online", "connected"].includes(hop.status) ? "good" : undefined }))} /><small className="fm-cell-note">{hops.length} 跳 · TCP + UDP</small></td><td><span>{forwardingBillingModeLabel(template.billing_mode)}</span><small className="fm-cell-note">{((template.traffic_multiplier_milli ?? 1000) / 1000).toFixed(2)} 倍 · {template.port_range_start || "-"}–{template.port_range_end || "-"}</small></td><td><span>{template.max_total_forwards ? `${template.active_forwards ?? 0}/${template.max_total_forwards} 条转发` : "不限制"}</span><small className="fm-cell-note">{template.grant_count ?? 0} 份授权</small></td><td><Badge tone={stateTone(template.state)}>{stateLabel(template.state)}</Badge></td><td><div className="fm-row-actions">{template.state !== "active" ? <IconButton label={`恢复 ${template.name}`} disabled={sameID(workingID, id)} onClick={() => void changeState(template, "active")}><CirclePlay size={16} /></IconButton> : <IconButton label={`停止 ${template.name} 新建`} disabled={sameID(workingID, id)} onClick={() => void changeState(template, "draining")}><CirclePause size={16} /></IconButton>}<IconButton label={`紧急停用 ${template.name}`} disabled={template.state === "suspended" || sameID(workingID, id)} onClick={() => void changeState(template, "suspended")}><Zap size={16} /></IconButton><IconButton label={`删除 ${template.name}`} onClick={() => onDelete(template)}><Trash2 size={16} /></IconButton></div></td></tr>;
+    {groups.length === 0 ? <EmptyState icon={<Route size={25} />} title="暂无隧道模板" description="先选择 1 至 8 台在线受管服务器创建路线" action={<Button onClick={onCreate}><Plus size={16} />创建第一条隧道</Button>} /> : <Surface className="table-surface fm-table-surface"><div className="table-wrap"><table className="fm-table"><thead><tr><th>隧道</th><th>服务器路线</th><th>策略</th><th>使用情况</th><th>状态</th><th aria-label="操作" /></tr></thead><tbody>{groups.map((group) => {
+      const hops = group.hops;
+      const id = group.id;
+      const isWorking = workingKey === group.key;
+      return <tr key={group.key}><td className="fm-primary-cell"><div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><strong>{group.name}</strong>{group.isBidirectional ? <Badge tone="info">双向</Badge> : null}</div><small>{group.description || `#${id}`}</small></td><td><RouteLine hops={hops.map((hop) => ({ name: hop.name, tone: hop.status && ["online", "connected"].includes(hop.status) ? "good" : undefined }))} bidirectional={group.isBidirectional} /><small className="fm-cell-note">{hops.length} 跳 · {group.isBidirectional ? "双向 · " : ""}TCP + UDP</small></td><td><span>{forwardingBillingModeLabel(group.billing_mode)}</span><small className="fm-cell-note">{((group.traffic_multiplier_milli ?? 1000) / 1000).toFixed(2)} 倍 · {group.port_range_start || "-"}–{group.port_range_end || "-"}</small></td><td><span>{group.max_total_forwards ? `${group.active_forwards}/${group.max_total_forwards} 条转发` : "不限制"}</span><small className="fm-cell-note">{group.grant_count} 份授权</small></td><td><Badge tone={stateTone(group.state)}>{stateLabel(group.state)}</Badge></td><td><div className="fm-row-actions">{group.state !== "active" ? <IconButton label={`恢复 ${group.name}`} disabled={isWorking} onClick={() => void changeState(group, "active")}><CirclePlay size={16} /></IconButton> : <IconButton label={`停止 ${group.name} 新建`} disabled={isWorking} onClick={() => void changeState(group, "draining")}><CirclePause size={16} /></IconButton>}<IconButton label={`紧急停用 ${group.name}`} disabled={group.state === "suspended" || isWorking} onClick={() => void changeState(group, "suspended")}><Zap size={16} /></IconButton><IconButton label={`删除 ${group.name}`} disabled={isWorking} onClick={() => onDelete(group)}><Trash2 size={16} /></IconButton></div></td></tr>;
     })}</tbody></table></div></Surface>}
   </div>;
 }
 
-function RouteLine({ hops }: { hops: Array<{ name: string; tone?: "good" | "warn" }> }) {
-  return <div className="fm-route-line">{hops.map((hop, index) => <span key={`${hop.name}-${index}`}><span className={`fm-hop ${hop.tone ? `is-${hop.tone}` : ""}`} title={hop.name}>{hop.name}</span>{index < hops.length - 1 ? <ArrowRight size={14} /> : null}</span>)}</div>;
+function RouteLine({ hops, bidirectional = false }: { hops: Array<{ name: string; tone?: "good" | "warn" }>; bidirectional?: boolean }) {
+  return <div className="fm-route-line">{hops.map((hop, index) => <span key={`${hop.name}-${index}`}><span className={`fm-hop ${hop.tone ? `is-${hop.tone}` : ""}`} title={hop.name}>{hop.name}</span>{index < hops.length - 1 ? (bidirectional ? <ArrowLeftRight size={14} /> : <ArrowRight size={14} />) : null}</span>)}</div>;
 }
 
 function TemplateDialog({ servers, onClose, onComplete }: { servers: RemoteServer[]; onClose: () => void; onComplete: () => Promise<void> }) {
@@ -806,7 +951,7 @@ function GrantPanel({ grants, templates, onCreate, onEdit, onAction, onDelete }:
   })}</tbody></table></div></Surface>}</div>;
 }
 
-function GrantDialog({ grant, users, templates, onClose, onComplete }: { grant?: TunnelGrant; users: UserItem[]; templates: TunnelTemplate[]; onClose: () => void; onComplete: () => Promise<void> }) {
+function GrantDialog({ grant, users, templates, servers = [], onClose, onComplete }: { grant?: TunnelGrant; users: UserItem[]; templates: TunnelTemplate[]; servers?: RemoteServer[]; onClose: () => void; onComplete: () => Promise<void> }) {
   const [draft, setDraft] = useState<GrantDraft>(() => grant ? grantDraftFrom(grant, templates) : defaultGrantDraft(users, templates));
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
@@ -841,7 +986,11 @@ function GrantDialog({ grant, users, templates, onClose, onComplete }: { grant?:
     } catch (reason) { setError(reason instanceof Error ? reason.message : "隧道授权保存失败"); setWorking(false); }
   };
   const update = <K extends keyof GrantDraft>(key: K, value: GrantDraft[K]) => setDraft((current) => ({ ...current, [key]: value }));
-  return <Dialog title={grant ? "编辑隧道授权" : "新增隧道授权"} description="限制对单个用户生效，不会改变隧道模板或服务器权限。" onClose={onClose} wide dismissible={!working}><form className="fm-form" onSubmit={(event) => void submit(event)}>{error ? <ErrorState message={error} /> : null}<div className="fm-form-grid"><Field label="授权用户"><select value={draft.username} disabled={Boolean(grant)} onChange={(event) => update("username", event.target.value)}><option value="">选择用户</option>{eligibleUsers.map((user) => <option key={user.username} value={user.username}>{user.nickname || user.username} ({user.username})</option>)}</select></Field><Field label="隧道模板"><select value={draft.tunnelID} disabled={Boolean(grant)} onChange={(event) => update("tunnelID", event.target.value)}><option value="">选择隧道</option>{activeTemplates.map((template) => <option key={String(resourceID(template))} value={String(resourceID(template))}>{template.name}</option>)}</select></Field></div><div className="fm-form-grid"><Field label="生效时间"><input type="datetime-local" value={draft.startsAt} onChange={(event) => update("startsAt", event.target.value)} /></Field><Field label="到期时间" hint="留空表示长期"><input type="datetime-local" value={draft.expiresAt} onChange={(event) => update("expiresAt", event.target.value)} /></Field></div><div className="fm-form-grid fm-form-grid-four"><Field label="最大启用转发"><input type="number" min="1" value={draft.maxForwards} onChange={(event) => update("maxForwards", event.target.value)} /></Field><Field label="每转发限速 Mbps" hint="0 表示不限"><input type="number" min="0" step="0.1" value={draft.speedMbps} onChange={(event) => update("speedMbps", event.target.value)} /></Field><Field label="每转发连接数" hint="当前节点组件暂不支持"><input type="number" min="0" value="0" disabled /></Field><Field label="授权总流量 GB" hint="0 表示不限"><input type="number" min="0" step="0.1" value={draft.trafficGB} onChange={(event) => update("trafficGB", event.target.value)} /></Field></div><div className="fm-form-grid"><Field label="计费方向"><select value={draft.billingMode} onChange={(event) => update("billingMode", event.target.value as ForwardingBillingMode)}><option value="both">双向</option><option value="upload">仅算上行</option><option value="download">仅算下行</option></select></Field><Field label="流量重置" hint="当前版本暂不支持"><select value="none" disabled><option value="none">不自动重置</option></select></Field></div><div className="fm-capability-note"><ShieldCheck size={17} /><span>转发同时支持 TCP 与 UDP，可配置每条转发的独立限速，并自动选取共同端口或由用户在模板范围内指定端口。连接数限制当前不可用并固定为不限。</span></div><div className="dialog-actions"><Button type="button" variant="secondary" disabled={working} onClick={onClose}>取消</Button><Button type="submit" disabled={!valid || working}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />保存授权</>}</Button></div></form></Dialog>;
+  return <Dialog title={grant ? "编辑隧道授权" : "新增隧道授权"} description="限制对单个用户生效，不会改变隧道模板或服务器权限。" onClose={onClose} wide dismissible={!working}><form className="fm-form" onSubmit={(event) => void submit(event)}>{error ? <ErrorState message={error} /> : null}<div className="fm-form-grid"><Field label="授权用户"><select value={draft.username} disabled={Boolean(grant)} onChange={(event) => update("username", event.target.value)}><option value="">选择用户</option>{eligibleUsers.map((user) => <option key={user.username} value={user.username}>{user.nickname || user.username} ({user.username})</option>)}</select></Field><Field label="隧道模板"><select value={draft.tunnelID} disabled={Boolean(grant)} onChange={(event) => update("tunnelID", event.target.value)}><option value="">选择隧道</option>{activeTemplates.map((template) => {
+    const hops = routeHops(template, servers);
+    const routeText = hops.length > 0 ? ` (${hops.map((hop) => hop.name).join(" → ")})` : "";
+    return <option key={String(resourceID(template))} value={String(resourceID(template))}>{template.name}{routeText}</option>;
+  })}</select></Field></div><div className="fm-form-grid"><Field label="生效时间"><input type="datetime-local" value={draft.startsAt} onChange={(event) => update("startsAt", event.target.value)} /></Field><Field label="到期时间" hint="留空表示长期"><input type="datetime-local" value={draft.expiresAt} onChange={(event) => update("expiresAt", event.target.value)} /></Field></div><div className="fm-form-grid fm-form-grid-four"><Field label="最大启用转发"><input type="number" min="1" value={draft.maxForwards} onChange={(event) => update("maxForwards", event.target.value)} /></Field><Field label="每转发限速 Mbps" hint="0 表示不限"><input type="number" min="0" step="0.1" value={draft.speedMbps} onChange={(event) => update("speedMbps", event.target.value)} /></Field><Field label="每转发连接数" hint="当前节点组件暂不支持"><input type="number" min="0" value="0" disabled /></Field><Field label="授权总流量 GB" hint="0 表示不限"><input type="number" min="0" step="0.1" value={draft.trafficGB} onChange={(event) => update("trafficGB", event.target.value)} /></Field></div><div className="fm-form-grid"><Field label="计费方向"><select value={draft.billingMode} onChange={(event) => update("billingMode", event.target.value as ForwardingBillingMode)}><option value="both">双向</option><option value="upload">仅算上行</option><option value="download">仅算下行</option></select></Field><Field label="流量重置" hint="当前版本暂不支持"><select value="none" disabled><option value="none">不自动重置</option></select></Field></div><div className="fm-capability-note"><ShieldCheck size={17} /><span>转发同时支持 TCP 与 UDP，可配置每条转发的独立限速，并自动选取共同端口或由用户在模板范围内指定端口。连接数限制当前不可用并固定为不限。</span></div><div className="dialog-actions"><Button type="button" variant="secondary" disabled={working} onClick={onClose}>取消</Button><Button type="submit" disabled={!valid || working}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />保存授权</>}</Button></div></form></Dialog>;
 }
 
 function ForwardTable({ forwards, templates, admin = false, onAction, onDelete, onCopy }: {

@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
-import { extractList, ForwardingManagement } from "./forwarding-management";
+import { extractList, ForwardingManagement, groupTunnelTemplates, isReverseHops } from "./forwarding-management";
 import type { RemoteServer } from "./types";
 
 vi.hoisted(() => {
@@ -407,5 +407,117 @@ describe("administrator tunnel composition", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "隧道名称" }), { target: { value: "东京-洛杉矶" } });
     fireEvent.click(screen.getByRole("button", { name: "加入路线" }));
     expect(within(dialog).getByText(/将同时创建正向与反向两条独立隧道模板（共用相同名称）/)).toBeInTheDocument();
+  });
+
+  it("merges bidirectional mirror templates into a single row with bidirectional indicator and synchronized actions", async () => {
+    const notify = vi.fn();
+    const forwardTemplate = {
+      id: 201,
+      public_id: "tun_tw_hk",
+      name: "港台",
+      state: "active",
+      billing_mode: "both" as const,
+      traffic_multiplier_milli: 1000,
+      port_range_start: 1024,
+      port_range_end: 65535,
+      version: 1,
+      hops: [
+        { position: 0, server_id: 11, server_name: "Bestvm TW" },
+        { position: 1, server_id: 12, server_name: "Bestvm HK" },
+      ],
+    };
+    const reverseTemplate = {
+      id: 202,
+      public_id: "tun_hk_tw",
+      name: "港台",
+      state: "active",
+      billing_mode: "both" as const,
+      traffic_multiplier_milli: 1000,
+      port_range_start: 1024,
+      port_range_end: 65535,
+      version: 1,
+      hops: [
+        { position: 0, server_id: 12, server_name: "Bestvm HK" },
+        { position: 1, server_id: 11, server_name: "Bestvm TW" },
+      ],
+    };
+
+    // Test pure grouping logic first
+    const groups = groupTunnelTemplates([forwardTemplate, reverseTemplate]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].name).toBe("港台");
+    expect(groups[0].isBidirectional).toBe(true);
+    expect(groups[0].templates).toHaveLength(2);
+
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/tunnel-templates") return { templates: [forwardTemplate, reverseTemplate] } as T;
+      if (path === "/api/admin/remote-servers") return { servers: [
+        { id: 11, name: "Bestvm TW", status: "online", ws_connected: true, is_federated: false },
+        { id: 12, name: "Bestvm HK", status: "online", ws_connected: true, is_federated: false },
+      ] } as T;
+      if (path === "/api/admin/users") return { users: [] } as T;
+      if (path === "/api/admin/forwards") return { forwards: [] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    const put = vi.spyOn(api, "put").mockResolvedValue({});
+    const del = vi.spyOn(api, "delete").mockResolvedValue({});
+
+    render(<ForwardingManagement isAdmin notify={notify} />);
+
+    // Tab count should be 1, not 2
+    const templateTab = await screen.findByRole("tab", { name: /隧道模板/ });
+    expect(templateTab).toHaveTextContent("1");
+
+    // Table should have only 1 row for 港台
+    const tableRows = screen.getAllByRole("row");
+    // Row 0 is header, Row 1 is data row
+    expect(tableRows).toHaveLength(2);
+
+    expect(screen.getByText("港台")).toBeInTheDocument();
+    expect(screen.getAllByText("双向")).toHaveLength(2); // One for badge, one for billing mode
+    expect(screen.getByText(/2 跳 · 双向 · TCP \+ UDP/)).toBeInTheDocument();
+
+    // Test Pause (停止新建) triggers state update on BOTH templates
+    const pauseButton = screen.getByRole("button", { name: "停止 港台 新建" });
+    fireEvent.click(pauseButton);
+
+    await waitFor(() => {
+      expect(put).toHaveBeenCalledWith(
+        "/api/admin/tunnel-templates/tun_tw_hk/state",
+        { state: "draining", version: 1 },
+        { idempotencyKey: expect.any(String) },
+      );
+      expect(put).toHaveBeenCalledWith(
+        "/api/admin/tunnel-templates/tun_hk_tw/state",
+        { state: "draining", version: 1 },
+        { idempotencyKey: expect.any(String) },
+      );
+      expect(notify).toHaveBeenCalledWith("双向隧道已停止新建");
+    });
+
+    // Test Delete triggers bidirectional confirmation and deletes BOTH templates
+    const deleteButton = screen.getByRole("button", { name: "删除 港台" });
+    fireEvent.click(deleteButton);
+
+    const confirmDialog = await screen.findByRole("dialog", { name: "删除双向隧道模板" });
+    expect(confirmDialog).toBeInTheDocument();
+    expect(within(confirmDialog).getByText(/将同时删除“港台”的正反两条隧道模板/)).toBeInTheDocument();
+
+    fireEvent.click(within(confirmDialog).getByRole("button", { name: "确认删除" }));
+
+    await waitFor(() => {
+      expect(del).toHaveBeenCalledWith(
+        "/api/admin/tunnel-templates/tun_tw_hk",
+        undefined,
+        { idempotencyKey: expect.any(String) },
+      );
+      expect(del).toHaveBeenCalledWith(
+        "/api/admin/tunnel-templates/tun_hk_tw",
+        undefined,
+        { idempotencyKey: expect.any(String) },
+      );
+      expect(notify).toHaveBeenCalledWith("双向隧道模板已删除");
+    });
   });
 });

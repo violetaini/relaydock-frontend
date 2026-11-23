@@ -309,4 +309,42 @@ describe("package management", () => {
     const grantedIDs = payload.forwarding_grants.map((g) => g.tunnel_id).sort();
     expect(grantedIDs).toEqual([10, 11]);
   });
+
+  it("filters servers and routes within the package editor dialog", async () => {
+    const serversList = [
+      { id: 1, name: "香港入口 01", status: "online", ip_address: "1.1.1.1" },
+      { id: 2, name: "日本入口 02", status: "online", ip_address: "2.2.2.2" },
+    ];
+    const tunnelsList = [
+      { id: 10, name: "港台专线", state: "active", billing_mode: "both", hops: [{ server_id: 1, position: 1 }] },
+      { id: 20, name: "美日专线", state: "active", billing_mode: "both", hops: [{ server_id: 2, position: 1 }] },
+    ];
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/packages") return { packages: [packageItem] } as T;
+      if (path === "/api/admin/nodes") return { nodes } as T;
+      if (path === "/api/admin/remote-servers") return { servers: serversList } as T;
+      if (path === "/api/admin/tunnel-templates") return { tunnels: tunnelsList } as T;
+      if (path === "/api/admin/rule-templates") return { templates: ["default.yaml"] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    render(<PackagesPage notify={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 标准套餐" }));
+
+    // Filter server
+    const serverFilter = screen.getByRole("textbox", { name: "筛选服务器" });
+    fireEvent.change(serverFilter, { target: { value: "日本" } });
+    expect(screen.getByText("日本入口 02")).toBeInTheDocument();
+    expect(screen.queryByText("香港入口 01")).not.toBeInTheDocument();
+
+    // Clear filter
+    fireEvent.change(serverFilter, { target: { value: "" } });
+    expect(screen.getByText("香港入口 01")).toBeInTheDocument();
+
+    // Filter tunnel route
+    const tunnelFilter = screen.getByRole("textbox", { name: "筛选转发线路" });
+    fireEvent.change(tunnelFilter, { target: { value: "美日" } });
+    expect(screen.getByText(/美日专线/)).toBeInTheDocument();
+    expect(screen.queryByText(/港台专线/)).not.toBeInTheDocument();
+  });
 });

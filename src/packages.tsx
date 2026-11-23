@@ -376,6 +376,8 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
     };
   });
   const [nodeSearch, setNodeSearch] = useState("");
+  const [serverSearch, setServerSearch] = useState("");
+  const [tunnelSearch, setTunnelSearch] = useState("");
   const [templates, setTemplates] = useState<string[]>([]);
   const [showAdvanced, setShowAdvanced] = useState(Boolean(
     Object.keys(item?.node_multipliers ?? {}).length ||
@@ -494,7 +496,61 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
     });
   };
 
+  const visibleServers = useMemo(() => {
+    const query = serverSearch.trim().toLowerCase();
+    if (!query) return servers;
+    return servers.filter((server) => {
+      const nameMatch = (server.name || "").toLowerCase().includes(query);
+      const ipMatch = (server.ip_address || "").toLowerCase().includes(query);
+      const statusMatch = (server.status || "").toLowerCase().includes(query);
+      return nameMatch || ipMatch || statusMatch;
+    });
+  }, [serverSearch, servers]);
+
+  const allVisibleServersSelected = visibleServers.length > 0 &&
+    visibleServers.every((server) => form.serverGrants.some((g) => g.server_id === server.id));
+
+  const toggleVisibleServers = () => {
+    setForm((current) => {
+      const visibleIDs = visibleServers.map((s) => s.id);
+      if (allVisibleServersSelected) {
+        return {
+          ...current,
+          serverGrants: current.serverGrants.filter((g) => !visibleIDs.includes(g.server_id)),
+        };
+      }
+      const unselected = visibleServers.filter((s) => !current.serverGrants.some((g) => g.server_id === s.id));
+      const newGrants: PackageServerGrant[] = unselected.map((s) => ({
+        server_id: s.id,
+        max_active_nodes: 0,
+        speed_limit_mbps: 0,
+        connection_limit: 0,
+        traffic_limit_bytes: 0,
+        billing_mode: "download",
+        reset_policy: "none",
+        reset_day: 1,
+        allowed_protocols: [],
+        allowed_protocol_profiles: [],
+      }));
+      return {
+        ...current,
+        serverGrants: [...current.serverGrants, ...newGrants],
+      };
+    });
+  };
+
   const tunnelGroups = useMemo(() => groupTunnelTemplates(tunnels, servers), [tunnels, servers]);
+
+  const visibleTunnelGroups = useMemo(() => {
+    const query = tunnelSearch.trim().toLowerCase();
+    if (!query) return tunnelGroups;
+    return tunnelGroups.filter((group) => {
+      const nameMatch = (group.name || "").toLowerCase().includes(query);
+      const descMatch = (group.description || "").toLowerCase().includes(query);
+      const hopsMatch = (group.hops || []).some((h) => (h.name || "").toLowerCase().includes(query));
+      return nameMatch || descMatch || hopsMatch;
+    });
+  }, [tunnelSearch, tunnelGroups]);
 
   const toggleTunnelGroup = (group: TunnelTemplateGroup) => {
     const primaryID = Number(group.primary.id);
@@ -647,9 +703,31 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
           ) : null}
         </div>
 
-        <div className="surface-heading package-subheading"><div><h2>服务器节点授权（{form.serverGrants.length}）</h2><small>允许账号在指定服务器创建自己的节点，也可开通管理员发布的节点</small></div></div>
+        <div className="surface-heading package-subheading">
+          <div>
+            <h2>服务器节点授权（{form.serverGrants.length}）</h2>
+            <small>允许账号在指定服务器创建自己的节点，也可开通管理员发布的节点</small>
+          </div>
+          {visibleServers.length > 0 ? (
+            <Button type="button" variant="ghost" onClick={toggleVisibleServers}>
+              {allVisibleServersSelected ? "取消当前结果" : "选择当前结果"}
+            </Button>
+          ) : null}
+        </div>
+        <Field label="筛选服务器">
+          <input
+            value={serverSearch}
+            onChange={(event) => setServerSearch(event.target.value)}
+            placeholder="名称、IP 地址或状态"
+            aria-label="筛选服务器"
+          />
+        </Field>
         <div className="package-entitlement-list">
-          {servers.length === 0 ? <span className="muted">暂无可授权服务器</span> : servers.map((server) => {
+          {visibleServers.length === 0 ? (
+            <div className="package-empty-entitlement">
+              <span className="muted">{servers.length === 0 ? "暂无可授权服务器" : "没有匹配的服务器"}</span>
+            </div>
+          ) : visibleServers.map((server) => {
             const grant = form.serverGrants.find((itemGrant) => itemGrant.server_id === server.id);
             const protocolProfiles = grant ? selectedServerProfiles(grant) : [];
             const protocolUnrestricted = Boolean(grant && !grant.allowed_protocol_profiles?.length && !grant.allowed_protocols?.length);
@@ -707,13 +785,30 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
           })}
         </div>
 
-        <div className="surface-heading package-subheading"><div><h2>转发线路授权（{tunnelGroups.filter((g) => {
-          const pid = Number(g.primary.id);
-          const fid = g.partner ? Number(g.partner.id) : null;
-          return form.forwardingGrants.some((grant) => grant.tunnel_id === pid || (fid !== null && grant.tunnel_id === fid));
-        }).length}）</h2><small>允许账号在选定线路模板上创建转发规则</small></div></div>
+        <div className="surface-heading package-subheading">
+          <div>
+            <h2>转发线路授权（{tunnelGroups.filter((g) => {
+              const pid = Number(g.primary.id);
+              const fid = g.partner ? Number(g.partner.id) : null;
+              return form.forwardingGrants.some((grant) => grant.tunnel_id === pid || (fid !== null && grant.tunnel_id === fid));
+            }).length}）</h2>
+            <small>允许账号在选定线路模板上创建转发规则</small>
+          </div>
+        </div>
+        <Field label="筛选转发线路">
+          <input
+            value={tunnelSearch}
+            onChange={(event) => setTunnelSearch(event.target.value)}
+            placeholder="线路名称、跳点或描述"
+            aria-label="筛选转发线路"
+          />
+        </Field>
         <div className="package-entitlement-list">
-          {tunnelGroups.length === 0 ? <span className="muted">暂无可授权转发线路</span> : tunnelGroups.map((group) => {
+          {visibleTunnelGroups.length === 0 ? (
+            <div className="package-empty-entitlement">
+              <span className="muted">{tunnelGroups.length === 0 ? "暂无可授权转发线路" : "没有匹配的转发线路"}</span>
+            </div>
+          ) : visibleTunnelGroups.map((group) => {
             const primaryID = Number(group.primary.id);
             const partnerID = group.partner ? Number(group.partner.id) : null;
             const grant = form.forwardingGrants.find((itemGrant) => itemGrant.tunnel_id === primaryID) ||

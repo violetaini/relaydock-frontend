@@ -1371,7 +1371,7 @@ function ForwardFlowVisualizer({
     <div className="fm-flow-visualizer" aria-label="流量走向动效图">
       <div className="fm-flow-header">
         <div className="fm-flow-title">
-          <Activity size={15} className="fm-flow-pulse-icon" />
+          <Activity size={14} className="fm-flow-pulse-icon" />
           <span>实时流量走向模拟</span>
         </div>
         <div className={`fm-flow-status-badge is-${tone}`}>
@@ -1381,7 +1381,7 @@ function ForwardFlowVisualizer({
 
       <div className="fm-flow-track">
         <div className="fm-flow-node is-client">
-          <div className="fm-flow-node-icon"><Laptop size={17} /></div>
+          <div className="fm-flow-node-icon"><Laptop size={15} /></div>
           <div className="fm-flow-node-meta">
             <strong>客户端</strong>
             <small>用户设备</small>
@@ -1402,7 +1402,7 @@ function ForwardFlowVisualizer({
           return (
             <Fragment key={`${hop.name}-${idx}`}>
               <div className={`fm-flow-node ${isEntry ? "is-entry" : isExit ? "is-exit" : "is-hop"}`}>
-                <div className="fm-flow-node-icon"><Server size={17} /></div>
+                <div className="fm-flow-node-icon"><Server size={15} /></div>
                 <div className="fm-flow-node-meta">
                   <strong title={hop.name}>{hop.name}</strong>
                   <small>{isEntry ? "入口 (第1跳)" : isExit ? `出口 (第${hops.length}跳)` : `中转 #${idx + 1}`}</small>
@@ -1427,7 +1427,7 @@ function ForwardFlowVisualizer({
         })}
 
         <div className={`fm-flow-node is-target ${isLoopback ? "is-warn" : isLocalHandover ? "is-good" : ""}`}>
-          <div className="fm-flow-node-icon"><Radio size={17} /></div>
+          <div className="fm-flow-node-icon"><Radio size={15} /></div>
           <div className="fm-flow-node-meta">
             <strong title={target?.node_name || "未选目标"}>{target?.node_name || "目标节点"}</strong>
             <small>{target ? target.protocol.toUpperCase() : "等待选择"}</small>
@@ -1442,7 +1442,7 @@ function ForwardFlowVisualizer({
         </div>
 
         <div className="fm-flow-node is-internet">
-          <div className="fm-flow-node-icon"><Globe size={17} /></div>
+          <div className="fm-flow-node-icon"><Globe size={15} /></div>
           <div className="fm-flow-node-meta">
             <strong>目标网站</strong>
             <small>Internet</small>
@@ -1452,7 +1452,26 @@ function ForwardFlowVisualizer({
 
       <div className={`fm-flow-diagnostic is-${tone}`}>
         <Info size={14} />
-        <span>{diagnostic}</span>
+        <div className="fm-flow-diag-content">
+          <span>{diagnostic}</span>
+          {target ? (
+            <div className="fm-flow-target-meta">
+              <span>节点 ID: {target.id}</span>
+              <span className="fm-flow-meta-sep">·</span>
+              <span>入站: {target.inbound_tag || "默认入站"}</span>
+              <span className="fm-flow-meta-sep">·</span>
+              <span className={target.enabled ? "fm-meta-good" : "fm-meta-warn"}>
+                {target.enabled ? "正常运行" : "已停用"}
+              </span>
+              {target.tag ? (
+                <>
+                  <span className="fm-flow-meta-sep">·</span>
+                  <span>标签: {target.tag}</span>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </div>
     </div>
   );
@@ -1573,30 +1592,21 @@ function ForwardWizard({ grants, initialGrantID, nodes, templates = [], onClose,
   return <Dialog title="创建用户转发" description="TCP 与 UDP 共用端口，支持双向隧道两端使用相同入口端口。" onClose={onClose} wide dismissible={!working}><div className="fm-wizard"><ol className="fm-steps" aria-label="创建转发步骤">{([[1, "选择隧道"], [2, "选择目标"], [3, "转发设置"], [4, "确认创建"]] as const).map(([number, label]) => <li key={number} className={step === number ? "is-active" : step > number ? "is-done" : ""}><span>{step > number ? <Check size={14} /> : number}</span><strong>{label}</strong></li>)}</ol>{error ? <ErrorState message={error} /> : null}
     <div className="fm-wizard-content">{step === 1 ? (!grants.length ? <EmptyState icon={<Route size={25} />} title="暂无可用隧道" description="管理员尚未开通可用路线或模板未激活" /> : <div className="fm-choice-grid">{grants.map((item) => { const template = tunnelForGrant(item, templates); return <button type="button" key={String(resourceID(item))} className={sameID(resourceID(item), draft.grantID) ? "is-active" : ""} onClick={() => update("grantID", String(resourceID(item)))}><span><Route size={19} /><strong>{tunnelName(item, templates)}</strong></span>{template ? <RouteLine hops={routeHops(template).map((hop) => ({ name: hop.name }))} /> : null}<small>{item.per_forward_speed_mbps ? `${item.per_forward_speed_mbps} Mbps` : "不限速"} · {item.per_forward_connection_limit ? `${item.per_forward_connection_limit} 连接` : "不限连接"} · 至 {displayDate(item.expires_at)}</small></button>; })}</div>) : null}
       {step === 2 ? <>
-        <div className="fm-target-types">
+        <div className="fm-target-segmented">
           <button type="button" className="is-active">
-            <Server size={19} />
-            <span>
-              <strong>受管节点</strong>
-              <small>从自己已有且可访问的节点中选择</small>
-            </span>
-            <Check size={16} />
+            <Server size={14} />
+            <span>受管节点</span>
+            <Check size={13} />
           </button>
-          <button type="button" disabled>
-            <Network size={19} />
-            <span>
-              <strong>自定义公网目标</strong>
-              <small>首版暂未开放</small>
-            </span>
+          <button type="button" disabled title="首版暂未开放">
+            <Network size={14} />
+            <span>自定义公网目标（暂未开放）</span>
           </button>
         </div>
         {nodes.length ? (
-          <div className="fm-form" style={{ marginTop: 14 }}>
+          <div className="fm-form" style={{ marginTop: 10 }}>
             <div className="fm-form-grid">
-              <Field
-                label="目标服务器"
-                hint={selectedServer ? `已筛选 “${selectedServer}” 下的节点` : "选择服务器以缩小范围，或直接在下方选节点"}
-              >
+              <Field label="目标服务器">
                 <select
                   aria-label="目标服务器"
                   value={selectedServer}
@@ -1611,12 +1621,9 @@ function ForwardWizard({ grants, initialGrantID, nodes, templates = [], onClose,
                 </select>
               </Field>
 
-              <Field
-                label="节点预筛选"
-                hint={nodeSearch ? `匹配到 ${filteredNodes.length} 个节点` : "输入名称、协议即时预筛选"}
-              >
+              <Field label="节点预筛选">
                 <div className="fm-search-wrap">
-                  <Search size={16} className="fm-search-icon" />
+                  <Search size={15} className="fm-search-icon" />
                   <input
                     aria-label="节点预筛选"
                     type="text"
@@ -1631,7 +1638,7 @@ function ForwardWizard({ grants, initialGrantID, nodes, templates = [], onClose,
                       onClick={() => setNodeSearch("")}
                       title="清空搜索"
                     >
-                      <X size={14} />
+                      <X size={13} />
                     </button>
                   ) : null}
                 </div>
@@ -1651,16 +1658,7 @@ function ForwardWizard({ grants, initialGrantID, nodes, templates = [], onClose,
               </div>
             ) : null}
 
-            <Field
-              label="最终目标节点"
-              hint={
-                filteredNodes.length === 0
-                  ? "无匹配节点，请调整搜索关键字或服务器筛选"
-                  : selectedServer
-                    ? `已筛选出 ${filteredNodes.length} 个节点`
-                    : "选择节点将自动带出所属服务器"
-              }
-            >
+            <Field label="最终目标节点">
               <select
                 aria-label="最终目标节点"
                 value={draft.targetNodeID}
@@ -1685,42 +1683,6 @@ function ForwardWizard({ grants, initialGrantID, nodes, templates = [], onClose,
               templates={templates}
               target={target}
             />
-
-            {target ? (
-              <div className="fm-target-node-card">
-                <div className="fm-target-node-header">
-                  <div>
-                    <strong>{target.node_name}</strong>
-                    <small>ID: {target.id}</small>
-                  </div>
-                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    <Badge tone="info">{target.protocol.toUpperCase()}</Badge>
-                    <Badge tone={target.enabled ? "good" : "neutral"}>
-                      {target.enabled ? "正常运行" : "停用"}
-                    </Badge>
-                  </div>
-                </div>
-                <div className="fm-target-node-details">
-                  <div>
-                    <small>所属服务器</small>
-                    <span>
-                      <Server size={14} />
-                      {target.original_server || "外部导入"}
-                    </span>
-                  </div>
-                  <div>
-                    <small>入站标识</small>
-                    <span>{target.inbound_tag || "默认入站"}</span>
-                  </div>
-                  {target.tag ? (
-                    <div>
-                      <small>分组标签</small>
-                      <span>{target.tag}</span>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
           </div>
         ) : (
           <EmptyState

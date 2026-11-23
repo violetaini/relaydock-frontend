@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import {
   Activity,
   ArrowDown,
@@ -10,9 +10,13 @@ import {
   CirclePlay,
   Copy,
   Gauge,
+  Globe,
+  Info,
+  Laptop,
   Network,
   Pencil,
   Plus,
+  Radio,
   RefreshCw,
   Route,
   Search,
@@ -1300,6 +1304,160 @@ function UserGrantCards({ grants, onCreate }: { grants: TunnelGrant[]; onCreate:
   })}</div>;
 }
 
+function ForwardFlowVisualizer({
+  grantTunnel,
+  grant,
+  templates = [],
+  target,
+}: {
+  grantTunnel?: TunnelTemplate;
+  grant?: TunnelGrant;
+  templates?: TunnelTemplate[];
+  target?: NodeItem;
+}) {
+  const hops = useMemo(() => {
+    if (grantTunnel) {
+      const raw = routeHops(grantTunnel);
+      if (raw.length > 0) return raw;
+    }
+    return [{ id: 0, name: grant ? tunnelName(grant, templates) : "中转隧道" }];
+  }, [grantTunnel, grant, templates]);
+
+  const entryHop = hops[0];
+  const exitHop = hops[hops.length - 1];
+  const targetServer = (target?.original_server || "").trim();
+  const entryServerName = (entryHop?.name || "").trim().toLowerCase();
+  const exitServerName = (exitHop?.name || "").trim().toLowerCase();
+  const targetServerLower = targetServer.toLowerCase();
+
+  const isLocalHandover = Boolean(
+    targetServer &&
+      exitServerName &&
+      (targetServerLower === exitServerName ||
+        exitServerName.includes(targetServerLower) ||
+        targetServerLower.includes(exitServerName))
+  );
+
+  const isLoopback = Boolean(
+    !isLocalHandover &&
+      targetServer &&
+      entryServerName &&
+      exitServerName &&
+      (targetServerLower === entryServerName ||
+        entryServerName.includes(targetServerLower) ||
+        targetServerLower.includes(entryServerName)) &&
+      entryServerName !== exitServerName
+  );
+
+  let tone: "good" | "warn" | "info" = "info";
+  let statusBadge = "跨区网络交付";
+  let diagnostic = target
+    ? `流量自入口【${entryHop?.name || "入口"}】进入隧道，于出口【${exitHop?.name || "出口"}】发往目标节点【${target.node_name}${targetServer ? ` (${targetServer})` : ""}】。`
+    : "请在上方选择目标节点，即可查看完整的流量走向与拓扑诊断。";
+
+  if (target) {
+    if (isLoopback) {
+      tone = "warn";
+      statusBadge = "⚠️ 绕路折返 (建议反向)";
+      diagnostic = `注意：目标节点与入口同在「${entryHop.name}」，但出口在「${exitHop.name}」。流量将由 ${entryHop.name} 穿透至 ${exitHop.name} 后又折返连回 ${targetServer} 节点，产生额外跨区延迟！建议在步骤一选择反向对称隧道（${exitHop.name} → ${entryHop.name}）。`;
+    } else if (isLocalHandover) {
+      tone = "good";
+      statusBadge = "✓ 同机直连 (极低延迟)";
+      diagnostic = `最佳拓扑：隧道出口【${exitHop.name}】与目标节点归属同一服务器，流量经本机回环直接交付，零额外跨海开销。`;
+    }
+  }
+
+  return (
+    <div className="fm-flow-visualizer" aria-label="流量走向动效图">
+      <div className="fm-flow-header">
+        <div className="fm-flow-title">
+          <Activity size={15} className="fm-flow-pulse-icon" />
+          <span>实时流量走向模拟</span>
+        </div>
+        <div className={`fm-flow-status-badge is-${tone}`}>
+          {statusBadge}
+        </div>
+      </div>
+
+      <div className="fm-flow-track">
+        <div className="fm-flow-node is-client">
+          <div className="fm-flow-node-icon"><Laptop size={17} /></div>
+          <div className="fm-flow-node-meta">
+            <strong>客户端</strong>
+            <small>用户设备</small>
+          </div>
+        </div>
+
+        <div className="fm-flow-connector">
+          <div className="fm-flow-line">
+            <span className="fm-flow-beam" style={{ animationDelay: "0s" }} />
+          </div>
+          <span className="fm-flow-step-tag">入站连接</span>
+        </div>
+
+        {hops.map((hop, idx) => {
+          const isEntry = idx === 0;
+          const isExit = idx === hops.length - 1;
+          const delay = `${(idx + 1) * 0.35}s`;
+          return (
+            <Fragment key={`${hop.name}-${idx}`}>
+              <div className={`fm-flow-node ${isEntry ? "is-entry" : isExit ? "is-exit" : "is-hop"}`}>
+                <div className="fm-flow-node-icon"><Server size={17} /></div>
+                <div className="fm-flow-node-meta">
+                  <strong title={hop.name}>{hop.name}</strong>
+                  <small>{isEntry ? "入口 (第1跳)" : isExit ? `出口 (第${hops.length}跳)` : `中转 #${idx + 1}`}</small>
+                </div>
+              </div>
+
+              <div className="fm-flow-connector">
+                <div className={`fm-flow-line ${isExit ? (isLoopback ? "is-warn" : isLocalHandover ? "is-good" : "") : ""}`}>
+                  <span
+                    className={`fm-flow-beam ${isExit ? (isLoopback ? "is-warn" : isLocalHandover ? "is-good" : "") : ""}`}
+                    style={{ animationDelay: delay }}
+                  />
+                </div>
+                <span className="fm-flow-step-tag">
+                  {isExit
+                    ? (isLocalHandover ? "本机直连" : isLoopback ? "折返公网" : "出口交付")
+                    : "隧道穿透"}
+                </span>
+              </div>
+            </Fragment>
+          );
+        })}
+
+        <div className={`fm-flow-node is-target ${isLoopback ? "is-warn" : isLocalHandover ? "is-good" : ""}`}>
+          <div className="fm-flow-node-icon"><Radio size={17} /></div>
+          <div className="fm-flow-node-meta">
+            <strong title={target?.node_name || "未选目标"}>{target?.node_name || "目标节点"}</strong>
+            <small>{target ? target.protocol.toUpperCase() : "等待选择"}</small>
+          </div>
+        </div>
+
+        <div className="fm-flow-connector">
+          <div className="fm-flow-line">
+            <span className="fm-flow-beam" style={{ animationDelay: `${(hops.length + 1) * 0.35}s` }} />
+          </div>
+          <span className="fm-flow-step-tag">出海访问</span>
+        </div>
+
+        <div className="fm-flow-node is-internet">
+          <div className="fm-flow-node-icon"><Globe size={17} /></div>
+          <div className="fm-flow-node-meta">
+            <strong>目标网站</strong>
+            <small>Internet</small>
+          </div>
+        </div>
+      </div>
+
+      <div className={`fm-flow-diagnostic is-${tone}`}>
+        <Info size={14} />
+        <span>{diagnostic}</span>
+      </div>
+    </div>
+  );
+}
+
 function ForwardWizard({ grants, initialGrantID, nodes, templates = [], onClose, onComplete }: { grants: TunnelGrant[]; initialGrantID?: string; nodes: NodeItem[]; templates?: TunnelTemplate[]; onClose: () => void; onComplete: () => Promise<void> }) {
   const [step, setStep] = useState(1);
   const [draft, setDraft] = useState<ForwardDraft>({ grantID: grants.some((grant) => sameID(resourceID(grant), initialGrantID)) ? initialGrantID || "" : grants[0] ? String(resourceID(grants[0])) : "", targetNodeID: nodes[0] ? String(nodes[0].id) : "", name: "", requestedEntryPort: "", sourceCIDRs: "" });
@@ -1520,6 +1678,13 @@ function ForwardWizard({ grants, initialGrantID, nodes, templates = [], onClose,
                 )}
               </select>
             </Field>
+
+            <ForwardFlowVisualizer
+              grantTunnel={grantTunnel}
+              grant={grant}
+              templates={templates}
+              target={target}
+            />
 
             {target ? (
               <div className="fm-target-node-card">

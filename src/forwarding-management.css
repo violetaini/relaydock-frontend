@@ -725,6 +725,314 @@
   font-weight: 500;
 }
 
+/* Traffic Flow Visualizer & Live Data Stream Animation */
+.fm-flow-visualizer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  background: color-mix(in srgb, var(--surface) 60%, var(--surface-muted));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+.fm-flow-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.fm-flow-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.fm-flow-pulse-icon {
+  color: var(--accent);
+  animation: fmPulseGlow 2s ease-in-out infinite;
+}
+
+@keyframes fmPulseGlow {
+  0%, 100% {
+    opacity: 0.65;
+    transform: scale(0.96);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.18);
+    filter: drop-shadow(0 0 6px var(--accent));
+  }
+}
+
+.fm-flow-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  font-size: 11.5px;
+  font-weight: 650;
+  border-radius: 20px;
+  letter-spacing: 0.2px;
+}
+
+.fm-flow-status-badge.is-good {
+  background: rgba(34, 197, 94, 0.14);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  box-shadow: 0 0 10px rgba(34, 197, 94, 0.15);
+}
+
+.fm-flow-status-badge.is-warn {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.2);
+  animation: fmWarningBlink 2s ease-in-out infinite;
+}
+
+@keyframes fmWarningBlink {
+  0%, 100% { opacity: 0.9; }
+  50% { opacity: 1; filter: drop-shadow(0 0 4px rgba(245, 158, 11, 0.5)); }
+}
+
+.fm-flow-status-badge.is-info {
+  background: rgba(59, 130, 246, 0.14);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+}
+
+/* Track container */
+.fm-flow-track {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 10px 4px 6px 4px;
+}
+
+.fm-flow-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  flex-shrink: 0;
+  min-width: 80px;
+  max-width: 110px;
+}
+
+.fm-flow-node-icon {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  color: var(--text-soft);
+  margin-bottom: 7px;
+  transition: all 0.2s ease;
+}
+
+.fm-flow-node.is-client .fm-flow-node-icon {
+  border-color: #60a5fa;
+  color: #60a5fa;
+  background: color-mix(in srgb, #60a5fa 9%, var(--surface));
+  box-shadow: 0 0 10px rgba(96, 165, 250, 0.25);
+}
+
+.fm-flow-node.is-entry .fm-flow-node-icon {
+  border-color: #a78bfa;
+  color: #c4b5fd;
+  background: color-mix(in srgb, #a78bfa 10%, var(--surface));
+  box-shadow: 0 0 10px rgba(167, 139, 250, 0.25);
+}
+
+.fm-flow-node.is-hop .fm-flow-node-icon {
+  border-color: #94a3b8;
+  color: #cbd5e1;
+  background: color-mix(in srgb, #94a3b8 8%, var(--surface));
+}
+
+.fm-flow-node.is-exit .fm-flow-node-icon {
+  border-color: #38bdf8;
+  color: #7dd3fc;
+  background: color-mix(in srgb, #38bdf8 10%, var(--surface));
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.25);
+}
+
+.fm-flow-node.is-target .fm-flow-node-icon {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.fm-flow-node.is-target.is-good .fm-flow-node-icon {
+  border-color: #10b981;
+  color: #34d399;
+  background: color-mix(in srgb, #10b981 14%, var(--surface));
+  box-shadow: 0 0 14px rgba(16, 185, 129, 0.35);
+}
+
+.fm-flow-node.is-target.is-warn .fm-flow-node-icon {
+  border-color: #f59e0b;
+  color: #fbbf24;
+  background: color-mix(in srgb, #f59e0b 14%, var(--surface));
+  box-shadow: 0 0 16px rgba(245, 158, 11, 0.4);
+}
+
+.fm-flow-node.is-internet .fm-flow-node-icon {
+  border-color: #34d399;
+  color: #6ee7b7;
+  background: color-mix(in srgb, #34d399 9%, var(--surface));
+  box-shadow: 0 0 10px rgba(52, 211, 153, 0.25);
+}
+
+.fm-flow-node-meta strong {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 650;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.fm-flow-node-meta small {
+  display: block;
+  margin-top: 2px;
+  font-size: 10.5px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* Connector & Laser Data Stream Animation */
+.fm-flow-connector {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1 1 44px;
+  min-width: 44px;
+  padding: 0 4px;
+  top: -12px; /* align with node icons */
+}
+
+.fm-flow-line {
+  position: relative;
+  width: 100%;
+  height: 3px;
+  background: color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.fm-flow-line.is-good {
+  background: rgba(34, 197, 94, 0.3);
+}
+
+.fm-flow-line.is-warn {
+  background: rgba(245, 158, 11, 0.35);
+}
+
+.fm-flow-beam {
+  position: absolute;
+  top: 0;
+  left: -60px;
+  width: 50px;
+  height: 100%;
+  background: linear-gradient(90deg, transparent 0%, var(--accent) 55%, #ffffff 85%, var(--accent) 100%);
+  box-shadow: 0 0 8px var(--accent);
+  border-radius: 2px;
+  animation: fmDataStream 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.fm-flow-beam.is-good {
+  background: linear-gradient(90deg, transparent 0%, #10b981 55%, #a7f3d0 85%, #10b981 100%);
+  box-shadow: 0 0 9px #10b981;
+  animation: fmDataStream 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.fm-flow-beam.is-warn {
+  background: linear-gradient(90deg, transparent 0%, #f59e0b 45%, #ef4444 80%, #ffffff 95%);
+  box-shadow: 0 0 10px #f59e0b;
+  animation: fmDataStream 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@keyframes fmDataStream {
+  0% {
+    left: -60px;
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    left: 100%;
+    opacity: 0;
+  }
+}
+
+.fm-flow-step-tag {
+  margin-top: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-faint);
+  white-space: nowrap;
+  letter-spacing: 0.2px;
+}
+
+/* Diagnostic info banner */
+.fm-flow-diagnostic {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.fm-flow-diagnostic svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.fm-flow-diagnostic.is-good {
+  background: rgba(34, 197, 94, 0.08);
+  border: 1px solid rgba(34, 197, 94, 0.25);
+  color: #86efac;
+}
+
+.fm-flow-diagnostic.is-warn {
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.32);
+  color: #fde047;
+}
+
+.fm-flow-diagnostic.is-info {
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  color: #93c5fd;
+}
+
 @media (max-width: 1050px) {
   .fm-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .fm-metric:nth-child(2) { border-right: 0; }

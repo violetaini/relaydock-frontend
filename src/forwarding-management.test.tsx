@@ -732,5 +732,62 @@ describe("administrator tunnel composition", () => {
     fireEvent.click(clearButton);
     expect(searchInput).toHaveValue("");
     expect(within(nodeSelect).getAllByRole("option")).toHaveLength(3);
+
+    // 4. 实时流量走向动效图与拓扑诊断：
+    const flowVisualizer = screen.getByLabelText("流量走向动效图");
+    expect(flowVisualizer).toBeInTheDocument();
+    expect(within(flowVisualizer).getByText("实时流量走向模拟")).toBeInTheDocument();
+    expect(within(flowVisualizer).getByText("客户端")).toBeInTheDocument();
+    expect(within(flowVisualizer).getByText("目标网站")).toBeInTheDocument();
+
+    // Tunnel is "东京到洛杉矶" (Entry: 东京入口, Exit: 洛杉矶出口)
+    // When node is 42 (original_server: "Bestvm JP"): cross-network
+    expect(within(flowVisualizer).getByText("跨区网络交付")).toBeInTheDocument();
+  });
+
+  it("visualizes traffic flow and warns on loopback or highlights local handover", async () => {
+    const notify = vi.fn();
+    const testNodes = [
+      { id: 101, node_name: "东京出口节点", protocol: "vless", enabled: true, original_server: "东京入口" },
+      { id: 102, node_name: "洛杉矶直连节点", protocol: "trojan", enabled: true, original_server: "洛杉矶出口" },
+    ];
+
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/tunnel-templates") return { templates: [tunnel] } as T;
+      if (path === "/api/admin/remote-servers") return { servers: [
+        { id: 11, name: "东京入口", status: "online", ws_connected: true, is_federated: false },
+        { id: 12, name: "洛杉矶出口", status: "online", ws_connected: true, is_federated: false },
+      ] } as T;
+      if (path === "/api/admin/users") return { users: [{ username: "admin", nickname: "管理员", role: "admin" }] } as T;
+      if (path === "/api/admin/forwards") return { forwards: [] } as T;
+      if (path === "/api/admin/users/admin/tunnel-grants") return { grants: [
+        { id: 99, public_id: "grant_admin_tokyo", username: "admin", tunnel_id: 7, enabled: true, state: "active" },
+      ] } as T;
+      if (path === "/api/user/nodes") return { nodes: testNodes } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    render(<ForwardingManagement isAdmin currentUsername="admin" notify={notify} />);
+
+    // Open wizard to Step 2
+    fireEvent.click(await screen.findByRole("button", { name: "创建转发" }));
+    const dialog = await screen.findByRole("dialog", { name: "创建用户转发" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "下一步" }));
+
+    const nodeSelect = await screen.findByRole("combobox", { name: "最终目标节点" });
+    const flowVisualizer = screen.getByLabelText("流量走向动效图");
+
+    // Case 1: Node 101 has server "东京入口".
+    // Tunnel is 东京入口 -> 洛杉矶出口. Exit is 洛杉矶出口, Target is 东京入口 => LOOPBACK!
+    expect(nodeSelect).toHaveValue("101");
+    expect(within(flowVisualizer).getByText("⚠️ 绕路折返 (建议反向)")).toBeInTheDocument();
+    expect(within(flowVisualizer).getByText(/产生额外跨区延迟/)).toBeInTheDocument();
+
+    // Case 2: Node 102 has server "洛杉矶出口".
+    // Tunnel exit is 洛杉矶出口, Target is 洛杉矶出口 => LOCAL HANDOVER!
+    fireEvent.change(nodeSelect, { target: { value: "102" } });
+    expect(nodeSelect).toHaveValue("102");
+    expect(within(flowVisualizer).getByText("✓ 同机直连 (极低延迟)")).toBeInTheDocument();
+    expect(within(flowVisualizer).getByText(/零额外跨海开销/)).toBeInTheDocument();
   });
 });

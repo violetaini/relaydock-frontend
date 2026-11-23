@@ -1520,6 +1520,19 @@ function GrantDialog({
 
   const templateGroups = useMemo(() => groupTunnelTemplates(activeTemplates, servers), [activeTemplates, servers]);
 
+  const [tunnelFilter, setTunnelFilter] = useState("");
+
+  const filteredTemplateGroups = useMemo(() => {
+    if (!tunnelFilter.trim()) return templateGroups;
+    const q = tunnelFilter.trim().toLowerCase();
+    return templateGroups.filter((g) => {
+      const nameMatch = g.name.toLowerCase().includes(q);
+      const descMatch = (g.description || "").toLowerCase().includes(q);
+      const hopsMatch = (g.hops || []).some((h) => (h.name || "").toLowerCase().includes(q));
+      return nameMatch || descMatch || hopsMatch;
+    });
+  }, [templateGroups, tunnelFilter]);
+
   // Selected group keys for batch tunnel granting
   const [selectedGroupKeys, setSelectedGroupKeys] = useState<Set<string>>(() => {
     if (grant) {
@@ -1541,11 +1554,27 @@ function GrantDialog({
   };
 
   const selectAllGroups = () => {
-    setSelectedGroupKeys(new Set(templateGroups.map((g) => g.key)));
+    if (tunnelFilter.trim()) {
+      setSelectedGroupKeys((current) => {
+        const next = new Set(current);
+        filteredTemplateGroups.forEach((g) => next.add(g.key));
+        return next;
+      });
+    } else {
+      setSelectedGroupKeys(new Set(templateGroups.map((g) => g.key)));
+    }
   };
 
   const clearAllGroups = () => {
-    setSelectedGroupKeys(new Set());
+    if (tunnelFilter.trim()) {
+      setSelectedGroupKeys((current) => {
+        const next = new Set(current);
+        filteredTemplateGroups.forEach((g) => next.delete(g.key));
+        return next;
+      });
+    } else {
+      setSelectedGroupKeys(new Set());
+    }
   };
 
   const selectedUser = users.find((user) => user.username === draft.username);
@@ -1634,11 +1663,34 @@ function GrantDialog({
           <ErrorState message="套餐授权的隧道禁止从本处修改，请前往套餐管理调整。" />
         ) : null}
 
-        <div className="fm-form-grid">
-          <Field label="授权用户">
+        {grant ? (
+          <div className="fm-form-grid">
+            <Field label="授权用户">
+              <select
+                value={draft.username}
+                disabled
+                onChange={(event) => update("username", event.target.value)}
+              >
+                <option value="">选择用户</option>
+                {eligibleUsers.map((user) => (
+                  <option key={user.username} value={user.username}>
+                    {user.nickname || user.username} ({user.username})
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="隧道线路">
+              <input
+                disabled
+                value={tunnelName(grant, templates)}
+                readOnly
+              />
+            </Field>
+          </div>
+        ) : (
+          <Field label="授权用户" className="fm-field-full">
             <select
               value={draft.username}
-              disabled={Boolean(grant)}
               onChange={(event) => update("username", event.target.value)}
             >
               <option value="">选择用户</option>
@@ -1649,31 +1701,47 @@ function GrantDialog({
               ))}
             </select>
           </Field>
-          {grant ? (
-            <Field label="隧道线路">
-              <input
-                disabled
-                value={tunnelName(grant, templates)}
-                readOnly
-              />
-            </Field>
-          ) : null}
-        </div>
+        )}
 
         {!grant ? (
           <div className="fm-tunnel-selection-container">
             <div className="fm-tunnel-selection-header">
-              <span><strong>选择授权隧道线路（可多选，双向隧道点击一次自动授权双向）</strong></span>
-              <div>
+              <div className="fm-tunnel-selection-title">
+                <strong>选择授权隧道路线</strong>
+                <span className="fm-selection-hint">（可多选 · 双向隧道自动双向授权）</span>
+              </div>
+              <div className="fm-tunnel-selection-actions">
+                <div className="fm-tunnel-search-box">
+                  <Search size={14} className="fm-tunnel-search-icon" />
+                  <input
+                    type="text"
+                    aria-label="搜索隧道路线"
+                    placeholder="快速筛选隧道..."
+                    value={tunnelFilter}
+                    onChange={(e) => setTunnelFilter(e.target.value)}
+                  />
+                  {tunnelFilter ? (
+                    <button
+                      type="button"
+                      aria-label="清空搜索"
+                      className="fm-tunnel-search-clear"
+                      onClick={() => setTunnelFilter("")}
+                    >
+                      <X size={12} />
+                    </button>
+                  ) : null}
+                </div>
                 <Button type="button" variant="ghost" onClick={selectAllGroups}>全选所有</Button>
                 <Button type="button" variant="ghost" onClick={clearAllGroups}>清空选择</Button>
               </div>
             </div>
             <div className="fm-tunnel-selection-list">
-              {templateGroups.length === 0 ? (
-                <span className="muted">暂无可授权的隧道线路</span>
+              {filteredTemplateGroups.length === 0 ? (
+                <div className="fm-tunnel-empty-notice">
+                  {templateGroups.length === 0 ? "暂无可授权的隧道线路" : "未找到匹配的隧道路线"}
+                </div>
               ) : (
-                templateGroups.map((group) => {
+                filteredTemplateGroups.map((group) => {
                   const isChecked = selectedGroupKeys.has(group.key);
                   const hops = group.hops || [];
                   const routeText = hops.length > 0
@@ -1691,10 +1759,10 @@ function GrantDialog({
                       />
                       <div className="fm-tunnel-option-content">
                         <div className="fm-tunnel-option-title">
-                          <span>{group.name}{routeText}</span>
+                          <span title={group.name + routeText}>{group.name}{routeText}</span>
                           {group.isBidirectional ? <Badge tone="info">双向对称</Badge> : null}
                         </div>
-                        <div className="fm-tunnel-option-desc">
+                        <div className="fm-tunnel-option-desc" title={group.description || undefined}>
                           {group.description || `${group.isBidirectional ? "双向" : ""}${hops.length ? `${hops.length} 跳线路` : "直连线路"}`}
                         </div>
                       </div>
@@ -1703,9 +1771,19 @@ function GrantDialog({
                 })
               )}
             </div>
-            <small className="fm-cell-note">
-              已选中 {selectedGroupKeys.size} 组隧道（共计将为用户开通 {targetTemplateIDs.length} 条单向/反向路线）
-            </small>
+            <div className="fm-tunnel-selection-footer">
+              <small className="fm-cell-note">
+                已选中 <strong>{selectedGroupKeys.size}</strong> 组隧道
+                {targetTemplateIDs.length > selectedGroupKeys.size ? (
+                  <>（含双向对称隧道，共将为用户开通 <strong>{targetTemplateIDs.length}</strong> 条单向/反向路线）</>
+                ) : null}
+              </small>
+              {templateGroups.length > 4 ? (
+                <small className="fm-scroll-tip">
+                  共 {templateGroups.length} 组路线（面板支持上下滚动）
+                </small>
+              ) : null}
+            </div>
           </div>
         ) : null}
 

@@ -963,6 +963,14 @@ describe("administrator tunnel composition", () => {
     // Bidirectional tunnel "港台隧道" should display once with "双向对称" badge
     expect(within(dialog).getByText("双向对称")).toBeInTheDocument();
 
+    // Test quick search filter in tunnel selection
+    const searchInput = within(dialog).getByRole("textbox", { name: "搜索隧道路线" });
+    fireEvent.change(searchInput, { target: { value: "东京" } });
+    expect(within(dialog).getByText(/东京单向/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/港台/)).not.toBeInTheDocument();
+    fireEvent.change(searchInput, { target: { value: "" } });
+    expect(within(dialog).getByText(/港台/)).toBeInTheDocument();
+
     // Click "全选所有"
     fireEvent.click(within(dialog).getByRole("button", { name: "全选所有" }));
 

@@ -475,7 +475,7 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange, onWallpaperCha
                 {page === "generator" && pageAllowed(page, profile.is_admin, userPages) ? <SubscriptionGeneratorPage notify={notify} /> : null}
                 {page === "servers" && profile.is_admin ? <ServicesWorkbenchPage notify={notify} /> : null}
                 {page === "nodes" && pageAllowed(page, profile.is_admin, userPages) ? <NodesWorkbench isAdmin={profile.is_admin} notify={notify} /> : null}
-                {page === "forwarding" && pageAllowed(page, profile.is_admin, userPages) ? <ForwardingManagement isAdmin={profile.is_admin} notify={notify} /> : null}
+                {page === "forwarding" && pageAllowed(page, profile.is_admin, userPages) ? <ForwardingManagement isAdmin={profile.is_admin} currentUsername={profile.username} notify={notify} /> : null}
                 {page === "traffic" ? <TrafficWorkbenchPage profile={profile} /> : null}
                 {page === "users" && profile.is_admin ? <UsersWorkbenchPage notify={notify} initialScope={usersScope} /> : null}
                 {page === "packages" && profile.is_admin ? <PackagesPage notify={notify} /> : null}

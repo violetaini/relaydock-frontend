@@ -155,7 +155,7 @@ describe("administrator tunnel composition", () => {
     expect(userSelect).toHaveValue("custom-user");
     expect(screen.getByRole("option", { name: /自定义用户/ })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: /套餐用户/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: /管理员/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /管理员/ })).toBeInTheDocument();
   });
 
   it("keeps successful admin data usable when one user's grants fail", async () => {
@@ -559,6 +559,97 @@ describe("administrator tunnel composition", () => {
         { idempotencyKey: expect.any(String) },
       );
       expect(notify).toHaveBeenCalledWith("双向隧道模板已删除");
+    });
+  });
+
+  it("allows administrator to directly create personal forwards with auto-provisioned tunnel grant", async () => {
+    const notify = vi.fn();
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/tunnel-templates") return { templates: [tunnel] } as T;
+      if (path === "/api/admin/remote-servers") return { servers: [
+        { id: 11, name: "东京入口", status: "online", ws_connected: true, is_federated: false },
+        { id: 12, name: "洛杉矶出口", status: "online", ws_connected: true, is_federated: false },
+      ] } as T;
+      if (path === "/api/admin/users") return { users: [{ username: "admin", nickname: "管理员", role: "admin" }] } as T;
+      if (path === "/api/admin/forwards") return { forwards: [] } as T;
+      if (path === "/api/admin/users/admin/tunnel-grants") return { grants: [] } as T;
+      if (path === "/api/user/nodes") return { nodes: [{ id: 42, node_name: "东京 Reality", protocol: "vless", enabled: true }] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/users/admin/tunnel-grants") {
+        return {
+          grant: {
+            id: 99,
+            public_id: "grant_admin_tokyo",
+            username: "admin",
+            tunnel_id: 7,
+            enabled: true,
+            state: "active",
+            starts_at: "2026-01-01T00:00:00Z",
+          },
+        } as T;
+      }
+      if (path === "/api/user/forwards/preflight") {
+        return { data: { result: { success: true, ready: true, entry_address: "tokyo.example.com", entry_port: 2022 } } } as T;
+      }
+      if (path === "/api/user/forwards") {
+        return { data: { forward: { id: "fwd_admin_1", name: "管理员东京转发", observed_state: "active", username: "admin" } } } as T;
+      }
+      throw new Error(`unexpected POST ${path}`);
+    });
+
+    render(<ForwardingManagement isAdmin currentUsername="admin" notify={notify} />);
+
+    // Verify tabs include "我的转发"
+    expect(await screen.findByRole("tab", { name: /我的转发/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /全部转发/ })).toBeInTheDocument();
+
+    // Click "创建转发" in PageHeader
+    const createForwardButton = screen.getByRole("button", { name: "创建转发" });
+    fireEvent.click(createForwardButton);
+
+    // Auto-grant should have been called for admin
+    await waitFor(() => {
+      expect(post).toHaveBeenCalledWith(
+        "/api/admin/users/admin/tunnel-grants",
+        expect.objectContaining({ tunnel_id: "tunnel_tokyo_us" }),
+        { idempotencyKey: expect.any(String) },
+      );
+    });
+
+    // Dialog opens
+    const dialog = await screen.findByRole("dialog", { name: "创建用户转发" });
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByText("东京到洛杉矶")).toBeInTheDocument();
+
+    // Step 1: Click next
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+
+    // Step 2: Target node selected
+    expect(await screen.findByRole("combobox", { name: "最终目标节点" })).toHaveValue("42");
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+
+    // Step 3: Fill forward settings
+    fireEvent.change(screen.getByRole("textbox", { name: "转发名称" }), { target: { value: "管理员东京转发" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: /入口端口/ }), { target: { value: "2022" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+
+    // Step 4: Confirm creation
+    expect(await screen.findByText("转发预检通过")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认创建" }));
+
+    await waitFor(() => {
+      expect(post).toHaveBeenCalledWith("/api/user/forwards", {
+        grant_id: "grant_admin_tokyo",
+        name: "管理员东京转发",
+        target: { type: "managed_node", node_id: 42 },
+        network: "tcp_udp",
+        requested_entry_port: 2022,
+        source_cidrs: [],
+      }, { idempotencyKey: expect.any(String) });
+      expect(notify).toHaveBeenCalledWith("转发创建任务已提交");
     });
   });
 });

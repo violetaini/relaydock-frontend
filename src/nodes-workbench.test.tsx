@@ -18,6 +18,7 @@ import {
   TempSubscriptionDialog,
   TestersDialog,
   URIManagerDialog,
+  replaceUriAddress,
   managedCertificateMatchesServer,
   managedCertificateNameMatchesHost,
   managedTLSHostnameForCertificate,
@@ -964,7 +965,8 @@ describe("node any-door forwarding", () => {
     expect(parentRow?.nextElementSibling).toBe(forwardRow);
 
     expect(within(forwardRow!).getByText("188.253.6.193:2056")).toBeInTheDocument();
-    expect(within(forwardRow!).getByText("TUNNEL")).toBeInTheDocument();
+    expect(within(forwardRow!).getByText("TU")).toBeInTheDocument();
+    expect(within(forwardRow!).getByTitle("TUNNEL")).toBeInTheDocument();
     expect(within(forwardRow!).getByText(/Bestvm TW/)).toBeInTheDocument();
     expect(within(forwardRow!).getByText(/Bestvm HK/)).toBeInTheDocument();
 
@@ -1950,6 +1952,143 @@ describe("single node QR import", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("menu", { name: "香港 A 节点操作" })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
+  });
+
+  describe("replaceUriAddress", () => {
+    it("replaces Shadowsocks SIP002 host, port, and name preserving base64 credentials", () => {
+      const orig = "ss://YWVzLTEyOC1nY206cGMyNnJaZTdGRExablZTMGVZYkpOcWpOaEpCSllVdC9yZGRsak5EenhBZz0=@icable.xiaofankj.com.cn:52143#friend";
+      const replaced = replaceUriAddress(orig, "188.253.6.193", 2056, "hkt");
+      expect(replaced).toBe("ss://YWVzLTEyOC1nY206cGMyNnJaZTdGRExablZTMGVZYkpOcWpOaEpCSllVdC9yZGRsak5EenhBZz0=@188.253.6.193:2056#hkt");
+    });
+
+    it("replaces VLESS host, port, query, and name", () => {
+      const orig = "vless://uuid-1234@edge.example.com:443?security=reality&sni=example.com#old-vless";
+      const replaced = replaceUriAddress(orig, "188.253.6.193", 2056, "hkt");
+      expect(replaced).toBe("vless://uuid-1234@188.253.6.193:2056?security=reality&sni=example.com#hkt");
+    });
+
+    it("replaces VMess JSON parameters correctly", () => {
+      const vmessObj = { v: "2", ps: "old-vmess", add: "old.example.com", port: 10086, id: "u-1", net: "ws" };
+      const rawUri = "vmess://" + btoa(JSON.stringify(vmessObj));
+      const replaced = replaceUriAddress(rawUri, "188.253.6.193", 2056, "hkt");
+      expect(replaced.startsWith("vmess://")).toBe(true);
+      const decoded = JSON.parse(atob(replaced.slice(8)));
+      expect(decoded.add).toBe("188.253.6.193");
+      expect(decoded.port).toBe(2056);
+      expect(decoded.ps).toBe("hkt");
+    });
+
+    it("replaces AnyDoor and Tunnel entry address in NodeShareQRCodeDialog", async () => {
+      const targetNode = node(41, "friend", "shadowsocks", "icable.xiaofankj.com.cn");
+      const origUri = "ss://YWVzLTEyOC1nY206cGMyNnJaZTdGRExablZTMGVZYkpOcWpOaEpCSllVdC9yZGRsak5EenhBZz0=@icable.xiaofankj.com.cn:52143#friend";
+      vi.spyOn(api, "get").mockImplementation(async (path) => {
+        if (path === "/api/admin/nodes/41/uri") {
+          return {
+            item: {
+              username: "admin",
+              node_id: 41,
+              node_name: "friend",
+              protocol: "shadowsocks",
+              node_type: "physical",
+              uri: origUri,
+            },
+          };
+        }
+        throw new Error("unexpected GET " + path);
+      });
+      vi.mocked(QRCode.toDataURL).mockClear();
+
+      render(
+        <NodeShareQRCodeDialog
+          node={targetNode}
+          overrideAddress={{ host: "188.253.6.193", port: 2056 }}
+          displayName="hkt"
+          protocolLabel="TU"
+          notify={vi.fn()}
+          onClose={vi.fn()}
+        />
+      );
+
+      const expectedUri = "ss://YWVzLTEyOC1nY206cGMyNnJaZTdGRExablZTMGVZYkpOcWpOaEpCSllVdC9yZGRsak5EenhBZz0=@188.253.6.193:2056#hkt";
+      expect(await screen.findByRole("img", { name: "hkt 隧道二维码" })).toBeInTheDocument();
+      expect(QRCode.toDataURL).toHaveBeenCalledWith(expectedUri, expect.objectContaining({ width: 320, margin: 2 }));
+      expect(screen.getByText(expectedUri)).toBeInTheDocument();
+    });
+
+    it("tests tunnel latency independently with override_server and override_port", async () => {
+      const target = node(41, "friend", "shadowsocks");
+      const template = {
+        id: "tun-1",
+        tunnel_name: "港台",
+        template_type: "duplex",
+        hops: [
+          { order: 1, ingress_server_id: 11, egress_server_id: 11 },
+          { order: 2, ingress_server_id: 12, egress_server_id: 12 },
+        ],
+      };
+      const fwd = {
+        id: "fwd-1",
+        name: "hkt",
+        tunnel_id: "tun-1",
+        tunnel_name: "港台",
+        target_node_id: 41,
+        entry_host: "188.253.6.193",
+        entry_port: 2056,
+        requested_entry_port: 2056,
+        allocated_entry_port: 2056,
+        status: "active",
+        state: "active",
+        traffic_used_bytes: 1048576,
+        speed_limit_mbps: 100,
+        connection_limit: 0,
+        route: ["Bestvm TW", "Bestvm HK"],
+      };
+
+      vi.spyOn(api, "get").mockImplementation(async (path) => {
+        if (path === "/api/admin/nodes") return { nodes: [target] };
+        if (path === "/api/admin/forwards") return { forwards: [fwd] };
+        if (path === "/api/admin/tunnel-templates") return { templates: [template] };
+        if (path === "/api/admin/remote/servers") {
+          return {
+            servers: [
+              { id: 11, name: "Bestvm TW", ip_address: "188.253.6.193", domain: "" },
+              { id: 12, name: "Bestvm HK", ip_address: "154.12.1.2", domain: "" },
+            ],
+          };
+        }
+        if (path.startsWith("/api/admin/speedtest/results")) return { results: [] };
+        if (path === "/api/admin/managed-node-offers") return { offers: [] };
+        if (path === "/api/user/config") return userConfig([41]);
+        if (path === "/api/user/routed-outbound") return { items: [], enabled: false, quota: { used: 0, max: 2 }, daily: { used: 0, max: 5 } };
+        throw new Error("unexpected GET " + path);
+      });
+
+      const postSpy = vi.spyOn(api, "post").mockImplementation(async (path) => {
+        if (path === "/api/admin/tcping") {
+          return { success: true, latency: 45.2, probe: "mihomo_url_test" };
+        }
+        throw new Error("unexpected POST " + path);
+      });
+
+      render(<NodesWorkbench isAdmin notify={vi.fn()} />);
+
+      const forwardRow = (await screen.findByText("hkt", { exact: true })).closest("tr");
+      expect(forwardRow).not.toBeNull();
+
+      const pingBtn = within(forwardRow!).getByTitle(/测试隧道链路延迟/);
+      fireEvent.click(pingBtn);
+
+      await waitFor(() => {
+        expect(postSpy).toHaveBeenCalledWith("/api/admin/tcping", {
+          node_id: 41,
+          override_server: "188.253.6.193",
+          override_port: 2056,
+          timeout: 5000,
+        });
+      });
+
+      expect(await within(forwardRow!).findByText(/45(\.2)? ms/)).toBeInTheDocument();
+    });
   });
 
   describe("server filtering", () => {

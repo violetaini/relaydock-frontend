@@ -317,7 +317,13 @@ type WorkbenchDialog =
   | { kind: "subscriptions" }
   | { kind: "testers" }
   | { kind: "route"; node: WorkbenchNode }
-  | { kind: "qr"; node: WorkbenchNode }
+  | {
+      kind: "qr";
+      node: WorkbenchNode;
+      overrideAddress?: { host?: string; port?: number };
+      displayName?: string;
+      protocolLabel?: string;
+    }
   | { kind: "temp-sub"; nodes: WorkbenchNode[] }
   | { kind: "duplicates"; groups: DuplicateNodeGroup[] }
   | null;
@@ -744,7 +750,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
   const [nodes, setNodes] = useState<WorkbenchNode[]>([]);
   const [offers, setOffers] = useState<ManagedNodeOffer[]>([]);
   const [latest, setLatest] = useState<Record<number, SpeedResult>>({});
-  const [tcping, setTCPing] = useState<Record<number, TCPingResult>>({});
+  const [tcping, setTCPing] = useState<Record<string | number, TCPingResult>>({});
   const [userConfig, setUserConfig] = useState<UserNodeConfig | null>(null);
   const [userRouted, setUserRouted] = useState<UserRoutedOutboundStatus | null>(null);
   const [userCreationContext, setUserCreationContext] = useState<UserManagedCreationContext | null>(null);
@@ -1415,6 +1421,29 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
     }
   };
 
+  const pingForward = async (rootNode: WorkbenchNode, fwd: ForwardRule, entry: { host?: string; port?: number }) => {
+    if (!entry.host || !entry.port) {
+      notify("隧道入口地址尚未就绪", "error");
+      return;
+    }
+    const fwdKey = `fwd-${fwd.id}`;
+    setTCPing((current) => ({ ...current, [fwdKey]: { success: false, latency: 0, loading: true } }));
+    try {
+      const result = await api.post<TCPingResult>("/api/admin/tcping", {
+        node_id: rootNode.id,
+        override_server: entry.host,
+        override_port: entry.port,
+        timeout: 5000,
+      });
+      setTCPing((current) => ({ ...current, [fwdKey]: result }));
+    } catch (reason) {
+      setTCPing((current) => ({
+        ...current,
+        [fwdKey]: { success: false, latency: 0, error: reason instanceof Error ? reason.message : "测试失败" },
+      }));
+    }
+  };
+
   const restoreDomain = (node: WorkbenchNode) => setPending({
     title: "恢复原始域名",
     description: `将“${node.node_name}”当前服务器地址恢复为 ${node.original_domain}。`,
@@ -1655,7 +1684,8 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
                     const routeDetail = fwd.tunnel_name && routeHopsText
                       ? `${fwd.tunnel_name} (${routeHopsText})`
                       : fwd.tunnel_name || routeHopsText;
-                    const fwdPing = tcping[rootNode.id];
+                    const fwdPingKey = `fwd-${fwd.id}`;
+                    const fwdPing = tcping[fwdPingKey];
                     return (
                       <tr key={`fwd-${fwd.id}`} data-forward-target={rootNode.id} className="nw-forward-child">
                         <td className="nw-cell-check" />
@@ -1667,7 +1697,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
                         <td className="nw-cell-primary">
                           <div className="nw-node-primary" style={{ paddingInlineStart: 20 }}>
                             <span className="nw-forward-branch" aria-hidden="true">↳</span>
-                            <Badge tone="info" className="nw-protocol-badge" title="TUNNEL">TUNNEL</Badge>
+                            <Badge tone="info" className="nw-protocol-badge" title="TUNNEL">TU</Badge>
                             <span>
                               <strong>{fwd.name}</strong>
                               <small title={routeHopsText || routeDetail}>
@@ -1699,9 +1729,15 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
                         <td className="nw-cell-latency" data-label="连通性">
                           <button
                             className={`nw-result-button ${fwdPing?.success ? "is-good" : fwdPing?.error ? "is-bad" : ""}`}
-                            disabled={fwdPing?.loading}
-                            title={tcpingResultTitle(fwdPing) || `测试目标节点连通性: ${rootNode.node_name}`}
-                            onClick={() => void pingOne(rootNode)}
+                            disabled={fwdPing?.loading || !entry.host || !entry.port}
+                            title={
+                              !entry.host || !entry.port
+                                ? "入口尚未可用，无法测延迟"
+                                : fwdPing?.success || fwdPing?.error
+                                ? tcpingResultTitle(fwdPing)
+                                : `测试隧道链路延迟: ${fwd.name} (${entry.host}:${entry.port})`
+                            }
+                            onClick={() => void pingForward(rootNode, fwd, entry)}
                           >
                             {fwdPing?.loading ? <Spinner label="" /> : <Zap size={14} />}
                             {tcpingResultLabel(fwdPing)}
@@ -1736,6 +1772,13 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
                             state={fwdState}
                             entry={entry}
                             onConfig={() => openForwardConfig(rootNode, fwd)}
+                            onQRCode={() => setDialog({
+                              kind: "qr",
+                              node: rootNode,
+                              overrideAddress: { host: entry.host, port: entry.port },
+                              displayName: fwd.name,
+                              protocolLabel: "TU",
+                            })}
                             onEdit={() => setEditingForward(fwd)}
                             onCopy={() => void copyForwardEntry(fwd)}
                             onToggleStatus={() => void toggleForwardStatus(fwd)}
@@ -2094,7 +2137,16 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       {dialog?.kind === "uris" ? <URIManagerDialog notify={notify} onClose={closeDialog} /> : null}
       {dialog?.kind === "subscriptions" ? <ExternalSubscriptionsDialog notify={notify} onClose={closeDialog} onNodesChanged={() => load(true)} /> : null}
       {dialog?.kind === "route" ? <RoutedOutboundDialog node={dialog.node} nodes={nodes} isAdmin={isAdmin} userStatus={userRouted} onClose={closeDialog} onComplete={async () => { closeDialog(); notify(isAdmin ? "路由出站已创建" : "私有路由出站已创建"); await load(true); }} /> : null}
-      {dialog?.kind === "qr" ? <NodeShareQRCodeDialog node={dialog.node} notify={notify} onClose={closeDialog} /> : null}
+      {dialog?.kind === "qr" ? (
+        <NodeShareQRCodeDialog
+          node={dialog.node}
+          overrideAddress={dialog.overrideAddress}
+          displayName={dialog.displayName}
+          protocolLabel={dialog.protocolLabel}
+          notify={notify}
+          onClose={closeDialog}
+        />
+      ) : null}
       {dialog?.kind === "temp-sub" ? <TempSubscriptionDialog nodes={dialog.nodes} notify={notify} onClose={closeDialog} /> : null}
       {dialog?.kind === "duplicates" ? <DuplicateNodesDialog groups={dialog.groups} onClose={closeDialog} onDelete={deleteDuplicateSelection} /> : null}
       {editingForward ? (
@@ -2340,6 +2392,7 @@ function ForwardRowActions({
   state,
   entry,
   onConfig,
+  onQRCode,
   onEdit,
   onCopy,
   onToggleStatus,
@@ -2351,6 +2404,7 @@ function ForwardRowActions({
   state: string;
   entry: { host?: string; port?: number };
   onConfig: () => void;
+  onQRCode?: () => void;
   onEdit: () => void;
   onCopy: () => void;
   onToggleStatus: () => void;
@@ -2444,6 +2498,11 @@ function ForwardRowActions({
       <button role="menuitem" disabled={!canCopy} onClick={() => choose(onCopy)}>
         <Copy size={15} />复制入口地址
       </button>
+      {onQRCode ? (
+        <button role="menuitem" disabled={!canCopy} onClick={() => choose(onQRCode)}>
+          <QrCode size={15} />二维码导入
+        </button>
+      ) : null}
       <button role="menuitem" onClick={() => choose(onConfig)}>
         <Eye size={15} />查看客户端配置
       </button>
@@ -4564,7 +4623,102 @@ export function RoutedOutboundDialog({ node, nodes, isAdmin = true, userStatus =
   </form></Dialog>;
 }
 
-export function NodeShareQRCodeDialog({ node, notify, onClose }: { node: WorkbenchNode; notify: NodesWorkbenchNotify; onClose: () => void }) {
+export function replaceUriAddress(
+  rawUri: string,
+  newHost?: string,
+  newPort?: number | string,
+  newName?: string,
+): string {
+  if (!rawUri || (!newHost && !newPort && !newName)) return rawUri;
+  const targetHost = newHost && newHost.includes(":") && !newHost.startsWith("[")
+    ? `[${newHost}]`
+    : newHost;
+
+  // VMess URI: vmess://base64(json)
+  if (rawUri.startsWith("vmess://")) {
+    try {
+      const b64 = rawUri.slice(8).trim();
+      const jsonStr = decodeURIComponent(escape(atob(b64)));
+      const obj = JSON.parse(jsonStr);
+      if (newHost) obj.add = newHost;
+      if (newPort !== undefined) obj.port = Number(newPort) || newPort;
+      if (newName) obj.ps = newName;
+      return `vmess://${btoa(unescape(encodeURIComponent(JSON.stringify(obj))))}`;
+    } catch {
+      return rawUri;
+    }
+  }
+
+  // Shadowsocks SIP002 (ss://base64@host:port#name) or legacy (ss://base64#name)
+  if (rawUri.startsWith("ss://")) {
+    const hashIdx = rawUri.indexOf("#");
+    const mainPart = hashIdx >= 0 ? rawUri.slice(0, hashIdx) : rawUri;
+    const oldHash = hashIdx >= 0 ? rawUri.slice(hashIdx + 1) : "";
+    const nameToUse = newName || (oldHash ? decodeURIComponent(oldHash) : "");
+    const hashSuffix = nameToUse ? `#${encodeURIComponent(nameToUse)}` : "";
+
+    if (mainPart.includes("@")) {
+      const atIdx = mainPart.indexOf("@");
+      const prefix = mainPart.slice(0, atIdx + 1);
+      const rest = mainPart.slice(atIdx + 1);
+      const queryIdx = rest.search(/[\/\?]/);
+      const querySuffix = queryIdx >= 0 ? rest.slice(queryIdx) : "";
+      const hostPart = targetHost || rest.split(":")[0];
+      const portPart = newPort !== undefined ? String(newPort) : rest.split(":")[1]?.split(/[\/\?]/)[0];
+      return `${prefix}${hostPart}:${portPart}${querySuffix}${hashSuffix}`;
+    } else {
+      try {
+        const b64 = mainPart.slice(5);
+        const decoded = decodeURIComponent(escape(atob(b64)));
+        const atIdx = decoded.indexOf("@");
+        if (atIdx >= 0) {
+          const auth = decoded.slice(0, atIdx + 1);
+          const rest = decoded.slice(atIdx + 1);
+          const hostPart = targetHost || rest.split(":")[0];
+          const portPart = newPort !== undefined ? String(newPort) : rest.split(":")[1];
+          const replaced = `${auth}${hostPart}:${portPart}`;
+          return `ss://${btoa(unescape(encodeURIComponent(replaced)))}${hashSuffix}`;
+        }
+      } catch {
+        // Fall back to regex
+      }
+    }
+  }
+
+  // Standard URI schemes: vless://, trojan://, hysteria2://, hy2://, tuic://, etc.
+  const regex = /^([a-zA-Z0-9_+.-]+:\/\/(?:[^@\/]+@)?)([^:\/?#]+|\[[^\]]+\])(?::([0-9]+))?([\/\\?][^#]*)?(?:#(.*))?$/;
+  const match = rawUri.match(regex);
+  if (match) {
+    const prefix = match[1];
+    const oldHost = match[2];
+    const oldPort = match[3];
+    const pathAndQuery = match[4] || "";
+    const oldName = match[5] ? decodeURIComponent(match[5]) : "";
+    const nameToUse = newName || oldName;
+    const hostPart = targetHost || oldHost;
+    const portPart = newPort !== undefined ? String(newPort) : oldPort;
+    const hashSuffix = nameToUse ? `#${encodeURIComponent(nameToUse)}` : "";
+    return `${prefix}${hostPart}${portPart ? `:${portPart}` : ""}${pathAndQuery}${hashSuffix}`;
+  }
+
+  return rawUri;
+}
+
+export function NodeShareQRCodeDialog({
+  node,
+  overrideAddress,
+  displayName,
+  protocolLabel,
+  notify,
+  onClose,
+}: {
+  node: WorkbenchNode;
+  overrideAddress?: { host?: string; port?: number };
+  displayName?: string;
+  protocolLabel?: string;
+  notify: NodesWorkbenchNotify;
+  onClose: () => void;
+}) {
   const [item, setItem] = useState<NodeURI | null>(null);
   const [dataURL, setDataURL] = useState("");
   const [loading, setLoading] = useState(true);
@@ -4577,13 +4731,30 @@ export function NodeShareQRCodeDialog({ node, notify, onClose }: { node: Workben
     try {
       const response = await api.get<{ item?: NodeURI }>(`/api/admin/nodes/${node.id}/uri`, { skipCache: true });
       if (!response.item?.uri) throw new Error("服务端没有返回可用的节点分享链接");
-      setItem(response.item);
+
+      let finalUri = response.item.uri;
+      const nameToUse = displayName || response.item.node_name;
+      const targetHost = overrideAddress?.host || (isForwardingEntry(node) ? nodeAddress(node).host : undefined);
+      const targetPort = overrideAddress?.port || (isForwardingEntry(node) ? nodeAddress(node).port : undefined);
+
+      if (targetHost && targetPort) {
+        finalUri = replaceUriAddress(finalUri, targetHost, targetPort, nameToUse);
+      } else if (displayName) {
+        finalUri = replaceUriAddress(finalUri, undefined, undefined, displayName);
+      }
+
+      setItem({
+        ...response.item,
+        node_name: nameToUse,
+        uri: finalUri,
+        protocol: protocolLabel || response.item.protocol,
+      });
     } catch (reason) {
       setError(reasonMessage(reason, "节点分享链接生成失败"));
     } finally {
       setLoading(false);
     }
-  }, [node.id]);
+  }, [node, overrideAddress?.host, overrideAddress?.port, displayName, protocolLabel]);
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
@@ -4612,12 +4783,16 @@ export function NodeShareQRCodeDialog({ node, notify, onClose }: { node: Workben
     }
   };
 
-  return <Dialog title="节点二维码" description={`${node.node_name} · ${displayedNodeProtocol(node).toUpperCase()}`} onClose={onClose} medium>
+  const titleText = overrideAddress ? "隧道二维码" : "节点二维码";
+  const effectiveName = displayName || node.node_name;
+  const effectiveProtocol = (protocolLabel || displayedNodeProtocol(node)).toUpperCase();
+
+  return <Dialog title={titleText} description={`${effectiveName} · ${effectiveProtocol}`} onClose={onClose} medium>
     <div className="form-stack nw-node-qr">
       <div className="nw-inline-note nw-qr-warning"><KeyRound size={17} /><span>二维码包含节点凭据，请勿转发或公开截图。</span></div>
       {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
       {!error ? <div className="nw-qr-canvas">
-        {dataURL ? <img src={dataURL} alt={`${node.node_name} 节点二维码`} width={320} height={320} /> : <Spinner label={loading ? "正在生成节点链接" : "正在本地生成二维码"} />}
+        {dataURL ? <img src={dataURL} alt={overrideAddress ? `${effectiveName} 隧道二维码` : `${effectiveName} 节点二维码`} width={320} height={320} /> : <Spinner label={loading ? "正在生成节点链接" : "正在本地生成二维码"} />}
       </div> : null}
       {item ? <div className="nw-qr-uri">
         <span><Badge tone="info" className="nw-protocol-badge" title={item.protocol.toUpperCase()}>{protocolBadgeText(item.protocol)}</Badge><strong>{item.node_name}</strong></span>
@@ -4627,7 +4802,7 @@ export function NodeShareQRCodeDialog({ node, notify, onClose }: { node: Workben
       <div className="dialog-actions">
         <Button variant="secondary" onClick={onClose}>关闭</Button>
         {item ? <Button variant="secondary" onClick={() => void copy()}><Copy size={16} />复制链接</Button> : null}
-        {dataURL ? <a className="button button-primary" href={dataURL} download={`${safeDownloadBasename(node.node_name)}.png`}><Download size={16} />下载 PNG</a> : null}
+        {dataURL ? <a className="button button-primary" href={dataURL} download={`${safeDownloadBasename(effectiveName)}.png`}><Download size={16} />下载 PNG</a> : null}
       </div>
     </div>
   </Dialog>;

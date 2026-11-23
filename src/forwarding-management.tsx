@@ -275,7 +275,10 @@ interface TemplateDraft {
 
 interface ForwardDraft {
   grantID: string;
+  targetType: "managed_node" | "custom";
   targetNodeID: string;
+  customHost: string;
+  customPort: string;
   name: string;
   requestedEntryPort: string;
   sourceCIDRs: string;
@@ -1887,7 +1890,10 @@ export function ForwardEditDialog({
   onComplete: () => Promise<void>;
 }) {
   const currentEntry = forwardEntry(forward, servers, templates);
+  const isCustom = forward.target_type === "custom";
   const [name, setName] = useState(forward.name || "");
+  const [customHost, setCustomHost] = useState(forward.target_host || "");
+  const [customPort, setCustomPort] = useState(forward.target_port ? String(forward.target_port) : "");
   const [targetNodeID, setTargetNodeID] = useState(forward.target_node_id ? String(forward.target_node_id) : "");
   const [requestedEntryPort, setRequestedEntryPort] = useState(
     String(forward.allocated_entry_port || forward.entry_port || currentEntry.port || ""),
@@ -1915,6 +1921,17 @@ export function ForwardEditDialog({
       setError("转发名称不能为空");
       return;
     }
+    const parsedCustomPort = Number(customPort.trim()) || 0;
+    if (isCustom) {
+      if (!customHost.trim()) {
+        setError("目标主机地址不能为空");
+        return;
+      }
+      if (parsedCustomPort < 1 || parsedCustomPort > 65535) {
+        setError("目标端口必须在 1 至 65535 范围内");
+        return;
+      }
+    }
     if (parsedPort > 0 && (parsedPort < 1024 || parsedPort > 65535)) {
       setError("入口端口必须在 1024 至 65535 范围内");
       return;
@@ -1938,7 +1955,16 @@ export function ForwardEditDialog({
         {
           name: name.trim(),
           requested_entry_port: parsedPort > 0 ? parsedPort : undefined,
-          target_node_id: Number(targetNodeID) || undefined,
+          ...(isCustom
+            ? {
+                target_type: "custom",
+                target_host: customHost.trim(),
+                target_port: parsedCustomPort,
+                target_node_id: 0,
+              }
+            : {
+                target_node_id: Number(targetNodeID) || undefined,
+              }),
           source_cidrs: cidrs,
         },
         { idempotencyKey: idempotencyKey() },
@@ -1965,53 +1991,107 @@ export function ForwardEditDialog({
     >
       <form className="fm-form" onSubmit={(event) => void submit(event)}>
         {error ? <ErrorState message={error} /> : null}
-        <div className="fm-form-grid">
-          <Field label="转发名称">
-            <input
-              required
-              autoFocus
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="例如：香港入口到美国 Reality"
-            />
-          </Field>
-          <Field label="最终目标节点" hint="选择流量要送往的目标受管节点">
-            <select
-              value={targetNodeID}
-              onChange={(e) => setTargetNodeID(e.target.value)}
-            >
-              <option value="">保持当前目标 ({forward.target_name || forward.target_host || "未变更"})</option>
-              {nodes.map((node) => (
-                <option key={node.id} value={node.id}>
-                  {node.node_name} · {node.protocol ? node.protocol.toUpperCase() : "受管"} ({node.original_server || "节点 #" + node.id})
-                </option>
-              ))}
-            </select>
-          </Field>
-        </div>
-        <div className="fm-form-grid">
-          <Field label="入口主机 / 路线" hint="由隧道固定首跳服务器提供连接">
-            <input
-              readOnly
-              disabled
-              value={previewHost}
-              title="入口服务器由已选隧道固定"
-            />
-          </Field>
-          <div className="port-field-group">
-            <Field label="入口端口" hint="可修改为 1024–65535 范围内的空闲端口">
-              <input
-                type="number"
-                min="1024"
-                max="65535"
-                value={requestedEntryPort}
-                onChange={(e) => setRequestedEntryPort(e.target.value)}
-                placeholder="例如 2056"
-              />
-            </Field>
-            {isPortChanged ? <PortCheckHint state={portCheck} /> : null}
-          </div>
-        </div>
+        {isCustom ? (
+          <>
+            <div className="fm-form-grid">
+              <Field label="转发名称">
+                <input
+                  required
+                  autoFocus
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="例如：香港入口到外部服务器"
+                />
+              </Field>
+              <Field label="目标主机 / IP" hint="自定义公网目标 IP 或域名">
+                <input
+                  required
+                  aria-label="目标主机"
+                  value={customHost}
+                  onChange={(e) => setCustomHost(e.target.value.trim())}
+                  placeholder="例如：198.51.100.24 或 api.example.com"
+                />
+              </Field>
+            </div>
+            <div className="fm-form-grid">
+              <Field label="目标端口" hint="目标服务监听端口（1 至 65535）">
+                <input
+                  required
+                  aria-label="目标端口"
+                  type="number"
+                  min="1"
+                  max="65535"
+                  value={customPort}
+                  onChange={(e) => setCustomPort(e.target.value)}
+                  placeholder="例如：443"
+                />
+              </Field>
+              <div className="port-field-group">
+                <Field label="入口端口" hint="可修改为 1024–65535 范围内的空闲端口">
+                  <input
+                    type="number"
+                    min="1024"
+                    max="65535"
+                    value={requestedEntryPort}
+                    onChange={(e) => setRequestedEntryPort(e.target.value)}
+                    placeholder="例如 2056"
+                  />
+                </Field>
+                {isPortChanged ? <PortCheckHint state={portCheck} /> : null}
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="fm-form-grid">
+              <Field label="转发名称">
+                <input
+                  required
+                  autoFocus
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="例如：香港入口到美国 Reality"
+                />
+              </Field>
+              <Field label="最终目标节点" hint="选择流量要送往的目标受管节点">
+                <select
+                  value={targetNodeID}
+                  onChange={(e) => setTargetNodeID(e.target.value)}
+                >
+                  <option value="">保持当前目标 ({forward.target_name || forward.target_host || "未变更"})</option>
+                  {nodes.map((node) => (
+                    <option key={node.id} value={node.id}>
+                      {node.node_name} · {node.protocol ? node.protocol.toUpperCase() : "受管"} ({node.original_server || "节点 #" + node.id})
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+            <div className="fm-form-grid">
+              <Field label="入口主机 / 路线" hint="由隧道固定首跳服务器提供连接">
+                <input
+                  readOnly
+                  disabled
+                  value={previewHost}
+                  title="入口服务器由已选隧道固定"
+                />
+              </Field>
+              <div className="port-field-group">
+                <Field label="入口端口" hint="可修改为 1024–65535 范围内的空闲端口">
+                  <input
+                    type="number"
+                    min="1024"
+                    max="65535"
+                    value={requestedEntryPort}
+                    onChange={(e) => setRequestedEntryPort(e.target.value)}
+                    placeholder="例如 2056"
+                  />
+                </Field>
+                {isPortChanged ? <PortCheckHint state={portCheck} /> : null}
+              </div>
+            </div>
+          </>
+        )}
         <Field
           label="入口来源 CIDR 白名单（可选）"
           hint="每行或逗号分隔；留空表示允许任何客户端访问此入口端口。"
@@ -2076,7 +2156,7 @@ function ForwardTable({ forwards, templates, servers = [], admin = false, onActi
     const rawTunnelName = forward.tunnel_name || template?.name || "";
     const isGrantPlaceholder = !rawTunnelName || rawTunnelName.startsWith("授权") || rawTunnelName.startsWith("grt_");
     const tunnelTitle = isGrantPlaceholder ? "" : rawTunnelName;
-    return <tr key={String(id)}>{admin ? <td><strong>{forward.username || "-"}</strong></td> : null}<td className="fm-primary-cell"><strong>{forward.name}</strong><small>{state === "active" && entry.host && entry.port ? `${entry.host}:${entry.port}` : "入口尚未可用"}</small></td><td>{tunnelTitle ? <span>{tunnelTitle}</span> : null}{template ? <RouteLine hops={routeHops(template).map((hop) => ({ name: hop.name }))} /> : null}</td><td><span>{forward.target_node_name || forward.target_name || forward.target_host || `节点 #${forward.target_node_id || "-"}`}</span><small className="fm-cell-note">TCP + UDP · {forward.target_port || "节点服务端口"}</small></td><td><span>{formatBytes(forward.traffic_used_bytes)}</span><small className="fm-cell-note">{forward.speed_limit_mbps ? `${forward.speed_limit_mbps} Mbps` : "不限速"} · {forward.connection_limit ? `${forward.connection_limit} 连接` : "不限连接"}</small></td><td><Badge tone={stateTone(state)}>{stateLabel(state)}</Badge>{forward.effective_expires_at ? <small className="fm-cell-note">至 {displayDate(forward.effective_expires_at)}</small> : null}</td><td><div className="fm-row-actions">{onCopy ? <IconButton label={`复制 ${forward.name} 入口`} disabled={state !== "active" || !entry.host || !entry.port} onClick={() => void onCopy(forward)}><Copy size={18} /></IconButton> : null}{onEdit ? <IconButton label={`编辑 ${forward.name}`} onClick={() => onEdit(forward)}><Pencil size={18} /></IconButton> : null}{state === "active" ? <IconButton label={`暂停 ${forward.name}`} disabled={sameID(workingID, id)} onClick={() => void act(forward, "suspend")}><CirclePause size={18} /></IconButton> : <IconButton label={`恢复 ${forward.name}`} disabled={sameID(workingID, id) || ["pending", "provisioning", "cleanup_pending"].includes(state)} onClick={() => void act(forward, "resume")}><CirclePlay size={18} /></IconButton>}{["error", "degraded"].includes(state) ? <IconButton label={`重试 ${forward.name}`} disabled={sameID(workingID, id)} onClick={() => void act(forward, "retry")}><RefreshCw size={18} /></IconButton> : null}<IconButton label={`删除 ${forward.name}`} onClick={() => onDelete(forward)}><Trash2 size={18} /></IconButton></div></td></tr>;
+    return <tr key={String(id)}>{admin ? <td><strong>{forward.username || "-"}</strong></td> : null}<td className="fm-primary-cell"><strong>{forward.name}</strong><small>{state === "active" && entry.host && entry.port ? `${entry.host}:${entry.port}` : "入口尚未可用"}</small></td><td>{tunnelTitle ? <span>{tunnelTitle}</span> : null}{template ? <RouteLine hops={routeHops(template).map((hop) => ({ name: hop.name }))} /> : null}</td><td><span>{forward.target_type === "custom" || !forward.target_node_id ? (forward.target_host ? `${forward.target_host}:${forward.target_port}` : forward.target_name || "自定义目标") : (forward.target_node_name || forward.target_name || forward.target_host || `节点 #${forward.target_node_id || "-"}`)}</span><small className="fm-cell-note">{forward.target_type === "custom" || !forward.target_node_id ? "自定义目标 · TCP + UDP" : `TCP + UDP · ${forward.target_port || "节点服务端口"}`}</small></td><td><span>{formatBytes(forward.traffic_used_bytes)}</span><small className="fm-cell-note">{forward.speed_limit_mbps ? `${forward.speed_limit_mbps} Mbps` : "不限速"} · {forward.connection_limit ? `${forward.connection_limit} 连接` : "不限连接"}</small></td><td><Badge tone={stateTone(state)}>{stateLabel(state)}</Badge>{forward.effective_expires_at ? <small className="fm-cell-note">至 {displayDate(forward.effective_expires_at)}</small> : null}</td><td><div className="fm-row-actions">{onCopy ? <IconButton label={`复制 ${forward.name} 入口`} disabled={state !== "active" || !entry.host || !entry.port} onClick={() => void onCopy(forward)}><Copy size={18} /></IconButton> : null}{onEdit ? <IconButton label={`编辑 ${forward.name}`} onClick={() => onEdit(forward)}><Pencil size={18} /></IconButton> : null}{state === "active" ? <IconButton label={`暂停 ${forward.name}`} disabled={sameID(workingID, id)} onClick={() => void act(forward, "suspend")}><CirclePause size={18} /></IconButton> : <IconButton label={`恢复 ${forward.name}`} disabled={sameID(workingID, id) || ["pending", "provisioning", "cleanup_pending"].includes(state)} onClick={() => void act(forward, "resume")}><CirclePlay size={18} /></IconButton>}{["error", "degraded"].includes(state) ? <IconButton label={`重试 ${forward.name}`} disabled={sameID(workingID, id)} onClick={() => void act(forward, "retry")}><RefreshCw size={18} /></IconButton> : null}<IconButton label={`删除 ${forward.name}`} onClick={() => onDelete(forward)}><Trash2 size={18} /></IconButton></div></td></tr>;
   })}</tbody></table></div></Surface>}</div>;
 }
 
@@ -2193,11 +2273,15 @@ function ForwardFlowVisualizer({
   grant,
   templates = [],
   target,
+  targetType = "managed_node",
+  customTarget,
 }: {
   grantTunnel?: TunnelTemplate;
   grant?: TunnelGrant;
   templates?: TunnelTemplate[];
   target?: NodeItem;
+  targetType?: "managed_node" | "custom";
+  customTarget?: { host: string; port: string };
 }) {
   const hops = useMemo(() => {
     if (grantTunnel) {
@@ -2215,7 +2299,8 @@ function ForwardFlowVisualizer({
   const targetServerLower = targetServer.toLowerCase();
 
   const isLocalHandover = Boolean(
-    targetServer &&
+    targetType !== "custom" &&
+      targetServer &&
       exitServerName &&
       (targetServerLower === exitServerName ||
         exitServerName.includes(targetServerLower) ||
@@ -2223,7 +2308,8 @@ function ForwardFlowVisualizer({
   );
 
   const isLoopback = Boolean(
-    !isLocalHandover &&
+    targetType !== "custom" &&
+      !isLocalHandover &&
       targetServer &&
       entryServerName &&
       exitServerName &&
@@ -2234,12 +2320,16 @@ function ForwardFlowVisualizer({
   );
 
   let tone: "good" | "warn" | "info" = "info";
-  let statusBadge = "跨区网络交付";
-  let diagnostic = target
-    ? `流量自入口【${entryHop?.name || "入口"}】进入隧道，于出口【${exitHop?.name || "出口"}】发往目标节点【${target.node_name}${targetServer ? ` (${targetServer})` : ""}】。`
-    : "请在上方选择目标节点，即可查看完整的流量走向与拓扑诊断。";
+  let statusBadge = targetType === "custom" ? "公网端点交付" : "跨区网络交付";
+  let diagnostic = targetType === "custom"
+    ? customTarget?.host
+      ? `流量自入口【${entryHop?.name || "入口"}】进入隧道，于出口【${exitHop?.name || "出口"}】直接交付至自定义公网目标【${customTarget.host}:${customTarget.port || "..."}】。`
+      : "请输入自定义目标的公网 IP 或域名与端口，即可查看流量走向。"
+    : target
+      ? `流量自入口【${entryHop?.name || "入口"}】进入隧道，于出口【${exitHop?.name || "出口"}】发往目标节点【${target.node_name}${targetServer ? ` (${targetServer})` : ""}】。`
+      : "请在上方选择目标节点，即可查看完整的流量走向与拓扑诊断。";
 
-  if (target) {
+  if (targetType !== "custom" && target) {
     if (isLoopback) {
       tone = "warn";
       statusBadge = "⚠️ 绕路折返 (建议反向)";
@@ -2311,10 +2401,20 @@ function ForwardFlowVisualizer({
         })}
 
         <div className={`fm-flow-node is-target ${isLoopback ? "is-warn" : isLocalHandover ? "is-good" : ""}`}>
-          <div className="fm-flow-node-icon"><Radio size={15} /></div>
+          <div className="fm-flow-node-icon">
+            {targetType === "custom" ? <Network size={15} /> : <Radio size={15} />}
+          </div>
           <div className="fm-flow-node-meta">
-            <strong title={target?.node_name || "未选目标"}>{target?.node_name || "目标节点"}</strong>
-            <small>{target ? target.protocol.toUpperCase() : "等待选择"}</small>
+            <strong title={targetType === "custom" ? (customTarget?.host ? `${customTarget.host}:${customTarget.port || "..."}` : "自定义公网目标") : (target?.node_name || "未选目标")}>
+              {targetType === "custom"
+                ? (customTarget?.host ? `${customTarget.host}:${customTarget.port || "..."}` : "自定义公网目标")
+                : (target?.node_name || "目标节点")}
+            </strong>
+            <small>
+              {targetType === "custom"
+                ? (customTarget?.host ? "公网目标" : "等待输入")
+                : (target ? target.protocol.toUpperCase() : "等待选择")}
+            </small>
           </div>
         </div>
 
@@ -2338,7 +2438,17 @@ function ForwardFlowVisualizer({
         <Info size={14} />
         <div className="fm-flow-diag-content">
           <span>{diagnostic}</span>
-          {target ? (
+          {targetType === "custom" ? (
+            customTarget?.host ? (
+              <div className="fm-flow-target-meta">
+                <span>公网地址: {customTarget.host}</span>
+                <span className="fm-flow-meta-sep">·</span>
+                <span>目标端口: {customTarget.port || "未指定"}</span>
+                <span className="fm-flow-meta-sep">·</span>
+                <span className="fm-meta-good">自定义公网端点</span>
+              </div>
+            ) : null
+          ) : target ? (
             <div className="fm-flow-target-meta">
               <span>节点 ID: {target.id}</span>
               <span className="fm-flow-meta-sep">·</span>
@@ -2388,11 +2498,14 @@ export function ForwardWizard({
       : grants[0]
       ? String(resourceID(grants[0]))
       : "",
+    targetType: "managed_node",
     targetNodeID: matchedTarget
       ? String(matchedTarget.id)
       : nodes[0]
       ? String(nodes[0].id)
       : "",
+    customHost: "",
+    customPort: "",
     name: "",
     requestedEntryPort: "",
     sourceCIDRs: "",
@@ -2484,15 +2597,31 @@ export function ForwardWizard({
     }
   }, [step, filteredNodes, draft.targetNodeID]);
 
+  const isCustomTargetValid = Boolean(draft.customHost.trim()) &&
+    Number.isInteger(Number(draft.customPort)) &&
+    Number(draft.customPort) >= 1 &&
+    Number(draft.customPort) <= 65535;
+
   const stepValid = step === 1
     ? Boolean(grant)
     : step === 2
-      ? Boolean(target && (!nodes.length || filteredNodes.some((n) => String(n.id) === String(target.id))))
+      ? draft.targetType === "custom"
+        ? isCustomTargetValid
+        : Boolean(target && (!nodes.length || filteredNodes.some((n) => String(n.id) === String(target.id))))
       : step === 3
         ? Boolean(draft.name.trim()) && requestedPortValid && !isPortCheckBlocking(portCheck)
         : Boolean(preflight && preflight.success !== false && preflight.ready !== false);
 
-  const payload = () => ({ grant_id: draft.grantID, name: draft.name.trim(), target: { type: "managed_node", node_id: Number(draft.targetNodeID) }, network: "tcp_udp", requested_entry_port: requestedEntryPort, source_cidrs: sourceCIDRs });
+  const payload = () => ({
+    grant_id: draft.grantID,
+    name: draft.name.trim(),
+    target: draft.targetType === "custom"
+      ? { type: "custom", host: draft.customHost.trim(), port: Number(draft.customPort) }
+      : { type: "managed_node", node_id: Number(draft.targetNodeID) },
+    network: "tcp_udp",
+    requested_entry_port: requestedEntryPort,
+    source_cidrs: sourceCIDRs,
+  });
   const update = <K extends keyof ForwardDraft>(key: K, value: ForwardDraft[K]) => { setDraft((current) => ({ ...current, [key]: value })); setPreflight(null); };
   const next = async () => {
     if (!stepValid || step >= 4) return;
@@ -2512,17 +2641,66 @@ export function ForwardWizard({
     <div className="fm-wizard-content">{step === 1 ? (!grants.length ? <EmptyState icon={<Route size={25} />} title="暂无可用隧道" description="管理员尚未开通可用路线或模板未激活" /> : <div className="fm-choice-grid">{grants.map((item) => { const template = tunnelForGrant(item, templates); return <button type="button" key={String(resourceID(item))} className={sameID(resourceID(item), draft.grantID) ? "is-active" : ""} onClick={() => update("grantID", String(resourceID(item)))}><span><Route size={19} /><strong>{tunnelName(item, templates)}</strong></span>{template ? <RouteLine hops={routeHops(template).map((hop) => ({ name: hop.name }))} /> : null}<small>{item.per_forward_speed_mbps ? `${item.per_forward_speed_mbps} Mbps` : "不限速"} · {item.per_forward_connection_limit ? `${item.per_forward_connection_limit} 连接` : "不限连接"} · 至 {displayDate(item.expires_at)}</small></button>; })}</div>) : null}
       {step === 2 ? <>
         <div className="fm-target-segmented">
-          <button type="button" className="is-active">
+          <button
+            type="button"
+            className={draft.targetType === "managed_node" ? "is-active" : ""}
+            onClick={() => update("targetType", "managed_node")}
+          >
             <Server size={14} />
             <span>受管节点</span>
-            <Check size={13} />
+            {draft.targetType === "managed_node" ? <Check size={13} /> : null}
           </button>
-          <button type="button" disabled title="首版暂未开放">
+          <button
+            type="button"
+            className={draft.targetType === "custom" ? "is-active" : ""}
+            onClick={() => update("targetType", "custom")}
+          >
             <Network size={14} />
-            <span>自定义公网目标（暂未开放）</span>
+            <span>自定义公网目标</span>
+            {draft.targetType === "custom" ? <Check size={13} /> : null}
           </button>
         </div>
-        {nodes.length ? (
+        {draft.targetType === "custom" ? (
+          <div className="fm-form" style={{ marginTop: 10 }}>
+            <div className="fm-form-grid">
+              <Field label="目标主机 / IP" hint="支持 IPv4、IPv6 或外部域名（如 198.51.100.24 或 api.example.com）">
+                <input
+                  autoFocus
+                  aria-label="目标主机"
+                  type="text"
+                  placeholder="例如：198.51.100.24 或 api.example.com"
+                  value={draft.customHost}
+                  onChange={(event) => update("customHost", event.target.value.trim())}
+                />
+              </Field>
+
+              <Field label="目标端口" hint="目标服务监听端口（1 至 65535）">
+                <input
+                  aria-label="目标端口"
+                  type="number"
+                  min="1"
+                  max="65535"
+                  placeholder="例如：443 或 8080"
+                  value={draft.customPort}
+                  onChange={(event) => update("customPort", event.target.value)}
+                />
+              </Field>
+            </div>
+
+            <div className="fm-capability-note">
+              <Network size={16} />
+              <span>流量经隧道各跳到达出口服务器后，将由出口直接通过 TCP/UDP 将流量交付至该公网地址与端口。</span>
+            </div>
+
+            <ForwardFlowVisualizer
+              grantTunnel={grantTunnel}
+              grant={grant}
+              templates={templates}
+              targetType="custom"
+              customTarget={{ host: draft.customHost.trim(), port: draft.customPort.trim() }}
+            />
+          </div>
+        ) : nodes.length ? (
           <div className="fm-form" style={{ marginTop: 10 }}>
             <div className="fm-form-grid">
               <Field label="目标服务器">
@@ -2601,18 +2779,19 @@ export function ForwardWizard({
               grant={grant}
               templates={templates}
               target={target}
+              targetType="managed_node"
             />
           </div>
         ) : (
           <EmptyState
             icon={<Server size={24} />}
             title="没有可用受管节点"
-            description="请先在节点管理中开通或导入符合条件的节点"
+            description="请先在节点管理中开通或导入符合条件的节点，或切换到“自定义公网目标”直接转发至外部主机"
           />
         )}
       </> : null}
       {step === 3 ? <div className="fm-form"><div className="fm-form-grid"><Field label="转发名称"><input autoFocus value={draft.name} onChange={(event) => update("name", event.target.value)} placeholder="例如：香港入口到美国 Reality" /></Field><Field label="网络类型"><select value="tcp_udp" disabled><option value="tcp_udp">TCP + UDP</option></select></Field></div><div className="port-field-group"><Field label="入口端口（可选）" hint="例如 2022；留空时自动分配空闲端口。支持双向隧道两端使用相同入口端口。"><input type="number" min="1024" max="65535" value={draft.requestedEntryPort} onChange={(event) => update("requestedEntryPort", event.target.value)} placeholder="自动选择" /></Field><PortCheckHint state={portCheck} /></div><Field label="入口来源 CIDR 白名单（可选）" hint="每行或逗号分隔；留空时遵循隧道模板策略"><textarea rows={4} value={draft.sourceCIDRs} onChange={(event) => update("sourceCIDRs", event.target.value)} placeholder="例如：203.0.113.8/32" /></Field><div className="fm-capability-note"><ShieldCheck size={17} /><span>入口节点绑定入口端口，中转跳点自动分配内部端口，支持双向隧道两端使用相同入口端口。</span></div></div> : null}
-      {step === 4 ? <div className="fm-review"><div className="fm-review-route"><span>固定路线</span>{grantTunnel ? <RouteLine hops={[...routeHops(grantTunnel).map((hop) => ({ name: hop.name })), { name: target?.node_name || "目标节点" }]} /> : <strong>{grant ? tunnelName(grant, templates) : "已授权隧道"} → {target?.node_name}</strong>}</div><dl><div><dt>转发名称</dt><dd>{draft.name}</dd></div><div><dt>网络与入口</dt><dd>TCP + UDP · {requestedEntryPort ? `入口端口 ${requestedEntryPort}` : "自动分配入口端口"}</dd></div><div><dt>最终目标</dt><dd>{target?.node_name}{target?.original_server ? ` (${target.original_server})` : ""}</dd></div><div><dt>有效期</dt><dd>{displayDate(preflight?.effective_expires_at || grant?.expires_at)}</dd></div><div><dt>每转发限速</dt><dd>{grant?.per_forward_speed_mbps ? `${grant.per_forward_speed_mbps} Mbps` : "不限"}</dd></div><div><dt>连接数</dt><dd>{grant?.per_forward_connection_limit || "不限"}</dd></div><div><dt>计费流量</dt><dd>仅入口统计一次</dd></div><div><dt>入口预览</dt><dd>{preflight?.entry_host || preflight?.entry_address ? `${preflight.entry_host || preflight.entry_address}:${preflight.entry_port || requestedEntryPort || "自动"}` : requestedEntryPort ? `创建后使用 ${requestedEntryPort}` : "创建后由系统分配"}</dd></div></dl><div className={`fm-preflight ${preflight?.success === false || preflight?.ready === false ? "is-bad" : "is-good"}`}><ShieldCheck size={18} /><span><strong>{preflight?.success === false || preflight?.ready === false ? "预检未通过" : "转发预检通过"}</strong><small>{preflight?.message || "授权、目标、路线和端口资源均满足创建条件"}</small>{preflight?.warnings?.map((warning) => <small key={warning}>{warning}</small>)}</span></div></div> : null}</div>
+      {step === 4 ? <div className="fm-review"><div className="fm-review-route"><span>固定路线</span>{grantTunnel ? <RouteLine hops={[...routeHops(grantTunnel).map((hop) => ({ name: hop.name })), { name: draft.targetType === "custom" ? (draft.customHost.trim() || "公网目标") : (target?.node_name || "目标节点") }]} /> : <strong>{grant ? tunnelName(grant, templates) : "已授权隧道"} → {draft.targetType === "custom" ? `${draft.customHost.trim()}:${draft.customPort.trim()}` : target?.node_name}</strong>}</div><dl><div><dt>转发名称</dt><dd>{draft.name}</dd></div><div><dt>网络与入口</dt><dd>TCP + UDP · {requestedEntryPort ? `入口端口 ${requestedEntryPort}` : "自动分配入口端口"}</dd></div><div><dt>最终目标</dt><dd>{draft.targetType === "custom" ? `自定义公网目标 (${draft.customHost.trim()}:${draft.customPort.trim()})` : `${target?.node_name || "目标节点"}${target?.original_server ? ` (${target.original_server})` : ""}`}</dd></div><div><dt>有效期</dt><dd>{displayDate(preflight?.effective_expires_at || grant?.expires_at)}</dd></div><div><dt>每转发限速</dt><dd>{grant?.per_forward_speed_mbps ? `${grant.per_forward_speed_mbps} Mbps` : "不限"}</dd></div><div><dt>连接数</dt><dd>{grant?.per_forward_connection_limit || "不限"}</dd></div><div><dt>计费流量</dt><dd>仅入口统计一次</dd></div><div><dt>入口预览</dt><dd>{preflight?.entry_host || preflight?.entry_address ? `${preflight.entry_host || preflight.entry_address}:${preflight.entry_port || requestedEntryPort || "自动"}` : requestedEntryPort ? `创建后使用 ${requestedEntryPort}` : "创建后由系统分配"}</dd></div></dl><div className={`fm-preflight ${preflight?.success === false || preflight?.ready === false ? "is-bad" : "is-good"}`}><ShieldCheck size={18} /><span><strong>{preflight?.success === false || preflight?.ready === false ? "预检未通过" : "转发预检通过"}</strong><small>{preflight?.message || "授权、目标、路线和端口资源均满足创建条件"}</small>{preflight?.warnings?.map((warning) => <small key={warning}>{warning}</small>)}</span></div></div> : null}</div>
     <div className="dialog-actions"><Button type="button" variant="secondary" disabled={Boolean(working)} onClick={step === 1 ? onClose : () => setStep((current) => current - 1)}>{step === 1 ? "取消" : "上一步"}</Button>{step < 4 ? <Button type="button" disabled={!stepValid || Boolean(working)} onClick={() => void next()}>{working === "preflight" ? <Spinner label="正在预检" /> : <>下一步<ArrowRight size={16} /></>}</Button> : <Button type="button" disabled={!stepValid || Boolean(working)} onClick={() => void create()}>{working === "create" ? <Spinner label="正在创建" /> : <><Check size={16} />确认创建</>}</Button>}</div>
   </div></Dialog>;
 }

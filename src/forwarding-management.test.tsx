@@ -79,7 +79,7 @@ describe("user forwarding workflow", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     expect(await screen.findByRole("combobox", { name: "最终目标节点" })).toHaveValue("42");
-    expect(screen.getByRole("button", { name: /自定义公网目标/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /自定义公网目标/ })).toBeEnabled();
 
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     fireEvent.change(screen.getByRole("textbox", { name: "转发名称" }), { target: { value: "东京入口" } });
@@ -97,6 +97,53 @@ describe("user forwarding workflow", () => {
       target: { type: "managed_node", node_id: 42 },
       network: "tcp_udp",
       requested_entry_port: 2033,
+      source_cidrs: [],
+    }, { idempotencyKey: expect.any(String) }));
+  }, 15_000);
+
+  it("creates a forward with custom public target", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/user/tunnel-grants") return { data: { grants: [compactGrant] } } as T;
+      if (path === "/api/user/forwards") return { forwards: [] } as T;
+      if (path === "/api/user/nodes") return { nodes: [{ id: 42, node_name: "美国 Reality", protocol: "vless", enabled: true }] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/user/forwards/preflight") return { data: { result: { success: true, ready: true, entry_address: "edge.example.com", entry_port: 2033 } } } as T;
+      if (path === "/api/user/forwards") return { data: { forward: { id: "forward_custom", observed_state: "pending" } } } as T;
+      throw new Error(`unexpected POST ${path}`);
+    });
+    render(<ForwardingManagement isAdmin={false} notify={vi.fn()} />);
+
+    await screen.findByRole("tab", { name: /可用隧道/ });
+    const createButton = screen.getByRole("button", { name: "创建转发" });
+    await waitFor(() => expect(createButton).toBeEnabled());
+    fireEvent.click(createButton);
+
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    const customTargetButton = screen.getByRole("button", { name: /自定义公网目标/ });
+    expect(customTargetButton).toBeEnabled();
+    fireEvent.click(customTargetButton);
+
+    const hostInput = await screen.findByRole("textbox", { name: "目标主机" });
+    const portInput = screen.getByRole("spinbutton", { name: "目标端口" });
+    fireEvent.change(hostInput, { target: { value: "198.51.100.24" } });
+    fireEvent.change(portInput, { target: { value: "8443" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "转发名称" }), { target: { value: "公网转发入口" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+
+    expect(await screen.findByText("转发预检通过")).toBeInTheDocument();
+    expect(screen.getByText(/自定义公网目标/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认创建" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/user/forwards", {
+      grant_id: "grant_alice_tokyo",
+      name: "公网转发入口",
+      target: { type: "custom", host: "198.51.100.24", port: 8443 },
+      network: "tcp_udp",
+      requested_entry_port: 0,
       source_cidrs: [],
     }, { idempotencyKey: expect.any(String) }));
   }, 15_000);

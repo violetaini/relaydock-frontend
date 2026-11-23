@@ -155,7 +155,7 @@ describe("administrator tunnel composition", () => {
     expect(userSelect).toHaveValue("custom-user");
     expect(screen.getByRole("option", { name: /自定义用户/ })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: /套餐用户/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("option", { name: /管理员/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /管理员/ })).not.toBeInTheDocument();
   });
 
   it("keeps successful admin data usable when one user's grants fail", async () => {
@@ -610,16 +610,14 @@ describe("administrator tunnel composition", () => {
     const createForwardButton = screen.getByRole("button", { name: "创建转发" });
     fireEvent.click(createForwardButton);
 
-    // Auto-grant should have been called for admin
-    await waitFor(() => {
-      expect(post).toHaveBeenCalledWith(
-        "/api/admin/users/admin/tunnel-grants",
-        expect.objectContaining({ tunnel_id: "tunnel_tokyo_us" }),
-        { idempotencyKey: expect.any(String) },
-      );
-    });
+    // Admin has default access to all tunnels without needing auto-grant API calls
+    expect(post).not.toHaveBeenCalledWith(
+      "/api/admin/users/admin/tunnel-grants",
+      expect.anything(),
+      expect.anything(),
+    );
 
-    // Dialog opens
+    // Dialog opens with active tunnels available
     const dialog = await screen.findByRole("dialog", { name: "创建用户转发" });
     expect(dialog).toBeInTheDocument();
     expect(within(dialog).getByText("东京到洛杉矶")).toBeInTheDocument();
@@ -642,7 +640,7 @@ describe("administrator tunnel composition", () => {
 
     await waitFor(() => {
       expect(post).toHaveBeenCalledWith("/api/user/forwards", {
-        grant_id: "grant_admin_tokyo",
+        grant_id: "admin_auto_tunnel_tokyo_us",
         name: "管理员东京转发",
         target: { type: "managed_node", node_id: 42 },
         network: "tcp_udp",
@@ -789,5 +787,257 @@ describe("administrator tunnel composition", () => {
     expect(nodeSelect).toHaveValue("102");
     expect(within(flowVisualizer).getByText("✓ 同机直连 (极低延迟)")).toBeInTheDocument();
     expect(within(flowVisualizer).getByText(/零额外跨海开销/)).toBeInTheDocument();
+  });
+
+  it("resolves entry host and port from server hops when missing in raw forward rule and allows copying", async () => {
+    const notify = vi.fn();
+    const mockServers = [
+      { id: 11, name: "东京入口", ip_address: "203.0.113.10", status: "online", ws_connected: true, is_federated: false },
+      { id: 12, name: "洛杉矶出口", ip_address: "198.51.100.20", status: "online", ws_connected: true, is_federated: false },
+    ];
+    // A forward missing entry_host, but having hops with server_id = 11 and allocated_entry_port = 8888
+    const rawForward = {
+      id: 999,
+      name: "tokyo-to-la-forward",
+      username: "admin",
+      tunnel_id: 7,
+      observed_state: "active",
+      allocated_entry_port: 8888,
+      hops: [{ server_id: 11, position: 0, listen_port: 8888 }],
+      target_host: "10.0.0.5",
+      target_port: 443,
+      traffic_used_bytes: 1024,
+    };
+
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/tunnel-templates") return { templates: [tunnel] } as T;
+      if (path === "/api/admin/remote-servers") return { servers: mockServers } as T;
+      if (path === "/api/admin/users") return { users: [{ username: "admin", nickname: "管理员", role: "admin" }] } as T;
+      if (path === "/api/admin/forwards") return { forwards: [rawForward] } as T;
+      if (path === "/api/user/nodes") return { nodes: [] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    // Mock clipboard
+    let written = "";
+    Object.assign(navigator, {
+      clipboard: {
+        writeText: vi.fn(async (text: string) => {
+          written = text;
+        }),
+      },
+    });
+
+    render(<ForwardingManagement isAdmin currentUsername="admin" notify={notify} />);
+
+    // Switch to "我的转发" tab
+    const myTab = await screen.findByRole("tab", { name: /我的转发/ });
+    fireEvent.click(myTab);
+
+    // Verify row displays the resolved entry IP and port
+    expect(await screen.findByText("tokyo-to-la-forward")).toBeInTheDocument();
+    expect(screen.getByText("203.0.113.10:8888")).toBeInTheDocument();
+    // Grant placeholder such as "授权 ..." or "grt_..." should be hidden in tunnel column
+    expect(screen.queryByText(/^授权/)).not.toBeInTheDocument();
+
+    // Click the copy button
+    const copyBtn = screen.getByRole("button", { name: "复制 tokyo-to-la-forward 入口" });
+    expect(copyBtn).toBeEnabled();
+    fireEvent.click(copyBtn);
+
+    await waitFor(() => {
+      expect(written).toBe("203.0.113.10:8888");
+      expect(notify).toHaveBeenCalledWith("入口已复制：203.0.113.10:8888");
+    });
+  });
+
+  it("allows editing forward rule name, target node and source cidrs", async () => {
+    const notify = vi.fn();
+    const rawForward = {
+      id: "fwd_editable_1",
+      name: "initial-forward-name",
+      username: "admin",
+      tunnel_id: 7,
+      observed_state: "active",
+      allocated_entry_port: 8888,
+      target_node_id: 42,
+      target_node_name: "日本落地",
+      target_host: "10.0.0.5",
+      target_port: 443,
+      source_cidrs: ["1.1.1.1/32"],
+    };
+
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/tunnel-templates") return { templates: [tunnel] } as T;
+      if (path === "/api/admin/remote-servers") return { servers: [] } as T;
+      if (path === "/api/admin/users") return { users: [{ username: "admin", nickname: "管理员", role: "admin" }] } as T;
+      if (path === "/api/admin/forwards") return { forwards: [rawForward] } as T;
+      if (path === "/api/user/nodes") return { nodes: [{ id: 42, node_name: "日本落地", protocol: "vless", enabled: true }, { id: 43, node_name: "美国落地", protocol: "vmess", enabled: true }] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    let putPayload: any = null;
+    vi.spyOn(api, "put").mockImplementation(async <T,>(_path: string, body?: any): Promise<T> => {
+      putPayload = body;
+      return { success: true, forward: { ...rawForward, ...body } } as T;
+    });
+
+    render(<ForwardingManagement isAdmin currentUsername="admin" notify={notify} />);
+
+    // Switch to "我的转发" tab
+    const myTab = await screen.findByRole("tab", { name: /我的转发/ });
+    fireEvent.click(myTab);
+
+    expect(await screen.findByText("initial-forward-name")).toBeInTheDocument();
+
+    // Click edit button
+    const editBtn = screen.getByRole("button", { name: "编辑 initial-forward-name" });
+    fireEvent.click(editBtn);
+
+    // Dialog appears
+    const dialog = await screen.findByRole("dialog", { name: "编辑转发 “initial-forward-name”" });
+    expect(dialog).toBeInTheDocument();
+
+    // Change forward name
+    const nameInput = within(dialog).getByLabelText("转发名称");
+    fireEvent.change(nameInput, { target: { value: "renamed-forward" } });
+
+    // Change entry port
+    const portInput = within(dialog).getByPlaceholderText("例如 2056");
+    fireEvent.change(portInput, { target: { value: "9999" } });
+
+    // Change target node
+    const nodeSelect = within(dialog).getByRole("combobox");
+    fireEvent.change(nodeSelect, { target: { value: "43" } });
+
+    // Submit form
+    const saveBtn = within(dialog).getByRole("button", { name: "保存修改" });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(putPayload).toEqual({
+        name: "renamed-forward",
+        requested_entry_port: 9999,
+        target_node_id: 43,
+        source_cidrs: ["1.1.1.1/32"],
+      });
+      expect(notify).toHaveBeenCalledWith("转发已更新");
+    });
+  });
+
+  it("supports multi-tunnel batch granting in GrantDialog including bidirectional pair", async () => {
+    const notify = vi.fn();
+    const bidirectionalTunnels = [
+      { id: 101, name: "港台隧道", state: "active", billing_mode: "both", hops: [{ server_id: 1, position: 1 }, { server_id: 2, position: 2 }] },
+      { id: 102, name: "港台隧道", state: "active", billing_mode: "both", hops: [{ server_id: 2, position: 1 }, { server_id: 1, position: 2 }] },
+      { id: 103, name: "东京单向", state: "active", billing_mode: "upload", hops: [{ server_id: 1, position: 1 }] },
+    ];
+    const remoteServers = [
+      { id: 1, name: "Bestvm HK", status: "online" },
+      { id: 2, name: "Bestvm TW", status: "online" },
+    ];
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/tunnel-templates") return { templates: bidirectionalTunnels } as T;
+      if (path === "/api/admin/remote-servers") return { servers: remoteServers } as T;
+      if (path === "/api/admin/users") return { users: [{ username: "bob", nickname: "Bob", role: "user" }] } as T;
+      if (path === "/api/admin/forwards") return { forwards: [] } as T;
+      if (path.endsWith("/tunnel-grants")) return { grants: [] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    const postSpy = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+
+    render(<ForwardingManagement isAdmin currentUsername="admin" notify={notify} />);
+
+    // Switch to grants tab
+    fireEvent.click(await screen.findByRole("tab", { name: /用户授权/ }));
+    fireEvent.click(screen.getByRole("button", { name: "新增授权" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "新增隧道授权" });
+    expect(dialog).toBeInTheDocument();
+
+    // Select user bob
+    const userSelect = within(dialog).getByRole("combobox", { name: "授权用户" });
+    fireEvent.change(userSelect, { target: { value: "bob" } });
+
+    // Bidirectional tunnel "港台隧道" should display once with "双向对称" badge
+    expect(within(dialog).getByText("双向对称")).toBeInTheDocument();
+
+    // Click "全选所有"
+    fireEvent.click(within(dialog).getByRole("button", { name: "全选所有" }));
+
+    // Save grant
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存授权" }));
+
+    await waitFor(() => {
+      expect(postSpy).toHaveBeenCalled();
+    });
+
+    const grantPosts = postSpy.mock.calls
+      .filter(([path]) => path === "/api/admin/users/bob/tunnel-grants")
+      .map(([_, body]) => (body as { tunnel_id: string }).tunnel_id)
+      .sort();
+
+    // Must grant all 3 tunnel IDs (both directions 101, 102 of 港台隧道 + 103 东京单向)
+    expect(grantPosts).toEqual(["101", "102", "103"]);
+  });
+
+  it("marks package-managed grants as 套餐隧道 and disallows editing from GrantPanel", async () => {
+    const notify = vi.fn();
+    const packageGrant = {
+      id: "grant_pkg_1",
+      username: "alice",
+      tunnel_id: 101,
+      name: "港台隧道",
+      source_type: "package",
+      enabled: true,
+      state: "active",
+      max_active_forwards: 5,
+      per_forward_speed_mbps: 50,
+      traffic_limit_bytes: 10 * 1024 ** 3,
+    };
+    const manualGrant = {
+      id: "grant_man_2",
+      username: "charlie",
+      tunnel_id: 101,
+      name: "港台隧道",
+      source_type: "manual",
+      enabled: true,
+      state: "active",
+      max_active_forwards: 2,
+      per_forward_speed_mbps: 20,
+      traffic_limit_bytes: 0,
+    };
+
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/tunnel-templates") return { templates: [{ id: 101, name: "港台隧道", state: "active" }] } as T;
+      if (path === "/api/admin/remote-servers") return { servers: [] } as T;
+      if (path === "/api/admin/users") return { users: [
+        { username: "alice", nickname: "Alice", role: "user" },
+        { username: "charlie", nickname: "Charlie", role: "user" },
+      ] } as T;
+      if (path === "/api/admin/forwards") return { forwards: [] } as T;
+      if (path === "/api/admin/users/alice/tunnel-grants") return { grants: [packageGrant] } as T;
+      if (path === "/api/admin/users/charlie/tunnel-grants") return { grants: [manualGrant] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    render(<ForwardingManagement isAdmin currentUsername="admin" notify={notify} />);
+
+    // Switch to grants tab
+    fireEvent.click(await screen.findByRole("tab", { name: /用户授权/ }));
+
+    // Verify package tunnel tag is rendered in table
+    expect(await screen.findByText("套餐隧道 · 禁止从本处修改")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "编辑 alice 的隧道授权" })).not.toBeInTheDocument();
+
+    // Manual grant row still has edit button
+    expect(screen.getByRole("button", { name: "编辑 charlie 的隧道授权" })).toBeInTheDocument();
+
+    // Filter by source: 套餐隧道
+    const sourceSelect = screen.getByRole("combobox", { name: "授权来源筛选" });
+    fireEvent.change(sourceSelect, { target: { value: "package" } });
+    expect(screen.getByText("alice")).toBeInTheDocument();
+    expect(screen.queryByText("charlie")).not.toBeInTheDocument();
   });
 });

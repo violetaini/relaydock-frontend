@@ -28,7 +28,11 @@ import type {
   RemoteServer,
   ServerListResponse,
 } from "./types";
-import type { TunnelTemplate } from "./forwarding-management";
+import {
+  groupTunnelTemplates,
+  type TunnelTemplate,
+  type TunnelTemplateGroup,
+} from "./forwarding-management";
 import { normalizeForwardingBillingMode } from "./forwarding-billing";
 import {
   normalizeNodeTrafficResetPeriod,
@@ -490,31 +494,49 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
     });
   };
 
-  const toggleTunnel = (tunnelID: number) => {
+  const tunnelGroups = useMemo(() => groupTunnelTemplates(tunnels, servers), [tunnels, servers]);
+
+  const toggleTunnelGroup = (group: TunnelTemplateGroup) => {
+    const primaryID = Number(group.primary.id);
+    const partnerID = group.partner ? Number(group.partner.id) : null;
+    const targetIDs = partnerID !== null ? [primaryID, partnerID] : [primaryID];
     setForm((current) => {
-      const exists = current.forwardingGrants.some((grant) => grant.tunnel_id === tunnelID);
+      const exists = targetIDs.some((id) => current.forwardingGrants.some((grant) => grant.tunnel_id === id));
+      if (exists) {
+        return {
+          ...current,
+          forwardingGrants: current.forwardingGrants.filter((grant) => !targetIDs.includes(grant.tunnel_id)),
+        };
+      }
+      const newGrants = targetIDs.map((id) => {
+        const tunnelObj = id === primaryID ? group.primary : group.partner;
+        return {
+          tunnel_id: id,
+          max_active_forwards: 1,
+          per_forward_speed_mbps: 0,
+          per_forward_connection_limit: 0,
+          traffic_limit_bytes: 0,
+          billing_mode_override: normalizeForwardingBillingMode(
+            tunnelObj?.billing_mode,
+          ),
+        };
+      });
       return {
         ...current,
-        forwardingGrants: exists
-          ? current.forwardingGrants.filter((grant) => grant.tunnel_id !== tunnelID)
-          : [...current.forwardingGrants, {
-            tunnel_id: tunnelID,
-            max_active_forwards: 1,
-            per_forward_speed_mbps: 0,
-            per_forward_connection_limit: 0,
-            traffic_limit_bytes: 0,
-            billing_mode_override: normalizeForwardingBillingMode(
-              tunnels.find((tunnel) => Number(tunnel.id) === tunnelID)?.billing_mode,
-            ),
-          }],
+        forwardingGrants: [...current.forwardingGrants, ...newGrants],
       };
     });
   };
 
-  const updateForwardingGrant = (tunnelID: number, patch: Partial<PackageForwardingGrant>) => {
+  const updateTunnelGroupGrant = (group: TunnelTemplateGroup, patch: Partial<PackageForwardingGrant>) => {
+    const primaryID = Number(group.primary.id);
+    const partnerID = group.partner ? Number(group.partner.id) : null;
+    const targetIDs = partnerID !== null ? [primaryID, partnerID] : [primaryID];
     setForm((current) => ({
       ...current,
-      forwardingGrants: current.forwardingGrants.map((grant) => grant.tunnel_id === tunnelID ? { ...grant, ...patch } : grant),
+      forwardingGrants: current.forwardingGrants.map((grant) =>
+        targetIDs.includes(grant.tunnel_id) ? { ...grant, ...patch } : grant
+      ),
     }));
   };
 
@@ -685,18 +707,40 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
           })}
         </div>
 
-        <div className="surface-heading package-subheading"><div><h2>转发线路授权（{form.forwardingGrants.length}）</h2><small>允许账号在选定线路模板上创建转发规则</small></div></div>
+        <div className="surface-heading package-subheading"><div><h2>转发线路授权（{tunnelGroups.filter((g) => {
+          const pid = Number(g.primary.id);
+          const fid = g.partner ? Number(g.partner.id) : null;
+          return form.forwardingGrants.some((grant) => grant.tunnel_id === pid || (fid !== null && grant.tunnel_id === fid));
+        }).length}）</h2><small>允许账号在选定线路模板上创建转发规则</small></div></div>
         <div className="package-entitlement-list">
-          {tunnels.length === 0 ? <span className="muted">暂无可授权转发线路</span> : tunnels.map((tunnel) => {
-            const tunnelID = Number(tunnel.id);
-            const grant = form.forwardingGrants.find((itemGrant) => itemGrant.tunnel_id === tunnelID);
-            return <div key={String(tunnel.id)} className={grant ? "is-selected" : ""}>
-              <label className="checkbox-row"><input type="checkbox" checked={Boolean(grant)} onChange={() => toggleTunnel(tunnelID)} /><span><strong>{tunnel.name}</strong><small>{tunnel.description || `${tunnel.hops?.length ?? 0} 跳线路`}</small></span></label>
-              {grant ? <div className="package-entitlement-fields package-entitlement-fields-forward">
-                <Field label="转发名额"><input aria-label={`${tunnel.name} 转发名额`} type="number" min="1" value={grant.max_active_forwards} onChange={(event) => updateForwardingGrant(tunnelID, { max_active_forwards: Number(event.target.value) })} /></Field>
-                <Field label="单条限速 Mbps" hint="0 表示不限"><input aria-label={`${tunnel.name} 单条转发限速`} type="number" min="0" step="0.1" value={grant.per_forward_speed_mbps} onChange={(event) => updateForwardingGrant(tunnelID, { per_forward_speed_mbps: Number(event.target.value) })} /></Field>
-                <Field label="授权流量 GB" hint="0 表示不限"><input aria-label={`${tunnel.name} 授权流量`} type="number" min="0" step="0.01" value={grant.traffic_limit_bytes / 1024 ** 3} onChange={(event) => updateForwardingGrant(tunnelID, { traffic_limit_bytes: Math.round(Number(event.target.value) * 1024 ** 3) })} /></Field>
-                <Field label="流量计算"><select aria-label={`${tunnel.name} 流量计算`} value={normalizeForwardingBillingMode(grant.billing_mode_override, tunnel.billing_mode)} onChange={(event) => updateForwardingGrant(tunnelID, { billing_mode_override: event.target.value as ForwardingBillingMode })}><option value="both">双向</option><option value="upload">仅算上行</option><option value="download">仅算下行</option></select></Field>
+          {tunnelGroups.length === 0 ? <span className="muted">暂无可授权转发线路</span> : tunnelGroups.map((group) => {
+            const primaryID = Number(group.primary.id);
+            const partnerID = group.partner ? Number(group.partner.id) : null;
+            const grant = form.forwardingGrants.find((itemGrant) => itemGrant.tunnel_id === primaryID) ||
+                          (partnerID !== null ? form.forwardingGrants.find((itemGrant) => itemGrant.tunnel_id === partnerID) : undefined);
+            const isSelected = Boolean(grant);
+            const hops = group.hops || [];
+            const routeText = hops.length > 0 ? (group.isBidirectional ? ` (${hops.map((h) => h.name).join(" ⇄ ")})` : ` (${hops.map((h) => h.name).join(" → ")})`) : "";
+            return <div key={group.key} className={isSelected ? "is-selected" : ""}>
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={isSelected}
+                  onChange={() => toggleTunnelGroup(group)}
+                />
+                <span>
+                  <strong>
+                    {group.name}{routeText}
+                    {group.isBidirectional ? <Badge tone="info" className="package-bidirectional-badge">双向对称</Badge> : null}
+                  </strong>
+                  <small>{group.description || `${group.isBidirectional ? "双向" : ""}${hops.length ? `${hops.length} 跳线路` : "直连线路"}`}</small>
+                </span>
+              </label>
+              {isSelected && grant ? <div className="package-entitlement-fields package-entitlement-fields-forward">
+                <Field label="转发名额"><input aria-label={`${group.name} 转发名额`} type="number" min="1" value={grant.max_active_forwards} onChange={(event) => updateTunnelGroupGrant(group, { max_active_forwards: Number(event.target.value) })} /></Field>
+                <Field label="单条限速 Mbps" hint="0 表示不限"><input aria-label={`${group.name} 单条转发限速`} type="number" min="0" step="0.1" value={grant.per_forward_speed_mbps} onChange={(event) => updateTunnelGroupGrant(group, { per_forward_speed_mbps: Number(event.target.value) })} /></Field>
+                <Field label="授权流量 GB" hint="0 表示不限"><input aria-label={`${group.name} 授权流量`} type="number" min="0" step="0.01" value={grant.traffic_limit_bytes / 1024 ** 3} onChange={(event) => updateTunnelGroupGrant(group, { traffic_limit_bytes: Math.round(Number(event.target.value) * 1024 ** 3) })} /></Field>
+                <Field label="流量计算"><select aria-label={`${group.name} 流量计算`} value={normalizeForwardingBillingMode(grant.billing_mode_override, group.primary.billing_mode)} onChange={(event) => updateTunnelGroupGrant(group, { billing_mode_override: event.target.value as ForwardingBillingMode })}><option value="both">双向</option><option value="upload">仅算上行</option><option value="download">仅算下行</option></select></Field>
               </div> : null}
             </div>;
           })}

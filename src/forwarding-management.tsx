@@ -191,6 +191,8 @@ interface ForwardHop {
   position?: number;
   server_id?: number;
   server_name?: string;
+  listen_port?: number;
+  target_port?: number;
 }
 
 export interface ForwardRule {
@@ -217,6 +219,7 @@ export interface ForwardRule {
   entry?: ForwardEndpoint;
   route?: string[];
   hops?: ForwardHop[];
+  source_cidrs?: string[];
   desired_state?: string;
   observed_state?: string;
   state?: string;
@@ -526,11 +529,65 @@ function forwardState(forward: ForwardRule): string {
   return forward.observed_state || forward.state || forward.desired_state || "pending";
 }
 
-function forwardEntry(forward: ForwardRule): { host: string; port: number } {
-  return {
-    host: forward.entry_host || forward.entry_address || forward.entry?.host || forward.entry?.address || "",
-    port: Number(forward.allocated_entry_port || forward.entry_port || forward.entry?.port || 0),
-  };
+export async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // fallback below
+  }
+  try {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.top = "-9999px";
+    textarea.style.left = "-9999px";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    const success = document.execCommand("copy");
+    document.body.removeChild(textarea);
+    return success;
+  } catch {
+    return false;
+  }
+}
+
+function forwardEntry(
+  forward: ForwardRule,
+  servers: RemoteServer[] = [],
+  templates: TunnelTemplate[] = [],
+): { host: string; port: number } {
+  let host = forward.entry_host || forward.entry_address || forward.entry?.host || forward.entry?.address || "";
+  if (!host && servers.length) {
+    if (forward.hops?.length) {
+      const server = servers.find((s) => s.id === forward.hops![0].server_id);
+      if (server) {
+        host = server.ip_address || server.domain || "";
+      }
+    }
+    if (!host) {
+      const t = forward.tunnel || templates.find((item) => sameID(resourceID(item), forward.tunnel_id));
+      if (t?.hops?.length) {
+        const firstHopServerID = t.hops[0].server_id;
+        const server = servers.find((s) => s.id === firstHopServerID);
+        if (server) {
+          host = server.ip_address || server.domain || "";
+        }
+      }
+    }
+  }
+  const port = Number(
+    forward.allocated_entry_port ||
+      forward.entry_port ||
+      forward.entry?.port ||
+      forward.hops?.[0]?.listen_port ||
+      forward.requested_entry_port ||
+      0,
+  );
+  return { host, port };
 }
 
 function grantActiveForwards(grant: TunnelGrant): number {
@@ -633,6 +690,7 @@ function AdminForwarding({ notify, currentUsername = "admin" }: { notify: Notify
   const [wizardGrantID, setWizardGrantID] = useState<string | undefined>();
   const [editingGrant, setEditingGrant] = useState<TunnelGrant | undefined>();
   const [editingTemplate, setEditingTemplate] = useState<TunnelTemplateGroup | undefined>();
+  const [editingForward, setEditingForward] = useState<ForwardRule | undefined>();
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [working, setWorking] = useState(false);
 
@@ -673,7 +731,7 @@ function AdminForwarding({ notify, currentUsername = "admin" }: { notify: Notify
 
       if (userResult.status === "fulfilled") {
         const nextUsers = extractList<UserItem>(userResult.value, "users");
-        const grantUsers = [...new Map(nextUsers.filter((user) => user.username).map((user) => [user.username, user])).values()];
+        const grantUsers = [...new Map(nextUsers.filter((user) => user.username && user.username !== "admin" && user.role !== "admin").map((user) => [user.username, user])).values()];
         setUsers(nextUsers);
         const grantResults = await Promise.allSettled(grantUsers.map((user) => (
           api.get<unknown>(`/api/admin/users/${encodeURIComponent(user.username)}/tunnel-grants`)
@@ -686,8 +744,9 @@ function AdminForwarding({ notify, currentUsername = "admin" }: { notify: Notify
           current.forEach((grant) => currentByUsername.set(grant.username, [...(currentByUsername.get(grant.username) ?? []), grant]));
           return grantResults.flatMap((result, index) => {
             const username = grantUsers[index].username;
-            if (result.status === "rejected") return currentByUsername.get(username) ?? [];
+            if (result.status === "rejected") return (currentByUsername.get(username) ?? []).filter((g) => g.username !== "admin");
             return extractList<TunnelGrant>(result.value, "grants", "tunnel_grants")
+              .filter((g) => g.username !== "admin")
               .map((grant) => grant.username ? grant : { ...grant, username });
           });
         });
@@ -770,18 +829,42 @@ function AdminForwarding({ notify, currentUsername = "admin" }: { notify: Notify
   };
 
   const copyEntry = async (forward: ForwardRule) => {
-    const entry = forwardEntry(forward);
-    if (!entry.host || !entry.port) return;
-    await navigator.clipboard.writeText(`${entry.host}:${entry.port}`);
-    notify("入口地址已复制");
+    const entry = forwardEntry(forward, servers, templates);
+    if (!entry.host || !entry.port) {
+      notify("入口尚未生成，请稍后重试", "error");
+      return;
+    }
+    const text = `${entry.host}:${entry.port}`;
+    const ok = await copyToClipboard(text);
+    if (ok) {
+      notify(`入口已复制：${text}`);
+    } else {
+      notify(`复制受限，入口地址为：${text}`);
+    }
   };
 
   const myForwards = useMemo(() => forwards.filter((forward) => forward.username === currentUsername), [forwards, currentUsername]);
   const activeAdminGrants = useMemo(() => {
-    return grants
-      .filter((grant) => grant.username === currentUsername)
-      .filter((grant) => (grant.effective_state || grant.state || (grant.enabled === false ? "suspended" : "active")) === "active");
-  }, [grants, currentUsername]);
+    const activeTemplates = templates.filter((t) => (t.state || "active") === "active");
+    return activeTemplates.map((t) => ({
+      id: `admin_auto_${resourceID(t)}`,
+      public_id: `admin_auto_${resourceID(t)}`,
+      username: currentUsername || "admin",
+      tunnel_id: resourceID(t),
+      tunnel: t,
+      enabled: true,
+      effective_state: "active" as const,
+      state: "active",
+      starts_at: new Date().toISOString(),
+      expires_at: null,
+      max_active_forwards: 1000,
+      per_forward_speed_mbps: 0,
+      per_forward_connection_limit: 0,
+      traffic_limit_bytes: 0,
+      billing_mode_override: "both" as const,
+      source_type: "manual" as const,
+    }));
+  }, [templates, currentUsername]);
 
   const openCreateForward = async (initialTemplateOrGrantID?: ResourceID) => {
     const activeTemplates = templates.filter((t) => (t.state || "active") === "active");
@@ -791,42 +874,6 @@ function AdminForwarding({ notify, currentUsername = "admin" }: { notify: Notify
     }
 
     setWorking(true);
-    let currentAdminGrants = grants.filter((g) => g.username === currentUsername);
-
-    // Auto-grant any active template that admin does not have an active grant for yet
-    const missing = activeTemplates.filter((t) => {
-      return !currentAdminGrants.some((g) => sameID(g.tunnel_id, resourceID(t)) && (g.effective_state || g.state || "active") === "active");
-    });
-
-    if (missing.length > 0) {
-      const addedGrants: TunnelGrant[] = [];
-      for (const t of missing) {
-        try {
-          const res = await api.post<{ grant: TunnelGrant }>(`/api/admin/users/${encodeURIComponent(currentUsername)}/tunnel-grants`, {
-            tunnel_id: String(resourceID(t)),
-            enabled: true,
-            starts_at: new Date().toISOString(),
-            expires_at: null,
-            max_active_forwards: 100,
-            per_forward_speed_mbps: 0,
-            per_forward_connection_limit: 0,
-            traffic_limit_bytes: 0,
-            billing_mode_override: "both",
-            allow_custom_public_target: false,
-          }, { idempotencyKey: idempotencyKey() });
-          const newGrant = (res as any)?.grant || (res as any)?.data?.grant || res;
-          if (newGrant) {
-            addedGrants.push({ ...newGrant, username: currentUsername });
-          }
-        } catch (err) {
-          console.warn("Auto-grant for admin failed for template", t.id, err);
-        }
-      }
-      if (addedGrants.length > 0) {
-        currentAdminGrants = [...currentAdminGrants, ...addedGrants];
-        setGrants((prev) => [...prev, ...addedGrants]);
-      }
-    }
 
     // Ensure nodes are loaded
     if (!nodes.length) {
@@ -843,7 +890,7 @@ function AdminForwarding({ notify, currentUsername = "admin" }: { notify: Notify
 
     let grantIDToSelect: string | undefined = undefined;
     if (initialTemplateOrGrantID) {
-      const matched = currentAdminGrants.find((g) => sameID(resourceID(g), initialTemplateOrGrantID) || sameID(g.tunnel_id, initialTemplateOrGrantID));
+      const matched = activeAdminGrants.find((g) => sameID(resourceID(g), initialTemplateOrGrantID) || sameID(g.tunnel_id, initialTemplateOrGrantID));
       if (matched) {
         grantIDToSelect = String(resourceID(matched));
       }
@@ -908,8 +955,10 @@ function AdminForwarding({ notify, currentUsername = "admin" }: { notify: Notify
         <ForwardTable
           forwards={myForwards}
           templates={templates}
+          servers={servers}
           onAction={runMyForwardAction}
           onCopy={copyEntry}
+          onEdit={setEditingForward}
           onDelete={(forward) => setConfirm({
             title: "删除转发",
             description: `将切断“${forward.name}”的入口并清理各跳端口。此操作无法撤销。`,
@@ -927,12 +976,42 @@ function AdminForwarding({ notify, currentUsername = "admin" }: { notify: Notify
         ) : null}
       </>
     ) : null}
-    {!loading && tab === "forwards" ? <ForwardTable admin forwards={forwards} templates={templates} onAction={runForwardAction} onDelete={(forward) => setConfirm({
-      title: "删除用户转发",
-      description: `将切断“${forward.name}”的入口并逐跳清理远端资源。离线服务器会进入等待清理状态。`,
-      confirmLabel: "确认删除",
-      run: async () => { await api.delete(`/api/admin/forwards/${encodeURIComponent(resourceID(forward))}`, undefined, { idempotencyKey: idempotencyKey() }); notify("转发删除任务已提交"); },
-    })} /> : null}
+    {!loading && tab === "forwards" ? (
+      <ForwardTable
+        admin
+        forwards={forwards}
+        templates={templates}
+        servers={servers}
+        onAction={runForwardAction}
+        onCopy={copyEntry}
+        onEdit={setEditingForward}
+        onDelete={(forward) => setConfirm({
+          title: "删除用户转发",
+          description: `将切断“${forward.name}”的入口并逐跳清理远端资源。离线服务器会进入等待清理状态。`,
+          confirmLabel: "确认删除",
+          run: async () => {
+            await api.delete(`/api/admin/forwards/${encodeURIComponent(resourceID(forward))}`, undefined, { idempotencyKey: idempotencyKey() });
+            notify("转发删除任务已提交");
+          },
+        })}
+      />
+    ) : null}
+
+    {editingForward ? (
+      <ForwardEditDialog
+        admin
+        forward={editingForward}
+        nodes={nodes.filter((node) => node.enabled)}
+        servers={servers}
+        templates={templates}
+        onClose={() => setEditingForward(undefined)}
+        onComplete={async () => {
+          setEditingForward(undefined);
+          notify("转发已更新");
+          await load(true);
+        }}
+      />
+    ) : null}
 
     {dialog === "template" ? <TemplateDialog templateGroup={editingTemplate} servers={servers} onClose={() => { setDialog(null); setEditingTemplate(undefined); }} onComplete={async () => { setDialog(null); notify(editingTemplate ? (editingTemplate.isBidirectional ? "双向隧道已更新" : "隧道模板已更新") : "隧道模板已创建"); setEditingTemplate(undefined); await load(true); }} /> : null}
     {dialog === "grant" ? <GrantDialog grant={editingGrant} users={users} templates={templates} servers={servers} onClose={() => setDialog(null)} onComplete={async () => { setDialog(null); notify(editingGrant ? "隧道授权已更新" : "隧道授权已创建"); await load(true); }} /> : null}
@@ -1125,7 +1204,14 @@ function TemplateDialog({ templateGroup, servers, onClose, onComplete }: { templ
   </Dialog>;
 }
 
-function GrantPanel({ grants, templates, onCreate, onEdit, onAction, onDelete }: {
+function GrantPanel({
+  grants,
+  templates,
+  onCreate,
+  onEdit,
+  onAction,
+  onDelete,
+}: {
   grants: TunnelGrant[];
   templates: TunnelTemplate[];
   onCreate: () => void;
@@ -1134,67 +1220,761 @@ function GrantPanel({ grants, templates, onCreate, onEdit, onAction, onDelete }:
   onDelete: (grant: TunnelGrant) => void;
 }) {
   const [workingID, setWorkingID] = useState<ResourceID | null>(null);
+  const [batchWorking, setBatchWorking] = useState(false);
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [sourceFilter, setSourceFilter] = useState("all");
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+
+  // Filter out admin users: admin has all tunnel permissions by default and does not appear in grants
+  const nonAdminGrants = useMemo(() => grants.filter((g) => g.username !== "admin"), [grants]);
+
+  const visibleGrants = useMemo(() => {
+    return nonAdminGrants.filter((grant) => {
+      const state = grant.effective_state || grant.state || (grant.enabled === false ? "suspended" : "active");
+      if (statusFilter !== "all" && state !== statusFilter) return false;
+      const isPackage = grant.source_type === "package";
+      if (sourceFilter === "package" && !isPackage) return false;
+      if (sourceFilter === "manual" && isPackage) return false;
+      if (query.trim()) {
+        const tName = tunnelName(grant, templates);
+        const text = `${grant.username} ${tName}`.toLowerCase();
+        if (!text.includes(query.trim().toLowerCase())) return false;
+      }
+      return true;
+    });
+  }, [nonAdminGrants, templates, statusFilter, sourceFilter, query]);
+
+  const grantKey = (g: TunnelGrant) => `${g.username}:::${String(resourceID(g))}`;
+
+  const allVisibleSelected = visibleGrants.length > 0 && visibleGrants.every((g) => selectedKeys.has(grantKey(g)));
+
+  const toggleSelectAll = () => {
+    if (allVisibleSelected) {
+      setSelectedKeys(new Set());
+    } else {
+      const next = new Set(selectedKeys);
+      visibleGrants.forEach((g) => next.add(grantKey(g)));
+      setSelectedKeys(next);
+    }
+  };
+
+  const toggleSelect = (key: string) => {
+    const next = new Set(selectedKeys);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    setSelectedKeys(next);
+  };
+
   const change = async (grant: TunnelGrant, action: "suspend" | "resume") => {
     setWorkingID(resourceID(grant));
-    try { await onAction(grant, action); } finally { setWorkingID(null); }
+    try {
+      await onAction(grant, action);
+    } finally {
+      setWorkingID(null);
+    }
   };
-  return <div className="fm-panel"><div className="fm-toolbar"><div><strong>用户隧道授权</strong><span>授权仅提供路线使用权，不开放服务器管理权限。</span></div><Button onClick={onCreate}><Plus size={17} />新增授权</Button></div>{grants.length === 0 ? <EmptyState icon={<UserRound size={25} />} title="暂无隧道授权" description="先建立隧道模板，再为用户设置期限与资源上限" action={<Button onClick={onCreate}><Plus size={17} />新增第一份授权</Button>} /> : <Surface className="table-surface fm-table-surface"><div className="table-wrap"><table className="fm-table"><thead><tr><th>用户 / 隧道</th><th>有效期</th><th>转发限制</th><th>流量</th><th>状态</th><th aria-label="操作" /></tr></thead><tbody>{grants.map((grant) => {
-    const id = resourceID(grant);
-    const state = grant.effective_state || grant.state || (grant.enabled === false ? "suspended" : "active");
-    const packageManaged = grant.source_type === "package";
-    return <tr key={`${grant.username}-${String(id)}`}><td className="fm-primary-cell"><strong>{grant.username}</strong><small>{tunnelName(grant, templates)}{packageManaged ? " · 套餐来源" : ""}</small></td><td><span>{displayDate(grant.expires_at)}</span><small className="fm-cell-note">{grant.starts_at ? `${displayDate(grant.starts_at)} 起` : "立即生效"}</small></td><td><span>{grantActiveForwards(grant)}/{grant.max_active_forwards} 条启用</span><small className="fm-cell-note">{grant.per_forward_speed_mbps ? `${grant.per_forward_speed_mbps} Mbps` : "不限速"} · {grant.per_forward_connection_limit ? `${grant.per_forward_connection_limit} 连接` : "不限连接"}</small></td><td><span>{formatBytes(grantUsedBytes(grant))} / {grant.traffic_limit_bytes ? formatBytes(grant.traffic_limit_bytes) : "不限"}</span><small className="fm-cell-note">当前版本不自动重置</small></td><td><Badge tone={stateTone(state)}>{stateLabel(state)}</Badge></td><td><div className="fm-row-actions">{packageManaged ? <Badge tone="info">套餐管理</Badge> : <><IconButton label={`编辑 ${grant.username} 的隧道授权`} onClick={() => onEdit(grant)}><Gauge size={18} /></IconButton>{state === "active" ? <IconButton label={`暂停 ${grant.username} 的隧道授权`} disabled={sameID(workingID, id)} onClick={() => void change(grant, "suspend")}><CirclePause size={18} /></IconButton> : <IconButton label={`恢复 ${grant.username} 的隧道授权`} disabled={sameID(workingID, id)} onClick={() => void change(grant, "resume")}><CirclePlay size={18} /></IconButton>}<IconButton label={`撤销 ${grant.username} 的隧道授权`} onClick={() => onDelete(grant)}><Trash2 size={18} /></IconButton></>}</div></td></tr>;
-  })}</tbody></table></div></Surface>}</div>;
+
+  const batchAction = async (action: "suspend" | "resume") => {
+    const targets = visibleGrants.filter((g) => {
+      if (!selectedKeys.has(grantKey(g))) return false;
+      const state = g.effective_state || g.state || (g.enabled === false ? "suspended" : "active");
+      if (action === "suspend") return state === "active";
+      return state !== "active";
+    });
+    if (!targets.length) return;
+    setBatchWorking(true);
+    try {
+      for (const g of targets) {
+        await onAction(g, action);
+      }
+      setSelectedKeys(new Set());
+    } finally {
+      setBatchWorking(false);
+    }
+  };
+
+  const batchDelete = async () => {
+    const targets = visibleGrants.filter((g) => selectedKeys.has(grantKey(g)) && g.source_type !== "package");
+    if (!targets.length) return;
+    for (const g of targets) {
+      onDelete(g);
+    }
+    setSelectedKeys(new Set());
+  };
+
+  return (
+    <div className="fm-panel">
+      <div className="fm-toolbar fm-filter-toolbar">
+        <div>
+          <strong>用户隧道授权</strong>
+          <span>授权仅提供路线使用权，不开放服务器管理权限。管理员写死享有全部路线。</span>
+        </div>
+        <div className="fm-inline-filters">
+          <input
+            aria-label="搜索用户或隧道"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="搜索用户名或隧道路线..."
+          />
+          <select
+            aria-label="授权状态筛选"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+          >
+            <option value="all">全部状态</option>
+            <option value="active">运行中</option>
+            <option value="suspended">已暂停</option>
+          </select>
+          <select
+            aria-label="授权来源筛选"
+            value={sourceFilter}
+            onChange={(e) => setSourceFilter(e.target.value)}
+          >
+            <option value="all">全部来源</option>
+            <option value="manual">手动授权</option>
+            <option value="package">套餐隧道</option>
+          </select>
+          <Button onClick={onCreate}><Plus size={17} />新增授权</Button>
+        </div>
+      </div>
+
+      {selectedKeys.size > 0 ? (
+        <div className="fm-batch-bar">
+          <div>
+            已选择 <strong>{selectedKeys.size}</strong> 项授权
+          </div>
+          <div className="fm-batch-actions">
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={batchWorking}
+              onClick={() => void batchAction("suspend")}
+            >
+              <CirclePause size={15} />批量暂停
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={batchWorking}
+              onClick={() => void batchAction("resume")}
+            >
+              <CirclePlay size={15} />批量恢复
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={batchWorking}
+              onClick={() => void batchDelete()}
+            >
+              <Trash2 size={15} />批量删除
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={batchWorking}
+              onClick={() => setSelectedKeys(new Set())}
+            >
+              取消选择
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {visibleGrants.length === 0 ? (
+        <EmptyState
+          icon={<UserRound size={25} />}
+          title={nonAdminGrants.length ? "没有匹配的隧道授权" : "暂无隧道授权"}
+          description={nonAdminGrants.length ? "请调整搜索条件或状态筛选" : "先建立隧道模板，再为用户设置期限与资源上限"}
+          action={!nonAdminGrants.length ? <Button onClick={onCreate}><Plus size={17} />新增第一份授权</Button> : undefined}
+        />
+      ) : (
+        <Surface className="table-surface fm-table-surface">
+          <div className="table-wrap">
+            <table className="fm-table">
+              <thead>
+                <tr>
+                  <th className="fm-checkbox-col">
+                    <input
+                      type="checkbox"
+                      aria-label="全选授权"
+                      checked={allVisibleSelected}
+                      onChange={toggleSelectAll}
+                    />
+                  </th>
+                  <th>用户 / 隧道</th>
+                  <th>有效期</th>
+                  <th>转发限制</th>
+                  <th>流量</th>
+                  <th>状态</th>
+                  <th aria-label="操作" />
+                </tr>
+              </thead>
+              <tbody>
+                {visibleGrants.map((grant) => {
+                  const id = resourceID(grant);
+                  const key = grantKey(grant);
+                  const isChecked = selectedKeys.has(key);
+                  const state = grant.effective_state || grant.state || (grant.enabled === false ? "suspended" : "active");
+                  const packageManaged = grant.source_type === "package";
+
+                  return (
+                    <tr key={key} className={isChecked ? "is-selected" : ""}>
+                      <td className="fm-checkbox-col">
+                        <input
+                          type="checkbox"
+                          aria-label={`选择 ${grant.username} 的授权`}
+                          checked={isChecked}
+                          onChange={() => toggleSelect(key)}
+                        />
+                      </td>
+                      <td className="fm-primary-cell">
+                        <strong>{grant.username}</strong>
+                        <div className="fm-tunnel-name-row">
+                          <small>{tunnelName(grant, templates)}</small>
+                          {packageManaged ? <Badge tone="info">套餐隧道</Badge> : null}
+                        </div>
+                      </td>
+                      <td>
+                        <span>{displayDate(grant.expires_at)}</span>
+                        <small className="fm-cell-note">{grant.starts_at ? `${displayDate(grant.starts_at)} 起` : "立即生效"}</small>
+                      </td>
+                      <td>
+                        <span>{grantActiveForwards(grant)}/{grant.max_active_forwards} 条启用</span>
+                        <small className="fm-cell-note">{grant.per_forward_speed_mbps ? `${grant.per_forward_speed_mbps} Mbps` : "不限速"} · {grant.per_forward_connection_limit ? `${grant.per_forward_connection_limit} 连接` : "不限连接"}</small>
+                      </td>
+                      <td>
+                        <span>{formatBytes(grantUsedBytes(grant))} / {grant.traffic_limit_bytes ? formatBytes(grant.traffic_limit_bytes) : "不限"}</span>
+                        <small className="fm-cell-note">当前版本不自动重置</small>
+                      </td>
+                      <td>
+                        <Badge tone={stateTone(state)}>{stateLabel(state)}</Badge>
+                      </td>
+                      <td>
+                        <div className="fm-row-actions">
+                          {packageManaged ? (
+                            <Badge tone="neutral" title="套餐隧道禁止从本处修改，请在套餐管理中调整">套餐隧道 · 禁止从本处修改</Badge>
+                          ) : (
+                            <>
+                              <IconButton label={`编辑 ${grant.username} 的隧道授权`} onClick={() => onEdit(grant)}>
+                                <Gauge size={18} />
+                              </IconButton>
+                              {state === "active" ? (
+                                <IconButton label={`暂停 ${grant.username} 的隧道授权`} disabled={sameID(workingID, id)} onClick={() => void change(grant, "suspend")}>
+                                  <CirclePause size={18} />
+                                </IconButton>
+                              ) : (
+                                <IconButton label={`恢复 ${grant.username} 的隧道授权`} disabled={sameID(workingID, id)} onClick={() => void change(grant, "resume")}>
+                                  <CirclePlay size={18} />
+                                </IconButton>
+                              )}
+                              <IconButton label={`撤销 ${grant.username} 的隧道授权`} onClick={() => onDelete(grant)}>
+                                <Trash2 size={18} />
+                              </IconButton>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Surface>
+      )}
+    </div>
+  );
 }
 
-function GrantDialog({ grant, users, templates, servers = [], onClose, onComplete }: { grant?: TunnelGrant; users: UserItem[]; templates: TunnelTemplate[]; servers?: RemoteServer[]; onClose: () => void; onComplete: () => Promise<void> }) {
-  const [draft, setDraft] = useState<GrantDraft>(() => grant ? grantDraftFrom(grant, templates) : defaultGrantDraft(users, templates));
+function GrantDialog({
+  grant,
+  users,
+  templates,
+  servers = [],
+  onClose,
+  onComplete,
+}: {
+  grant?: TunnelGrant;
+  users: UserItem[];
+  templates: TunnelTemplate[];
+  servers?: RemoteServer[];
+  onClose: () => void;
+  onComplete: () => Promise<void>;
+}) {
+  const [draft, setDraft] = useState<GrantDraft>(() =>
+    grant ? grantDraftFrom(grant, templates) : defaultGrantDraft(users, templates)
+  );
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
+
+  // Filter out admin users from grant creation: admin has full permissions by default
   const eligibleUsers = users.filter((user) => {
+    if (user.username === "admin" || user.role === "admin") return false;
     return !isPackageAuthorization(user) || (Boolean(grant) && user.username === draft.username);
   });
-  const activeTemplates = templates.filter((template) => template.state === "active" || sameID(resourceID(template), draft.tunnelID));
+
+  const activeTemplates = templates.filter(
+    (template) => template.state === "active" || sameID(resourceID(template), draft.tunnelID)
+  );
+
+  const templateGroups = useMemo(() => groupTunnelTemplates(activeTemplates, servers), [activeTemplates, servers]);
+
+  // Selected group keys for batch tunnel granting
+  const [selectedGroupKeys, setSelectedGroupKeys] = useState<Set<string>>(() => {
+    if (grant) {
+      const matchedGroup = templateGroups.find((g) =>
+        g.templates.some((t) => sameID(resourceID(t), grant.tunnel_id) || sameID(t.id, grant.tunnel_id))
+      );
+      return new Set(matchedGroup ? [matchedGroup.key] : []);
+    }
+    return new Set(templateGroups[0] ? [templateGroups[0].key] : []);
+  });
+
+  const toggleGroupSelection = (key: string) => {
+    setSelectedGroupKeys((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const selectAllGroups = () => {
+    setSelectedGroupKeys(new Set(templateGroups.map((g) => g.key)));
+  };
+
+  const clearAllGroups = () => {
+    setSelectedGroupKeys(new Set());
+  };
+
   const selectedUser = users.find((user) => user.username === draft.username);
-  const valid = Boolean(selectedUser && !isPackageAuthorization(selectedUser)) && draft.username && draft.tunnelID && draft.startsAt && Number(draft.maxForwards) >= 1 && Number(draft.speedMbps) >= 0 && Number(draft.trafficGB) >= 0 && (!draft.expiresAt || new Date(draft.expiresAt).getTime() > new Date(draft.startsAt).getTime());
+
+  // Target template IDs representing all directions of all selected groups
+  const targetTemplateIDs = useMemo(() => {
+    return templateGroups
+      .filter((g) => selectedGroupKeys.has(g.key))
+      .flatMap((g) => g.templates.map((t) => resourceID(t)));
+  }, [templateGroups, selectedGroupKeys]);
+
+  const isPackageManaged = grant?.source_type === "package";
+
+  const valid =
+    !isPackageManaged &&
+    Boolean(selectedUser && !isPackageAuthorization(selectedUser)) &&
+    Boolean(draft.username) &&
+    (Boolean(grant) ? Boolean(draft.tunnelID) : targetTemplateIDs.length > 0) &&
+    Boolean(draft.startsAt) &&
+    Number(draft.maxForwards) >= 1 &&
+    Number(draft.speedMbps) >= 0 &&
+    Number(draft.trafficGB) >= 0 &&
+    (!draft.expiresAt || new Date(draft.expiresAt).getTime() > new Date(draft.startsAt).getTime());
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!valid) return;
-    setWorking(true); setError("");
-    const payload = {
-      tunnel_id: draft.tunnelID,
-      enabled: grant?.enabled ?? true,
-      starts_at: new Date(draft.startsAt).toISOString(),
-      expires_at: draft.expiresAt ? new Date(draft.expiresAt).toISOString() : null,
-      max_active_forwards: Number(draft.maxForwards),
-      per_forward_speed_mbps: Number(draft.speedMbps),
-      per_forward_connection_limit: 0,
-      traffic_limit_bytes: Math.round(Number(draft.trafficGB) * 1024 ** 3),
-      billing_mode_override: draft.billingMode,
-      allow_custom_public_target: false,
-      ...(grant ? { version: grant.version ?? 1 } : {}),
-    };
+    setWorking(true);
+    setError("");
+
     try {
       const base = `/api/admin/users/${encodeURIComponent(draft.username)}/tunnel-grants`;
-      if (grant) await api.put(`${base}/${encodeURIComponent(resourceID(grant))}`, payload, { idempotencyKey: idempotencyKey() });
-      else await api.post(base, payload, { idempotencyKey: idempotencyKey() });
+      if (grant) {
+        const payload = {
+          tunnel_id: draft.tunnelID,
+          enabled: grant.enabled ?? true,
+          starts_at: new Date(draft.startsAt).toISOString(),
+          expires_at: draft.expiresAt ? new Date(draft.expiresAt).toISOString() : null,
+          max_active_forwards: Number(draft.maxForwards),
+          per_forward_speed_mbps: Number(draft.speedMbps),
+          per_forward_connection_limit: 0,
+          traffic_limit_bytes: Math.round(Number(draft.trafficGB) * 1024 ** 3),
+          billing_mode_override: draft.billingMode,
+          allow_custom_public_target: false,
+          version: grant.version ?? 1,
+        };
+        await api.put(`${base}/${encodeURIComponent(resourceID(grant))}`, payload, { idempotencyKey: idempotencyKey() });
+      } else {
+        for (const tid of targetTemplateIDs) {
+          const payload = {
+            tunnel_id: String(tid),
+            enabled: true,
+            starts_at: new Date(draft.startsAt).toISOString(),
+            expires_at: draft.expiresAt ? new Date(draft.expiresAt).toISOString() : null,
+            max_active_forwards: Number(draft.maxForwards),
+            per_forward_speed_mbps: Number(draft.speedMbps),
+            per_forward_connection_limit: 0,
+            traffic_limit_bytes: Math.round(Number(draft.trafficGB) * 1024 ** 3),
+            billing_mode_override: draft.billingMode,
+            allow_custom_public_target: false,
+          };
+          await api.post(base, payload, { idempotencyKey: idempotencyKey() });
+        }
+      }
       await onComplete();
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "隧道授权保存失败"); setWorking(false); }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "隧道授权保存失败");
+      setWorking(false);
+    }
   };
-  const update = <K extends keyof GrantDraft>(key: K, value: GrantDraft[K]) => setDraft((current) => ({ ...current, [key]: value }));
-  return <Dialog title={grant ? "编辑隧道授权" : "新增隧道授权"} description="限制对单个用户生效，不会改变隧道模板或服务器权限。" onClose={onClose} wide dismissible={!working}><form className="fm-form" onSubmit={(event) => void submit(event)}>{error ? <ErrorState message={error} /> : null}<div className="fm-form-grid"><Field label="授权用户"><select value={draft.username} disabled={Boolean(grant)} onChange={(event) => update("username", event.target.value)}><option value="">选择用户</option>{eligibleUsers.map((user) => <option key={user.username} value={user.username}>{user.nickname || user.username} ({user.username})</option>)}</select></Field><Field label="隧道模板"><select value={draft.tunnelID} disabled={Boolean(grant)} onChange={(event) => update("tunnelID", event.target.value)}><option value="">选择隧道</option>{activeTemplates.map((template) => {
-    const hops = routeHops(template, servers);
-    const routeText = hops.length > 0 ? ` (${hops.map((hop) => hop.name).join(" → ")})` : "";
-    return <option key={String(resourceID(template))} value={String(resourceID(template))}>{template.name}{routeText}</option>;
-  })}</select></Field></div><div className="fm-form-grid"><Field label="生效时间"><input type="datetime-local" value={draft.startsAt} onChange={(event) => update("startsAt", event.target.value)} /></Field><Field label="到期时间" hint="留空表示长期"><input type="datetime-local" value={draft.expiresAt} onChange={(event) => update("expiresAt", event.target.value)} /></Field></div><div className="fm-form-grid fm-form-grid-four"><Field label="最大启用转发"><input type="number" min="1" value={draft.maxForwards} onChange={(event) => update("maxForwards", event.target.value)} /></Field><Field label="每转发限速 Mbps" hint="0 表示不限"><input type="number" min="0" step="0.1" value={draft.speedMbps} onChange={(event) => update("speedMbps", event.target.value)} /></Field><Field label="每转发连接数" hint="当前节点组件暂不支持"><input type="number" min="0" value="0" disabled /></Field><Field label="授权总流量 GB" hint="0 表示不限"><input type="number" min="0" step="0.1" value={draft.trafficGB} onChange={(event) => update("trafficGB", event.target.value)} /></Field></div><div className="fm-form-grid"><Field label="计费方向"><select value={draft.billingMode} onChange={(event) => update("billingMode", event.target.value as ForwardingBillingMode)}><option value="both">双向</option><option value="upload">仅算上行</option><option value="download">仅算下行</option></select></Field><Field label="流量重置" hint="当前版本暂不支持"><select value="none" disabled><option value="none">不自动重置</option></select></Field></div><div className="fm-capability-note"><ShieldCheck size={17} /><span>转发同时支持 TCP 与 UDP，可配置每条转发的独立限速，并自动选取共同端口或由用户在模板范围内指定端口。连接数限制当前不可用并固定为不限。</span></div><div className="dialog-actions"><Button type="button" variant="secondary" disabled={working} onClick={onClose}>取消</Button><Button type="submit" disabled={!valid || working}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />保存授权</>}</Button></div></form></Dialog>;
+
+  const update = <K extends keyof GrantDraft>(key: K, value: GrantDraft[K]) =>
+    setDraft((current) => ({ ...current, [key]: value }));
+
+  return (
+    <Dialog
+      title={grant ? "编辑隧道授权" : "新增隧道授权"}
+      description="限制对单个用户生效，不会改变隧道模板或服务器权限。"
+      onClose={onClose}
+      wide
+      dismissible={!working}
+    >
+      <form className="fm-form" onSubmit={(event) => void submit(event)}>
+        {error ? <ErrorState message={error} /> : null}
+        {isPackageManaged ? (
+          <ErrorState message="套餐授权的隧道禁止从本处修改，请前往套餐管理调整。" />
+        ) : null}
+
+        <div className="fm-form-grid">
+          <Field label="授权用户">
+            <select
+              value={draft.username}
+              disabled={Boolean(grant)}
+              onChange={(event) => update("username", event.target.value)}
+            >
+              <option value="">选择用户</option>
+              {eligibleUsers.map((user) => (
+                <option key={user.username} value={user.username}>
+                  {user.nickname || user.username} ({user.username})
+                </option>
+              ))}
+            </select>
+          </Field>
+          {grant ? (
+            <Field label="隧道线路">
+              <input
+                disabled
+                value={tunnelName(grant, templates)}
+                readOnly
+              />
+            </Field>
+          ) : null}
+        </div>
+
+        {!grant ? (
+          <div className="fm-tunnel-selection-container">
+            <div className="fm-tunnel-selection-header">
+              <span><strong>选择授权隧道线路（可多选，双向隧道点击一次自动授权双向）</strong></span>
+              <div>
+                <Button type="button" variant="ghost" onClick={selectAllGroups}>全选所有</Button>
+                <Button type="button" variant="ghost" onClick={clearAllGroups}>清空选择</Button>
+              </div>
+            </div>
+            <div className="fm-tunnel-selection-list">
+              {templateGroups.length === 0 ? (
+                <span className="muted">暂无可授权的隧道线路</span>
+              ) : (
+                templateGroups.map((group) => {
+                  const isChecked = selectedGroupKeys.has(group.key);
+                  const hops = group.hops || [];
+                  const routeText = hops.length > 0
+                    ? (group.isBidirectional ? ` (${hops.map((h) => h.name).join(" ⇄ ")})` : ` (${hops.map((h) => h.name).join(" → ")})`)
+                    : "";
+                  return (
+                    <label
+                      key={group.key}
+                      className={`fm-tunnel-option-item ${isChecked ? "is-selected" : ""}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => toggleGroupSelection(group.key)}
+                      />
+                      <div className="fm-tunnel-option-content">
+                        <div className="fm-tunnel-option-title">
+                          <span>{group.name}{routeText}</span>
+                          {group.isBidirectional ? <Badge tone="info">双向对称</Badge> : null}
+                        </div>
+                        <div className="fm-tunnel-option-desc">
+                          {group.description || `${group.isBidirectional ? "双向" : ""}${hops.length ? `${hops.length} 跳线路` : "直连线路"}`}
+                        </div>
+                      </div>
+                    </label>
+                  );
+                })
+              )}
+            </div>
+            <small className="fm-cell-note">
+              已选中 {selectedGroupKeys.size} 组隧道（共计将为用户开通 {targetTemplateIDs.length} 条单向/反向路线）
+            </small>
+          </div>
+        ) : null}
+
+        <div className="fm-form-grid">
+          <Field label="生效时间">
+            <input
+              type="datetime-local"
+              value={draft.startsAt}
+              onChange={(event) => update("startsAt", event.target.value)}
+            />
+          </Field>
+          <Field label="到期时间" hint="留空表示长期">
+            <input
+              type="datetime-local"
+              value={draft.expiresAt}
+              onChange={(event) => update("expiresAt", event.target.value)}
+            />
+          </Field>
+        </div>
+        <div className="fm-form-grid fm-form-grid-four">
+          <Field label="最大启用转发">
+            <input
+              type="number"
+              min="1"
+              value={draft.maxForwards}
+              onChange={(event) => update("maxForwards", event.target.value)}
+            />
+          </Field>
+          <Field label="每转发限速 Mbps" hint="0 表示不限">
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              value={draft.speedMbps}
+              onChange={(event) => update("speedMbps", event.target.value)}
+            />
+          </Field>
+          <Field label="每转发连接数" hint="当前节点组件暂不支持">
+            <input type="number" min="0" value="0" disabled />
+          </Field>
+          <Field label="授权总流量 GB" hint="0 表示不限">
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              value={draft.trafficGB}
+              onChange={(event) => update("trafficGB", event.target.value)}
+            />
+          </Field>
+        </div>
+        <div className="fm-form-grid">
+          <Field label="计费方向">
+            <select
+              value={draft.billingMode}
+              onChange={(event) => update("billingMode", event.target.value as ForwardingBillingMode)}
+            >
+              <option value="both">双向</option>
+              <option value="upload">仅算上行</option>
+              <option value="download">仅算下行</option>
+            </select>
+          </Field>
+          <Field label="流量重置" hint="当前版本暂不支持">
+            <select value="none" disabled>
+              <option value="none">不自动重置</option>
+            </select>
+          </Field>
+        </div>
+        <div className="fm-capability-note">
+          <ShieldCheck size={17} />
+          <span>
+            转发同时支持 TCP 与 UDP，可配置每条转发的独立限速，并自动选取共同端口或由用户在模板范围内指定端口。连接数限制当前不可用并固定为不限。
+          </span>
+        </div>
+        <div className="dialog-actions">
+          <Button type="button" variant="secondary" disabled={working} onClick={onClose}>
+            取消
+          </Button>
+          <Button type="submit" disabled={!valid || working}>
+            {working ? <Spinner label="正在保存" /> : <><Check size={16} />保存授权</>}</Button>
+        </div>
+      </form>
+    </Dialog>
+  );
 }
 
-function ForwardTable({ forwards, templates, admin = false, onAction, onDelete, onCopy }: {
+function ForwardEditDialog({
+  forward,
+  nodes,
+  servers = [],
+  templates = [],
+  admin = false,
+  onClose,
+  onComplete,
+}: {
+  forward: ForwardRule;
+  nodes: NodeItem[];
+  servers?: RemoteServer[];
+  templates?: TunnelTemplate[];
+  admin?: boolean;
+  onClose: () => void;
+  onComplete: () => Promise<void>;
+}) {
+  const currentEntry = forwardEntry(forward, servers, templates);
+  const [name, setName] = useState(forward.name || "");
+  const [targetNodeID, setTargetNodeID] = useState(forward.target_node_id ? String(forward.target_node_id) : "");
+  const [requestedEntryPort, setRequestedEntryPort] = useState(
+    String(forward.allocated_entry_port || forward.entry_port || currentEntry.port || ""),
+  );
+  const [sourceCIDRs, setSourceCIDRs] = useState((forward.source_cidrs || []).join("\n"));
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState("");
+
+  const parsedPort = Number(requestedEntryPort.trim()) || 0;
+  const isPortChanged = parsedPort > 0 && parsedPort !== currentEntry.port;
+  const portCheckURL = forward.grant_id && isPortChanged
+    ? `/api/user/forwards/port-check?grant_id=${encodeURIComponent(forward.grant_id)}&port=${encodeURIComponent(requestedEntryPort.trim())}`
+    : null;
+  const portCheck = useDebouncedPortCheck({
+    enabled: Boolean(forward.grant_id) && isPortChanged,
+    url: portCheckURL,
+    port: requestedEntryPort,
+    minPort: 1024,
+    maxPort: 65535,
+  });
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!name.trim()) {
+      setError("转发名称不能为空");
+      return;
+    }
+    if (parsedPort > 0 && (parsedPort < 1024 || parsedPort > 65535)) {
+      setError("入口端口必须在 1024 至 65535 范围内");
+      return;
+    }
+    if (isPortChanged && isPortCheckBlocking(portCheck)) {
+      setError("指定入口端口已被占用或无法使用，请修改后重试");
+      return;
+    }
+    setWorking(true);
+    setError("");
+    try {
+      const endpoint = admin
+        ? `/api/admin/forwards/${encodeURIComponent(resourceID(forward))}`
+        : `/api/user/forwards/${encodeURIComponent(resourceID(forward))}`;
+      const cidrs = sourceCIDRs
+        .split(/[\n,]/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      await api.put(
+        endpoint,
+        {
+          name: name.trim(),
+          requested_entry_port: parsedPort > 0 ? parsedPort : undefined,
+          target_node_id: Number(targetNodeID) || undefined,
+          source_cidrs: cidrs,
+        },
+        { idempotencyKey: idempotencyKey() },
+      );
+      await onComplete();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "保存转发修改失败");
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const selectedNode = nodes.find((n) => String(n.id) === targetNodeID);
+  const previewPort = parsedPort > 0 ? parsedPort : currentEntry.port;
+  const previewHost = currentEntry.host || forward.entry_host || forward.entry_address || "入口服务器";
+
+  return (
+    <Dialog
+      title={`编辑转发 “${forward.name}”`}
+      description="可修改转发名称、入口地址/端口、最终目标受管节点以及来源 IP 白名单。修改后将自动平滑热重载下发。"
+      onClose={onClose}
+      wide
+      dismissible={!working}
+    >
+      <form className="fm-form" onSubmit={(event) => void submit(event)}>
+        {error ? <ErrorState message={error} /> : null}
+        <div className="fm-form-grid">
+          <Field label="转发名称">
+            <input
+              required
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="例如：香港入口到美国 Reality"
+            />
+          </Field>
+          <Field label="最终目标节点" hint="选择流量要送往的目标受管节点">
+            <select
+              value={targetNodeID}
+              onChange={(e) => setTargetNodeID(e.target.value)}
+            >
+              <option value="">保持当前目标 ({forward.target_name || forward.target_host || "未变更"})</option>
+              {nodes.map((node) => (
+                <option key={node.id} value={node.id}>
+                  {node.node_name} · {node.protocol ? node.protocol.toUpperCase() : "受管"} ({node.original_server || "节点 #" + node.id})
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
+        <div className="fm-form-grid">
+          <Field label="入口主机 / 路线" hint="由隧道固定首跳服务器提供连接">
+            <input
+              readOnly
+              disabled
+              value={previewHost}
+              title="入口服务器由已选隧道固定"
+            />
+          </Field>
+          <div className="port-field-group">
+            <Field label="入口端口" hint="可修改为 1024–65535 范围内的空闲端口">
+              <input
+                type="number"
+                min="1024"
+                max="65535"
+                value={requestedEntryPort}
+                onChange={(e) => setRequestedEntryPort(e.target.value)}
+                placeholder="例如 2056"
+              />
+            </Field>
+            {isPortChanged ? <PortCheckHint state={portCheck} /> : null}
+          </div>
+        </div>
+        <Field
+          label="入口来源 CIDR 白名单（可选）"
+          hint="每行或逗号分隔；留空表示允许任何客户端访问此入口端口。"
+        >
+          <textarea
+            rows={3}
+            value={sourceCIDRs}
+            onChange={(e) => setSourceCIDRs(e.target.value)}
+            placeholder="例如：203.0.113.8/32 或 198.51.100.0/24"
+          />
+        </Field>
+        <div className="fm-capability-note">
+          <ShieldCheck size={17} />
+          <span>
+            {`保存后完整入口地址为 ${previewHost}:${previewPort || "自动"}。`}
+            {selectedNode ? `最终交付至：${selectedNode.node_name}（所属服务器：${selectedNode.original_server || "未知"}）。` : ""}
+            系统将自动平滑下发更新，客户端连接入口地址即可直连。
+          </span>
+        </div>
+        <div className="dialog-actions">
+          <Button type="button" variant="secondary" disabled={working} onClick={onClose}>
+            取消
+          </Button>
+          <Button type="submit" disabled={!name.trim() || working || (isPortChanged && isPortCheckBlocking(portCheck))}>
+            {working ? <Spinner label="正在保存" /> : <><Check size={16} />保存修改</>}
+          </Button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+function ForwardTable({ forwards, templates, servers = [], admin = false, onAction, onDelete, onCopy, onEdit }: {
   forwards: ForwardRule[];
   templates: TunnelTemplate[];
+  servers?: RemoteServer[];
   admin?: boolean;
   onAction: (forward: ForwardRule, action: "suspend" | "resume" | "retry") => Promise<void>;
   onDelete: (forward: ForwardRule) => void;
   onCopy?: (forward: ForwardRule) => Promise<void>;
+  onEdit?: (forward: ForwardRule) => void;
 }) {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
@@ -1212,10 +1992,13 @@ function ForwardTable({ forwards, templates, admin = false, onAction, onDelete, 
   return <div className="fm-panel"><div className="fm-toolbar fm-filter-toolbar"><div><strong>{admin ? "全部用户转发" : "我的转发"}</strong><span>{admin ? "入口异常时可重试下发，删除会按入口到出口顺序清理。" : "入口完全生效后才能复制地址或生成客户端配置。"}</span></div><div className="fm-inline-filters"><input aria-label="搜索转发" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="名称、用户、隧道或目标" /><select aria-label="转发状态" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">全部状态</option><option value="active">运行中</option><option value="pending">等待下发</option><option value="provisioning">正在下发</option><option value="degraded">部分异常</option><option value="suspended">已停用</option><option value="error">异常</option></select></div></div>{visible.length === 0 ? <EmptyState icon={<Network size={25} />} title={forwards.length ? "没有匹配的转发" : "暂无转发"} description={forwards.length ? "调整搜索条件或状态筛选" : admin ? "用户创建的转发会显示在这里" : "从有效隧道授权创建第一条转发"} /> : <Surface className="table-surface fm-table-surface"><div className="table-wrap"><table className="fm-table fm-forward-table"><thead><tr>{admin ? <th>用户</th> : null}<th>转发 / 入口</th><th>隧道</th><th>最终目标</th><th>限制与流量</th><th>状态</th><th aria-label="操作" /></tr></thead><tbody>{visible.map((forward) => {
     const id = resourceID(forward);
     const state = forwardState(forward);
-    const entry = forwardEntry(forward);
+    const entry = forwardEntry(forward, servers, templates);
     const route = forwardRoute(forward);
-    const template = forward.tunnel || templates.find((item) => sameID(resourceID(item), forward.tunnel_id)) || (route.length ? { id: forward.grant_id, name: forward.tunnel_name || `授权 ${forward.grant_id}`, state: "active", route } : undefined);
-    return <tr key={String(id)}>{admin ? <td><strong>{forward.username || "-"}</strong></td> : null}<td className="fm-primary-cell"><strong>{forward.name}</strong><small>{state === "active" && entry.host && entry.port ? `${entry.host}:${entry.port}` : "入口尚未可用"}</small></td><td><span>{forward.tunnel_name || template?.name || `授权 ${forward.grant_id}`}</span>{template ? <RouteLine hops={routeHops(template).map((hop) => ({ name: hop.name }))} /> : null}</td><td><span>{forward.target_node_name || forward.target_name || forward.target_host || `节点 #${forward.target_node_id || "-"}`}</span><small className="fm-cell-note">TCP + UDP · {forward.target_port || "节点服务端口"}</small></td><td><span>{formatBytes(forward.traffic_used_bytes)}</span><small className="fm-cell-note">{forward.speed_limit_mbps ? `${forward.speed_limit_mbps} Mbps` : "不限速"} · {forward.connection_limit ? `${forward.connection_limit} 连接` : "不限连接"}</small></td><td><Badge tone={stateTone(state)}>{stateLabel(state)}</Badge>{forward.effective_expires_at ? <small className="fm-cell-note">至 {displayDate(forward.effective_expires_at)}</small> : null}</td><td><div className="fm-row-actions">{onCopy ? <IconButton label={`复制 ${forward.name} 入口`} disabled={state !== "active" || !entry.host || !entry.port} onClick={() => void onCopy(forward)}><Copy size={18} /></IconButton> : null}{state === "active" ? <IconButton label={`暂停 ${forward.name}`} disabled={sameID(workingID, id)} onClick={() => void act(forward, "suspend")}><CirclePause size={18} /></IconButton> : <IconButton label={`恢复 ${forward.name}`} disabled={sameID(workingID, id) || ["pending", "provisioning", "cleanup_pending"].includes(state)} onClick={() => void act(forward, "resume")}><CirclePlay size={18} /></IconButton>}{["error", "degraded"].includes(state) ? <IconButton label={`重试 ${forward.name}`} disabled={sameID(workingID, id)} onClick={() => void act(forward, "retry")}><RefreshCw size={18} /></IconButton> : null}<IconButton label={`删除 ${forward.name}`} onClick={() => onDelete(forward)}><Trash2 size={18} /></IconButton></div></td></tr>;
+    const template = forward.tunnel || templates.find((item) => sameID(resourceID(item), forward.tunnel_id)) || (route.length ? { id: forward.grant_id, name: forward.tunnel_name || "", state: "active", route } : undefined);
+    const rawTunnelName = forward.tunnel_name || template?.name || "";
+    const isGrantPlaceholder = !rawTunnelName || rawTunnelName.startsWith("授权") || rawTunnelName.startsWith("grt_");
+    const tunnelTitle = isGrantPlaceholder ? "" : rawTunnelName;
+    return <tr key={String(id)}>{admin ? <td><strong>{forward.username || "-"}</strong></td> : null}<td className="fm-primary-cell"><strong>{forward.name}</strong><small>{state === "active" && entry.host && entry.port ? `${entry.host}:${entry.port}` : "入口尚未可用"}</small></td><td>{tunnelTitle ? <span>{tunnelTitle}</span> : null}{template ? <RouteLine hops={routeHops(template).map((hop) => ({ name: hop.name }))} /> : null}</td><td><span>{forward.target_node_name || forward.target_name || forward.target_host || `节点 #${forward.target_node_id || "-"}`}</span><small className="fm-cell-note">TCP + UDP · {forward.target_port || "节点服务端口"}</small></td><td><span>{formatBytes(forward.traffic_used_bytes)}</span><small className="fm-cell-note">{forward.speed_limit_mbps ? `${forward.speed_limit_mbps} Mbps` : "不限速"} · {forward.connection_limit ? `${forward.connection_limit} 连接` : "不限连接"}</small></td><td><Badge tone={stateTone(state)}>{stateLabel(state)}</Badge>{forward.effective_expires_at ? <small className="fm-cell-note">至 {displayDate(forward.effective_expires_at)}</small> : null}</td><td><div className="fm-row-actions">{onCopy ? <IconButton label={`复制 ${forward.name} 入口`} disabled={state !== "active" || !entry.host || !entry.port} onClick={() => void onCopy(forward)}><Copy size={18} /></IconButton> : null}{onEdit ? <IconButton label={`编辑 ${forward.name}`} onClick={() => onEdit(forward)}><Pencil size={18} /></IconButton> : null}{state === "active" ? <IconButton label={`暂停 ${forward.name}`} disabled={sameID(workingID, id)} onClick={() => void act(forward, "suspend")}><CirclePause size={18} /></IconButton> : <IconButton label={`恢复 ${forward.name}`} disabled={sameID(workingID, id) || ["pending", "provisioning", "cleanup_pending"].includes(state)} onClick={() => void act(forward, "resume")}><CirclePlay size={18} /></IconButton>}{["error", "degraded"].includes(state) ? <IconButton label={`重试 ${forward.name}`} disabled={sameID(workingID, id)} onClick={() => void act(forward, "retry")}><RefreshCw size={18} /></IconButton> : null}<IconButton label={`删除 ${forward.name}`} onClick={() => onDelete(forward)}><Trash2 size={18} /></IconButton></div></td></tr>;
   })}</tbody></table></div></Surface>}</div>;
 }
 
@@ -1228,6 +2011,7 @@ function UserForwarding({ notify }: { notify: Notify }) {
   const [error, setError] = useState("");
   const [wizard, setWizard] = useState(false);
   const [wizardGrantID, setWizardGrantID] = useState<string>();
+  const [editingForward, setEditingForward] = useState<ForwardRule | undefined>();
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [working, setWorking] = useState(false);
 
@@ -1268,9 +2052,18 @@ function UserForwarding({ notify }: { notify: Notify }) {
     finally { setWorking(false); }
   };
   const copyEntry = async (forward: ForwardRule) => {
-    const entry = forwardEntry(forward);
-    await navigator.clipboard.writeText(`${entry.host}:${entry.port}`);
-    notify("入口地址已复制");
+    const entry = forwardEntry(forward, [], templates);
+    if (!entry.host || !entry.port) {
+      notify("入口尚未生成，请稍后重试", "error");
+      return;
+    }
+    const text = `${entry.host}:${entry.port}`;
+    const ok = await copyToClipboard(text);
+    if (ok) {
+      notify(`入口已复制：${text}`);
+    } else {
+      notify(`复制受限，入口地址为：${text}`);
+    }
   };
 
   return <section className="fm-root" aria-label="转发管理">
@@ -1287,9 +2080,22 @@ function UserForwarding({ notify }: { notify: Notify }) {
     <div className="fm-metrics"><Metric icon={<Activity size={18} />} label="运行中转发" value={activeForwards.length} note={`共 ${forwards.length} 条`} /><Metric icon={<Route size={18} />} label="可用隧道" value={activeGrants.length} note={`共 ${grants.length} 份授权`} /><Metric icon={<Gauge size={18} />} label="本周期流量" value={formatBytes(totalUsed)} note={totalLimit ? `总额 ${formatBytes(totalLimit)}` : "当前授权不限总流量"} /><Metric icon={<ShieldCheck size={18} />} label="最近到期" value={nearestExpiry ? displayDate(nearestExpiry).split(" ")[0] : "长期"} note={nearestExpiry ? displayDate(nearestExpiry) : "没有固定到期时间"} /></div>
     <div className="fm-tabs" role="tablist" aria-label="用户转发视图"><button role="tab" aria-selected={tab === "forwards"} className={tab === "forwards" ? "is-active" : ""} onClick={() => setTab("forwards")}><Network size={16} />我的转发 <span>{forwards.length}</span></button><button role="tab" aria-selected={tab === "grants"} className={tab === "grants" ? "is-active" : ""} onClick={() => setTab("grants")}><Route size={16} />可用隧道 <span>{activeGrants.length}</span></button></div>
     {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}{loading ? <div className="center-state"><Spinner label="正在加载转发" /></div> : null}
-    {!loading && tab === "forwards" ? <><ForwardTable forwards={forwards} templates={templates} onAction={runForwardAction} onCopy={copyEntry} onDelete={(forward) => setConfirm({ title: "删除转发", description: `将停止“${forward.name}”入口并清理每一跳端口。此操作无法撤销。`, confirmLabel: "确认删除", run: async () => { await api.delete(`/api/user/forwards/${encodeURIComponent(resourceID(forward))}`, undefined, { idempotencyKey: idempotencyKey() }); notify("转发删除任务已提交"); } })} />{!forwards.length && activeGrants.length ? <div className="fm-empty-action"><Button onClick={() => { setWizardGrantID(undefined); setWizard(true); }}><Plus size={17} />创建第一条转发</Button></div> : null}</> : null}
+    {!loading && tab === "forwards" ? <><ForwardTable forwards={forwards} templates={templates} onAction={runForwardAction} onCopy={copyEntry} onEdit={setEditingForward} onDelete={(forward) => setConfirm({ title: "删除转发", description: `将停止“${forward.name}”入口并清理每一跳端口。此操作无法撤销。`, confirmLabel: "确认删除", run: async () => { await api.delete(`/api/user/forwards/${encodeURIComponent(resourceID(forward))}`, undefined, { idempotencyKey: idempotencyKey() }); notify("转发删除任务已提交"); } })} />{!forwards.length && activeGrants.length ? <div className="fm-empty-action"><Button onClick={() => { setWizardGrantID(undefined); setWizard(true); }}><Plus size={17} />创建第一条转发</Button></div> : null}</> : null}
     {!loading && tab === "grants" ? <UserGrantCards grants={grants} onCreate={(grant) => { if ((grant.effective_state || grant.state || "active") !== "active") return; setWizardGrantID(String(resourceID(grant))); setWizard(true); }} /> : null}
     {wizard ? <ForwardWizard grants={activeGrants} initialGrantID={wizardGrantID} nodes={nodes.filter((node) => node.enabled)} onClose={() => { setWizard(false); setWizardGrantID(undefined); }} onComplete={async () => { setWizard(false); setWizardGrantID(undefined); notify("转发创建任务已提交"); setTab("forwards"); await load(true); }} /> : null}
+    {editingForward ? (
+      <ForwardEditDialog
+        forward={editingForward}
+        nodes={nodes.filter((node) => node.enabled)}
+        templates={templates}
+        onClose={() => setEditingForward(undefined)}
+        onComplete={async () => {
+          setEditingForward(undefined);
+          notify("转发已更新");
+          await load(true);
+        }}
+      />
+    ) : null}
     {confirm ? <ConfirmDialog title={confirm.title} description={confirm.description} confirmLabel={confirm.confirmLabel} working={working} onCancel={() => !working && setConfirm(null)} onConfirm={() => void runConfirmed()} /> : null}
   </section>;
 }

@@ -267,4 +267,46 @@ describe("package management", () => {
     expect(screen.queryByText(/香港 转发 01/)).not.toBeInTheDocument();
     expect(screen.queryByText(/韩国 SS-ChaCha20/)).not.toBeInTheDocument();
   });
+
+  it("groups bidirectional tunnels into a single item and toggles both directions in package grants", async () => {
+    const bidirectionalTunnels = [
+      { id: 10, name: "港台专线", state: "active", billing_mode: "both", hops: [{ server_id: 1, position: 1 }, { server_id: 2, position: 2 }] },
+      { id: 11, name: "港台专线", state: "active", billing_mode: "both", hops: [{ server_id: 2, position: 1 }, { server_id: 1, position: 2 }] },
+    ];
+    const remoteServers = [
+      { id: 1, name: "Bestvm HK", status: "online" },
+      { id: 2, name: "Bestvm TW", status: "online" },
+    ];
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/packages") return { packages: [{ ...packageItem, forwarding_grants: [] }] } as T;
+      if (path === "/api/admin/nodes") return { nodes } as T;
+      if (path === "/api/admin/remote-servers") return { servers: remoteServers } as T;
+      if (path === "/api/admin/tunnel-templates") return { tunnels: bidirectionalTunnels } as T;
+      if (path === "/api/admin/rule-templates") return { templates: ["default.yaml"] } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const postSpy = vi.spyOn(api, "post").mockResolvedValue({ message: "Package updated" });
+
+    render(<PackagesPage notify={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 标准套餐" }));
+
+    // Bidirectional tunnel "港台专线" should only be rendered ONCE
+    const checkboxes = screen.getAllByRole("checkbox", { name: /港台专线/ });
+    expect(checkboxes).toHaveLength(1);
+    expect(screen.getByText("双向对称")).toBeInTheDocument();
+
+    // Toggle on the bidirectional tunnel
+    fireEvent.click(checkboxes[0]);
+
+    // Save package
+    fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
+
+    await waitFor(() => expect(postSpy).toHaveBeenCalledWith("/api/admin/packages/update", expect.any(Object)));
+    const updateCall = postSpy.mock.calls.find(([url]) => url === "/api/admin/packages/update");
+    expect(updateCall).toBeDefined();
+    const payload = updateCall![1] as { forwarding_grants: Array<{ tunnel_id: number }> };
+    // Both tunnel IDs 10 and 11 must be included in forwarding_grants!
+    const grantedIDs = payload.forwarding_grants.map((g) => g.tunnel_id).sort();
+    expect(grantedIDs).toEqual([10, 11]);
+  });
 });

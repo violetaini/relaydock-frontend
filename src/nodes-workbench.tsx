@@ -13,6 +13,8 @@ import {
   Cable,
   Check,
   ChevronDown,
+  CirclePause,
+  CirclePlay,
   Clock3,
   Clipboard,
   Copy,
@@ -55,6 +57,23 @@ import {
   Zap,
 } from "lucide-react";
 import { api } from "./api";
+import {
+  ForwardWizard,
+  ForwardEditDialog,
+  extractList,
+  forwardEntry,
+  forwardState,
+  stateLabel,
+  stateTone,
+  copyToClipboard,
+  resourceID,
+  sameID,
+  idempotencyKey,
+  tunnelForGrant,
+  type ForwardRule,
+  type TunnelGrant,
+  type TunnelTemplate,
+} from "./forwarding-management";
 import { forwardingOrderGroups, forwardingRows, forwardingTargetID, isForwardingEntry } from "./node-forwarding-view";
 import {
   PortCheckHint,
@@ -103,7 +122,7 @@ import {
   managedTLSHostnameForCertificate as resolveTLSHostnameForCertificate,
 } from "./tls-cert-match";
 import { SelfServiceNodes } from "./self-service-nodes";
-import type { RemoteServer, ServerListResponse } from "./types";
+import type { NodeItem, RemoteServer, ServerListResponse } from "./types";
 import { CountryFlag, normalizeCountryCode } from "./country-flag";
 import {
   Badge,
@@ -283,7 +302,7 @@ type SourceFilter = "all" | "managed" | "imported" | "routed";
 type WorkbenchDialog =
   | { kind: "managed-create"; initialServerID?: number }
   | { kind: "edit"; node: WorkbenchNode }
-  | { kind: "config"; node: WorkbenchNode }
+  | { kind: "config"; node: WorkbenchNode; readOnly?: boolean }
   | { kind: "import" }
   | { kind: "relay"; node: WorkbenchNode }
   | { kind: "anydoor"; node: WorkbenchNode }
@@ -754,6 +773,14 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
   const [sort, setSort] = useState<SortMode>("recent");
   const [enabledOnly, setEnabledOnly] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [forwards, setForwards] = useState<ForwardRule[]>([]);
+  const [templates, setTemplates] = useState<TunnelTemplate[]>([]);
+  const [userGrants, setUserGrants] = useState<TunnelGrant[]>([]);
+  const [editingForward, setEditingForward] = useState<ForwardRule | undefined>();
+  const [deletingForward, setDeletingForward] = useState<ForwardRule | undefined>();
+  const [workingForwardID, setWorkingForwardID] = useState<string | number | null>(null);
+  const [forwardWizardOpen, setForwardWizardOpen] = useState(false);
+  const [wizardTargetNodeID, setWizardTargetNodeID] = useState<number | undefined>();
   const [dialog, setDialog] = useState<WorkbenchDialog>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [working, setWorking] = useState(false);
@@ -769,7 +796,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
     setError("");
     if (!isAdmin) setUserCreationError("");
     try {
-      const [nodeResponse, speedResponse, configResponse, routedResponse, offerResponse, creationResponse, serverResponse] = await Promise.all([
+      const [nodeResponse, speedResponse, configResponse, routedResponse, offerResponse, creationResponse, serverResponse, forwardResponse, templateOrGrantPayload] = await Promise.all([
         api.get<{ nodes?: WorkbenchNode[] }>("/api/admin/nodes"),
         isAdmin
           ? api.get<{ results?: SpeedResult[] | null }>("/api/admin/speedtest/results?latest=1").catch(() => ({ results: [] }))
@@ -787,10 +814,22 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
         isAdmin
           ? api.get<ServerListResponse>("/api/admin/remote-servers").catch(() => ({ success: false, servers: [] }))
           : Promise.resolve({ success: true, servers: [] }),
+        api.get<{ forwards?: ForwardRule[] }>(isAdmin ? "/api/admin/forwards" : "/api/user/forwards").catch(() => ({ forwards: [] as ForwardRule[] })),
+        isAdmin
+          ? api.get<unknown>("/api/admin/tunnel-templates").catch(() => ({ templates: [] }))
+          : api.get<unknown>("/api/user/tunnel-grants").catch(() => ({ grants: [] })),
       ]);
       if (requestID !== loadRequestRef.current) return;
       const list = nodeResponse.nodes ?? [];
       setNodes(list);
+      setForwards(forwardResponse?.forwards ?? []);
+      if (isAdmin) {
+        setTemplates(extractList<TunnelTemplate>(templateOrGrantPayload, "tunnels", "templates"));
+      } else {
+        const grts = extractList<TunnelGrant>(templateOrGrantPayload, "grants", "tunnel_grants");
+        setUserGrants(grts);
+        setTemplates(grts.map((g) => tunnelForGrant(g, [])).filter((item): item is TunnelTemplate => Boolean(item)));
+      }
       setOffers(Array.isArray(offerResponse) ? offerResponse : offerResponse.offers ?? []);
       setUserConfig(configResponse);
       setUserRouted(routedResponse);
@@ -807,6 +846,126 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       if (requestID === loadRequestRef.current) setLoading(false);
     }
   }, [isAdmin]);
+
+  const activeGrants: TunnelGrant[] = useMemo(() => {
+    if (isAdmin) {
+      const activeTemplates = templates.filter((t) => (t.state || "active") === "active");
+      return activeTemplates.map((t) => ({
+        id: `admin_auto_${resourceID(t)}`,
+        public_id: `admin_auto_${resourceID(t)}`,
+        username: typeof userConfig?.username === "string" ? userConfig.username : "admin",
+        tunnel_id: resourceID(t),
+        tunnel: t,
+        enabled: true,
+        effective_state: "active" as const,
+        state: "active",
+        max_active_forwards: 100,
+        route: t.hops || t.route,
+      }));
+    }
+    return userGrants.filter(
+      (grant) =>
+        (grant.effective_state ||
+          grant.state ||
+          (grant.enabled === false ? "suspended" : "active")) === "active",
+    );
+  }, [isAdmin, templates, userGrants, userConfig?.username]);
+
+  const forwardsByTargetNodeID = useMemo(() => {
+    const map = new Map<number, ForwardRule[]>();
+    for (const fwd of forwards) {
+      const targetID = fwd.target_node_id;
+      if (targetID && Number(targetID) > 0) {
+        const list = map.get(Number(targetID)) || [];
+        list.push(fwd);
+        map.set(Number(targetID), list);
+      }
+    }
+    return map;
+  }, [forwards]);
+
+  const copyForwardEntry = async (fwd: ForwardRule) => {
+    const entry = forwardEntry(fwd, remoteServers, templates);
+    if (!entry.host || !entry.port) {
+      notify("入口尚未生成，请稍后重试", "error");
+      return;
+    }
+    const text = `${entry.host}:${entry.port}`;
+    const ok = await copyToClipboard(text);
+    if (ok) {
+      notify(`入口已复制：${text}`);
+    } else {
+      notify(`复制受限，入口地址为：${text}`);
+    }
+  };
+
+  const toggleForwardStatus = async (fwd: ForwardRule) => {
+    const state = forwardState(fwd);
+    const action = state === "active" ? "suspend" : "resume";
+    setWorkingForwardID(fwd.id);
+    try {
+      const endpoint = isAdmin
+        ? `/api/admin/forwards/${encodeURIComponent(resourceID(fwd))}/${action}`
+        : `/api/user/forwards/${encodeURIComponent(resourceID(fwd))}/${action}`;
+      await api.post(endpoint, {}, { idempotencyKey: idempotencyKey() });
+      notify(action === "suspend" ? "转发已暂停" : "转发恢复任务已提交");
+      await load(true);
+    } catch (reason) {
+      notify(reason instanceof Error ? reason.message : "状态操作失败", "error");
+    } finally {
+      setWorkingForwardID(null);
+    }
+  };
+
+  const retryForward = async (fwd: ForwardRule) => {
+    setWorkingForwardID(fwd.id);
+    try {
+      const endpoint = isAdmin
+        ? `/api/admin/forwards/${encodeURIComponent(resourceID(fwd))}/retry`
+        : `/api/user/forwards/${encodeURIComponent(resourceID(fwd))}/retry`;
+      await api.post(endpoint, {}, { idempotencyKey: idempotencyKey() });
+      notify("转发重试任务已提交");
+      await load(true);
+    } catch (reason) {
+      notify(reason instanceof Error ? reason.message : "重试失败", "error");
+    } finally {
+      setWorkingForwardID(null);
+    }
+  };
+
+  const openCreateTunnelForward = (node: WorkbenchNode) => {
+    if (activeGrants.length === 0) {
+      notify(
+        isAdmin
+          ? "暂无可用隧道，请先在隧道模板中创建并启用隧道"
+          : "暂无可用的隧道授权，请联系管理员分配隧道",
+        "error",
+      );
+      return;
+    }
+    setWizardTargetNodeID(node.id);
+    setForwardWizardOpen(true);
+  };
+
+  const openForwardConfig = (targetNode: WorkbenchNode, forward: ForwardRule) => {
+    const entry = forwardEntry(forward, remoteServers, templates);
+    let clashConfig = targetNode.clash_config || "{}";
+    try {
+      const parsed = parseClashProxyInput(clashConfig);
+      parsed.name = forward.name;
+      if (entry.host) parsed.server = entry.host;
+      if (entry.port) parsed.port = entry.port;
+      clashConfig = JSON.stringify(parsed);
+    } catch {
+      // fallback
+    }
+    const syntheticNode: WorkbenchNode = {
+      ...targetNode,
+      node_name: forward.name,
+      clash_config: clashConfig,
+    };
+    setDialog({ kind: "config", node: syntheticNode, readOnly: true });
+  };
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
@@ -1082,7 +1241,13 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       if (enabledOnly && !node.enabled) return false;
       if (!query) return true;
       const address = nodeAddress(node);
-      return [node.node_name, node.protocol, displayedNodeProtocol(node), node.original_server, node.inbound_tag, address.host, ...nodeTags(node)]
+      const nodeFwds = forwardsByTargetNodeID.get(node.id) || [];
+      const forwardMatch = nodeFwds.some((fwd) => {
+        const entry = forwardEntry(fwd, remoteServers, templates);
+        return [fwd.name, fwd.tunnel_name, entry.host, ...(fwd.route || [])]
+          .some((val) => val?.toLowerCase().includes(query));
+      });
+      return forwardMatch || [node.node_name, node.protocol, displayedNodeProtocol(node), node.original_server, node.inbound_tag, address.host, ...nodeTags(node)]
         .some((value) => value?.toLowerCase().includes(query));
     });
     const orderIndex = new Map(manualOrder.map((id, index) => [id, index]));
@@ -1101,7 +1266,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       if (sort === "speed") return (latest[b.id]?.down_mbps || -1) - (latest[a.id]?.down_mbps || -1);
       return new Date(b.updated_at || b.created_at || 0).getTime() - new Date(a.updated_at || a.created_at || 0).getTime();
     });
-  }, [enabledOnly, getServerForNode, latest, manualOrder, nodes, protocol, search, server, sort, source, tag]);
+  }, [enabledOnly, getServerForNode, latest, manualOrder, nodes, protocol, search, server, sort, source, tag, forwardsByTargetNodeID, remoteServers, templates]);
 
   const selectedNodes = useMemo(() => nodes.filter((node) => selected.has(node.id)), [nodes, selected]);
   const canCreateOnGrantedServer = !isAdmin && Boolean(userCreationContext?.servers?.some((server) => userCreationGrant(server)?.state === "active"));
@@ -1346,121 +1511,242 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
             </tr>
           </thead>
           <tbody>
-            {forwardingRows(rowNodes).map(({node, depth}) => {
+            {forwardingRows(rowNodes).map(({node, depth}, index, allRows) => {
               const targetID = forwardingTargetID(node);
               const forwardTarget = nodes.find(item => item.id === targetID);
-              const childCount = rowNodes.filter(item => forwardingTargetID(item) === node.id).length;
+              const anydoorCount = rowNodes.filter(item => forwardingTargetID(item) === node.id).length;
+              const nodeTunnelForwards = forwardsByTargetNodeID.get(node.id) || [];
+              const totalChildCount = anydoorCount + nodeTunnelForwards.length;
               const address = nodeAddress(node);
               const ping = tcping[node.id];
               const speed = latest[node.id];
               const offer = offers.find((item) => item.node_id === node.id);
               const orderIndex = orderGroups.findIndex(group => group[0]?.id === node.id);
+
+              const isFamilyEnd = index === allRows.length - 1 || allRows[index + 1].depth === 0;
+              let rootNode = node;
+              if (depth > 0) {
+                for (let j = index - 1; j >= 0; j--) {
+                  if (allRows[j].depth === 0) {
+                    rootNode = allRows[j].node;
+                    break;
+                  }
+                }
+              }
+              const trailingForwards = isFamilyEnd
+                ? [
+                    ...(forwardsByTargetNodeID.get(rootNode.id) || []),
+                    ...(rootNode.id !== node.id ? (forwardsByTargetNodeID.get(node.id) || []) : []),
+                  ]
+                : [];
               return (
-                <tr key={node.id} data-forward-target={targetID} className={`${selected.has(node.id) ? "is-selected" : ""} ${depth ? "nw-forward-child" : ""}`}>
-                  <td className="nw-cell-check">
-                    <input
-                      aria-label={`选择 ${node.node_name}`}
-                      type="checkbox"
-                      checked={selected.has(node.id)}
-                      onChange={() => toggleSelection(node.id)}
-                    />
-                  </td>
-                  {sort === "custom" && viewMode === "nodes" && !isCompact ? (
-                    <td className="nw-order-col nw-cell-order" data-label="顺序">
-                      <span>{orderIndex < 0 ? "↳" : orderIndex + 1}</span>
-                      <IconButton label={`上移 ${node.node_name}`} disabled={orderIndex <= 0} onClick={() => moveManualNode(node.id, -1)}><ArrowUp size={14} /></IconButton>
-                      <IconButton label={`下移 ${node.node_name}`} disabled={orderIndex < 0 || orderIndex >= orderGroups.length - 1} onClick={() => moveManualNode(node.id, 1)}><ArrowDown size={14} /></IconButton>
+                <Fragment key={node.id}>
+                  <tr key={node.id} data-forward-target={targetID} className={`${selected.has(node.id) ? "is-selected" : ""} ${depth ? "nw-forward-child" : ""}`}>
+                    <td className="nw-cell-check">
+                      <input
+                        aria-label={`选择 ${node.node_name}`}
+                        type="checkbox"
+                        checked={selected.has(node.id)}
+                        onChange={() => toggleSelection(node.id)}
+                      />
                     </td>
-                  ) : null}
-                  <td className="nw-cell-primary">
-                    <div className="nw-node-primary" style={depth ? {paddingInlineStart: Math.min(depth, 4) * 20} : undefined}>
-                      {depth ? <span className="nw-forward-branch" aria-hidden="true">↳</span> : null}
-                      <Badge tone="info" className="nw-protocol-badge" title={displayedNodeProtocol(node) === "tunnel" ? "TUNNEL" : node.protocol.toUpperCase() || "UNKNOWN"}>{protocolBadgeText(displayedNodeProtocol(node))}</Badge>
-                      <span>
-                        <strong>{node.node_name}</strong>
-                        <small title={isTunnelNode(node) && nodeProtocolKey(node.protocol) !== "tunnel" ? `目标客户端协议：${node.protocol.toUpperCase()}（订阅沿用目标节点的协议与凭据）` : undefined}>#{node.id}{isTunnelNode(node) ? " · 任意门转发" : node.node_type === "routed" ? " · 路由出站" : ""}{forwardTarget ? ` → ${forwardTarget.node_name}` : targetID ? ` → 节点 #${targetID}` : ""}{childCount ? ` · ${childCount} 个转发入口` : ""}{node.relay_orig_server ? " · 已中转" : ""}</small>
-                      </span>
-                      {node.credential_state === "pending" ? <Badge tone="warn">凭据待下发</Badge> : null}
-                    </div>
-                  </td>
-                  <td className="nw-cell-owner">
-                    <div className="nw-node-tags">
-                      {offer?.enabled ? <Badge tone="good">自助发布</Badge> : null}
-                      {nodeTags(node).length ? nodeTags(node).slice(0, 3).map((item) => <Badge key={item}>{item}</Badge>) : <span className="muted">未分类</span>}
-                    </div>
-                    <small className="cell-note">{node.original_server || node.created_by || "外部导入"}{node.inbound_tag ? ` · ${node.inbound_tag}` : ""}</small>
-                  </td>
-                  <td className="nw-cell-address" data-label="服务器">
-                    <code className="nw-address">{address.host || "-"}:{address.port || "-"}</code>
-                    {node.relay_orig_server ? <small className="cell-note">原站 {node.relay_orig_server}:{node.relay_orig_port || "-"}</small> : node.original_domain ? <small className="cell-note">原域名 {node.original_domain}</small> : null}
-                  </td>
-                  <td className="nw-cell-latency" data-label="连通性">
-                    <button className={`nw-result-button ${ping?.success ? "is-good" : ping?.error ? "is-bad" : ""}`} disabled={ping?.loading} title={tcpingResultTitle(ping)} onClick={() => void pingOne(node)}>
-                      {ping?.loading ? <Spinner label="" /> : <Zap size={14} />}
-                      {tcpingResultLabel(ping)}
-                    </button>
-                  </td>
-                  <td className="nw-cell-traffic nw-cell-speed" data-label="流量">
-                    {(() => {
-                      const srv = getServerForNode(node);
-                      if (srv) {
+                    {sort === "custom" && viewMode === "nodes" && !isCompact ? (
+                      <td className="nw-order-col nw-cell-order" data-label="顺序">
+                        <span>{orderIndex < 0 ? "↳" : orderIndex + 1}</span>
+                        <IconButton label={`上移 ${node.node_name}`} disabled={orderIndex <= 0} onClick={() => moveManualNode(node.id, -1)}><ArrowUp size={14} /></IconButton>
+                        <IconButton label={`下移 ${node.node_name}`} disabled={orderIndex < 0 || orderIndex >= orderGroups.length - 1} onClick={() => moveManualNode(node.id, 1)}><ArrowDown size={14} /></IconButton>
+                      </td>
+                    ) : null}
+                    <td className="nw-cell-primary">
+                      <div className="nw-node-primary" style={depth ? {paddingInlineStart: Math.min(depth, 4) * 20} : undefined}>
+                        {depth ? <span className="nw-forward-branch" aria-hidden="true">↳</span> : null}
+                        <Badge tone="info" className="nw-protocol-badge" title={displayedNodeProtocol(node) === "tunnel" ? "TUNNEL" : node.protocol.toUpperCase() || "UNKNOWN"}>{protocolBadgeText(displayedNodeProtocol(node))}</Badge>
+                        <span>
+                          <strong>{node.node_name}</strong>
+                          <small title={isTunnelNode(node) && nodeProtocolKey(node.protocol) !== "tunnel" ? `目标客户端协议：${node.protocol.toUpperCase()}（订阅沿用目标节点的协议与凭据）` : undefined}>#{node.id}{isTunnelNode(node) ? " · 任意门转发" : node.node_type === "routed" ? " · 路由出站" : ""}{forwardTarget ? ` → ${forwardTarget.node_name}` : targetID ? ` → 节点 #${targetID}` : ""}{totalChildCount ? ` · ${totalChildCount} 个转发入口` : ""}{node.relay_orig_server ? " · 已中转" : ""}</small>
+                        </span>
+                        {node.credential_state === "pending" ? <Badge tone="warn">凭据待下发</Badge> : null}
+                      </div>
+                    </td>
+                    <td className="nw-cell-owner">
+                      <div className="nw-node-tags">
+                        {offer?.enabled ? <Badge tone="good">自助发布</Badge> : null}
+                        {nodeTags(node).length ? nodeTags(node).slice(0, 3).map((item) => <Badge key={item}>{item}</Badge>) : <span className="muted">未分类</span>}
+                      </div>
+                      <small className="cell-note">{node.original_server || node.created_by || "外部导入"}{node.inbound_tag ? ` · ${node.inbound_tag}` : ""}</small>
+                    </td>
+                    <td className="nw-cell-address" data-label="服务器">
+                      <code className="nw-address">{address.host || "-"}:{address.port || "-"}</code>
+                      {node.relay_orig_server ? <small className="cell-note">原站 {node.relay_orig_server}:{node.relay_orig_port || "-"}</small> : node.original_domain ? <small className="cell-note">原域名 {node.original_domain}</small> : null}
+                    </td>
+                    <td className="nw-cell-latency" data-label="连通性">
+                      <button className={`nw-result-button ${ping?.success ? "is-good" : ping?.error ? "is-bad" : ""}`} disabled={ping?.loading} title={tcpingResultTitle(ping)} onClick={() => void pingOne(node)}>
+                        {ping?.loading ? <Spinner label="" /> : <Zap size={14} />}
+                        {tcpingResultLabel(ping)}
+                      </button>
+                    </td>
+                    <td className="nw-cell-traffic nw-cell-speed" data-label="流量">
+                      {(() => {
+                        const srv = getServerForNode(node);
+                        if (srv) {
+                          return (
+                            <div
+                              className="nw-traffic-cell"
+                              title={`服务器：${srv.name}\nXray 累计跑量：${formatBytes(srv.traffic_used || 0)}${srv.traffic_limit > 0 ? `\n限额：${formatBytes(srv.traffic_limit)}` : "\n限额：不限额"}`}
+                            >
+                              <strong>{formatBytes(srv.traffic_used || 0)}</strong>
+                              <small className="cell-note">
+                                {srv.traffic_limit > 0 ? `限额 ${formatBytes(srv.traffic_limit)}` : "不限额"}
+                              </small>
+                            </div>
+                          );
+                        }
                         return (
-                          <div
-                            className="nw-traffic-cell"
-                            title={`服务器：${srv.name}\nXray 累计跑量：${formatBytes(srv.traffic_used || 0)}${srv.traffic_limit > 0 ? `\n限额：${formatBytes(srv.traffic_limit)}` : "\n限额：不限额"}`}
-                          >
-                            <strong>{formatBytes(srv.traffic_used || 0)}</strong>
-                            <small className="cell-note">
-                              {srv.traffic_limit > 0 ? `限额 ${formatBytes(srv.traffic_limit)}` : "不限额"}
-                            </small>
+                          <div className="nw-traffic-cell">
+                            <span className="muted">-</span>
+                            <small className="cell-note">{node.node_type === "routed" ? "出站路由" : "外部导入"}</small>
                           </div>
                         );
-                      }
-                      return (
-                        <div className="nw-traffic-cell">
-                          <span className="muted">-</span>
-                          <small className="cell-note">{node.node_type === "routed" ? "出站路由" : "外部导入"}</small>
-                        </div>
-                      );
-                    })()}
-                  </td>
-                  <td className="nw-cell-status" data-label="状态">
-                    {isAdmin ? (
-                      <button className="nw-status-button" title={`点击${node.enabled ? "停用" : "启用"}`} onClick={() => void update(node, { enabled: !node.enabled }, node.enabled ? "节点已停用" : "节点已启用")}>
-                        <span className={node.enabled ? "is-on" : ""} />
-                        {node.enabled ? "启用" : "停用"}
-                      </button>
-                    ) : (
-                      <Badge tone={node.enabled ? "good" : "neutral"}>{node.enabled ? "启用" : "停用"}</Badge>
-                    )}
-                  </td>
-                  <td className="nw-cell-actions">
-                    <NodeActions
-                      node={node}
-                      isAdmin={isAdmin}
-                      userRouted={userRouted}
-                      userManagedCreation={userCreationByNodeID.get(node.id)}
-                      onEdit={() => setDialog({ kind: "edit", node })}
-                      onConfig={() => setDialog({ kind: "config", node })}
-                      onQRCode={() => setDialog({ kind: "qr", node })}
-                      onRelay={() => setDialog({ kind: "relay", node })}
-                      onAnyDoor={() => setDialog({ kind: "anydoor", node })}
-                      onCancelRelay={() => cancelRelay(node)}
-                      onChain={() => setDialog({ kind: "chain", node })}
-                      onResolve={() => setDialog({ kind: "resolve", node })}
-                      onRegion={() => setDialog({ kind: "region", node })}
-                      onRestore={() => restoreDomain(node)}
-                      onRoute={() => setDialog({ kind: "route", node })}
-                      onTempSub={() => setDialog({ kind: "temp-sub", nodes: [node] })}
-                      onDelete={() => {
-                        const creation = userCreationByNodeID.get(node.id);
-                        if (isAdmin) removeNode(node);
-                        else if (creation) removeUserManagedCreation(node, creation);
-                        else removeUserRouted(node);
-                      }}
-                    />
-                  </td>
-                </tr>
+                      })()}
+                    </td>
+                    <td className="nw-cell-status" data-label="状态">
+                      {isAdmin ? (
+                        <button className="nw-status-button" title={`点击${node.enabled ? "停用" : "启用"}`} onClick={() => void update(node, { enabled: !node.enabled }, node.enabled ? "节点已停用" : "节点已启用")}>
+                          <span className={node.enabled ? "is-on" : ""} />
+                          {node.enabled ? "启用" : "停用"}
+                        </button>
+                      ) : (
+                        <Badge tone={node.enabled ? "good" : "neutral"}>{node.enabled ? "启用" : "停用"}</Badge>
+                      )}
+                    </td>
+                    <td className="nw-cell-actions">
+                      <NodeActions
+                        node={node}
+                        isAdmin={isAdmin}
+                        userRouted={userRouted}
+                        userManagedCreation={userCreationByNodeID.get(node.id)}
+                        onEdit={() => setDialog({ kind: "edit", node })}
+                        onConfig={() => setDialog({ kind: "config", node })}
+                        onQRCode={() => setDialog({ kind: "qr", node })}
+                        onRelay={() => setDialog({ kind: "relay", node })}
+                        onAnyDoor={() => setDialog({ kind: "anydoor", node })}
+                        onTunnelForward={() => openCreateTunnelForward(node)}
+                        onCancelRelay={() => cancelRelay(node)}
+                        onChain={() => setDialog({ kind: "chain", node })}
+                        onResolve={() => setDialog({ kind: "resolve", node })}
+                        onRegion={() => setDialog({ kind: "region", node })}
+                        onRestore={() => restoreDomain(node)}
+                        onRoute={() => setDialog({ kind: "route", node })}
+                        onTempSub={() => setDialog({ kind: "temp-sub", nodes: [node] })}
+                        onDelete={() => {
+                          const creation = userCreationByNodeID.get(node.id);
+                          if (isAdmin) removeNode(node);
+                          else if (creation) removeUserManagedCreation(node, creation);
+                          else removeUserRouted(node);
+                        }}
+                      />
+                    </td>
+                  </tr>
+                  {trailingForwards.map((fwd) => {
+                    const entry = forwardEntry(fwd, remoteServers, templates);
+                    const fwdState = forwardState(fwd);
+                    const fwdActive = fwdState === "active";
+                    const routeHopsText = fwd.route?.length ? fwd.route.join(" ⇄ ") : "";
+                    const routeDetail = fwd.tunnel_name && routeHopsText
+                      ? `${fwd.tunnel_name} (${routeHopsText})`
+                      : fwd.tunnel_name || routeHopsText;
+                    const fwdPing = tcping[rootNode.id];
+                    return (
+                      <tr key={`fwd-${fwd.id}`} data-forward-target={rootNode.id} className="nw-forward-child">
+                        <td className="nw-cell-check" />
+                        {sort === "custom" && viewMode === "nodes" && !isCompact ? (
+                          <td className="nw-order-col nw-cell-order" data-label="顺序">
+                            <span>↳</span>
+                          </td>
+                        ) : null}
+                        <td className="nw-cell-primary">
+                          <div className="nw-node-primary" style={{ paddingInlineStart: 20 }}>
+                            <span className="nw-forward-branch" aria-hidden="true">↳</span>
+                            <Badge tone="info" className="nw-protocol-badge" title="TUNNEL">TUNNEL</Badge>
+                            <span>
+                              <strong>{fwd.name}</strong>
+                              <small title={routeHopsText || routeDetail}>
+                                #{fwd.id} · 隧道转发 → {rootNode.node_name}{routeDetail ? ` · ${routeDetail}` : ""}
+                              </small>
+                            </span>
+                            {!fwdActive ? <Badge tone={stateTone(fwdState)}>{stateLabel(fwdState)}</Badge> : null}
+                          </div>
+                        </td>
+                        <td className="nw-cell-owner">
+                          <div className="nw-node-tags">
+                            <Badge tone="neutral">隧道转发</Badge>
+                            {fwd.network ? <Badge>{fwd.network.toUpperCase()}</Badge> : null}
+                          </div>
+                          <small className="cell-note" title={fwd.route?.join(" → ")}>
+                            {fwd.tunnel_name || (fwd.route?.length ? fwd.route.join(" → ") : "隧道转发")}
+                          </small>
+                        </td>
+                        <td className="nw-cell-address" data-label="服务器">
+                          {entry.host && entry.port ? (
+                            <code className="nw-address">{entry.host}:{entry.port}</code>
+                          ) : (
+                            <span className="muted">入口尚未可用</span>
+                          )}
+                          {fwd.requested_entry_port && fwd.requested_entry_port !== entry.port ? (
+                            <small className="cell-note">指定端口 {fwd.requested_entry_port}</small>
+                          ) : null}
+                        </td>
+                        <td className="nw-cell-latency" data-label="连通性">
+                          <button
+                            className={`nw-result-button ${fwdPing?.success ? "is-good" : fwdPing?.error ? "is-bad" : ""}`}
+                            disabled={fwdPing?.loading}
+                            title={tcpingResultTitle(fwdPing) || `测试目标节点连通性: ${rootNode.node_name}`}
+                            onClick={() => void pingOne(rootNode)}
+                          >
+                            {fwdPing?.loading ? <Spinner label="" /> : <Zap size={14} />}
+                            {tcpingResultLabel(fwdPing)}
+                          </button>
+                        </td>
+                        <td className="nw-cell-traffic nw-cell-speed" data-label="流量">
+                          <div
+                            className="nw-traffic-cell"
+                            title={`隧道跑量：${formatBytes(fwd.traffic_used_bytes || 0)}\n限速：${fwd.speed_limit_mbps ? `${fwd.speed_limit_mbps} Mbps` : "不限速"}\n连接限制：${fwd.connection_limit ? `${fwd.connection_limit} 连接` : "不限连接"}`}
+                          >
+                            <strong>{formatBytes(fwd.traffic_used_bytes || 0)}</strong>
+                            <small className="cell-note">
+                              {fwd.speed_limit_mbps ? `${fwd.speed_limit_mbps} Mbps` : "不限速"}
+                            </small>
+                          </div>
+                        </td>
+                        <td className="nw-cell-status" data-label="状态">
+                          <button
+                            className="nw-status-button"
+                            title={`点击${fwdActive ? "停用" : "启用"}`}
+                            disabled={sameID(workingForwardID, fwd.id)}
+                            onClick={() => void toggleForwardStatus(fwd)}
+                          >
+                            <span className={fwdActive ? "is-on" : ""} />
+                            {fwdActive ? "启用" : stateLabel(fwdState)}
+                          </button>
+                        </td>
+                        <td className="nw-cell-actions">
+                          <ForwardRowActions
+                            forward={fwd}
+                            isAdmin={isAdmin}
+                            state={fwdState}
+                            entry={entry}
+                            onConfig={() => openForwardConfig(rootNode, fwd)}
+                            onEdit={() => setEditingForward(fwd)}
+                            onCopy={() => void copyForwardEntry(fwd)}
+                            onToggleStatus={() => void toggleForwardStatus(fwd)}
+                            onRetry={() => void retryForward(fwd)}
+                            onDelete={() => setDeletingForward(fwd)}
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </Fragment>
               );
             })}
           </tbody>
@@ -1793,7 +2079,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
 
       {dialog?.kind === "managed-create" ? <ManagedNodeWizard nodes={nodes} isAdmin={isAdmin} initialServerID={dialog.initialServerID} userContext={userCreationContext ?? undefined} onClose={closeDialog} onComplete={async (message, tone) => { closeDialog(); if (tone) notify(message, tone); else notify(message); await load(true); }} /> : null}
       {dialog?.kind === "edit" ? <NodeEditor node={dialog.node} forwardTarget={nodes.find(item => item.id === forwardingTargetID(dialog.node))} availableNodes={nodes} availableServers={remoteServers} offer={offers.find((item) => item.node_id === dialog.node.id)} availableTags={knownTags} onClose={closeDialog} onComplete={async (message) => { closeDialog(); notify(message); await load(true); }} /> : null}
-      {dialog?.kind === "config" ? <ConfigDialog node={dialog.node} editable={isAdmin} onClose={closeDialog} onComplete={async () => { closeDialog(); notify("节点配置已更新"); await load(true); }} /> : null}
+      {dialog?.kind === "config" ? <ConfigDialog node={dialog.node} editable={isAdmin && !dialog.readOnly} onClose={closeDialog} onComplete={async () => { closeDialog(); notify("节点配置已更新"); await load(true); }} /> : null}
       {dialog?.kind === "import" ? <ImportDialog onClose={closeDialog} onComplete={async (count) => { closeDialog(); notify(`已导入 ${count} 个节点`); await load(true); }} /> : null}
       {dialog?.kind === "relay" ? <RelayDialog node={dialog.node} onClose={closeDialog} onComplete={async () => { closeDialog(); notify("节点中转已更新"); await load(true); }} /> : null}
       {dialog?.kind === "anydoor" ? <AnyDoorForwardDialog node={dialog.node} onClose={closeDialog} onComplete={async () => { closeDialog(); notify("任意门转发已创建"); await load(true); }} /> : null}
@@ -1811,6 +2097,65 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       {dialog?.kind === "qr" ? <NodeShareQRCodeDialog node={dialog.node} notify={notify} onClose={closeDialog} /> : null}
       {dialog?.kind === "temp-sub" ? <TempSubscriptionDialog nodes={dialog.nodes} notify={notify} onClose={closeDialog} /> : null}
       {dialog?.kind === "duplicates" ? <DuplicateNodesDialog groups={dialog.groups} onClose={closeDialog} onDelete={deleteDuplicateSelection} /> : null}
+      {editingForward ? (
+        <ForwardEditDialog
+          admin={isAdmin}
+          forward={editingForward}
+          nodes={nodes.filter((n) => n.enabled) as unknown as NodeItem[]}
+          servers={remoteServers}
+          templates={templates}
+          onClose={() => setEditingForward(undefined)}
+          onComplete={async () => {
+            setEditingForward(undefined);
+            notify("转发已更新");
+            await load(true);
+          }}
+        />
+      ) : null}
+      {forwardWizardOpen ? (
+        <ForwardWizard
+          grants={activeGrants}
+          initialTargetNodeID={wizardTargetNodeID}
+          nodes={nodes.filter((n) => n.enabled) as unknown as NodeItem[]}
+          templates={templates}
+          onClose={() => {
+            setForwardWizardOpen(false);
+            setWizardTargetNodeID(undefined);
+          }}
+          onComplete={async () => {
+            setForwardWizardOpen(false);
+            setWizardTargetNodeID(undefined);
+            notify("转发创建任务已提交");
+            await load(true);
+          }}
+        />
+      ) : null}
+      {deletingForward ? (
+        <ConfirmDialog
+          title="删除转发"
+          description={`将停止“${deletingForward.name}”入口并清理每一跳端口。此操作无法撤销。`}
+          confirmLabel="确认删除"
+          tone="danger"
+          working={sameID(workingForwardID, deletingForward.id)}
+          onCancel={() => !workingForwardID && setDeletingForward(undefined)}
+          onConfirm={async () => {
+            setWorkingForwardID(deletingForward.id);
+            try {
+              const endpoint = isAdmin
+                ? `/api/admin/forwards/${encodeURIComponent(resourceID(deletingForward))}`
+                : `/api/user/forwards/${encodeURIComponent(resourceID(deletingForward))}`;
+              await api.delete(endpoint, undefined, { idempotencyKey: idempotencyKey() });
+              notify("转发删除任务已提交");
+              setDeletingForward(undefined);
+              await load(true);
+            } catch (reason) {
+              notify(reason instanceof Error ? reason.message : "删除转发失败", "error");
+            } finally {
+              setWorkingForwardID(null);
+            }
+          }}
+        />
+      ) : null}
       {pending ? <ConfirmDialog title={pending.title} description={pending.description} confirmLabel={pending.confirmLabel} tone={pending.tone} working={working} onCancel={() => !working && setPending(null)} onConfirm={() => void runPending()} /> : null}
     </div>
   );
@@ -1854,7 +2199,7 @@ function DuplicateNodesDialog({ groups, onClose, onDelete }: { groups: Duplicate
   );
 }
 
-function NodeActions({ node, isAdmin, userRouted, userManagedCreation, onEdit, onConfig, onQRCode, onRelay, onAnyDoor, onCancelRelay, onChain, onResolve, onRegion, onRestore, onRoute, onTempSub, onDelete }: {
+function NodeActions({ node, isAdmin, userRouted, userManagedCreation, onEdit, onConfig, onQRCode, onRelay, onAnyDoor, onTunnelForward, onCancelRelay, onChain, onResolve, onRegion, onRestore, onRoute, onTempSub, onDelete }: {
   node: WorkbenchNode;
   isAdmin: boolean;
   userRouted: UserRoutedOutboundStatus | null;
@@ -1864,6 +2209,7 @@ function NodeActions({ node, isAdmin, userRouted, userManagedCreation, onEdit, o
   onQRCode: () => void;
   onRelay: () => void;
   onAnyDoor: () => void;
+  onTunnelForward?: () => void;
   onCancelRelay: () => void;
   onChain: () => void;
   onResolve: () => void;
@@ -1965,6 +2311,7 @@ function NodeActions({ node, isAdmin, userRouted, userManagedCreation, onEdit, o
       <button role="menuitem" disabled={credentialPending} onClick={() => choose(onQRCode)}><QrCode size={15} />二维码导入</button>
       <button role="menuitem" disabled={credentialPending} onClick={() => choose(onTempSub)}><Link2 size={15} />临时订阅</button>
       {isAdmin && isManaged && nodeAddress(node).host && nodeAddress(node).port ? <button role="menuitem" onClick={() => choose(onAnyDoor)}><Cable size={15} />任意门转发</button> : null}
+      {onTunnelForward && nodeAddress(node).host && nodeAddress(node).port ? <button role="menuitem" onClick={() => choose(onTunnelForward)}><Route size={15} />隧道转发</button> : null}
       {isAdmin && isManaged ? <button role="menuitem" onClick={() => choose(onRelay)}><Shuffle size={15} />{node.relay_orig_server ? "修改中转" : "设置中转"}</button> : null}
       {isAdmin && isManaged && node.relay_orig_server ? <button role="menuitem" onClick={() => choose(onCancelRelay)}><RotateCcw size={15} />取消中转</button> : null}
       {isAdmin && isManaged ? <button role="menuitem" onClick={() => choose(onChain)}><Route size={15} />{node.chain_proxy_node_id ? "修改链式代理" : "设置链式代理"}</button> : null}
@@ -1985,6 +2332,156 @@ function NodeActions({ node, isAdmin, userRouted, userManagedCreation, onEdit, o
     </div>
     {menu}
   </div>;
+}
+
+function ForwardRowActions({
+  forward,
+  isAdmin: _isAdmin,
+  state,
+  entry,
+  onConfig,
+  onEdit,
+  onCopy,
+  onToggleStatus,
+  onRetry,
+  onDelete,
+}: {
+  forward: ForwardRule;
+  isAdmin: boolean;
+  state: string;
+  entry: { host?: string; port?: number };
+  onConfig: () => void;
+  onEdit: () => void;
+  onCopy: () => void;
+  onToggleStatus: () => void;
+  onRetry: () => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState({ top: 8, left: 8, maxHeight: 320, above: false });
+  const triggerWrapRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const positionMenu = useCallback(() => {
+    const trigger = triggerWrapRef.current?.querySelector("button");
+    const menu = menuRef.current;
+    if (!trigger || !menu) return;
+    const margin = 8;
+    const gap = 4;
+    const triggerRect = trigger.getBoundingClientRect();
+    const menuWidth = menu.offsetWidth || 210;
+    const menuHeight = menu.offsetHeight || 360;
+    const spaceBelow = Math.max(0, window.innerHeight - triggerRect.bottom - gap - margin);
+    const spaceAbove = Math.max(0, triggerRect.top - gap - margin);
+    const above = spaceBelow < Math.min(menuHeight, 240) && spaceAbove > spaceBelow;
+    const maxHeight = above ? spaceAbove : spaceBelow;
+    const renderedHeight = Math.min(menuHeight, maxHeight);
+    const maxLeft = Math.max(margin, window.innerWidth - menuWidth - margin);
+    const left = Math.min(Math.max(triggerRect.right - menuWidth, margin), maxLeft);
+    const top = above
+      ? Math.max(margin, triggerRect.top - gap - renderedHeight)
+      : Math.min(triggerRect.bottom + gap, window.innerHeight - margin - renderedHeight);
+    setMenuPosition({ top, left, maxHeight, above });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    positionMenu();
+    menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target || triggerWrapRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setOpen(false);
+      triggerWrapRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", positionMenu);
+    window.addEventListener("scroll", positionMenu, true);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", positionMenu);
+      window.removeEventListener("scroll", positionMenu, true);
+    };
+  }, [open, positionMenu]);
+
+  const choose = (action: () => void) => {
+    triggerWrapRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    setOpen(false);
+    action();
+  };
+  const onMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (!items.length) return;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const offset = event.key === "ArrowDown" ? 1 : -1;
+      items[(current + offset + items.length) % items.length].focus();
+    } else if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      items[event.key === "Home" ? 0 : items.length - 1].focus();
+    }
+  };
+
+  const canCopy = state === "active" && Boolean(entry.host && entry.port);
+
+  const menu = open ? createPortal(
+    <div
+      ref={menuRef}
+      className={`nw-row-popover is-portal ${menuPosition.above ? "is-above" : ""}`}
+      role="menu"
+      aria-label={`${forward.name} 转发操作`}
+      style={{ top: menuPosition.top, left: menuPosition.left, maxHeight: menuPosition.maxHeight }}
+      onKeyDown={onMenuKeyDown}
+    >
+      <button role="menuitem" disabled={!canCopy} onClick={() => choose(onCopy)}>
+        <Copy size={15} />复制入口地址
+      </button>
+      <button role="menuitem" onClick={() => choose(onConfig)}>
+        <Eye size={15} />查看客户端配置
+      </button>
+      <button role="menuitem" onClick={() => choose(onEdit)}>
+        <Edit3 size={15} />编辑转发
+      </button>
+      <button role="menuitem" onClick={() => choose(onToggleStatus)}>
+        {state === "active" ? <CirclePause size={15} /> : <CirclePlay size={15} />}
+        {state === "active" ? "暂停转发" : "恢复转发"}
+      </button>
+      {["error", "degraded"].includes(state) ? (
+        <button role="menuitem" onClick={() => choose(onRetry)}>
+          <RotateCcw size={15} />重试下发
+        </button>
+      ) : null}
+      <button role="menuitem" className="is-danger" onClick={() => choose(onDelete)}>
+        <Trash2 size={15} />删除转发
+      </button>
+    </div>,
+    document.body,
+  ) : null;
+
+  return (
+    <div className="nw-row-actions">
+      <IconButton label={`查看 ${forward.name} 配置`} onClick={onConfig}>
+        <Eye size={16} />
+      </IconButton>
+      <IconButton label={`编辑 ${forward.name}`} onClick={onEdit}>
+        <Edit3 size={16} />
+      </IconButton>
+      <div ref={triggerWrapRef} className="nw-row-menu">
+        <IconButton label={`更多 ${forward.name} 操作`} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+          <MoreHorizontal size={17} />
+        </IconButton>
+      </div>
+      {menu}
+    </div>
+  );
 }
 
 export function NodeEditor({ node, forwardTarget, availableNodes = [], availableServers = [], offer, availableTags = [], onClose, onComplete }: { node?: WorkbenchNode; forwardTarget?: WorkbenchNode; availableNodes?: WorkbenchNode[]; availableServers?: Array<Pick<RemoteServer, "id" | "name" | "domain" | "ip_address">>; offer?: ManagedNodeOffer; availableTags?: string[]; onClose: () => void; onComplete: (message: string) => void }) {

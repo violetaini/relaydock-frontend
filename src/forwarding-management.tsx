@@ -304,15 +304,15 @@ export function extractList<T>(payload: unknown, ...keys: string[]): T[] {
   return (candidates.find(Array.isArray) as T[] | undefined) ?? [];
 }
 
-function resourceID(item: { id: ResourceID; public_id?: string }): ResourceID {
+export function resourceID(item: { id: ResourceID; public_id?: string }): ResourceID {
   return item.public_id || item.id;
 }
 
-function sameID(left: ResourceID | null | undefined, right: ResourceID | null | undefined): boolean {
+export function sameID(left: ResourceID | null | undefined, right: ResourceID | null | undefined): boolean {
   return left !== null && left !== undefined && right !== null && right !== undefined && String(left) === String(right);
 }
 
-function idempotencyKey(): string {
+export function idempotencyKey(): string {
   return typeof crypto.randomUUID === "function"
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -342,7 +342,7 @@ function isServerOnline(server: RemoteServer): boolean {
   return server.ws_connected || ["online", "connected"].includes(server.status?.toLowerCase());
 }
 
-function stateLabel(state?: string): string {
+export function stateLabel(state?: string): string {
   switch ((state || "").toLowerCase()) {
     case "active": return "运行中";
     case "inactive": return "已暂停";
@@ -363,7 +363,7 @@ function stateLabel(state?: string): string {
   }
 }
 
-function stateTone(state?: string): "good" | "warn" | "bad" | "info" | "neutral" {
+export function stateTone(state?: string): "good" | "warn" | "bad" | "info" | "neutral" {
   const value = (state || "").toLowerCase();
   if (value === "active") return "good";
   if (["pending", "provisioning", "scheduled", "draining", "degraded", "cleanup_pending"].includes(value)) return "warn";
@@ -505,7 +505,7 @@ export function groupTunnelTemplates(
   return groups;
 }
 
-function tunnelForGrant(grant: TunnelGrant, templates: TunnelTemplate[]): TunnelTemplate | undefined {
+export function tunnelForGrant(grant: TunnelGrant, templates: TunnelTemplate[]): TunnelTemplate | undefined {
   if (grant.tunnel) return grant.tunnel;
   const matched = templates.find((template) => sameID(resourceID(template), grant.tunnel_id) || sameID(template.id, grant.tunnel_id));
   if (matched) return matched;
@@ -525,7 +525,7 @@ function tunnelName(grant: TunnelGrant, templates: TunnelTemplate[]): string {
   return grant.tunnel_name || grant.name || tunnelForGrant(grant, templates)?.name || `隧道 ${grant.tunnel_id ?? grant.id}`;
 }
 
-function forwardState(forward: ForwardRule): string {
+export function forwardState(forward: ForwardRule): string {
   return forward.observed_state || forward.state || forward.desired_state || "pending";
 }
 
@@ -555,7 +555,7 @@ export async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
-function forwardEntry(
+export function forwardEntry(
   forward: ForwardRule,
   servers: RemoteServer[] = [],
   templates: TunnelTemplate[] = [],
@@ -1869,7 +1869,7 @@ function GrantDialog({
   );
 }
 
-function ForwardEditDialog({
+export function ForwardEditDialog({
   forward,
   nodes,
   servers = [],
@@ -2361,10 +2361,45 @@ function ForwardFlowVisualizer({
   );
 }
 
-function ForwardWizard({ grants, initialGrantID, nodes, templates = [], onClose, onComplete }: { grants: TunnelGrant[]; initialGrantID?: string; nodes: NodeItem[]; templates?: TunnelTemplate[]; onClose: () => void; onComplete: () => Promise<void> }) {
+export function ForwardWizard({
+  grants,
+  initialGrantID,
+  initialTargetNodeID,
+  nodes,
+  templates = [],
+  onClose,
+  onComplete,
+}: {
+  grants: TunnelGrant[];
+  initialGrantID?: string;
+  initialTargetNodeID?: string | number;
+  nodes: NodeItem[];
+  templates?: TunnelTemplate[];
+  onClose: () => void;
+  onComplete: () => Promise<void>;
+}) {
   const [step, setStep] = useState(1);
-  const [draft, setDraft] = useState<ForwardDraft>({ grantID: grants.some((grant) => sameID(resourceID(grant), initialGrantID)) ? initialGrantID || "" : grants[0] ? String(resourceID(grants[0])) : "", targetNodeID: nodes[0] ? String(nodes[0].id) : "", name: "", requestedEntryPort: "", sourceCIDRs: "" });
-  const [selectedServer, setSelectedServer] = useState<string>("");
+  const matchedTarget = initialTargetNodeID
+    ? nodes.find((node) => String(node.id) === String(initialTargetNodeID))
+    : undefined;
+  const [draft, setDraft] = useState<ForwardDraft>({
+    grantID: grants.some((grant) => sameID(resourceID(grant), initialGrantID))
+      ? initialGrantID || ""
+      : grants[0]
+      ? String(resourceID(grants[0]))
+      : "",
+    targetNodeID: matchedTarget
+      ? String(matchedTarget.id)
+      : nodes[0]
+      ? String(nodes[0].id)
+      : "",
+    name: "",
+    requestedEntryPort: "",
+    sourceCIDRs: "",
+  });
+  const [selectedServer, setSelectedServer] = useState<string>(
+    () => matchedTarget?.original_server?.trim() || "",
+  );
   const [nodeSearch, setNodeSearch] = useState<string>("");
   const [preflight, setPreflight] = useState<PreflightResult | null>(null);
   const [working, setWorking] = useState<"preflight" | "create" | "">("");

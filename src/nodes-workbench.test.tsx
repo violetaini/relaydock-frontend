@@ -27,6 +27,7 @@ import {
   inferCountryCode,
   type WorkbenchNode,
 } from "./nodes-workbench";
+import type { ForwardRule, TunnelTemplate } from "./forwarding-management";
 import type { RemoteServer } from "./types";
 
 vi.mock("qrcode", () => ({
@@ -914,6 +915,90 @@ describe("node any-door forwarding", () => {
     fireEvent.change(screen.getByLabelText("搜索节点"), { target: { value: "friend | Tunnel" } });
     expect(screen.queryByText("friend", { exact: true })).not.toBeInTheDocument();
     expect(screen.getByText(/任意门转发 → friend/)).toBeInTheDocument();
+  });
+
+  it("binds tunnel forwards directly below their target node as child rows with forwarding controls", async () => {
+    const target = node(41, "friend", "shadowsocks");
+    const forwardRule: ForwardRule = {
+      id: "fwd-1",
+      public_id: "fwd-1",
+      name: "hkt",
+      grant_id: "grt-1",
+      username: "admin",
+      tunnel_id: "tun-1",
+      tunnel_name: "港台",
+      target_type: "managed_node",
+      target_node_id: 41,
+      target_node_name: "friend",
+      entry_host: "188.253.6.193",
+      entry_port: 2056,
+      state: "active",
+      traffic_used_bytes: 1048576,
+      speed_limit_mbps: 100,
+      route: ["Bestvm TW", "Bestvm HK"],
+    };
+    const template: TunnelTemplate = {
+      id: "tun-1",
+      name: "港台",
+      state: "active",
+      hops: [{ server_id: 1, name: "Bestvm TW" }, { server_id: 2, name: "Bestvm HK" }],
+    };
+
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [target] } as T;
+      if (path === "/api/user/config") return userConfig([41]) as T;
+      if (path === "/api/admin/forwards") return { forwards: [forwardRule] } as T;
+      if (path === "/api/admin/tunnel-templates") return { templates: [template] } as T;
+      return { results: [], offers: [], servers: [] } as T;
+    });
+
+    render(<NodesWorkbench isAdmin notify={vi.fn()} />);
+
+    const parentRow = (await screen.findByText("friend", { exact: true })).closest("tr");
+    expect(parentRow).not.toBeNull();
+    expect(within(parentRow!).getByText(/1 个转发入口/)).toBeInTheDocument();
+
+    const forwardRow = (await screen.findByText("hkt", { exact: true })).closest("tr");
+    expect(forwardRow).not.toBeNull();
+    expect(forwardRow).toHaveClass("nw-forward-child");
+    expect(parentRow?.nextElementSibling).toBe(forwardRow);
+
+    expect(within(forwardRow!).getByText("188.253.6.193:2056")).toBeInTheDocument();
+    expect(within(forwardRow!).getByText("TUNNEL")).toBeInTheDocument();
+    expect(within(forwardRow!).getByText(/Bestvm TW/)).toBeInTheDocument();
+    expect(within(forwardRow!).getByText(/Bestvm HK/)).toBeInTheDocument();
+
+    const postSpy = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    const statusBtn = within(forwardRow!).getByTitle("点击停用");
+    fireEvent.click(statusBtn);
+    expect(postSpy).toHaveBeenCalledWith("/api/admin/forwards/fwd-1/suspend", {}, expect.any(Object));
+  });
+
+  it("opens forward wizard with preselected target node from node actions menu", async () => {
+    const target = node(41, "friend", "shadowsocks");
+    const template: TunnelTemplate = {
+      id: "tun-1",
+      name: "港台",
+      state: "active",
+      route: ["Bestvm TW", "Bestvm HK"],
+    };
+
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [target] } as T;
+      if (path === "/api/user/config") return userConfig([41]) as T;
+      if (path === "/api/admin/forwards") return { forwards: [] } as T;
+      if (path === "/api/admin/tunnel-templates") return { templates: [template] } as T;
+      return { results: [], offers: [], servers: [] } as T;
+    });
+
+    render(<NodesWorkbench isAdmin notify={vi.fn()} />);
+    await screen.findByText("friend", { exact: true });
+
+    fireEvent.click(screen.getByRole("button", { name: /更多 friend 操作/ }));
+    const tunnelForwardBtn = await screen.findByRole("menuitem", { name: /隧道转发/ });
+    fireEvent.click(tunnelForwardBtn);
+
+    expect(await screen.findByRole("heading", { name: "创建用户转发" })).toBeInTheDocument();
   });
 
   it.each(["vless", "shadowsocks", "dokodemo-door", "tunnel"])("labels an AnyDoor entry independently of its %s client protocol", async (protocol) => {

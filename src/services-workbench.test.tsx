@@ -504,7 +504,7 @@ describe("service management workbench", () => {
 
     expect(within(dialog).getByText(/当前填写的是 IP 地址（158\.51\.111\.32）/)).toBeInTheDocument();
 
-    const chip = within(dialog).getByRole("button", { name: "*.chitanda.net" });
+    const chip = await within(dialog).findByRole("button", { name: "*.chitanda.net" });
     fireEvent.click(chip);
     expect(domainInput).toHaveValue("ddpsjp.chitanda.net");
     expect(within(dialog).getByText(/已智能匹配泛域名证书/)).toBeInTheDocument();

@@ -652,4 +652,85 @@ describe("administrator tunnel composition", () => {
       expect(notify).toHaveBeenCalledWith("转发创建任务已提交");
     });
   });
+
+  it("supports server cascading filter, auto-detecting server from direct node selection, and keyword search in wizard step 2", async () => {
+    const notify = vi.fn();
+    const testNodes = [
+      { id: 42, node_name: "东京 Reality", protocol: "vless", enabled: true, original_server: "Bestvm JP" },
+      { id: 43, node_name: "香港 Hysteria", protocol: "hysteria2", enabled: true, original_server: "Bestvm HK" },
+      { id: 44, node_name: "台湾 Shadowsocks", protocol: "shadowsocks", enabled: true, original_server: "Bestvm TW" },
+    ];
+
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/tunnel-templates") return { templates: [tunnel] } as T;
+      if (path === "/api/admin/remote-servers") return { servers: [
+        { id: 11, name: "东京入口", status: "online", ws_connected: true, is_federated: false },
+        { id: 12, name: "洛杉矶出口", status: "online", ws_connected: true, is_federated: false },
+      ] } as T;
+      if (path === "/api/admin/users") return { users: [{ username: "admin", nickname: "管理员", role: "admin" }] } as T;
+      if (path === "/api/admin/forwards") return { forwards: [] } as T;
+      if (path === "/api/admin/users/admin/tunnel-grants") return { grants: [
+        { id: 99, public_id: "grant_admin_tokyo", username: "admin", tunnel_id: 7, enabled: true, state: "active" },
+      ] } as T;
+      if (path === "/api/user/nodes") return { nodes: testNodes } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    render(<ForwardingManagement isAdmin currentUsername="admin" notify={notify} />);
+
+    // Click "创建转发"
+    fireEvent.click(await screen.findByRole("button", { name: "创建转发" }));
+    const dialog = await screen.findByRole("dialog", { name: "创建用户转发" });
+    expect(dialog).toBeInTheDocument();
+
+    // Step 1 -> Next to Step 2
+    fireEvent.click(within(dialog).getByRole("button", { name: "下一步" }));
+
+    const serverSelect = await screen.findByRole("combobox", { name: "目标服务器" });
+    const nodeSelect = screen.getByRole("combobox", { name: "最终目标节点" });
+    const searchInput = screen.getByRole("textbox", { name: "节点预筛选" });
+
+    // Initial state: serverSelect is empty (all servers), nodeSelect has 3 options, default is 42 (Bestvm JP)
+    expect(serverSelect).toHaveValue("");
+    expect(within(nodeSelect).getAllByRole("option")).toHaveLength(3);
+    expect(nodeSelect).toHaveValue("42");
+
+    // 1. 先选服务器，再选节点：选择 "Bestvm HK"
+    fireEvent.change(serverSelect, { target: { value: "Bestvm HK" } });
+    expect(serverSelect).toHaveValue("Bestvm HK");
+    // Node options should now only be Hong Kong node
+    const hkOptions = within(nodeSelect).getAllByRole("option");
+    expect(hkOptions).toHaveLength(1);
+    expect(hkOptions[0]).toHaveTextContent("香港 Hysteria");
+    // Selected node should auto-update to node 43
+    expect(nodeSelect).toHaveValue("43");
+
+    // 2. 直接选节点自动带出服务器：
+    // First reset server to all
+    fireEvent.change(serverSelect, { target: { value: "" } });
+    expect(within(nodeSelect).getAllByRole("option")).toHaveLength(3);
+    // User directly chooses Taiwan node (id: 44)
+    fireEvent.change(nodeSelect, { target: { value: "44" } });
+    expect(nodeSelect).toHaveValue("44");
+    // Server select should automatically update to "Bestvm TW"
+    expect(serverSelect).toHaveValue("Bestvm TW");
+
+    // 3. 节点可以输入名字预筛选：
+    // Reset server filter
+    fireEvent.change(serverSelect, { target: { value: "" } });
+    expect(within(nodeSelect).getAllByRole("option")).toHaveLength(3);
+
+    // Type "Reality" into search
+    fireEvent.change(searchInput, { target: { value: "Reality" } });
+    const searchOptions = within(nodeSelect).getAllByRole("option");
+    expect(searchOptions).toHaveLength(1);
+    expect(searchOptions[0]).toHaveTextContent("东京 Reality");
+    expect(nodeSelect).toHaveValue("42");
+
+    // Clear search using clear button
+    const clearButton = screen.getByRole("button", { name: "清空搜索" });
+    fireEvent.click(clearButton);
+    expect(searchInput).toHaveValue("");
+    expect(within(nodeSelect).getAllByRole("option")).toHaveLength(3);
+  });
 });

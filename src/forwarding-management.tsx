@@ -15,6 +15,7 @@ import {
   Plus,
   RefreshCw,
   Route,
+  Search,
   Server,
   ShieldCheck,
   Trash2,
@@ -1302,6 +1303,8 @@ function UserGrantCards({ grants, onCreate }: { grants: TunnelGrant[]; onCreate:
 function ForwardWizard({ grants, initialGrantID, nodes, templates = [], onClose, onComplete }: { grants: TunnelGrant[]; initialGrantID?: string; nodes: NodeItem[]; templates?: TunnelTemplate[]; onClose: () => void; onComplete: () => Promise<void> }) {
   const [step, setStep] = useState(1);
   const [draft, setDraft] = useState<ForwardDraft>({ grantID: grants.some((grant) => sameID(resourceID(grant), initialGrantID)) ? initialGrantID || "" : grants[0] ? String(resourceID(grants[0])) : "", targetNodeID: nodes[0] ? String(nodes[0].id) : "", name: "", requestedEntryPort: "", sourceCIDRs: "" });
+  const [selectedServer, setSelectedServer] = useState<string>("");
+  const [nodeSearch, setNodeSearch] = useState<string>("");
   const [preflight, setPreflight] = useState<PreflightResult | null>(null);
   const [working, setWorking] = useState<"preflight" | "create" | "">("");
   const [error, setError] = useState("");
@@ -1321,7 +1324,78 @@ function ForwardWizard({ grants, initialGrantID, nodes, templates = [], onClose,
     minPort: 1024,
     maxPort: 65535,
   });
-  const stepValid = step === 1 ? Boolean(grant) : step === 2 ? Boolean(target) : step === 3 ? Boolean(draft.name.trim()) && requestedPortValid && !isPortCheckBlocking(portCheck) : Boolean(preflight && preflight.success !== false && preflight.ready !== false);
+
+  const serverOptions = useMemo(() => {
+    const map = new Map<string, number>();
+    nodes.forEach((node) => {
+      const srv = (node.original_server || "其他服务器").trim();
+      map.set(srv, (map.get(srv) ?? 0) + 1);
+    });
+    return Array.from(map.entries()).map(([name, count]) => ({ name, count }));
+  }, [nodes]);
+
+  const filteredNodes = useMemo(() => {
+    let list = nodes;
+    if (selectedServer) {
+      list = list.filter((node) => (node.original_server || "其他服务器").trim() === selectedServer);
+    }
+    const q = nodeSearch.trim().toLowerCase();
+    if (q) {
+      list = list.filter((node) => {
+        const text = [node.node_name, node.protocol, node.tag, node.original_server].filter(Boolean).join(" ").toLowerCase();
+        return text.includes(q);
+      });
+    }
+    return list;
+  }, [nodes, selectedServer, nodeSearch]);
+
+  const otherServerMatches = useMemo(() => {
+    if (!selectedServer || !nodeSearch.trim()) return 0;
+    const q = nodeSearch.trim().toLowerCase();
+    return nodes.filter((node) => {
+      const srv = (node.original_server || "其他服务器").trim();
+      if (srv === selectedServer) return false;
+      const text = [node.node_name, node.protocol, node.tag, node.original_server].filter(Boolean).join(" ").toLowerCase();
+      return text.includes(q);
+    }).length;
+  }, [nodes, selectedServer, nodeSearch]);
+
+  const handleServerChange = (newServer: string) => {
+    setSelectedServer(newServer);
+    const matching = newServer
+      ? nodes.filter((node) => (node.original_server || "其他服务器").trim() === newServer)
+      : nodes;
+    const currentStillValid = matching.some((node) => String(node.id) === draft.targetNodeID);
+    if (!currentStillValid && matching.length > 0) {
+      update("targetNodeID", String(matching[0].id));
+    }
+  };
+
+  const handleNodeSelect = (newNodeID: string) => {
+    update("targetNodeID", newNodeID);
+    const node = nodes.find((n) => String(n.id) === newNodeID);
+    if (node && node.original_server) {
+      setSelectedServer(node.original_server.trim());
+    }
+  };
+
+  useEffect(() => {
+    if (step === 2 && filteredNodes.length > 0) {
+      const currentStillValid = filteredNodes.some((node) => String(node.id) === draft.targetNodeID);
+      if (!currentStillValid) {
+        update("targetNodeID", String(filteredNodes[0].id));
+      }
+    }
+  }, [step, filteredNodes, draft.targetNodeID]);
+
+  const stepValid = step === 1
+    ? Boolean(grant)
+    : step === 2
+      ? Boolean(target && (!nodes.length || filteredNodes.some((n) => String(n.id) === String(target.id))))
+      : step === 3
+        ? Boolean(draft.name.trim()) && requestedPortValid && !isPortCheckBlocking(portCheck)
+        : Boolean(preflight && preflight.success !== false && preflight.ready !== false);
+
   const payload = () => ({ grant_id: draft.grantID, name: draft.name.trim(), target: { type: "managed_node", node_id: Number(draft.targetNodeID) }, network: "tcp_udp", requested_entry_port: requestedEntryPort, source_cidrs: sourceCIDRs });
   const update = <K extends keyof ForwardDraft>(key: K, value: ForwardDraft[K]) => { setDraft((current) => ({ ...current, [key]: value })); setPreflight(null); };
   const next = async () => {
@@ -1340,9 +1414,159 @@ function ForwardWizard({ grants, initialGrantID, nodes, templates = [], onClose,
   };
   return <Dialog title="创建用户转发" description="TCP 与 UDP 共用端口，支持双向隧道两端使用相同入口端口。" onClose={onClose} wide dismissible={!working}><div className="fm-wizard"><ol className="fm-steps" aria-label="创建转发步骤">{([[1, "选择隧道"], [2, "选择目标"], [3, "转发设置"], [4, "确认创建"]] as const).map(([number, label]) => <li key={number} className={step === number ? "is-active" : step > number ? "is-done" : ""}><span>{step > number ? <Check size={14} /> : number}</span><strong>{label}</strong></li>)}</ol>{error ? <ErrorState message={error} /> : null}
     <div className="fm-wizard-content">{step === 1 ? (!grants.length ? <EmptyState icon={<Route size={25} />} title="暂无可用隧道" description="管理员尚未开通可用路线或模板未激活" /> : <div className="fm-choice-grid">{grants.map((item) => { const template = tunnelForGrant(item, templates); return <button type="button" key={String(resourceID(item))} className={sameID(resourceID(item), draft.grantID) ? "is-active" : ""} onClick={() => update("grantID", String(resourceID(item)))}><span><Route size={19} /><strong>{tunnelName(item, templates)}</strong></span>{template ? <RouteLine hops={routeHops(template).map((hop) => ({ name: hop.name }))} /> : null}<small>{item.per_forward_speed_mbps ? `${item.per_forward_speed_mbps} Mbps` : "不限速"} · {item.per_forward_connection_limit ? `${item.per_forward_connection_limit} 连接` : "不限连接"} · 至 {displayDate(item.expires_at)}</small></button>; })}</div>) : null}
-      {step === 2 ? <><div className="fm-target-types"><button type="button" className="is-active"><Server size={19} /><span><strong>受管节点</strong><small>从自己已有且可访问的节点中选择</small></span><Check size={16} /></button><button type="button" disabled><Network size={19} /><span><strong>自定义公网目标</strong><small>首版暂未开放</small></span></button></div>{nodes.length ? <Field label="最终目标节点"><select value={draft.targetNodeID} onChange={(event) => update("targetNodeID", event.target.value)}>{nodes.map((node) => <option key={node.id} value={node.id}>{node.node_name} · {node.protocol.toUpperCase()}</option>)}</select></Field> : <EmptyState icon={<Server size={24} />} title="没有可用受管节点" description="请先在节点管理中开通或导入符合条件的节点" />}</> : null}
+      {step === 2 ? <>
+        <div className="fm-target-types">
+          <button type="button" className="is-active">
+            <Server size={19} />
+            <span>
+              <strong>受管节点</strong>
+              <small>从自己已有且可访问的节点中选择</small>
+            </span>
+            <Check size={16} />
+          </button>
+          <button type="button" disabled>
+            <Network size={19} />
+            <span>
+              <strong>自定义公网目标</strong>
+              <small>首版暂未开放</small>
+            </span>
+          </button>
+        </div>
+        {nodes.length ? (
+          <div className="fm-form" style={{ marginTop: 14 }}>
+            <div className="fm-form-grid">
+              <Field
+                label="目标服务器"
+                hint={selectedServer ? `已筛选 “${selectedServer}” 下的节点` : "选择服务器以缩小范围，或直接在下方选节点"}
+              >
+                <select
+                  aria-label="目标服务器"
+                  value={selectedServer}
+                  onChange={(event) => handleServerChange(event.target.value)}
+                >
+                  <option value="">全部服务器（{serverOptions.length} 个服务器 · 共 {nodes.length} 个节点）</option>
+                  {serverOptions.map((srv) => (
+                    <option key={srv.name} value={srv.name}>
+                      {srv.name}（{srv.count} 个节点）
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field
+                label="节点预筛选"
+                hint={nodeSearch ? `匹配到 ${filteredNodes.length} 个节点` : "输入名称、协议即时预筛选"}
+              >
+                <div className="fm-search-wrap">
+                  <Search size={16} className="fm-search-icon" />
+                  <input
+                    aria-label="节点预筛选"
+                    type="text"
+                    placeholder="搜索节点名称、协议或服务器..."
+                    value={nodeSearch}
+                    onChange={(event) => setNodeSearch(event.target.value)}
+                  />
+                  {nodeSearch ? (
+                    <button
+                      type="button"
+                      className="fm-search-clear"
+                      onClick={() => setNodeSearch("")}
+                      title="清空搜索"
+                    >
+                      <X size={14} />
+                    </button>
+                  ) : null}
+                </div>
+              </Field>
+            </div>
+
+            {otherServerMatches > 0 && filteredNodes.length === 0 ? (
+              <div className="fm-filter-tip">
+                <span>当前服务器下无匹配项，但在其他服务器找到 {otherServerMatches} 个节点。</span>
+                <button
+                  type="button"
+                  className="fm-text-action"
+                  onClick={() => setSelectedServer("")}
+                >
+                  切换至全部服务器
+                </button>
+              </div>
+            ) : null}
+
+            <Field
+              label="最终目标节点"
+              hint={
+                filteredNodes.length === 0
+                  ? "无匹配节点，请调整搜索关键字或服务器筛选"
+                  : selectedServer
+                    ? `已筛选出 ${filteredNodes.length} 个节点`
+                    : "选择节点将自动带出所属服务器"
+              }
+            >
+              <select
+                aria-label="最终目标节点"
+                value={draft.targetNodeID}
+                onChange={(event) => handleNodeSelect(event.target.value)}
+              >
+                {filteredNodes.length === 0 ? (
+                  <option value="" disabled>无匹配节点（请调整筛选条件）</option>
+                ) : (
+                  filteredNodes.map((node) => (
+                    <option key={node.id} value={node.id}>
+                      {node.node_name} · {node.protocol.toUpperCase()}
+                      {node.original_server ? ` [${node.original_server}]` : ""}
+                    </option>
+                  ))
+                )}
+              </select>
+            </Field>
+
+            {target ? (
+              <div className="fm-target-node-card">
+                <div className="fm-target-node-header">
+                  <div>
+                    <strong>{target.node_name}</strong>
+                    <small>ID: {target.id}</small>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <Badge tone="info">{target.protocol.toUpperCase()}</Badge>
+                    <Badge tone={target.enabled ? "good" : "neutral"}>
+                      {target.enabled ? "正常运行" : "停用"}
+                    </Badge>
+                  </div>
+                </div>
+                <div className="fm-target-node-details">
+                  <div>
+                    <small>所属服务器</small>
+                    <span>
+                      <Server size={14} />
+                      {target.original_server || "外部导入"}
+                    </span>
+                  </div>
+                  <div>
+                    <small>入站标识</small>
+                    <span>{target.inbound_tag || "默认入站"}</span>
+                  </div>
+                  {target.tag ? (
+                    <div>
+                      <small>分组标签</small>
+                      <span>{target.tag}</span>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <EmptyState
+            icon={<Server size={24} />}
+            title="没有可用受管节点"
+            description="请先在节点管理中开通或导入符合条件的节点"
+          />
+        )}
+      </> : null}
       {step === 3 ? <div className="fm-form"><div className="fm-form-grid"><Field label="转发名称"><input autoFocus value={draft.name} onChange={(event) => update("name", event.target.value)} placeholder="例如：香港入口到美国 Reality" /></Field><Field label="网络类型"><select value="tcp_udp" disabled><option value="tcp_udp">TCP + UDP</option></select></Field></div><div className="port-field-group"><Field label="入口端口（可选）" hint="例如 2022；留空时自动分配空闲端口。支持双向隧道两端使用相同入口端口。"><input type="number" min="1024" max="65535" value={draft.requestedEntryPort} onChange={(event) => update("requestedEntryPort", event.target.value)} placeholder="自动选择" /></Field><PortCheckHint state={portCheck} /></div><Field label="入口来源 CIDR 白名单（可选）" hint="每行或逗号分隔；留空时遵循隧道模板策略"><textarea rows={4} value={draft.sourceCIDRs} onChange={(event) => update("sourceCIDRs", event.target.value)} placeholder="例如：203.0.113.8/32" /></Field><div className="fm-capability-note"><ShieldCheck size={17} /><span>入口节点绑定入口端口，中转跳点自动分配内部端口，支持双向隧道两端使用相同入口端口。</span></div></div> : null}
-      {step === 4 ? <div className="fm-review"><div className="fm-review-route"><span>固定路线</span>{grantTunnel ? <RouteLine hops={[...routeHops(grantTunnel).map((hop) => ({ name: hop.name })), { name: target?.node_name || "目标节点" }]} /> : <strong>{grant ? tunnelName(grant, templates) : "已授权隧道"} → {target?.node_name}</strong>}</div><dl><div><dt>转发名称</dt><dd>{draft.name}</dd></div><div><dt>网络与入口</dt><dd>TCP + UDP · {requestedEntryPort ? `入口端口 ${requestedEntryPort}` : "自动分配入口端口"}</dd></div><div><dt>最终目标</dt><dd>{target?.node_name}</dd></div><div><dt>有效期</dt><dd>{displayDate(preflight?.effective_expires_at || grant?.expires_at)}</dd></div><div><dt>每转发限速</dt><dd>{grant?.per_forward_speed_mbps ? `${grant.per_forward_speed_mbps} Mbps` : "不限"}</dd></div><div><dt>连接数</dt><dd>{grant?.per_forward_connection_limit || "不限"}</dd></div><div><dt>计费流量</dt><dd>仅入口统计一次</dd></div><div><dt>入口预览</dt><dd>{preflight?.entry_host || preflight?.entry_address ? `${preflight.entry_host || preflight.entry_address}:${preflight.entry_port || requestedEntryPort || "自动"}` : requestedEntryPort ? `创建后使用 ${requestedEntryPort}` : "创建后由系统分配"}</dd></div></dl><div className={`fm-preflight ${preflight?.success === false || preflight?.ready === false ? "is-bad" : "is-good"}`}><ShieldCheck size={18} /><span><strong>{preflight?.success === false || preflight?.ready === false ? "预检未通过" : "转发预检通过"}</strong><small>{preflight?.message || "授权、目标、路线和端口资源均满足创建条件"}</small>{preflight?.warnings?.map((warning) => <small key={warning}>{warning}</small>)}</span></div></div> : null}</div>
+      {step === 4 ? <div className="fm-review"><div className="fm-review-route"><span>固定路线</span>{grantTunnel ? <RouteLine hops={[...routeHops(grantTunnel).map((hop) => ({ name: hop.name })), { name: target?.node_name || "目标节点" }]} /> : <strong>{grant ? tunnelName(grant, templates) : "已授权隧道"} → {target?.node_name}</strong>}</div><dl><div><dt>转发名称</dt><dd>{draft.name}</dd></div><div><dt>网络与入口</dt><dd>TCP + UDP · {requestedEntryPort ? `入口端口 ${requestedEntryPort}` : "自动分配入口端口"}</dd></div><div><dt>最终目标</dt><dd>{target?.node_name}{target?.original_server ? ` (${target.original_server})` : ""}</dd></div><div><dt>有效期</dt><dd>{displayDate(preflight?.effective_expires_at || grant?.expires_at)}</dd></div><div><dt>每转发限速</dt><dd>{grant?.per_forward_speed_mbps ? `${grant.per_forward_speed_mbps} Mbps` : "不限"}</dd></div><div><dt>连接数</dt><dd>{grant?.per_forward_connection_limit || "不限"}</dd></div><div><dt>计费流量</dt><dd>仅入口统计一次</dd></div><div><dt>入口预览</dt><dd>{preflight?.entry_host || preflight?.entry_address ? `${preflight.entry_host || preflight.entry_address}:${preflight.entry_port || requestedEntryPort || "自动"}` : requestedEntryPort ? `创建后使用 ${requestedEntryPort}` : "创建后由系统分配"}</dd></div></dl><div className={`fm-preflight ${preflight?.success === false || preflight?.ready === false ? "is-bad" : "is-good"}`}><ShieldCheck size={18} /><span><strong>{preflight?.success === false || preflight?.ready === false ? "预检未通过" : "转发预检通过"}</strong><small>{preflight?.message || "授权、目标、路线和端口资源均满足创建条件"}</small>{preflight?.warnings?.map((warning) => <small key={warning}>{warning}</small>)}</span></div></div> : null}</div>
     <div className="dialog-actions"><Button type="button" variant="secondary" disabled={Boolean(working)} onClick={step === 1 ? onClose : () => setStep((current) => current - 1)}>{step === 1 ? "取消" : "上一步"}</Button>{step < 4 ? <Button type="button" disabled={!stepValid || Boolean(working)} onClick={() => void next()}>{working === "preflight" ? <Spinner label="正在预检" /> : <>下一步<ArrowRight size={16} /></>}</Button> : <Button type="button" disabled={!stepValid || Boolean(working)} onClick={() => void create()}>{working === "create" ? <Spinner label="正在创建" /> : <><Check size={16} />确认创建</>}</Button>}</div>
   </div></Dialog>;
 }

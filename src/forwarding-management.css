@@ -732,32 +732,42 @@
 
 /* Target Type Compact Segmented */
 .fm-target-segmented {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 2px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  width: 100%;
+  margin-bottom: 6px;
 }
 
 .fm-target-segmented button {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
-  height: 30px;
-  font-size: 12px;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 14px;
+  height: 38px;
+  width: 100%;
+  font-size: 13px;
   font-weight: 600;
-  border-radius: 6px;
+  border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--surface-muted);
   color: var(--text-soft);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all 0.18s ease;
+}
+
+.fm-target-segmented button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--surface-muted) 80%, var(--surface-raised));
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--border) 70%, var(--accent));
 }
 
 .fm-target-segmented button.is-active {
-  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  background: color-mix(in srgb, var(--accent) 15%, var(--surface));
   border-color: var(--accent);
-  color: var(--text);
+  color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 .fm-target-segmented button:disabled {
@@ -1345,6 +1355,63 @@
 .fm-scroll-tip {
   font-size: 11px;
   color: var(--text-soft);
+}
+
+/* Forward Health & Latency Probe */
+.fm-cell-health {
+  white-space: nowrap;
+}
+
+.fm-health-button {
+  display: inline-flex;
+  min-width: 78px;
+  min-height: 28px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 6px;
+  color: var(--text-soft);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.fm-health-button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 65%, var(--border));
+  color: var(--text);
+  background: var(--surface-muted);
+}
+
+.fm-health-button.is-good {
+  border-color: color-mix(in srgb, var(--green, #398b65) 55%, var(--border));
+  color: var(--green, #398b65);
+  background: color-mix(in srgb, var(--green, #398b65) 10%, var(--surface));
+}
+
+.fm-health-button.is-bad {
+  border-color: color-mix(in srgb, var(--red, #c94b45) 55%, var(--border));
+  color: var(--red, #c94b45);
+  background: color-mix(in srgb, var(--red, #c94b45) 10%, var(--surface));
+}
+
+.fm-health-button.is-loading {
+  opacity: 0.75;
+  cursor: wait;
+}
+
+.fm-batch-probe-btn {
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 @media (max-width: 480px) {

@@ -2124,6 +2124,15 @@ export function ForwardEditDialog({
   );
 }
 
+interface ForwardHealthResult {
+  loading?: boolean;
+  success?: boolean;
+  latency?: number;
+  status?: "healthy" | "degraded" | "error";
+  message?: string;
+  checkedAt?: number;
+}
+
 function ForwardTable({ forwards, templates, servers = [], admin = false, onAction, onDelete, onCopy, onEdit }: {
   forwards: ForwardRule[];
   templates: TunnelTemplate[];
@@ -2137,6 +2146,72 @@ function ForwardTable({ forwards, templates, servers = [], admin = false, onActi
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
   const [workingID, setWorkingID] = useState<ResourceID | null>(null);
+  const [healthMap, setHealthMap] = useState<Record<string, ForwardHealthResult>>({});
+  const [testingAll, setTestingAll] = useState(false);
+
+  const probeForward = async (forward: ForwardRule) => {
+    const fwdID = String(resourceID(forward));
+    setHealthMap((prev) => ({
+      ...prev,
+      [fwdID]: { loading: true },
+    }));
+    try {
+      const endpoint = admin
+        ? `/api/admin/forwards/${encodeURIComponent(fwdID)}/probe`
+        : `/api/user/forwards/${encodeURIComponent(fwdID)}/probe`;
+      const res = await api.post<{
+        success: boolean;
+        latency_ms: number;
+        status: "healthy" | "degraded" | "error";
+        message?: string;
+        entry_host?: string;
+        entry_port?: number;
+      }>(endpoint, {});
+      setHealthMap((prev) => ({
+        ...prev,
+        [fwdID]: {
+          loading: false,
+          success: res.success,
+          latency: res.latency_ms,
+          status: res.status,
+          message: res.message,
+          checkedAt: Date.now(),
+        },
+      }));
+    } catch (err) {
+      setHealthMap((prev) => ({
+        ...prev,
+        [fwdID]: {
+          loading: false,
+          success: false,
+          status: "error",
+          message: err instanceof Error ? err.message : "检测失败",
+          checkedAt: Date.now(),
+        },
+      }));
+    }
+  };
+
+  const probeAllVisibleForwards = async () => {
+    const activeTargets = visible.filter((f) => forwardState(f) === "active");
+    if (!activeTargets.length) return;
+    setTestingAll(true);
+    try {
+      const pool = [...activeTargets];
+      const workers = Array.from({ length: Math.min(4, pool.length) }, async () => {
+        while (pool.length > 0) {
+          const item = pool.shift();
+          if (item) {
+            await probeForward(item);
+          }
+        }
+      });
+      await Promise.all(workers);
+    } finally {
+      setTestingAll(false);
+    }
+  };
+
   const visible = useMemo(() => forwards.filter((forward) => {
     const state = forwardState(forward);
     if (status !== "all" && state !== status) return false;
@@ -2147,7 +2222,7 @@ function ForwardTable({ forwards, templates, servers = [], admin = false, onActi
     setWorkingID(resourceID(forward));
     try { await onAction(forward, action); } finally { setWorkingID(null); }
   };
-  return <div className="fm-panel"><div className="fm-toolbar fm-filter-toolbar"><div><strong>{admin ? "全部用户转发" : "我的转发"}</strong><span>{admin ? "入口异常时可重试下发，删除会按入口到出口顺序清理。" : "入口完全生效后才能复制地址或生成客户端配置。"}</span></div><div className="fm-inline-filters"><input aria-label="搜索转发" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="名称、用户、隧道或目标" /><select aria-label="转发状态" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">全部状态</option><option value="active">运行中</option><option value="pending">等待下发</option><option value="provisioning">正在下发</option><option value="degraded">部分异常</option><option value="suspended">已停用</option><option value="error">异常</option></select></div></div>{visible.length === 0 ? <EmptyState icon={<Network size={25} />} title={forwards.length ? "没有匹配的转发" : "暂无转发"} description={forwards.length ? "调整搜索条件或状态筛选" : admin ? "用户创建的转发会显示在这里" : "从有效隧道授权创建第一条转发"} /> : <Surface className="table-surface fm-table-surface"><div className="table-wrap"><table className="fm-table fm-forward-table"><thead><tr>{admin ? <th>用户</th> : null}<th>转发 / 入口</th><th>隧道</th><th>最终目标</th><th>限制与流量</th><th>状态</th><th aria-label="操作" /></tr></thead><tbody>{visible.map((forward) => {
+  return <div className="fm-panel"><div className="fm-toolbar fm-filter-toolbar"><div><strong>{admin ? "全部用户转发" : "我的转发"}</strong><span>{admin ? "入口异常时可重试下发，删除会按入口到出口顺序清理。" : "入口完全生效后才能复制地址或生成客户端配置。"}</span></div><div className="fm-inline-filters"><input aria-label="搜索转发" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="名称、用户、隧道或目标" /><select aria-label="转发状态" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">全部状态</option><option value="active">运行中</option><option value="pending">等待下发</option><option value="provisioning">正在下发</option><option value="degraded">部分异常</option><option value="suspended">已停用</option><option value="error">异常</option></select>{visible.some((f) => forwardState(f) === "active") ? <Button type="button" variant="secondary" className="fm-batch-probe-btn" disabled={testingAll} onClick={() => void probeAllVisibleForwards()}>{testingAll ? <Spinner label="检测中..." /> : <><Activity size={14} /> 批量健康检查</>}</Button> : null}</div></div>{visible.length === 0 ? <EmptyState icon={<Network size={25} />} title={forwards.length ? "没有匹配的转发" : "暂无转发"} description={forwards.length ? "调整搜索条件或状态筛选" : admin ? "用户创建的转发会显示在这里" : "从有效隧道授权创建第一条转发"} /> : <Surface className="table-surface fm-table-surface"><div className="table-wrap"><table className="fm-table fm-forward-table"><thead><tr>{admin ? <th>用户</th> : null}<th>转发 / 入口</th><th>隧道</th><th>最终目标</th><th>限制与流量</th><th>健康 / 延迟</th><th>状态</th><th aria-label="操作" /></tr></thead><tbody>{visible.map((forward) => {
     const id = resourceID(forward);
     const state = forwardState(forward);
     const entry = forwardEntry(forward, servers, templates);
@@ -2156,7 +2231,8 @@ function ForwardTable({ forwards, templates, servers = [], admin = false, onActi
     const rawTunnelName = forward.tunnel_name || template?.name || "";
     const isGrantPlaceholder = !rawTunnelName || rawTunnelName.startsWith("授权") || rawTunnelName.startsWith("grt_");
     const tunnelTitle = isGrantPlaceholder ? "" : rawTunnelName;
-    return <tr key={String(id)}>{admin ? <td><strong>{forward.username || "-"}</strong></td> : null}<td className="fm-primary-cell"><strong>{forward.name}</strong><small>{state === "active" && entry.host && entry.port ? `${entry.host}:${entry.port}` : "入口尚未可用"}</small></td><td>{tunnelTitle ? <span>{tunnelTitle}</span> : null}{template ? <RouteLine hops={routeHops(template).map((hop) => ({ name: hop.name }))} /> : null}</td><td><span>{forward.target_type === "custom" || !forward.target_node_id ? (forward.target_host ? `${forward.target_host}:${forward.target_port}` : forward.target_name || "自定义目标") : (forward.target_node_name || forward.target_name || forward.target_host || `节点 #${forward.target_node_id || "-"}`)}</span><small className="fm-cell-note">{forward.target_type === "custom" || !forward.target_node_id ? "自定义目标 · TCP + UDP" : `TCP + UDP · ${forward.target_port || "节点服务端口"}`}</small></td><td><span>{formatBytes(forward.traffic_used_bytes)}</span><small className="fm-cell-note">{forward.speed_limit_mbps ? `${forward.speed_limit_mbps} Mbps` : "不限速"} · {forward.connection_limit ? `${forward.connection_limit} 连接` : "不限连接"}</small></td><td><Badge tone={stateTone(state)}>{stateLabel(state)}</Badge>{forward.effective_expires_at ? <small className="fm-cell-note">至 {displayDate(forward.effective_expires_at)}</small> : null}</td><td><div className="fm-row-actions">{onCopy ? <IconButton label={`复制 ${forward.name} 入口`} disabled={state !== "active" || !entry.host || !entry.port} onClick={() => void onCopy(forward)}><Copy size={18} /></IconButton> : null}{onEdit ? <IconButton label={`编辑 ${forward.name}`} onClick={() => onEdit(forward)}><Pencil size={18} /></IconButton> : null}{state === "active" ? <IconButton label={`暂停 ${forward.name}`} disabled={sameID(workingID, id)} onClick={() => void act(forward, "suspend")}><CirclePause size={18} /></IconButton> : <IconButton label={`恢复 ${forward.name}`} disabled={sameID(workingID, id) || ["pending", "provisioning", "cleanup_pending"].includes(state)} onClick={() => void act(forward, "resume")}><CirclePlay size={18} /></IconButton>}{["error", "degraded"].includes(state) ? <IconButton label={`重试 ${forward.name}`} disabled={sameID(workingID, id)} onClick={() => void act(forward, "retry")}><RefreshCw size={18} /></IconButton> : null}<IconButton label={`删除 ${forward.name}`} onClick={() => onDelete(forward)}><Trash2 size={18} /></IconButton></div></td></tr>;
+    const health = healthMap[String(id)];
+    return <tr key={String(id)}>{admin ? <td><strong>{forward.username || "-"}</strong></td> : null}<td className="fm-primary-cell"><strong>{forward.name}</strong><small>{state === "active" && entry.host && entry.port ? `${entry.host}:${entry.port}` : "入口尚未可用"}</small></td><td>{tunnelTitle ? <span>{tunnelTitle}</span> : null}{template ? <RouteLine hops={routeHops(template).map((hop) => ({ name: hop.name }))} /> : null}</td><td><span>{forward.target_type === "custom" || !forward.target_node_id ? (forward.target_host ? `${forward.target_host}:${forward.target_port}` : forward.target_name || "自定义目标") : (forward.target_node_name || forward.target_name || forward.target_host || `节点 #${forward.target_node_id || "-"}`)}</span><small className="fm-cell-note">{forward.target_type === "custom" || !forward.target_node_id ? "自定义目标 · TCP + UDP" : `TCP + UDP · ${forward.target_port || "节点服务端口"}`}</small></td><td><span>{formatBytes(forward.traffic_used_bytes)}</span><small className="fm-cell-note">{forward.speed_limit_mbps ? `${forward.speed_limit_mbps} Mbps` : "不限速"} · {forward.connection_limit ? `${forward.connection_limit} 连接` : "不限连接"}</small></td><td className="fm-cell-health">{state === "active" && entry.host && entry.port ? <button type="button" className={`fm-health-button ${health?.loading ? "is-loading" : health?.success ? "is-good" : health?.status === "error" ? "is-bad" : ""}`} disabled={health?.loading} title={health?.message ? `${health.message}${health.latency ? ` · 往返延迟 ${Math.round(health.latency)} ms` : ""}（点击重新检测）` : `测试入口连通性与健康状态 (${entry.host}:${entry.port})`} onClick={() => void probeForward(forward)}>{health?.loading ? <Spinner label="" /> : <Zap size={14} />}<span>{health?.loading ? "检测中" : health?.success ? `${Math.round(health.latency || 0)} ms` : health?.status === "error" ? "异常" : "测健康"}</span></button> : <span className="muted" title="入口尚未生效">-</span>}</td><td><Badge tone={stateTone(state)}>{stateLabel(state)}</Badge>{forward.effective_expires_at ? <small className="fm-cell-note">至 {displayDate(forward.effective_expires_at)}</small> : null}</td><td><div className="fm-row-actions">{onCopy ? <IconButton label={`复制 ${forward.name} 入口`} disabled={state !== "active" || !entry.host || !entry.port} onClick={() => void onCopy(forward)}><Copy size={18} /></IconButton> : null}{state === "active" && entry.host && entry.port ? <IconButton label={`检测 ${forward.name} 健康与延迟`} disabled={health?.loading} onClick={() => void probeForward(forward)}><Activity size={18} /></IconButton> : null}{onEdit ? <IconButton label={`编辑 ${forward.name}`} onClick={() => onEdit(forward)}><Pencil size={18} /></IconButton> : null}{state === "active" ? <IconButton label={`暂停 ${forward.name}`} disabled={sameID(workingID, id)} onClick={() => void act(forward, "suspend")}><CirclePause size={18} /></IconButton> : <IconButton label={`恢复 ${forward.name}`} disabled={sameID(workingID, id) || ["pending", "provisioning", "cleanup_pending"].includes(state)} onClick={() => void act(forward, "resume")}><CirclePlay size={18} /></IconButton>}{["error", "degraded"].includes(state) ? <IconButton label={`重试 ${forward.name}`} disabled={sameID(workingID, id)} onClick={() => void act(forward, "retry")}><RefreshCw size={18} /></IconButton> : null}<IconButton label={`删除 ${forward.name}`} onClick={() => onDelete(forward)}><Trash2 size={18} /></IconButton></div></td></tr>;
   })}</tbody></table></div></Surface>}</div>;
 }
 

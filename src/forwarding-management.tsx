@@ -2236,28 +2236,71 @@ function ForwardDiagnosticDialog({
         </div>
 
         {health?.segments && health.segments.length > 0 ? (
-          <div className="fm-diag-flow-wrapper">
-            <div className="fm-diag-flow">
-              {health.segments.map((seg, idx) => (
-                <div key={idx} className="fm-diag-hop-wrap">
-                  <div className={`fm-diag-node ${seg.success ? "is-ok" : "is-error"}`}>
-                    <span className="fm-diag-node-badge">
-                      {seg.type === "entry" ? <Globe size={13} /> : seg.type === "tunnel" ? <Route size={13} /> : <Radio size={13} />}
-                      {seg.type === "entry" ? "入口监听" : seg.type === "tunnel" ? `隧道跳 #${idx}` : "最终目标"}
-                    </span>
-                    <strong>{seg.target_name}</strong>
-                    <small>{seg.target_host}:{seg.target_port}</small>
-                  </div>
-                  {idx < (health.segments?.length || 0) - 1 ? (
-                    <div className={`fm-diag-connector ${seg.success ? "is-ok" : "is-error"}`}>
-                      <span className="fm-diag-link-latency">
-                        {seg.success ? `${Math.round(seg.latency_ms)} ms` : "断开"}
-                      </span>
-                      <ArrowRight size={16} />
-                    </div>
-                  ) : null}
+          <div className="fm-flow-visualizer fm-diag-visualizer" aria-label="端到端分段延迟动效图">
+            <div className="fm-flow-header">
+              <div className="fm-flow-title">
+                <Activity size={14} className="fm-flow-pulse-icon" />
+                <span>实时流量链路拓扑与分段延迟</span>
+              </div>
+              <div className={`fm-flow-status-badge is-${isHealthy ? "good" : isDegraded ? "warn" : isError ? "warn" : "info"}`}>
+                {isHealthy ? "✓ 各段探活正常" : isDegraded ? "⚠ 部分分段延迟偏高" : isError ? "✕ 链路存在中断" : "检测就绪"}
+              </div>
+            </div>
+
+            <div className="fm-flow-track">
+              {/* 初始节点：客户端 / 控制台 */}
+              <div className="fm-flow-node is-client">
+                <div className="fm-flow-node-icon"><Laptop size={15} /></div>
+                <div className="fm-flow-node-meta">
+                  <strong>客户端</strong>
+                  <small>探测控制台</small>
                 </div>
-              ))}
+              </div>
+
+              {/* 逐段渲染：连接线（激光流光动画与该段延迟）+ 该段目标节点 */}
+              {health.segments.map((seg, idx) => {
+                const isEntry = idx === 0;
+                const isTarget = idx === health.segments!.length - 1;
+                const isExit = !isTarget && idx === health.segments!.length - 2;
+                const isGood = seg.success && seg.latency_ms <= 300;
+                const isWarn = seg.success && seg.latency_ms > 300;
+                const isErr = !seg.success;
+                const lineTone = isGood ? "is-good" : isWarn ? "is-warn" : "is-error";
+                const delay = `${idx * 0.35}s`;
+
+                return (
+                  <Fragment key={idx}>
+                    <div className="fm-flow-connector fm-diag-flow-connector">
+                      <div className={`fm-flow-line ${lineTone}`}>
+                        {seg.success ? (
+                          <span
+                            className={`fm-flow-beam ${isWarn ? "is-warn" : "is-good"}`}
+                            style={{ animationDelay: delay }}
+                          />
+                        ) : null}
+                      </div>
+                      <div className="fm-diag-flow-badge-wrap">
+                        <span className={`fm-diag-flow-latency ${lineTone}`}>
+                          {seg.success ? `${Math.round(seg.latency_ms)} ms` : "断开"}
+                        </span>
+                        <span className="fm-flow-step-tag">
+                          {seg.type === "entry" ? "入口握手" : seg.type === "tunnel" ? (isExit ? "出口隧道" : "中转隧道") : "落地交付"}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className={`fm-flow-node ${isTarget ? `is-target ${lineTone}` : isEntry ? `is-entry ${isErr ? "is-error" : ""}` : isExit ? `is-exit ${isErr ? "is-error" : ""}` : `is-hop ${isErr ? "is-error" : ""}`}`}>
+                      <div className="fm-flow-node-icon">
+                        {isTarget ? (forward.target_type === "custom" ? <Globe size={15} /> : <Radio size={15} />) : <Server size={15} />}
+                      </div>
+                      <div className="fm-flow-node-meta">
+                        <strong title={seg.target_name}>{seg.target_name}</strong>
+                        <small title={`${seg.target_host}:${seg.target_port}`}>{seg.target_host}:{seg.target_port}</small>
+                      </div>
+                    </div>
+                  </Fragment>
+                );
+              })}
             </div>
           </div>
         ) : null}

@@ -1140,15 +1140,20 @@ describe("node any-door forwarding", () => {
     { kind: "nested node id", response: { success: true, node_id: 0, node: { id: 41 } } },
   ])("creates a TCP+UDP tunnel through the managed-node transaction with $kind", async ({ response }) => {
     const source = node(7, "美国 Reality", "vless", "target.example.com");
-    vi.spyOn(api, "get").mockResolvedValue({ servers: [{
-      id: 3,
-      name: "香港入口",
-      status: "online",
-      ws_connected: true,
-      xray_running: true,
-      is_federated: false,
-      domain: "edge.example.com",
-    }] });
+    vi.spyOn(api, "get").mockImplementation(async (path: string) => {
+      if (path.includes("port-check")) {
+        return { available: true };
+      }
+      return { servers: [{
+        id: 3,
+        name: "香港入口",
+        status: "online",
+        ws_connected: true,
+        xray_running: true,
+        is_federated: false,
+        domain: "edge.example.com",
+      }] };
+    });
     const post = vi.spyOn(api, "post").mockResolvedValue(response);
     const complete = vi.fn().mockResolvedValue(undefined);
     render(<AnyDoorForwardDialog node={source} onClose={vi.fn()} onComplete={complete} />);
@@ -1199,15 +1204,20 @@ describe("node any-door forwarding", () => {
     },
   ])("keeps the dialog open when the Agent returns $kind", async ({ response, expected }) => {
     const source = node(7, "美国 Reality", "vless", "target.example.com");
-    vi.spyOn(api, "get").mockResolvedValue({ servers: [{
-      id: 3,
-      name: "香港入口",
-      status: "online",
-      ws_connected: true,
-      xray_running: true,
-      is_federated: false,
-      domain: "edge.example.com",
-    }] });
+    vi.spyOn(api, "get").mockImplementation(async (path: string) => {
+      if (path.includes("port-check")) {
+        return { available: true };
+      }
+      return { servers: [{
+        id: 3,
+        name: "香港入口",
+        status: "online",
+        ws_connected: true,
+        xray_running: true,
+        is_federated: false,
+        domain: "edge.example.com",
+      }] };
+    });
     vi.spyOn(api, "post").mockResolvedValue(response);
     const complete = vi.fn().mockResolvedValue(undefined);
     render(<AnyDoorForwardDialog node={source} onClose={vi.fn()} onComplete={complete} />);

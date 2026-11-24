@@ -340,6 +340,12 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange, onWallpaperCha
   }, []);
 
   useEffect(() => {
+    const rawCandidate = location.hash.replace(/^#\/?/, "").split("?")[0];
+    if (!profile.is_admin && ["servers", "users", "packages", "rulesConfig", "settings"].includes(rawCandidate)) {
+      location.hash = "/dashboard";
+      setPage("dashboard");
+      return;
+    }
     if (!profile.is_admin && userPages !== null && !pageAllowed(page, false, userPages)) {
       location.hash = "/dashboard";
       setPage("dashboard");
@@ -470,7 +476,7 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange, onWallpaperCha
           ) : (
             <LazyPageBoundary pageKey={page}>
               <Suspense fallback={<ModuleLoadingFallback label={`正在载入${pageTitles[page] || "模块"}...`} />}>
-                {page === "dashboard" ? <DashboardPage profile={profile} navigate={navigate} canNavigateNodes={pageAllowed("nodes", profile.is_admin, userPages)} /> : null}
+                {page === "dashboard" ? <DashboardPage profile={profile} navigate={navigate} canNavigateNodes={pageAllowed("nodes", profile.is_admin, userPages)} userPages={userPages} /> : null}
                 {page === "subscriptions" && pageAllowed(page, profile.is_admin, userPages) ? <SubscriptionLinksPage notify={notify} /> : null}
                 {page === "generator" && pageAllowed(page, profile.is_admin, userPages) ? <SubscriptionGeneratorPage notify={notify} /> : null}
                 {page === "servers" && profile.is_admin ? <ServicesWorkbenchPage notify={notify} /> : null}
@@ -812,7 +818,7 @@ const DASHBOARD_CLIENT_OPTIONS: DashboardClientOption[] = [
   },
 ];
 
-function UserDashboardPage({ profile, navigate }: { profile: Profile; navigate: (page: PageKey) => void }) {
+function UserDashboardPage({ profile, navigate, userPages }: { profile: Profile; navigate: (page: PageKey) => void; userPages: string[] | null }) {
   const branding = useBranding();
   const [summary, setSummary] = useState<UserPortalSummary | null>(null);
   const [traffic, setTraffic] = useState<TrafficSummary | null>(null);
@@ -822,6 +828,11 @@ function UserDashboardPage({ profile, navigate }: { profile: Profile; navigate: 
   const [qrOpen, setQrOpen] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState("");
   const [copiedLabel, setCopiedLabel] = useState<string | null>(null);
+
+  const canNodes = pageAllowed("nodes", profile.is_admin, userPages);
+  const canForwarding = pageAllowed("forwarding", profile.is_admin, userPages);
+  const canSubscriptions = pageAllowed("subscriptions", profile.is_admin, userPages);
+  const canGenerator = pageAllowed("generator", profile.is_admin, userPages);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -906,76 +917,115 @@ function UserDashboardPage({ profile, navigate }: { profile: Profile; navigate: 
     document.getElementById(`dashboard-period-${periodTabs[next][0]}`)?.focus();
   };
 
+  const hasActivePackage = Boolean(summary?.package && summary.package.id > 0 && !summary.package.is_expired);
+
   return (
     <>
       <h1 className="sr-only">流量信息</h1>
       {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
 
       <div className="metric-grid">
-        <Metric tone="accent" icon={<HardDrive size={22} />} label="当期配额" value={loading ? "--" : totalLimit > 0 ? formatBytes(totalLimit) : "不限流量"} detail="本周期套餐总额度" />
-        <Metric tone="info" icon={<Activity size={22} />} label="已用流量" value={loading ? "--" : formatBytes(totalUsed)} detail="计费上下行累计消耗" />
-        <Metric tone="good" icon={<Sparkles size={22} />} label="剩余流量" value={loading ? "--" : remaining >= 0 ? formatBytes(remaining) : "不限"} detail="本周期可用余量" />
-        <Metric tone={isDanger ? "bad" : isWarning ? "warn" : "info"} icon={<RotateCcw size={22} />} label="使用率" value={loading ? "--" : `${usagePercent}%`} detail={summary?.traffic.reset_day ? `每月 ${summary.traffic.reset_day} 日重置 (余 ${summary.traffic.days_until_reset} 天)` : "周期自动重置"} progress={usagePercent} />
+        <Metric
+          tone="accent"
+          icon={<HardDrive size={22} />}
+          label="当期配额"
+          value={loading ? "--" : totalLimit > 0 ? formatBytes(totalLimit) : hasActivePackage ? "不限流量" : "--"}
+          detail={hasActivePackage ? "本周期套餐总额度" : summary?.package && summary.package.id > 0 ? "套餐已到期" : "未订购套餐"}
+        />
+        <Metric
+          tone="info"
+          icon={<Activity size={22} />}
+          label="已用流量"
+          value={loading ? "--" : formatBytes(totalUsed)}
+          detail="计费上下行累计消耗"
+        />
+        <Metric
+          tone="good"
+          icon={<Sparkles size={22} />}
+          label="剩余流量"
+          value={loading ? "--" : remaining >= 0 ? formatBytes(remaining) : hasActivePackage ? "不限" : "--"}
+          detail={hasActivePackage ? "本周期可用余量" : summary?.package && summary.package.id > 0 ? "套餐已到期" : "未订购套餐"}
+        />
+        <Metric
+          tone={isDanger ? "bad" : isWarning ? "warn" : "info"}
+          icon={<RotateCcw size={22} />}
+          label="使用率"
+          value={loading ? "--" : hasActivePackage || totalLimit > 0 ? `${usagePercent}%` : "--"}
+          detail={hasActivePackage && summary?.traffic.reset_day ? `每月 ${summary.traffic.reset_day} 日重置 (余 ${summary.traffic.days_until_reset} 天)` : hasActivePackage ? "周期自动重置" : "未订购套餐"}
+          progress={hasActivePackage || totalLimit > 0 ? usagePercent : undefined}
+        />
       </div>
 
-      <Surface className="mmw-plan-banner" style={{ marginTop: "1rem", marginBottom: "1rem" }}>
-        <div className="mmw-plan-info">
-          <div className="mmw-plan-name-wrap">
-            <span className="mmw-plan-name">{summary?.package.name || "全球优质加速套餐"}</span>
-            <Badge tone="good">生效中</Badge>
+      {summary?.package && summary.package.id > 0 ? (
+        <Surface className="mmw-plan-banner" style={{ marginTop: "1rem", marginBottom: "1rem" }}>
+          <div className="mmw-plan-info">
+            <div className="mmw-plan-name-wrap">
+              <span className="mmw-plan-name">{summary.package.name}</span>
+              {summary.package.is_expired ? (
+                <Badge tone="bad">已到期</Badge>
+              ) : (
+                <Badge tone="good">生效中</Badge>
+              )}
+            </div>
+            <div className="mmw-plan-dates">
+              <span>到期时间：{summary.package.end_date ? summary.package.end_date.split("T")[0].split(" ")[0] : "长期有效"}</span>
+              {summary.package.days_remaining != null && !summary.package.is_expired ? (
+                <Badge tone={summary.package.days_remaining <= 5 ? "bad" : "neutral"}>
+                  剩余 {summary.package.days_remaining} 天
+                </Badge>
+              ) : null}
+              <span>设备限制：{summary.package.device_limit ? `${summary.package.device_limit} 台` : "不限"}</span>
+              <span>可用节点：{summary.nodes.total_count} 个</span>
+            </div>
           </div>
-          <div className="mmw-plan-dates">
-            <span>到期时间：{summary?.package.end_date ? summary.package.end_date.split("T")[0].split(" ")[0] : "长期有效"}</span>
-            {summary?.package.days_remaining != null ? <Badge tone={summary.package.days_remaining <= 5 ? "bad" : "neutral"}>剩余 {summary.package.days_remaining} 天</Badge> : null}
-            <span>设备限制：{summary?.package.device_limit ? `${summary.package.device_limit} 台` : "不限"}</span>
-            <span>可用节点：{summary?.nodes.total_count ?? 11} 个全部在线</span>
-          </div>
-        </div>
-      </Surface>
+        </Surface>
+      ) : null}
 
-      <Surface className="dashboard-sub-surface" style={{ padding: "1.25rem", marginBottom: "1rem" }}>
-        <div className="surface-heading" style={{ marginBottom: "1rem" }}>
-          <div>
-            <h2 style={{ fontSize: "1.05rem", margin: 0 }}>快捷订阅与客户端导入</h2>
-            <small className="muted">一键复制通用订阅链接，或调起本地客户端快速导入节点</small>
+      {canSubscriptions && subUrl ? (
+        <Surface className="dashboard-sub-surface" style={{ padding: "1.25rem", marginBottom: "1rem" }}>
+          <div className="surface-heading" style={{ marginBottom: "1rem" }}>
+            <div>
+              <h2 style={{ fontSize: "1.05rem", margin: 0 }}>快捷订阅与客户端导入</h2>
+              <small className="muted">一键复制通用订阅链接，或调起本地客户端快速导入节点</small>
+            </div>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <Button variant="primary" onClick={() => copyText(subUrl, "订阅链接已复制")}>
+                <Copy size={16} />
+                {copiedLabel === "订阅链接已复制" ? "已复制！" : "复制订阅链接"}
+              </Button>
+              <Button variant="secondary" onClick={() => setQrOpen(true)}>
+                <QrCode size={16} />
+                二维码
+              </Button>
+            </div>
           </div>
-          <div style={{ display: "flex", gap: "0.5rem" }}>
-            <Button variant="primary" onClick={() => copyText(subUrl, "订阅链接已复制")}>
-              <Copy size={16} />
-              {copiedLabel === "订阅链接已复制" ? "已复制！" : "复制订阅链接"}
-            </Button>
-            <Button variant="secondary" onClick={() => setQrOpen(true)}>
-              <QrCode size={16} />
-              二维码
-            </Button>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(145px, 1fr))", gap: "0.6rem" }}>
+            {DASHBOARD_CLIENT_OPTIONS.map((client) => {
+              const clientUrl = getClientUrl(client.tag);
+              const deepLink = client.deepLink ? client.deepLink(clientUrl, branding.name || "Chitanda Relay") : "";
+              return (
+                <button
+                  key={client.tag}
+                  type="button"
+                  className="button button-secondary"
+                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.5rem 0.75rem", fontSize: "0.85rem", textAlign: "left" }}
+                  onClick={() => {
+                    if (deepLink) {
+                      window.location.href = deepLink;
+                      copyText(clientUrl, `${client.name} 订阅链接已复制`);
+                    } else {
+                      copyText(clientUrl, `${client.name} 订阅链接已复制`);
+                    }
+                  }}
+                >
+                  <span>{client.icon} {client.name.split(" ")[0]}</span>
+                  {client.badge ? <Badge tone="info">{client.badge}</Badge> : null}
+                </button>
+              );
+            })}
           </div>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(145px, 1fr))", gap: "0.6rem" }}>
-          {DASHBOARD_CLIENT_OPTIONS.map((client) => {
-            const clientUrl = getClientUrl(client.tag);
-            const deepLink = client.deepLink ? client.deepLink(clientUrl, branding.name || "Chitanda Relay") : "";
-            return (
-              <button
-                key={client.tag}
-                type="button"
-                className="button button-secondary"
-                style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.5rem 0.75rem", fontSize: "0.85rem", textAlign: "left" }}
-                onClick={() => {
-                  if (deepLink) {
-                    window.location.href = deepLink;
-                    copyText(clientUrl, `${client.name} 订阅链接已复制`);
-                  } else {
-                    copyText(clientUrl, `${client.name} 订阅链接已复制`);
-                  }
-                }}
-              >
-                <span>{client.icon} {client.name.split(" ")[0]}</span>
-                {client.badge ? <Badge tone="info">{client.badge}</Badge> : null}
-              </button>
-            );
-          })}
-        </div>
-      </Surface>
+        </Surface>
+      ) : null}
 
       <Surface className={`chart-surface dashboard-chart ${!loading && history.length === 0 ? "is-empty" : ""}`} style={{ marginBottom: "1rem" }}>
         <div className="surface-heading dashboard-chart-heading">
@@ -996,35 +1046,53 @@ function UserDashboardPage({ profile, navigate }: { profile: Profile; navigate: 
       </Surface>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem" }}>
-        <Surface style={{ padding: "1.1rem", cursor: "pointer" }} onClick={() => navigate("nodes")}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.5rem" }}>
-            <span style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 600, fontSize: "1rem" }}><Route size={20} color="var(--color-primary, #6366f1)" />节点管理</span>
-            <ChevronRight size={18} className="muted" />
-          </div>
-          <p className="muted" style={{ fontSize: "0.86rem", margin: 0, lineHeight: 1.5 }}>
-            查看授权的 11 个国际高速节点与延迟实测；也可使用授权服务器（东京/香港/洛杉矶）自建独立节点。
-          </p>
-        </Surface>
+        {canNodes ? (
+          <Surface style={{ padding: "1.1rem", cursor: "pointer" }} onClick={() => navigate("nodes")}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.5rem" }}>
+              <span style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 600, fontSize: "1rem" }}><Route size={20} color="var(--color-primary, #6366f1)" />节点管理</span>
+              <ChevronRight size={18} className="muted" />
+            </div>
+            <p className="muted" style={{ fontSize: "0.86rem", margin: 0, lineHeight: 1.5 }}>
+              查看授权的 {summary?.nodes.total_count ?? 0} 个国际高速节点与延迟实测；也可自建独立节点。
+            </p>
+          </Surface>
+        ) : null}
 
-        <Surface style={{ padding: "1.1rem", cursor: "pointer" }} onClick={() => navigate("generator")}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.5rem" }}>
-            <span style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 600, fontSize: "1rem" }}><Wrench size={20} color="var(--color-primary, #6366f1)" />生成订阅</span>
-            <ChevronRight size={18} className="muted" />
-          </div>
-          <p className="muted" style={{ fontSize: "0.86rem", margin: 0, lineHeight: 1.5 }}>
-            自由挑选心仪节点、自选或创建分流规则模板，一键生成 Clash、Sing-box 等定制客户端订阅。
-          </p>
-        </Surface>
+        {canForwarding ? (
+          <Surface style={{ padding: "1.1rem", cursor: "pointer" }} onClick={() => navigate("forwarding")}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.5rem" }}>
+              <span style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 600, fontSize: "1rem" }}><Network size={20} color="var(--color-primary, #6366f1)" />转发管理</span>
+              <ChevronRight size={18} className="muted" />
+            </div>
+            <p className="muted" style={{ fontSize: "0.86rem", margin: 0, lineHeight: 1.5 }}>
+              通过隧道穿透与全链路加速，创建和管理您的 TCP/UDP 端口转发规则。
+            </p>
+          </Surface>
+        ) : null}
 
-        <Surface style={{ padding: "1.1rem", cursor: "pointer" }} onClick={() => navigate("subscriptions")}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.5rem" }}>
-            <span style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 600, fontSize: "1rem" }}><Link2 size={20} color="var(--color-primary, #6366f1)" />订阅链接</span>
-            <ChevronRight size={18} className="muted" />
-          </div>
-          <p className="muted" style={{ fontSize: "0.86rem", margin: 0, lineHeight: 1.5 }}>
-            管理已开通的订阅 Token，查看客户端格式 URL 及历史导出记录。
-          </p>
-        </Surface>
+        {canGenerator ? (
+          <Surface style={{ padding: "1.1rem", cursor: "pointer" }} onClick={() => navigate("generator")}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.5rem" }}>
+              <span style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 600, fontSize: "1rem" }}><Wrench size={20} color="var(--color-primary, #6366f1)" />生成订阅</span>
+              <ChevronRight size={18} className="muted" />
+            </div>
+            <p className="muted" style={{ fontSize: "0.86rem", margin: 0, lineHeight: 1.5 }}>
+              自由挑选节点、自选或创建分流规则模板，一键生成定制客户端订阅。
+            </p>
+          </Surface>
+        ) : null}
+
+        {canSubscriptions ? (
+          <Surface style={{ padding: "1.1rem", cursor: "pointer" }} onClick={() => navigate("subscriptions")}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.5rem" }}>
+              <span style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 600, fontSize: "1rem" }}><Link2 size={20} color="var(--color-primary, #6366f1)" />订阅链接</span>
+              <ChevronRight size={18} className="muted" />
+            </div>
+            <p className="muted" style={{ fontSize: "0.86rem", margin: 0, lineHeight: 1.5 }}>
+              管理已开通的订阅 Token，查看客户端格式 URL 及历史导出记录。
+            </p>
+          </Surface>
+        ) : null}
       </div>
 
       {qrOpen ? (
@@ -1044,9 +1112,9 @@ function UserDashboardPage({ profile, navigate }: { profile: Profile; navigate: 
   );
 }
 
-function DashboardPage({ profile, navigate, canNavigateNodes }: { profile: Profile; navigate: (page: PageKey, options?: { usersScope?: UsersScope }) => void; canNavigateNodes: boolean }) {
+function DashboardPage({ profile, navigate, canNavigateNodes, userPages }: { profile: Profile; navigate: (page: PageKey, options?: { usersScope?: UsersScope }) => void; canNavigateNodes: boolean; userPages: string[] | null }) {
   if (!profile.is_admin) {
-    return <UserDashboardPage profile={profile} navigate={navigate} />;
+    return <UserDashboardPage profile={profile} navigate={navigate} userPages={userPages} />;
   }
   return <AdminDashboardPage profile={profile} navigate={navigate} canNavigateNodes={canNavigateNodes} />;
 }

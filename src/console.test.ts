@@ -103,4 +103,24 @@ describe("member console navigation permissions", () => {
     expect(await screen.findByRole("button", { name: "转发管理" })).toBeInTheDocument();
     expect(get).toHaveBeenCalledWith("/api/user/permissions");
   });
+
+  it("strictly hides servers and packages from normal users and redirects access", async () => {
+    location.hash = "/servers";
+    renderMemberConsole(["nodes", "forwarding", "subscription"]);
+
+    await waitFor(() => expect(location.hash).toBe("#/dashboard"));
+    expect(screen.queryByRole("button", { name: "服务管理" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "套餐管理" })).not.toBeInTheDocument();
+  });
+
+  it("hides nodes and subscriptions when permissions do not include them", async () => {
+    location.hash = "/nodes";
+    renderMemberConsole([]);
+
+    await waitFor(() => expect(location.hash).toBe("#/dashboard"));
+    expect(screen.queryByRole("button", { name: "节点管理" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "订阅链接" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "生成订阅" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "订阅管理" })).not.toBeInTheDocument();
+  });
 });

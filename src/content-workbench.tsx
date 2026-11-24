@@ -823,7 +823,18 @@ export function SubscriptionGeneratorPage({ notify = noNotify }: ContentPageProp
           <section className="cw-workbench-section cw-node-section">
             <div className="cw-section-title"><div><h2>选择节点</h2><p>从已保存的节点中选择需要添加到订阅的节点</p></div><span className="cw-category-count">已选 {selectedNodes.size}</span></div>
             <div className="cw-toolbar cw-generator-toolbar">
-              <Button variant="ghost" onClick={() => setSelectedNodes(new Set(nodes.map((node) => node.id)))}>全选</Button>
+              <Button
+                variant="ghost"
+                onClick={() =>
+                  setSelectedNodes((curr) =>
+                    nodes.length > 0 && curr.size === nodes.length
+                      ? new Set()
+                      : new Set(nodes.map((node) => node.id))
+                  )
+                }
+              >
+                全选
+              </Button>
               <Button variant="ghost" onClick={() => setSelectedNodes(new Set())}>清空</Button>
             </div>
             {nodes.length === 0 ? <div className="cw-empty-inline">暂无可用节点，请先在节点管理中添加并启用节点。</div> : (
@@ -1665,14 +1676,6 @@ function CreateCustomSubscriptionDialog({
       return next;
     });
 
-  const selectAllNodes = () => {
-    setSelectedNodeIDs(new Set(nodes.map((n) => n.id)));
-  };
-
-  const deselectAllNodes = () => {
-    setSelectedNodeIDs(new Set());
-  };
-
   const visibleNodes = useMemo(() => {
     if (!nodeFilter.trim()) return nodes;
     const q = nodeFilter.trim().toLowerCase();
@@ -1683,6 +1686,29 @@ function CreateCustomSubscriptionDialog({
         (n.tags && n.tags.some((t) => t.toLowerCase().includes(q)))
     );
   }, [nodes, nodeFilter]);
+
+  const isAllVisibleSelected =
+    visibleNodes.length > 0 && visibleNodes.every((n) => selectedNodeIDs.has(n.id));
+
+  const toggleSelectAllNodes = () => {
+    if (isAllVisibleSelected) {
+      setSelectedNodeIDs((current) => {
+        const next = new Set(current);
+        visibleNodes.forEach((n) => next.delete(n.id));
+        return next;
+      });
+    } else {
+      setSelectedNodeIDs((current) => {
+        const next = new Set(current);
+        visibleNodes.forEach((n) => next.add(n.id));
+        return next;
+      });
+    }
+  };
+
+  const deselectAllNodes = () => {
+    setSelectedNodeIDs(new Set());
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -1785,7 +1811,14 @@ function CreateCustomSubscriptionDialog({
               </span>
             </div>
             <div className="cw-node-picker-actions">
-              <button type="button" className="button button-secondary button-sm" onClick={selectAllNodes}>全选</button>
+              <button
+                type="button"
+                className="button button-secondary button-sm"
+                onClick={toggleSelectAllNodes}
+                title={isAllVisibleSelected ? "当前已全选，点击清除" : "全选节点"}
+              >
+                全选
+              </button>
               <button type="button" className="button button-secondary button-sm" onClick={deselectAllNodes}>清空</button>
             </div>
           </div>

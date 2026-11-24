@@ -782,8 +782,19 @@ describe("content workbench subscriptions", () => {
     expect(screen.getByRole("dialog", { name: "创建自选订阅" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /配置覆写规则/ })).not.toBeInTheDocument();
     expect(screen.getByText("选择自选节点")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "全选" })).toBeInTheDocument();
+    expect(screen.getByText("已选 1 / 1 个节点")).toBeInTheDocument();
+    const selectAllBtn = screen.getByRole("button", { name: "全选" });
+    expect(selectAllBtn).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "清空" })).toBeInTheDocument();
+
+    // Clicking "全选" when currently all selected clears all selections
+    fireEvent.click(selectAllBtn);
+    expect(screen.getByText("已选 0 / 1 个节点")).toBeInTheDocument();
+
+    // Clicking "全选" again restores all selections
+    fireEvent.click(selectAllBtn);
+    expect(screen.getByText("已选 1 / 1 个节点")).toBeInTheDocument();
+
     fireEvent.change(screen.getByRole("textbox", { name: "订阅名称" }), { target: { value: "自选套餐" } });
     fireEvent.change(screen.getByRole("textbox", { name: /文件名/ }), { target: { value: "my-package.yaml" } });
     fireEvent.change(screen.getByRole("spinbutton", { name: /总流量阀门/ }), { target: { value: "200" } });

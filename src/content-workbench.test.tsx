@@ -770,7 +770,9 @@ describe("content workbench subscriptions", () => {
     // Click strategy provider tab
     fireEvent.click(screen.getByRole("tab", { name: /策略订阅/ }));
     expect(await screen.findByText("hk-provider")).toBeInTheDocument();
-    expect(screen.getByText(/策略订阅调度原理/)).toBeInTheDocument();
+    expect(screen.getByText(/选择组合订阅源/)).toBeInTheDocument();
+    expect(screen.getByText("机场订阅")).toBeInTheDocument();
+    expect(screen.getByText("自选专线")).toBeInTheDocument();
 
     // Click back to all tab
     fireEvent.click(screen.getByRole("tab", { name: /全部订阅/ }));
@@ -828,6 +830,56 @@ describe("content workbench subscriptions", () => {
         type: "create",
       }));
     });
+  });
+
+  it("composes a strategy subscription from existing external and custom subscriptions", async () => {
+    const files = [
+      { id: 1, name: "外部机场", filename: "airport.yaml", type: "import", url: "https://sub.example/1", selected_node_ids: [10, 11] },
+      { id: 2, name: "自选专线", filename: "custom-hk.yaml", type: "create", selected_node_ids: [20, 21], traffic_limit: 100 },
+    ];
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path, files) as T);
+    const post = vi.spyOn(api, "post").mockResolvedValue({
+      file: { id: 99, name: "多源策略调度", filename: "strategy.yaml", type: "create" },
+    });
+    const put = vi.spyOn(api, "put").mockResolvedValue({});
+    const notify = vi.fn();
+
+    render(<SubscribeFilesPage notify={notify} />);
+
+    // Go to strategy tab
+    fireEvent.click(await screen.findByRole("tab", { name: /策略订阅/ }));
+    expect(await screen.findByText("外部机场")).toBeInTheDocument();
+    expect(screen.getByText("自选专线")).toBeInTheDocument();
+
+    // Select candidate subscriptions
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择订阅 外部机场" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择订阅 自选专线" }));
+
+    // Fill form
+    fireEvent.change(screen.getByLabelText("策略订阅名称"), { target: { value: "多源策略调度" } });
+    fireEvent.change(screen.getByLabelText("策略文件名"), { target: { value: "strategy.yaml" } });
+    fireEvent.change(screen.getByLabelText("策略总流量阀门"), { target: { value: "500" } });
+
+    // Submit
+    fireEvent.click(screen.getByRole("button", { name: "生成策略订阅" }));
+
+    await waitFor(() => {
+      expect(post).toHaveBeenCalledWith("/api/admin/subscribe-files/create-from-config", {
+        name: "多源策略调度",
+        description: "[策略订阅] 组合源: 外部机场 + 自选专线",
+        filename: "strategy.yaml",
+        content: "proxies: []\n",
+      });
+    });
+
+    await waitFor(() => {
+      expect(put).toHaveBeenCalledWith("/api/admin/subscribe-files/99", expect.objectContaining({
+        traffic_limit: 500,
+        type: "create",
+        selected_node_ids: [10, 11, 20, 21],
+      }));
+    });
+    expect(notify).toHaveBeenCalledWith("策略订阅已成功生成");
   });
 });
 

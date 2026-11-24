@@ -960,6 +960,24 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
   const [pending, setPending] = useState<FilePendingAction | null>(null);
   const [pendingError, setPendingError] = useState("");
 
+  // 策略订阅组合状态
+  const [strategyName, setStrategyName] = useState("");
+  const [strategyFilename, setStrategyFilename] = useState("");
+  const [strategyTemplate, setStrategyTemplate] = useState("");
+  const [strategyLimit, setStrategyLimit] = useState("");
+  const [strategyDesc, setStrategyDesc] = useState("");
+  const [selectedSubIDs, setSelectedSubIDs] = useState<Set<number>>(() => new Set());
+  const [subFilter, setSubFilter] = useState("");
+  const [strategyWorking, setStrategyWorking] = useState(false);
+  const [strategyError, setStrategyError] = useState("");
+  const [showComposer, setShowComposer] = useState(true);
+
+  useEffect(() => {
+    if (!strategyTemplate && templates.length > 0) {
+      setStrategyTemplate(templates[0]);
+    }
+  }, [templates, strategyTemplate]);
+
   const load = useCallback(async () => {
     setLoading(true); setError(""); setLoadWarning("");
     const requests = [
@@ -1063,11 +1081,17 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
     finally { setWorking(false); }
   };
 
-  const isExternalFile = (f: SubscribeFile) => f.type === "import" || f.type === "upload" || Boolean(f.url);
-  const isCustomFile = (f: SubscribeFile) => f.type === "create" || f.type === "package" || (!f.url && f.type !== "import" && f.type !== "upload");
+  const isStrategyFile = (f: SubscribeFile) =>
+    Boolean(f.description?.includes("[策略订阅]") || f.description?.includes("[策略訂閱]"));
+  const isExternalFile = (f: SubscribeFile) =>
+    !isStrategyFile(f) && (f.type === "import" || f.type === "upload" || Boolean(f.url));
+  const isCustomFile = (f: SubscribeFile) =>
+    !isStrategyFile(f) && (f.type === "create" || f.type === "package" || (!f.url && f.type !== "import" && f.type !== "upload"));
 
+  const strategyFiles = useMemo(() => files.filter(isStrategyFile), [files]);
   const externalFiles = useMemo(() => files.filter(isExternalFile), [files]);
   const customFiles = useMemo(() => files.filter(isCustomFile), [files]);
+  const candidateSubs = useMemo(() => files.filter((f) => !isStrategyFile(f)), [files]);
 
   const filteredExternalFiles = useMemo(() => {
     if (!search.trim()) return externalFiles;
@@ -1090,6 +1114,17 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
     );
   }, [customFiles, search]);
 
+  const filteredStrategyFiles = useMemo(() => {
+    if (!search.trim()) return strategyFiles;
+    const q = search.trim().toLowerCase();
+    return strategyFiles.filter((f) =>
+      f.name.toLowerCase().includes(q) ||
+      f.filename.toLowerCase().includes(q) ||
+      (f.description && f.description.toLowerCase().includes(q)) ||
+      (f.template_filename && f.template_filename.toLowerCase().includes(q))
+    );
+  }, [strategyFiles, search]);
+
   const filteredProviders = useMemo(() => {
     if (!search.trim()) return providers;
     const q = search.trim().toLowerCase();
@@ -1106,15 +1141,126 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
   type UnifiedSubscriptionItem =
     | { kind: "external"; file: SubscribeFile }
     | { kind: "custom"; file: SubscribeFile }
+    | { kind: "strategy"; file: SubscribeFile }
     | { kind: "provider"; provider: ProxyProviderConfig };
 
   const allFilteredItems = useMemo<UnifiedSubscriptionItem[]>(() => {
     const list: UnifiedSubscriptionItem[] = [];
     filteredExternalFiles.forEach((file) => list.push({ kind: "external", file }));
     filteredCustomFiles.forEach((file) => list.push({ kind: "custom", file }));
+    filteredStrategyFiles.forEach((file) => list.push({ kind: "strategy", file }));
     filteredProviders.forEach((provider) => list.push({ kind: "provider", provider }));
     return list;
-  }, [filteredExternalFiles, filteredCustomFiles, filteredProviders]);
+  }, [filteredExternalFiles, filteredCustomFiles, filteredStrategyFiles, filteredProviders]);
+
+  const visibleCandidateSubs = useMemo(() => {
+    if (!subFilter.trim()) return candidateSubs;
+    const q = subFilter.trim().toLowerCase();
+    return candidateSubs.filter((s) =>
+      s.name.toLowerCase().includes(q) ||
+      s.filename.toLowerCase().includes(q) ||
+      (s.template_filename && s.template_filename.toLowerCase().includes(q)) ||
+      (isExternalFile(s) ? "外部订阅" : "自选订阅").toLowerCase().includes(q)
+    );
+  }, [candidateSubs, subFilter]);
+
+  const isAllVisibleCandidateSelected =
+    visibleCandidateSubs.length > 0 && visibleCandidateSubs.every((s) => selectedSubIDs.has(s.id));
+
+  const toggleSelectAllCandidateSubs = () => {
+    if (isAllVisibleCandidateSelected) {
+      setSelectedSubIDs((current) => {
+        const next = new Set(current);
+        visibleCandidateSubs.forEach((s) => next.delete(s.id));
+        return next;
+      });
+    } else {
+      setSelectedSubIDs((current) => {
+        const next = new Set(current);
+        visibleCandidateSubs.forEach((s) => next.add(s.id));
+        return next;
+      });
+    }
+  };
+
+  const deselectAllCandidateSubs = () => {
+    setSelectedSubIDs(new Set());
+  };
+
+  const toggleCandidateSub = (id: number) => {
+    setSelectedSubIDs((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleCreateStrategySubscription = async (event: FormEvent) => {
+    event.preventDefault();
+    setStrategyWorking(true);
+    setStrategyError("");
+    try {
+      if (!strategyName.trim()) throw new Error("请输入策略订阅名称");
+      if (selectedSubIDs.size === 0) throw new Error("请至少选择一个订阅源组成策略订阅");
+
+      const limit = strategyLimit.trim() ? Number(strategyLimit) : null;
+      if (limit != null && (!Number.isFinite(limit) || limit < 0)) {
+        throw new Error("总流量阀门必须是大于等于 0 的 GB 数值");
+      }
+      if (!isAdmin && limit != null) {
+        throw new Error("普通用户无权设置或修改流量限制");
+      }
+
+      const selectedObjs = candidateSubs.filter((s) => selectedSubIDs.has(s.id));
+      const mergedNodeIDs = Array.from(new Set(selectedObjs.flatMap((s) => s.selected_node_ids || [])));
+      const sourceNames = selectedObjs.map((s) => s.name).join(" + ");
+      const autoDesc = `[策略订阅] 组合源: ${sourceNames}`;
+      const fullDesc = strategyDesc.trim() ? `${autoDesc} · ${strategyDesc.trim()}` : autoDesc;
+
+      const cleanFilename = normalizedFilename(strategyFilename || strategyName);
+      const createRes = await api.post<{ file?: SubscribeFile }>("/api/admin/subscribe-files/create-from-config", {
+        name: strategyName.trim(),
+        description: fullDesc,
+        filename: cleanFilename,
+        content: "proxies: []\n",
+      });
+
+      const file = createRes.file;
+      if (!file?.id) {
+        throw new Error("订阅创建失败，后端未返回文件 ID");
+      }
+
+      await api.put(`/api/admin/subscribe-files/${file.id}`, {
+        name: file.name,
+        description: file.description || fullDesc,
+        type: "create",
+        filename: file.filename,
+        template_filename: strategyTemplate,
+        selected_node_ids: mergedNodeIDs,
+        selected_tags: [],
+        selected_custom_rule_ids: [],
+        selected_override_script_ids: [],
+        stats_server_ids: "",
+        traffic_limit: isAdmin ? limit : null,
+        auto_sync_custom_rules: true,
+        raw_output: false,
+        auto_update_interval: 0,
+      });
+
+      notify("策略订阅已成功生成");
+      setStrategyName("");
+      setStrategyFilename("");
+      setStrategyLimit("");
+      setStrategyDesc("");
+      setSelectedSubIDs(new Set());
+      await load();
+    } catch (reason) {
+      setStrategyError(fail(reason, "生成策略订阅失败"));
+    } finally {
+      setStrategyWorking(false);
+    }
+  };
 
   return (
     <section className="cw-page">
@@ -1130,7 +1276,7 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
               <>
                 <Button onClick={() => setShowImport(true)} aria-label="添加订阅"><Plus size={16} />添加外部订阅</Button>
                 <Button variant="secondary" onClick={() => setShowCreateCustom(true)}><Plus size={16} />创建自选订阅</Button>
-                <Button variant="secondary" onClick={() => setEditingProvider("new")} aria-label="Proxy Provider"><Plus size={16} />创建策略订阅</Button>
+                <Button variant="secondary" onClick={() => { setTab("providers"); setShowComposer(true); }} aria-label="Proxy Provider"><Plus size={16} />创建策略订阅</Button>
               </>
             ) : tab === "external" ? (
               <Button onClick={() => setShowImport(true)} aria-label="添加订阅"><Plus size={16} />添加外部订阅</Button>
@@ -1203,13 +1349,13 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
               type="button"
               role="tab"
               aria-selected={tab === "providers"}
-              aria-label={`策略订阅 Provider (${providers.length})`}
+              aria-label={`策略订阅 Provider (${strategyFiles.length + providers.length})`}
               className={tab === "providers" ? "is-active" : ""}
               onClick={() => { userSelectedTabRef.current = true; setTab("providers"); }}
               title="策略订阅 (Proxy Provider)"
             >
               <Server size={15} />
-              策略订阅 ({providers.length})
+              策略订阅 ({strategyFiles.length + providers.length})
             </button>
           </div>
         </div>
@@ -1341,6 +1487,56 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
                           <td>
                             <strong>自建专线</strong>
                             <span className="cw-table-note">{file.auto_sync_custom_rules ? "自动同步自定义规则" : "手动同步"}</span>
+                          </td>
+                          <td>{formatDate(file.updated_at)}</td>
+                          <td>
+                            <div className="cw-table-actions">
+                              <IconButton label={`复制 ${file.name} 链接`} onClick={async () => { await copyText(url); notify("订阅链接已复制"); }}><Copy size={16} /></IconButton>
+                              <IconButton label={`编辑 ${file.name} 内容`} onClick={() => setEditingContent(file)}><FileCode2 size={16} /></IconButton>
+                              <IconButton label={`编辑 ${file.name}`} onClick={() => setEditingFile(file)}><Pencil size={16} /></IconButton>
+                              <IconButton label={`${file.auto_sync_custom_rules ? "关闭" : "开启"} ${file.name} 自动同步`} onClick={() => void updateFile(file, { auto_sync_custom_rules: !file.auto_sync_custom_rules })}><Sparkles size={16} /></IconButton>
+                              <IconButton label={`删除 ${file.name}`} onClick={() => setPending({ kind: "delete-file", item: file })}><Trash2 size={16} /></IconButton>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    if (item.kind === "strategy") {
+                      const file = item.file;
+                      const subItem: SubscriptionItem = { ...file, id: file.id, filename: file.filename, type: file.type };
+                      const url = resolveSubscriptionURL(subItem, token);
+                      const hasLimit = file.traffic_limit != null && file.traffic_limit > 0;
+                      const cleanDesc = (file.description || "").replace(/^\[策略订阅\]\s*/, "").replace(/^\[策略訂閱\]\s*/, "");
+                      return (
+                        <tr key={`strat-${file.id}`}>
+                          <td>
+                            <div className="cw-file-name">
+                              <span className="cw-file-icon"><Server size={18} /></span>
+                              <span>
+                                <strong>{file.name}</strong>
+                                <small>{file.filename}{file.latest_version ? ` · v${file.latest_version}` : ""}</small>
+                              </span>
+                            </div>
+                          </td>
+                          <td>
+                            <Badge tone="warn">策略订阅</Badge>
+                            <span className="cw-table-note">{cleanDesc || "多源智能组合"}</span>
+                          </td>
+                          <td>
+                            {hasLimit ? (
+                              <Badge tone="good">
+                                <Gauge size={13} style={{ marginRight: 4, verticalAlign: "middle" }} />
+                                {file.traffic_limit} GB 阀门
+                              </Badge>
+                            ) : (
+                              <strong>{file.template_filename || "未绑定模板"}</strong>
+                            )}
+                            <span className="cw-table-note">{hasLimit ? (file.template_filename || "未绑定模板") : (file.auto_sync_custom_rules ? "自动同步规则" : "跟随系统默认")}</span>
+                          </td>
+                          <td>
+                            <strong>策略调度</strong>
+                            <span className="cw-table-note">多源规则分流</span>
                           </td>
                           <td>{formatDate(file.updated_at)}</td>
                           <td>
@@ -1583,69 +1779,266 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
         </Surface>
       ) : (
         <>
-          <div className="cw-mixed-subscription-hero">
-            <div className="cw-mixed-hero-header">
-              <div className="cw-mixed-hero-badge"><Sparkles size={15} /> 多源融合架构</div>
-              <h3>策略订阅调度原理：1 外部订阅 ＋ 2 自选订阅 ＝ 3 策略调度</h3>
-              <p>在 Mihomo 规则模板中通过 Proxy Provider 挂载第三方外部源，结合本地自建中继专线，既保证核心业务稳定性，又享受外部多节点高可用备援。</p>
-            </div>
-            <div className="cw-mixed-hero-flow">
-              <div className="cw-mixed-flow-card">
-                <div className="cw-mixed-flow-step">1</div>
-                <div className="cw-mixed-flow-info">
-                  <strong>外部订阅源 (Provider)</strong>
-                  <span>第三方机场 / 订阅链接，支持按需直连拉取或服务端解析</span>
-                </div>
+          <Surface className="cw-strategy-composer">
+            <div className="cw-strategy-composer-head">
+              <div>
+                <h2>
+                  <Sparkles size={18} style={{ color: "var(--accent)" }} />
+                  策略订阅组合
+                </h2>
+                <small>任选已有的外部订阅与自选订阅，配置分流模板与流量阀门，一键组合生成全新的策略调度订阅。</small>
               </div>
-              <div className="cw-mixed-flow-symbol">＋</div>
-              <div className="cw-mixed-flow-card">
-                <div className="cw-mixed-flow-step">2</div>
-                <div className="cw-mixed-flow-info">
-                  <strong>自选节点订阅 (Proxies)</strong>
-                  <span>自建核心节点与转发中继，支持总流量阀门与精细化限流</span>
-                </div>
-              </div>
-              <div className="cw-mixed-flow-symbol">＝</div>
-              <div className="cw-mixed-flow-card is-highlight">
-                <div className="cw-mixed-flow-step">3</div>
-                <div className="cw-mixed-flow-info">
-                  <strong>策略订阅 (Mihomo 规则调度)</strong>
-                  <span>在模板策略组中按节点健康检查、时延或分流标签智能分流</span>
-                </div>
+              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => setShowComposer(!showComposer)}
+                >
+                  <SlidersHorizontal size={15} />
+                  {showComposer ? "收起组合面板" : "展开组合面板"}
+                </Button>
               </div>
             </div>
-          </div>
+
+            {showComposer ? (
+              <form className="cw-form" onSubmit={handleCreateStrategySubscription}>
+                {strategyError ? <ErrorState message={strategyError} /> : null}
+
+                <div className="cw-form-grid">
+                  <Field label="策略订阅名称">
+                    <input
+                      required
+                      value={strategyName}
+                      onChange={(e) => setStrategyName(e.target.value)}
+                      placeholder="例如：全源多线高可用订阅"
+                      aria-label="策略订阅名称"
+                    />
+                  </Field>
+                  <Field label="文件名" hint="留空根据名称自动生成 .yaml 结尾">
+                    <input
+                      value={strategyFilename}
+                      onChange={(e) => setStrategyFilename(e.target.value)}
+                      placeholder="strategy-combined.yaml"
+                      aria-label="策略文件名"
+                    />
+                  </Field>
+                </div>
+
+                <div className="cw-form-grid">
+                  <Field label="绑定 V3 分流模板" hint="策略订阅通过该模板的策略组与规则调度所选源">
+                    <select
+                      value={strategyTemplate}
+                      onChange={(e) => setStrategyTemplate(e.target.value)}
+                      aria-label="绑定分流模板"
+                    >
+                      <option value="">不绑定模板（仅输出纯节点）</option>
+                      {templates.map((tpl) => (
+                        <option value={tpl} key={tpl}>{tpl}</option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="总流量阀门（GB）" hint={isAdmin ? "组合订阅达到该流量后自动阻断；留空不限制" : "仅管理员有权配置"}>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.1"
+                      disabled={!isAdmin}
+                      value={strategyLimit}
+                      onChange={(e) => setStrategyLimit(e.target.value)}
+                      placeholder={isAdmin ? "例如：200（单位 GB）" : "无权限配置"}
+                      aria-label="策略总流量阀门"
+                    />
+                  </Field>
+                </div>
+
+                <Field label="备注说明">
+                  <textarea
+                    value={strategyDesc}
+                    onChange={(e) => setStrategyDesc(e.target.value)}
+                    placeholder="可选备注说明（系统会自动附加所选源摘要）"
+                    aria-label="策略说明"
+                  />
+                </Field>
+
+                <div className="cw-form-section cw-node-picker-section" style={{ marginTop: 14 }}>
+                  <div className="cw-node-picker-toolbar">
+                    <div className="cw-node-picker-title-group">
+                      <strong className="cw-node-picker-title">选择组合订阅源</strong>
+                      <span className="badge badge-info cw-node-picker-counter">
+                        已选 {selectedSubIDs.size} / {candidateSubs.length} 个订阅
+                      </span>
+                    </div>
+                    <div className="cw-node-picker-actions">
+                      <button
+                        type="button"
+                        className="button button-secondary button-sm"
+                        onClick={toggleSelectAllCandidateSubs}
+                        title={isAllVisibleCandidateSelected ? "当前已全选，点击清除" : "全选当前可见订阅"}
+                      >
+                        全选
+                      </button>
+                      <button
+                        type="button"
+                        className="button button-secondary button-sm"
+                        onClick={deselectAllCandidateSubs}
+                      >
+                        清空
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="search-box nw-search cw-node-picker-search">
+                    <Search size={16} />
+                    <input
+                      type="search"
+                      value={subFilter}
+                      onChange={(e) => setSubFilter(e.target.value)}
+                      placeholder="搜索订阅名称、类型或文件名..."
+                      aria-label="搜索候选订阅"
+                    />
+                  </div>
+
+                  {candidateSubs.length === 0 ? (
+                    <div className="cw-node-picker-empty">
+                      <Info size={24} />
+                      <p>暂无可用的订阅源。请先在「外部订阅」或「自选订阅」中添加或创建订阅。</p>
+                    </div>
+                  ) : visibleCandidateSubs.length === 0 ? (
+                    <div className="cw-node-picker-empty">
+                      <Search size={24} />
+                      <p>未找到匹配的订阅源</p>
+                    </div>
+                  ) : (
+                    <div className="cw-node-select-grid">
+                      {visibleCandidateSubs.map((sub) => {
+                        const isSelected = selectedSubIDs.has(sub.id);
+                        const isExt = isExternalFile(sub);
+                        const nodeCount = sub.selected_node_ids?.length ?? 0;
+                        return (
+                          <label
+                            key={sub.id}
+                            className={`cw-node-card ${isSelected ? "is-selected" : ""}`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleCandidateSub(sub.id)}
+                              aria-label={`选择订阅 ${sub.name}`}
+                            />
+                            <div className="cw-node-card-body">
+                              <div className="cw-node-card-header">
+                                <strong>{sub.name}</strong>
+                              </div>
+                              <div className="cw-node-card-meta">
+                                <span className={`cw-node-badge ${isExt ? "badge-info" : "badge-success"}`}>
+                                  {isExt ? "外部订阅" : "自选订阅"}
+                                </span>
+                                <span className="cw-node-tag">{sub.filename}</span>
+                                {isExt ? (
+                                  <span className="cw-node-tag">{sub.type === "upload" ? "本地上传" : "链接导入"}</span>
+                                ) : nodeCount > 0 ? (
+                                  <span className="cw-node-tag">{nodeCount} 节点</span>
+                                ) : null}
+                                {sub.traffic_limit != null && sub.traffic_limit > 0 ? (
+                                  <span className="cw-node-tag">{sub.traffic_limit} GB 阀门</span>
+                                ) : null}
+                              </div>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="dialog-actions" style={{ marginTop: 18 }}>
+                  <Button type="submit" disabled={strategyWorking || candidateSubs.length === 0}>
+                    {strategyWorking ? <Spinner label="正在生成..." /> : <><Sparkles size={16} />生成策略订阅</>}
+                  </Button>
+                </div>
+              </form>
+            ) : null}
+          </Surface>
 
           <Surface className="table-surface cw-subscription-surface">
             <div className="surface-heading">
               <div>
                 <h2>策略订阅列表</h2>
-                <small>把外部订阅作为 Mihomo 策略源（Proxy Provider）调度使用，完整保留过滤、健康检查与处理模式</small>
+                <small>已创建的多源组合策略订阅与 Mihomo 策略源（Proxy Provider）</small>
               </div>
-              <span className="cw-category-count">{filteredProviders.length} 个策略订阅</span>
+              <span className="cw-category-count">{filteredStrategyFiles.length + filteredProviders.length} 个策略订阅</span>
             </div>
-            {providers.length === 0 ? (
+            {strategyFiles.length === 0 && providers.length === 0 ? (
               <EmptyState
                 icon={<Server size={24} />}
                 title="暂无策略订阅"
-                description="先在「外部订阅」添加来源，再创建一个可复用的策略订阅配置。"
+                description="请在上方选择订阅源，配置模板与流量阀门后点击「生成策略订阅」。"
                 action={<Button onClick={() => setEditingProvider("new")}><Plus size={16} />创建策略订阅</Button>}
               />
-            ) : filteredProviders.length === 0 ? (
+            ) : filteredStrategyFiles.length === 0 && filteredProviders.length === 0 ? (
               <EmptyState icon={<Search size={24} />} title="未找到匹配的策略订阅" description="请尝试输入不同的搜索关键字。" />
             ) : (
               <div className="table-wrap">
                 <table>
                   <thead>
                     <tr>
-                      <th>Provider</th>
-                      <th>来源 / 模式</th>
-                      <th>节点健康检查</th>
-                      <th>过滤</th>
+                      <th>策略订阅</th>
+                      <th>种类 / 来源</th>
+                      <th>模板 / 过滤规则</th>
+                      <th>调度模式 / 健康检查</th>
+                      <th>更新时间</th>
                       <th aria-label="操作" />
                     </tr>
                   </thead>
                   <tbody>
+                    {filteredStrategyFiles.map((file) => {
+                      const item: SubscriptionItem = { ...file, id: file.id, filename: file.filename, type: file.type };
+                      const url = resolveSubscriptionURL(item, token);
+                      const hasLimit = file.traffic_limit != null && file.traffic_limit > 0;
+                      const cleanDesc = (file.description || "").replace(/^\[策略订阅\]\s*/, "").replace(/^\[策略訂閱\]\s*/, "");
+                      return (
+                        <tr key={`strat-tab-${file.id}`}>
+                          <td>
+                            <div className="cw-file-name">
+                              <span className="cw-file-icon"><Server size={18} /></span>
+                              <span>
+                                <strong>{file.name}</strong>
+                                <small>{file.filename}{file.latest_version ? ` · v${file.latest_version}` : ""}</small>
+                              </span>
+                            </div>
+                          </td>
+                          <td>
+                            <Badge tone="warn">策略订阅</Badge>
+                            <span className="cw-table-note">{cleanDesc || "多源智能组合"}</span>
+                          </td>
+                          <td>
+                            {hasLimit ? (
+                              <Badge tone="good">
+                                <Gauge size={13} style={{ marginRight: 4, verticalAlign: "middle" }} />
+                                {file.traffic_limit} GB 阀门
+                              </Badge>
+                            ) : (
+                              <strong>{file.template_filename || "未绑定模板"}</strong>
+                            )}
+                            <span className="cw-table-note">{hasLimit ? (file.template_filename || "未绑定模板") : (file.auto_sync_custom_rules ? "自动同步规则" : "跟随系统默认")}</span>
+                          </td>
+                          <td>
+                            <strong>策略调度</strong>
+                            <span className="cw-table-note">多源规则分流</span>
+                          </td>
+                          <td>{formatDate(file.updated_at)}</td>
+                          <td>
+                            <div className="cw-table-actions">
+                              <IconButton label={`复制 ${file.name} 链接`} onClick={async () => { await copyText(url); notify("订阅链接已复制"); }}><Copy size={16} /></IconButton>
+                              <IconButton label={`编辑 ${file.name} 内容`} onClick={() => setEditingContent(file)}><FileCode2 size={16} /></IconButton>
+                              <IconButton label={`编辑 ${file.name}`} onClick={() => setEditingFile(file)}><Pencil size={16} /></IconButton>
+                              <IconButton label={`${file.auto_sync_custom_rules ? "关闭" : "开启"} ${file.name} 自动同步`} onClick={() => void updateFile(file, { auto_sync_custom_rules: !file.auto_sync_custom_rules })}><Sparkles size={16} /></IconButton>
+                              <IconButton label={`删除 ${file.name}`} onClick={() => setPending({ kind: "delete-file", item: file })}><Trash2 size={16} /></IconButton>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                     {filteredProviders.map((item) => {
                       const source = external.find((entry) => entry.id === item.external_subscription_id);
                       const mode = proxyProviderMode(item.process_mode);

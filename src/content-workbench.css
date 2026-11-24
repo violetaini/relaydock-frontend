@@ -582,114 +582,37 @@
   border-color: var(--border-strong);
 }
 
-/* 混合订阅 / Provider 导引 Banner */
-.cw-mixed-subscription-hero {
-  margin-bottom: 20px;
+/* 策略订阅组合工作台 */
+.cw-strategy-composer {
+  margin-bottom: 24px;
   padding: 24px;
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 7%, var(--surface)) 0%, var(--surface) 100%);
-  box-shadow: var(--shadow-low);
-}
-
-.cw-mixed-hero-header {
-  margin-bottom: 20px;
-}
-
-.cw-mixed-hero-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 12.5px;
-  font-weight: 700;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
-  margin-bottom: 8px;
-}
-
-.cw-mixed-hero-header h3 {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--text);
-  margin: 0 0 6px;
-}
-
-.cw-mixed-hero-header p {
-  font-size: 14px;
-  color: var(--text-soft);
-  line-height: 1.6;
-  margin: 0;
-  max-width: 880px;
-}
-
-.cw-mixed-hero-flow {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.cw-mixed-flow-card {
-  flex: 1 1 240px;
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 16px;
-  border-radius: 6px;
   border: 1px solid var(--border);
+  border-radius: 8px;
   background: var(--surface);
 }
 
-.cw-mixed-flow-card.is-highlight {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+.cw-strategy-composer-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 20px;
+  gap: 16px;
+  flex-wrap: wrap;
 }
 
-.cw-mixed-flow-step {
-  width: 28px;
-  height: 28px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  font-size: 13px;
-  font-weight: 800;
-  color: var(--text-inverse);
-  background: var(--text);
-}
-
-.cw-mixed-flow-card.is-highlight .cw-mixed-flow-step {
-  background: var(--accent);
-}
-
-.cw-mixed-flow-info {
-  min-width: 0;
-}
-
-.cw-mixed-flow-info strong {
-  display: block;
-  font-size: 14.5px;
+.cw-strategy-composer-head h2 {
+  font-size: 18px;
   font-weight: 650;
+  margin: 0 0 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   color: var(--text);
 }
 
-.cw-mixed-flow-info span {
-  display: block;
-  font-size: 12.5px;
-  color: var(--text-soft);
-  margin-top: 3px;
-  line-height: 1.45;
-}
-
-.cw-mixed-flow-symbol {
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--text-soft);
-  flex: 0 0 auto;
+.cw-strategy-composer-head small {
+  color: var(--text-muted);
+  font-size: 13.5px;
 }
 
 /* --------------------------------------------------------------------------

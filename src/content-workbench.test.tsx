@@ -460,7 +460,7 @@ describe("content workbench subscriptions", () => {
   });
 
   it("saves node, template, rule, script and traffic scopes with the exact subscribe-file contract", async () => {
-    const file = { id: 4, name: "高级订阅", description: "", type: "import", filename: "advanced.yaml", auto_sync_custom_rules: false, selected_tags: [], selected_node_ids: [], selected_custom_rule_ids: [], selected_override_script_ids: [], stats_server_ids: "", traffic_limit: null };
+    const file = { id: 4, name: "高级订阅", description: "", type: "create", filename: "advanced.yaml", auto_sync_custom_rules: false, selected_tags: [], selected_node_ids: [], selected_custom_rule_ids: [], selected_override_script_ids: [], stats_server_ids: "", traffic_limit: null };
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path, [file]) as T);
     const put = vi.spyOn(api, "put").mockResolvedValue({});
     render(<SubscribeFilesPage />);
@@ -497,21 +497,17 @@ describe("content workbench subscriptions", () => {
     fireEvent.click((await screen.findAllByRole("button", { name: "添加订阅" }))[0]);
     fireEvent.change(screen.getByRole("textbox", { name: "订阅名称" }), { target: { value: "新订阅" } });
     fireEvent.change(screen.getByRole("textbox", { name: "订阅 URL" }), { target: { value: "https://sub.example/new" } });
-    fireEvent.click(screen.getByRole("button", { name: "配置模板、节点与覆写范围" }));
+    fireEvent.click(screen.getByRole("button", { name: "配置分流模板与规则覆写" }));
     fireEvent.change(screen.getByRole("combobox", { name: "V3 模板" }), { target: { value: "edge_v3.yaml" } });
-    fireEvent.click(screen.getByRole("checkbox", { name: /香港 01/ }));
     fireEvent.click(screen.getByRole("checkbox", { name: /DNS 覆写/ }));
     fireEvent.click(screen.getByRole("checkbox", { name: /节点整理/ }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /Edge HK/ }));
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/subscribe-files/import", { name: "新订阅", description: "", url: "https://sub.example/new", filename: "", auto_update_interval: 0 }));
     await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/subscribe-files/15", expect.objectContaining({
       template_filename: "edge_v3.yaml",
-      selected_node_ids: [7],
       selected_custom_rule_ids: [11],
       selected_override_script_ids: [13],
-      stats_server_ids: "2",
     })));
   });
 
@@ -527,7 +523,7 @@ describe("content workbench subscriptions", () => {
     fireEvent.click((await screen.findAllByRole("button", { name: "添加订阅" }))[0]);
     fireEvent.change(screen.getByRole("textbox", { name: "订阅名称" }), { target: { value: "新订阅" } });
     fireEvent.change(screen.getByRole("textbox", { name: "订阅 URL" }), { target: { value: "https://sub.example/new" } });
-    fireEvent.click(screen.getByRole("button", { name: "配置模板、节点与覆写范围" }));
+    fireEvent.click(screen.getByRole("button", { name: "配置分流模板与规则覆写" }));
     fireEvent.change(screen.getByRole("combobox", { name: "V3 模板" }), { target: { value: "edge_v3.yaml" } });
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
 
@@ -558,7 +554,7 @@ describe("content workbench subscriptions", () => {
     fireEvent.click((await screen.findAllByRole("button", { name: "添加订阅" }))[0]);
     fireEvent.change(screen.getByRole("textbox", { name: "订阅名称" }), { target: { value: "新订阅" } });
     fireEvent.change(screen.getByRole("textbox", { name: "订阅 URL" }), { target: { value: "https://sub.example/new" } });
-    fireEvent.click(screen.getByRole("button", { name: "配置模板、节点与覆写范围" }));
+    fireEvent.click(screen.getByRole("button", { name: "配置分流模板与规则覆写" }));
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
 
     expect(await screen.findByText("高级设置暂不可用")).toBeInTheDocument();

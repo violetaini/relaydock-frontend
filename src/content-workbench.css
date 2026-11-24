@@ -364,9 +364,113 @@
 /* --------------------------------------------------------------------------
    订阅管理（外部订阅 / 自选组合 / 混合订阅 Provider）现代化全尺寸设计
    -------------------------------------------------------------------------- */
+.cw-subscription-command-surface {
+  position: relative;
+  z-index: 5;
+  margin-bottom: 18px;
+  padding: 14px 18px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  border-radius: 8px;
+  box-shadow: var(--shadow-low);
+}
+
+.cw-subscription-command-surface .nw-command-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.cw-subscription-command-surface .cw-subscription-search {
+  flex: 1 1 280px;
+  min-width: 200px;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.cw-subscription-command-surface .cw-subscription-search input {
+  width: 100%;
+  height: 42px;
+  padding: 0 36px 0 38px;
+  font-size: 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-muted);
+  color: var(--text);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.cw-subscription-command-surface .cw-subscription-search input:focus {
+  background: var(--surface);
+  border-color: var(--accent);
+  outline: none;
+}
+
+.cw-subscription-command-surface .cw-subscription-search > svg {
+  position: absolute;
+  left: 12px;
+  color: var(--text-soft);
+  pointer-events: none;
+}
+
+.cw-subscription-command-surface .cw-subscription-search .nw-search-clear {
+  position: absolute;
+  right: 10px;
+  background: transparent;
+  border: 0;
+  color: var(--text-soft);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 4px;
+}
+
+.cw-subscription-command-surface .cw-subscription-tabs {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+}
+
+.cw-subscription-command-surface .cw-subscription-tabs button {
+  min-height: 38px;
+  padding: 0 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--text-soft);
+  background: transparent;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.cw-subscription-command-surface .cw-subscription-tabs button:hover:not(.is-active) {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.cw-subscription-command-surface .cw-subscription-tabs button.is-active {
+  color: var(--text-inverse);
+  background: var(--text);
+  box-shadow: var(--shadow-low);
+}
+
 .cw-subscription-surface {
   border: 1px solid var(--border-strong);
   background: var(--surface);
+  border-radius: 8px;
+  overflow: hidden;
   box-shadow: var(--shadow-low);
 }
 
@@ -394,25 +498,30 @@
 
 .cw-subscription-surface th {
   height: 48px;
-  padding: 14px 18px;
-  font-size: 14.5px;
+  padding: 0 20px;
+  font-size: 13.5px;
   font-weight: 700;
+  letter-spacing: 0.02em;
   color: var(--text-soft);
   background: var(--surface-muted);
-  border-bottom: 2px solid var(--border-strong);
+  border-bottom: 1px solid var(--border-strong);
   text-align: left;
 }
 
 .cw-subscription-surface td {
   min-height: 68px;
-  padding: 16px 18px;
-  font-size: 15px;
+  padding: 16px 20px;
+  font-size: 14.5px;
   vertical-align: middle;
   border-bottom: 1px solid var(--border);
 }
 
 .cw-subscription-surface tr:last-child td {
   border-bottom: 0;
+}
+
+.cw-subscription-surface tbody tr:hover td {
+  background: color-mix(in srgb, var(--surface-muted) 65%, transparent);
 }
 
 .cw-subscription-surface .cw-file-icon {
@@ -449,14 +558,28 @@
 .cw-subscription-surface .cw-table-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   justify-content: flex-end;
 }
 
 .cw-subscription-surface .cw-table-actions .icon-button {
   width: 36px;
   height: 36px;
+  flex: 0 0 36px;
   border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-soft);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.cw-subscription-surface .cw-table-actions .icon-button:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
 }
 
 /* 混合订阅 / Provider 导引 Banner */

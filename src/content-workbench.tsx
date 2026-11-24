@@ -1113,62 +1113,63 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
         }
       />
 
-      <div className="cw-tabs" role="tablist" aria-label="订阅管理分类">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "external"}
-          className={tab === "external" ? "is-active" : ""}
-          onClick={() => { userSelectedTabRef.current = true; setTab("external"); }}
-        >
-          <Globe size={16} />
-          外部订阅 <span>{externalFiles.length}</span>
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "custom"}
-          className={tab === "custom" ? "is-active" : ""}
-          onClick={() => { userSelectedTabRef.current = true; setTab("custom"); }}
-        >
-          <SlidersHorizontal size={16} />
-          自行组合 <span>{customFiles.length}</span>
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "providers"}
-          className={tab === "providers" ? "is-active" : ""}
-          onClick={() => { userSelectedTabRef.current = true; setTab("providers"); }}
-        >
-          <Server size={16} />
-          混合订阅 / Provider <span>{providers.length}</span>
-        </button>
-      </div>
-
-      <div className="nw-command-surface" style={{ marginBottom: "1rem" }}>
-        <div className="nw-search-box">
-          <Search size={18} />
-          <input
-            type="search"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder={
-              tab === "external"
-                ? "搜索外部订阅名称、文件名或链接..."
-                : tab === "custom"
-                ? "搜索自选订阅名称、文件名或模板..."
-                : "搜索 Provider 名称或节点过滤规则..."
-            }
-            aria-label="搜索订阅"
-          />
-          {search ? (
-            <button type="button" className="nw-search-clear" onClick={() => setSearch("")} title="清除搜索">
-              <X size={14} />
+      <Surface className="nw-command-surface cw-subscription-command-surface">
+        <div className="nw-command-row">
+          <div className="search-box nw-search cw-subscription-search">
+            <Search size={17} />
+            <input
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder={
+                tab === "external"
+                  ? "搜索外部订阅名称、文件名或链接..."
+                  : tab === "custom"
+                  ? "搜索自选订阅名称、文件名或模板..."
+                  : "搜索 Provider 名称或节点过滤规则..."
+              }
+              aria-label="搜索订阅"
+            />
+            {search ? (
+              <button type="button" className="nw-search-clear" onClick={() => setSearch("")} title="清除搜索">
+                <X size={14} />
+              </button>
+            ) : null}
+          </div>
+          <div className="segmented-control cw-subscription-tabs" role="tablist" aria-label="订阅管理分类">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "external"}
+              className={tab === "external" ? "is-active" : ""}
+              onClick={() => { userSelectedTabRef.current = true; setTab("external"); }}
+            >
+              <Globe size={15} />
+              外部订阅 ({externalFiles.length})
             </button>
-          ) : null}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "custom"}
+              className={tab === "custom" ? "is-active" : ""}
+              onClick={() => { userSelectedTabRef.current = true; setTab("custom"); }}
+            >
+              <SlidersHorizontal size={15} />
+              自行组合 ({customFiles.length})
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "providers"}
+              className={tab === "providers" ? "is-active" : ""}
+              onClick={() => { userSelectedTabRef.current = true; setTab("providers"); }}
+            >
+              <Server size={15} />
+              混合订阅 / Provider ({providers.length})
+            </button>
+          </div>
         </div>
-      </div>
+      </Surface>
 
       {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
       {loadWarning ? <div className="cw-help"><Info size={16} /><span>{loadWarning}</span></div> : null}
@@ -1503,12 +1504,12 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
   );
 }
 
-function ImportSubscriptionDialog({ nodes, templates, rules, scripts, servers, onClose, onComplete }: {
-  nodes: NodeItem[];
+function ImportSubscriptionDialog({ templates, rules, scripts, onClose, onComplete }: {
+  nodes?: NodeItem[];
   templates: string[];
   rules: CustomRuleOption[];
   scripts: OverrideScriptOption[];
-  servers: RemoteServerItem[];
+  servers?: RemoteServerItem[];
   onClose: (created: boolean) => void;
   onComplete: () => void;
 }) {
@@ -1520,11 +1521,8 @@ function ImportSubscriptionDialog({ nodes, templates, rules, scripts, servers, o
   const [file, setFile] = useState<File | null>(null);
   const [advanced, setAdvanced] = useState(false);
   const [templateFilename, setTemplateFilename] = useState("");
-  const [selectedNodeIDs, setSelectedNodeIDs] = useState<Set<number>>(new Set());
   const [selectedRuleIDs, setSelectedRuleIDs] = useState<Set<number>>(new Set());
   const [selectedScriptIDs, setSelectedScriptIDs] = useState<Set<number>>(new Set());
-  const [selectedServerIDs, setSelectedServerIDs] = useState<Set<number>>(new Set());
-  const [trafficLimit, setTrafficLimit] = useState("");
   const [autoSync, setAutoSync] = useState(false);
   const [autoUpdateInterval, setAutoUpdateInterval] = useState(0);
   const [rawOutput, setRawOutput] = useState(false);
@@ -1538,8 +1536,6 @@ function ImportSubscriptionDialog({ nodes, templates, rules, scripts, servers, o
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setWorking(true); setError("");
     try {
-      const limit = trafficLimit.trim() ? Number(trafficLimit) : null;
-      if (limit != null && (!Number.isFinite(limit) || limit < 0)) throw new Error("流量上限必须是大于等于 0 的 GB 数值");
       let importedFile = createdFile;
       if (!importedFile) {
         let result: { file?: SubscribeFile };
@@ -1563,11 +1559,8 @@ function ImportSubscriptionDialog({ nodes, templates, rules, scripts, servers, o
       if (advanced) {
         await api.put(`/api/admin/subscribe-files/${importedFile.id}`, subscribeFilePayload(importedFile, {
           template_filename: templateFilename,
-          selected_node_ids: [...selectedNodeIDs],
           selected_custom_rule_ids: [...selectedRuleIDs],
           selected_override_script_ids: [...selectedScriptIDs],
-          stats_server_ids: [...selectedServerIDs].join(","),
-          traffic_limit: limit,
           auto_sync_custom_rules: autoSync,
           raw_output: rawOutput,
           auto_update_interval: autoUpdateInterval,
@@ -1578,14 +1571,64 @@ function ImportSubscriptionDialog({ nodes, templates, rules, scripts, servers, o
     finally { setWorking(false); }
   };
   const toggle = (setter: Dispatch<SetStateAction<Set<number>>>, id: number) => setter((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
-  return <Dialog title="添加订阅" description="从 Clash 订阅链接导入或上传本地 YAML 文件" onClose={close} dismissible={!working} wide><form className="cw-form" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}{createdFile ? <div className="cw-help"><Info size={16} /><span>订阅“{createdFile.name}”已导入；再次提交只会重试尚未保存的高级设置，不会重复创建。</span></div> : null}<div className="cw-mode"><button type="button" disabled={Boolean(createdFile)} className={mode === "url" ? "is-active" : ""} onClick={() => setMode("url")}><Link2 size={16} />链接导入</button><button type="button" disabled={Boolean(createdFile)} className={mode === "upload" ? "is-active" : ""} onClick={() => setMode("upload")}><Upload size={16} />本地文件</button></div><div className="cw-form-grid"><Field label="订阅名称"><input disabled={Boolean(createdFile)} required={mode === "url"} value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：机场订阅" /></Field><Field label="文件名" hint="留空时自动生成"><input disabled={Boolean(createdFile)} value={filename} onChange={(event) => setFilename(event.target.value)} placeholder="subscription.yaml" /></Field></div>{mode === "url" ? <><Field label="订阅 URL"><input disabled={Boolean(createdFile)} required type="url" value={url} onChange={(event) => setURL(event.target.value)} placeholder="https://example.com/subscribe" /></Field><Field label="自动更新时间" hint="系统将按设定周期自动重新拉取外部链接并更新订阅文件"><select disabled={Boolean(createdFile)} value={autoUpdateInterval} onChange={(event) => setAutoUpdateInterval(Number(event.target.value))}><option value={0}>不自动更新（仅手动同步）</option><option value={3600}>每 1 小时</option><option value={7200}>每 2 小时</option><option value={21600}>每 6 小时</option><option value={43200}>每 12 小时</option><option value={86400}>每 24 小时（1 天）</option><option value={172800}>每 48 小时（2 天）</option><option value={604800}>每周（7 天）</option></select></Field></> : <Field label="YAML 文件"><input disabled={Boolean(createdFile)} required type="file" accept=".yaml,.yml,application/yaml,text/yaml" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></Field>}<Field label="说明"><textarea disabled={Boolean(createdFile)} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="可选" /></Field><Button type="button" variant="ghost" disabled={Boolean(createdFile)} onClick={() => setAdvanced((value) => !value)}><Settings2 size={16} />{advanced ? "收起高级设置" : "配置模板、节点与覆写范围"}</Button>{advanced ? <>
-    <div className="cw-form-grid"><Field label="V3 模板"><select value={templateFilename} onChange={(event) => setTemplateFilename(event.target.value)}><option value="">不绑定模板</option>{templates.map((template) => <option value={template} key={template}>{template}</option>)}</select></Field><Field label="手动流量上限（GB）"><input type="number" min="0" step="0.1" value={trafficLimit} onChange={(event) => setTrafficLimit(event.target.value)} placeholder="留空跟随服务器" /></Field></div>
-    <div className="cw-checkboxes"><Toggle checked={autoSync} onChange={setAutoSync} label="自动同步自定义规则" /><Toggle checked={rawOutput} onChange={setRawOutput} label="输出原始配置" /></div>
-    <div className="cw-form-section"><strong>节点范围</strong><div className="cw-option-grid">{nodes.map((node) => <label className="cw-option-check" key={node.id}><input type="checkbox" checked={selectedNodeIDs.has(node.id)} onChange={() => toggle(setSelectedNodeIDs, node.id)} /><span><strong>{node.node_name}</strong><small>{node.protocol || "未知协议"}</small></span></label>)}</div></div>
-    <div className="cw-form-grid"><div className="cw-form-section"><strong>指定覆写规则</strong><p className="cw-section-hint">不选表示全部已启用规则。</p><div className="cw-option-stack">{rules.map((rule) => <label className="cw-option-check" key={rule.id}><input type="checkbox" checked={selectedRuleIDs.has(rule.id)} onChange={() => toggle(setSelectedRuleIDs, rule.id)} /><span><strong>{rule.name}</strong><small>{rule.type}</small></span></label>)}</div></div><div className="cw-form-section"><strong>指定覆写脚本</strong><p className="cw-section-hint">不选表示全部已启用脚本。</p><div className="cw-option-stack">{scripts.map((script) => <label className="cw-option-check" key={script.id}><input type="checkbox" checked={selectedScriptIDs.has(script.id)} onChange={() => toggle(setSelectedScriptIDs, script.id)} /><span><strong>{script.name}</strong><small>{script.hook}</small></span></label>)}</div></div></div>
-    <div className="cw-form-section"><strong>流量统计服务器</strong><p className="cw-section-hint">不选表示汇总全部服务器。</p><div className="cw-option-grid">{servers.map((server) => <label className="cw-option-check" key={server.id}><input type="checkbox" checked={selectedServerIDs.has(server.id)} onChange={() => toggle(setSelectedServerIDs, server.id)} /><span><strong>{server.name}</strong><small>服务器 #{server.id}</small></span></label>)}</div></div>
-    <div className="cw-help"><Info size={16} /><span>高级设置在导入成功后通过返回的文件 ID 立即写入；若后端不返回 ID，前端会明确报错而不是假装保存成功。</span></div>
-  </> : null}<div className="dialog-actions"><Button type="button" variant="secondary" disabled={working} onClick={close}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label={createdFile ? "正在保存" : "正在导入"} /> : createdFile ? "重试高级设置" : "添加"}</Button></div></form></Dialog>;
+  return <Dialog title="添加订阅" description="从 Clash 订阅链接导入或上传本地 YAML 文件" onClose={close} dismissible={!working} wide><form className="cw-form" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}{createdFile ? <div className="cw-help"><Info size={16} /><span>订阅“{createdFile.name}”已导入；再次提交只会重试尚未保存的高级设置，不会重复创建。</span></div> : null}<div className="cw-mode"><button type="button" disabled={Boolean(createdFile)} className={mode === "url" ? "is-active" : ""} onClick={() => setMode("url")}><Link2 size={16} />链接导入</button><button type="button" disabled={Boolean(createdFile)} className={mode === "upload" ? "is-active" : ""} onClick={() => setMode("upload")}><Upload size={16} />本地文件</button></div><div className="cw-form-grid"><Field label="订阅名称"><input disabled={Boolean(createdFile)} required={mode === "url"} value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：机场订阅" /></Field><Field label="文件名" hint="留空时自动生成"><input disabled={Boolean(createdFile)} value={filename} onChange={(event) => setFilename(event.target.value)} placeholder="subscription.yaml" /></Field></div>{mode === "url" ? <><Field label="订阅 URL"><input disabled={Boolean(createdFile)} required type="url" value={url} onChange={(event) => setURL(event.target.value)} placeholder="https://example.com/subscribe" /></Field><Field label="自动更新时间" hint="系统将按设定周期自动重新拉取外部链接并更新订阅文件"><select disabled={Boolean(createdFile)} value={autoUpdateInterval} onChange={(event) => setAutoUpdateInterval(Number(event.target.value))}><option value={0}>不自动更新（仅手动同步）</option><option value={3600}>每 1 小时</option><option value={7200}>每 2 小时</option><option value={21600}>每 6 小时</option><option value={43200}>每 12 小时</option><option value={86400}>每 24 小时（1 天）</option><option value={172800}>每 48 小时（2 天）</option><option value={604800}>每周（7 天）</option></select></Field></> : <Field label="YAML 文件"><input disabled={Boolean(createdFile)} required type="file" accept=".yaml,.yml,application/yaml,text/yaml" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></Field>}<Field label="说明"><textarea disabled={Boolean(createdFile)} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="可选" /></Field><Button type="button" variant="ghost" disabled={Boolean(createdFile)} onClick={() => setAdvanced((value) => !value)}><Settings2 size={16} />{advanced ? "收起高级配置" : "配置分流模板与规则覆写"}</Button>{advanced ? (
+          <>
+            <div className="cw-form-grid">
+              <Field label="V3 模板">
+                <select value={templateFilename} onChange={(event) => setTemplateFilename(event.target.value)}>
+                  <option value="">不绑定模板</option>
+                  {templates.map((template) => (
+                    <option value={template} key={template}>
+                      {template}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+            <div className="cw-checkboxes">
+              <Toggle checked={autoSync} onChange={setAutoSync} label="自动同步自定义规则" />
+              <Toggle checked={rawOutput} onChange={setRawOutput} label="输出原始配置" />
+            </div>
+            <div className="cw-form-grid">
+              <div className="cw-form-section">
+                <strong>指定覆写规则</strong>
+                <p className="cw-section-hint">不选表示全部已启用规则。</p>
+                <div className="cw-option-stack">
+                  {rules.map((rule) => (
+                    <label className="cw-option-check" key={rule.id}>
+                      <input type="checkbox" checked={selectedRuleIDs.has(rule.id)} onChange={() => toggle(setSelectedRuleIDs, rule.id)} />
+                      <span><strong>{rule.name}</strong><small>{rule.type}</small></span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="cw-form-section">
+                <strong>指定覆写脚本</strong>
+                <p className="cw-section-hint">不选表示全部已启用脚本。</p>
+                <div className="cw-option-stack">
+                  {scripts.map((script) => (
+                    <label className="cw-option-check" key={script.id}>
+                      <input type="checkbox" checked={selectedScriptIDs.has(script.id)} onChange={() => toggle(setSelectedScriptIDs, script.id)} />
+                      <span><strong>{script.name}</strong><small>{script.hook}</small></span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="cw-help">
+              <Info size={16} />
+              <span>高级设置在导入成功后通过返回的文件 ID 立即写入；若后端不返回 ID，前端会明确报错而不是假装保存成功。</span>
+            </div>
+          </>
+        ) : null}
+        <div className="dialog-actions">
+          <Button type="button" variant="secondary" disabled={working} onClick={close}>取消</Button>
+          <Button type="submit" disabled={working}>
+            {working ? <Spinner label={createdFile ? "正在保存" : "正在导入"} /> : createdFile ? "重试高级设置" : "添加"}
+          </Button>
+        </div>
+      </form>
+    </Dialog>;
 }
 
 function CreateCustomSubscriptionDialog({
@@ -1873,6 +1916,7 @@ function EditSubscribeFileDialog({ item, nodes, templates, rules, scripts, serve
   const [selectedScriptIDs, setSelectedScriptIDs] = useState(() => new Set(item.selected_override_script_ids ?? []));
   const [selectedServerIDs, setSelectedServerIDs] = useState(() => new Set((item.stats_server_ids || "").split(",").map(Number).filter((id) => id > 0)));
   const [trafficLimit, setTrafficLimit] = useState(item.traffic_limit == null ? "" : String(item.traffic_limit));
+  const isExternal = item.type === "import" || Boolean(item.url);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
   const toggleID = (setter: Dispatch<SetStateAction<Set<number>>>, id: number) => setter((current) => {
@@ -1895,12 +1939,12 @@ function EditSubscribeFileDialog({ item, nodes, templates, rules, scripts, serve
         raw_output: rawOutput,
         auto_sync_custom_rules: autoSync,
         template_filename: templateFilename,
-        selected_node_ids: [...selectedNodeIDs],
-        selected_tags: selectedTags.split(",").map((tag) => tag.trim()).filter(Boolean),
+        selected_node_ids: isExternal ? [] : [...selectedNodeIDs],
+        selected_tags: isExternal ? [] : selectedTags.split(",").map((tag) => tag.trim()).filter(Boolean),
         selected_custom_rule_ids: ruleScope === "all" ? [] : [...selectedRuleIDs],
         selected_override_script_ids: scriptScope === "all" ? [] : [...selectedScriptIDs],
-        stats_server_ids: [...selectedServerIDs].join(","),
-        traffic_limit: limit,
+        stats_server_ids: isExternal ? "" : [...selectedServerIDs].join(","),
+        traffic_limit: isExternal ? null : limit,
         auto_update_interval: autoUpdateInterval,
       }));
       onComplete();
@@ -1913,12 +1957,16 @@ function EditSubscribeFileDialog({ item, nodes, templates, rules, scripts, serve
     <div className="cw-form-grid"><Field label="自定义短码" hint="留空使用系统短码；普通用户不能修改全局短码"><input value={shortCode} onChange={(event) => setShortCode(event.target.value)} /></Field><Field label="V3 模板"><select value={templateFilename} onChange={(event) => setTemplateFilename(event.target.value)}><option value="">不绑定模板</option>{templates.map((template) => <option value={template} key={template}>{template}</option>)}</select></Field></div>
     {item.type === "import" || Boolean(item.url) ? <Field label="自动更新时间" hint={item.last_sync_at ? `上次同步时间：${formatDate(item.last_sync_at)}` : "定期自动重新拉取外部订阅链接并更新配置文件"}><select value={autoUpdateInterval} onChange={(event) => setAutoUpdateInterval(Number(event.target.value))}><option value={0}>不自动更新（仅手动同步）</option><option value={3600}>每 1 小时</option><option value={7200}>每 2 小时</option><option value={21600}>每 6 小时</option><option value={43200}>每 12 小时</option><option value={86400}>每 24 小时（1 天）</option><option value={172800}>每 48 小时（2 天）</option><option value={604800}>每周（7 天）</option></select></Field> : null}
     <div className="cw-checkboxes"><Toggle checked={autoSync} onChange={setAutoSync} label="自动同步自定义规则" /><Toggle checked={rawOutput} onChange={setRawOutput} label="输出原始配置" /></div>
-    <div className="cw-form-section"><strong>节点范围</strong><p className="cw-section-hint">选择节点 ID 时优先使用该范围；不选节点时才按下方标签过滤，两者都为空表示全部可用节点。</p><div className="cw-option-grid">{nodes.map((node) => <label className="cw-option-check" key={node.id}><input type="checkbox" checked={selectedNodeIDs.has(node.id)} onChange={() => toggleID(setSelectedNodeIDs, node.id)} /><span><strong>{node.node_name}</strong><small>{node.protocol || "未知协议"}{node.enabled ? "" : " · 已停用"}</small></span></label>)}</div><Field label="旧版标签范围" hint="逗号分隔；仅在未选择节点 ID 时生效"><input value={selectedTags} onChange={(event) => setSelectedTags(event.target.value)} placeholder="hk, premium" /></Field></div>
+    {!isExternal ? (
+      <div className="cw-form-section"><strong>节点范围</strong><p className="cw-section-hint">选择节点 ID 时优先使用该范围；不选节点时才按下方标签过滤，两者都为空表示全部可用节点。</p><div className="cw-option-grid">{nodes.map((node) => <label className="cw-option-check" key={node.id}><input type="checkbox" checked={selectedNodeIDs.has(node.id)} onChange={() => toggleID(setSelectedNodeIDs, node.id)} /><span><strong>{node.node_name}</strong><small>{node.protocol || "未知协议"}{node.enabled ? "" : " · 已停用"}</small></span></label>)}</div><Field label="旧版标签范围" hint="逗号分隔；仅在未选择节点 ID 时生效"><input value={selectedTags} onChange={(event) => setSelectedTags(event.target.value)} placeholder="hk, premium" /></Field></div>
+    ) : null}
     <div className="cw-form-grid">
       <div className="cw-form-section"><strong>覆写规则</strong><Field label="应用范围"><select value={ruleScope} onChange={(event) => setRuleScope(event.target.value as "all" | "selected")}><option value="all">全部已启用规则（空 ID 数组）</option><option value="selected">仅选择的规则</option></select></Field>{ruleScope === "selected" ? <div className="cw-option-stack">{rules.map((rule) => <label className="cw-option-check" key={rule.id}><input type="checkbox" checked={selectedRuleIDs.has(rule.id)} onChange={() => toggleID(setSelectedRuleIDs, rule.id)} /><span><strong>{rule.name}</strong><small>{rule.type}{rule.enabled ? "" : " · 已停用"}</small></span></label>)}</div> : null}</div>
       <div className="cw-form-section"><strong>覆写脚本</strong><Field label="应用范围"><select value={scriptScope} onChange={(event) => setScriptScope(event.target.value as "all" | "selected")}><option value="all">全部已启用脚本（空 ID 数组）</option><option value="selected">仅选择的脚本</option></select></Field>{scriptScope === "selected" ? <div className="cw-option-stack">{scripts.map((script) => <label className="cw-option-check" key={script.id}><input type="checkbox" checked={selectedScriptIDs.has(script.id)} onChange={() => toggleID(setSelectedScriptIDs, script.id)} /><span><strong>{script.name}</strong><small>{script.hook}{script.enabled ? "" : " · 已停用"}</small></span></label>)}</div> : null}</div>
     </div>
-    <div className="cw-form-section"><strong>流量统计</strong><p className="cw-section-hint">不选服务器时汇总全部服务器；手动上限按后端契约使用 GB，留空表示跟随服务器或用户套餐。</p><div className="cw-option-grid">{servers.map((server) => <label className="cw-option-check" key={server.id}><input type="checkbox" checked={selectedServerIDs.has(server.id)} onChange={() => toggleID(setSelectedServerIDs, server.id)} /><span><strong>{server.name}</strong><small>服务器 #{server.id}</small></span></label>)}</div><Field label="手动流量上限（GB）"><input type="number" min="0" step="0.1" value={trafficLimit} onChange={(event) => setTrafficLimit(event.target.value)} placeholder="留空跟随统计范围" /></Field></div>
+    {!isExternal ? (
+      <div className="cw-form-section"><strong>流量统计</strong><p className="cw-section-hint">不选服务器时汇总全部服务器；手动上限按后端契约使用 GB，留空表示跟随服务器或用户套餐。</p><div className="cw-option-grid">{servers.map((server) => <label className="cw-option-check" key={server.id}><input type="checkbox" checked={selectedServerIDs.has(server.id)} onChange={() => toggleID(setSelectedServerIDs, server.id)} /><span><strong>{server.name}</strong><small>服务器 #{server.id}</small></span></label>)}</div><Field label="手动流量上限（GB）"><input type="number" min="0" step="0.1" value={trafficLimit} onChange={(event) => setTrafficLimit(event.target.value)} placeholder="留空跟随统计范围" /></Field></div>
+    ) : null}
     <div className="cw-help"><Info size={16} /><span>数据库存在历史 expire_at 列，但当前后端 SubscribeFile DTO 与保存请求没有映射该字段，因此这里不会展示一个无法生效的“过期时间”。</span></div>
     <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在保存" /> : "保存"}</Button></div>
   </form></Dialog>;

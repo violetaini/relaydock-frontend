@@ -26,6 +26,7 @@ import {
   RefreshCw,
   RotateCw,
   Save,
+  Search,
   Server,
   Settings2,
   ShieldCheck,
@@ -1383,6 +1384,8 @@ export function TemplatesWorkbenchPage({ notify = noNotify }: ContentPageProps) 
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<"all" | "default" | "mine" | "builtin">("all");
   const [showCreate, setShowCreate] = useState(false);
   const [showVisual, setShowVisual] = useState(false);
   const [previewing, setPreviewing] = useState<string | null>(null);
@@ -1437,24 +1440,201 @@ export function TemplatesWorkbenchPage({ notify = noNotify }: ContentPageProps) 
     finally { setWorking(false); }
   };
 
+  const filteredTemplates = useMemo(() => {
+    return templates.filter((filename) => {
+      if (search.trim()) {
+        const q = search.trim().toLowerCase();
+        const readable = filename.replace(/\.ya?ml$/i, "").replaceAll("_", " ").toLowerCase();
+        if (!filename.toLowerCase().includes(q) && !readable.includes(q)) return false;
+      }
+      const owner = owners[filename];
+      const isDefault = defaultTemplate === filename;
+      if (filter === "default") return isDefault;
+      if (filter === "mine") return Boolean(username && owner === username);
+      if (filter === "builtin") return !owner;
+      return true;
+    });
+  }, [templates, search, filter, owners, defaultTemplate, username]);
+
   return (
     <section className="cw-page">
-      <Surface className="table-surface cw-compact-table cw-template-panel">
-        <div className="surface-heading">
-          <div><h2>模板管理</h2><small>管理 V3 规则模板，支持结构化设计、导入、转换、预览和 YAML 编辑</small></div>
-          <div className="page-actions"><IconButton label="刷新模板" onClick={() => void load()}><RefreshCw size={18} /></IconButton><Button variant="secondary" onClick={() => setShowVisual(true)}><WandSparkles size={16} />可视化设计</Button><Button onClick={() => setShowCreate(true)}><Plus size={16} />新建模板</Button></div>
+      <PageHeader
+        title="模板管理"
+        description="管理 V3 规则模板，支持结构化设计、导入、转换、预览和 YAML 编辑"
+        actions={
+          <>
+            <IconButton label="刷新模板" onClick={() => void load()}>
+              <RefreshCw size={18} />
+            </IconButton>
+            <Button variant="secondary" onClick={() => setShowVisual(true)}>
+              <WandSparkles size={16} />
+              可视化设计
+            </Button>
+            <Button onClick={() => setShowCreate(true)}>
+              <Plus size={16} />
+              新建模板
+            </Button>
+          </>
+        }
+      />
+      {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
+      <Surface className="nw-command-surface cw-template-command-surface">
+        <div className="nw-command-row">
+          <div className="search-box nw-search cw-template-search">
+            <Search size={17} />
+            <input
+              aria-label="搜索模板"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="搜索模板文件名..."
+            />
+          </div>
+          <div className="segmented-control cw-template-filter" role="tablist" aria-label="模板筛选">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={filter === "all"}
+              className={filter === "all" ? "is-active" : ""}
+              onClick={() => setFilter("all")}
+            >
+              全部 {templates.length}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={filter === "default"}
+              className={filter === "default" ? "is-active" : ""}
+              onClick={() => setFilter("default")}
+            >
+              默认模板
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={filter === "mine"}
+              className={filter === "mine" ? "is-active" : ""}
+              onClick={() => setFilter("mine")}
+            >
+              我的模板
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={filter === "builtin"}
+              className={filter === "builtin" ? "is-active" : ""}
+              onClick={() => setFilter("builtin")}
+            >
+              内置模板
+            </button>
+          </div>
         </div>
-        {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
-        {loading ? <div className="cw-loading"><Spinner /></div> : templates.length === 0 ? (
-          <EmptyState icon={<FileCode2 size={24} />} title="暂无模板" description="上传 YAML、粘贴内容或从订阅生成模板。" action={<Button onClick={() => setShowCreate(true)}><Plus size={16} />新建模板</Button>} />
-        ) : (
-          <div className="table-wrap cw-template-table"><table><thead><tr><th>模板名称</th><th>归属 / 状态</th><th>操作</th></tr></thead><tbody>{templates.map((filename) => {
-            const owner = owners[filename];
-            const isDefault = defaultTemplate === filename;
-            return <tr key={filename}><td><div className="cw-file-name"><span className="cw-file-icon"><FileCode2 size={17} /></span><span><strong>{filename}</strong><small>{filename.replace(/\.ya?ml$/i, "").replaceAll("_", " ")}</small></span></div></td><td>{isDefault ? <Badge tone="good">默认模板</Badge> : owner ? <Badge tone={owner === username ? "info" : "neutral"}>{owner === username ? "我的模板" : owner}</Badge> : <Badge>内置模板</Badge>}</td><td><div className="cw-table-actions">{isAdmin ? <IconButton label={isDefault ? "默认模板" : `将 ${filename} 设为默认模板`} disabled={working || isDefault} onClick={() => void makeDefault(filename)}>{isDefault ? <Check size={16} /> : <Star size={16} />}</IconButton> : null}<IconButton label="预览" title={`预览 ${filename}`} onClick={() => setPreviewing(filename)}><Sparkles size={16} /></IconButton>{canModify(filename) ? <><IconButton label={`编辑 ${filename}`} onClick={() => setEditing(filename)}><Pencil size={16} /></IconButton><IconButton label={`删除 ${filename}`} disabled={working || isDefault} onClick={() => setDeleting(filename)}><Trash2 size={16} /></IconButton></> : null}</div></td></tr>;
-          })}</tbody></table></div>
-        )}
       </Surface>
+      {loading ? (
+        <Surface className="table-surface cw-template-surface">
+          <div className="cw-loading"><Spinner /></div>
+        </Surface>
+      ) : templates.length === 0 ? (
+        <Surface className="table-surface cw-template-surface">
+          <EmptyState
+            icon={<FileCode2 size={28} />}
+            title="暂无模板"
+            description="上传 YAML、粘贴内容或从订阅生成模板。"
+            action={<Button onClick={() => setShowCreate(true)}><Plus size={16} />新建模板</Button>}
+          />
+        </Surface>
+      ) : filteredTemplates.length === 0 ? (
+        <Surface className="table-surface cw-template-surface">
+          <EmptyState
+            icon={<Search size={28} />}
+            title="未找到匹配模板"
+            description="请调整搜索关键词或清除分类筛选条件。"
+            action={<Button variant="secondary" onClick={() => { setSearch(""); setFilter("all"); }}>清除筛选</Button>}
+          />
+        </Surface>
+      ) : (
+        <Surface className="table-surface cw-template-surface">
+          <div className="table-wrap cw-template-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>模板名称</th>
+                  <th>归属 / 状态</th>
+                  <th style={{ width: 160, textAlign: "right" }}>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredTemplates.map((filename) => {
+                  const owner = owners[filename];
+                  const isDefault = defaultTemplate === filename;
+                  return (
+                    <tr key={filename}>
+                      <td>
+                        <div className="cw-file-name">
+                          <span className="cw-file-icon">
+                            <FileCode2 size={20} />
+                          </span>
+                          <span>
+                            <strong>{filename}</strong>
+                            <small>{filename.replace(/\.ya?ml$/i, "").replaceAll("_", " ")}</small>
+                          </span>
+                        </div>
+                      </td>
+                      <td>
+                        {isDefault ? (
+                          <Badge tone="good">默认模板</Badge>
+                        ) : owner ? (
+                          <Badge tone={owner === username ? "info" : "neutral"}>
+                            {owner === username ? "我的模板" : owner}
+                          </Badge>
+                        ) : (
+                          <Badge>内置模板</Badge>
+                        )}
+                      </td>
+                      <td>
+                        <div className="cw-table-actions">
+                          {isAdmin ? (
+                            <IconButton
+                              label={isDefault ? "默认模板" : `将 ${filename} 设为默认模板`}
+                              disabled={working || isDefault}
+                              onClick={() => void makeDefault(filename)}
+                            >
+                              {isDefault ? <Check size={17} /> : <Star size={17} />}
+                            </IconButton>
+                          ) : null}
+                          <IconButton
+                            label="预览"
+                            title={`预览 ${filename}`}
+                            onClick={() => setPreviewing(filename)}
+                          >
+                            <Sparkles size={17} />
+                          </IconButton>
+                          {canModify(filename) ? (
+                            <>
+                              <IconButton
+                                label={`编辑 ${filename}`}
+                                onClick={() => setEditing(filename)}
+                              >
+                                <Pencil size={17} />
+                              </IconButton>
+                              <IconButton
+                                label={`删除 ${filename}`}
+                                disabled={working || isDefault}
+                                onClick={() => setDeleting(filename)}
+                              >
+                                <Trash2 size={17} />
+                              </IconButton>
+                            </>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Surface>
+      )}
       {showCreate ? <CreateTemplateDialog onClose={() => setShowCreate(false)} onComplete={async () => { setShowCreate(false); notify("模板已创建"); await load(); }} /> : null}
       {showVisual ? <VisualTemplateDialog onClose={() => setShowVisual(false)} onComplete={async () => { setShowVisual(false); notify("可视化模板已保存"); await load(); }} /> : null}
       {previewing ? <TemplatePreviewDialog filename={previewing} onClose={() => setPreviewing(null)} /> : null}

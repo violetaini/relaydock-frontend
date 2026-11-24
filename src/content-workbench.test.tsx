@@ -745,6 +745,66 @@ describe("content workbench subscriptions", () => {
     fireEvent.click(screen.getByRole("switch", { name: "确认移除旧版不兼容字段" }));
     expect(save).not.toBeDisabled();
   });
+
+  it("navigates across 3 subscription tabs: external, custom combination, and mixed provider", async () => {
+    const extFile = { id: 1, name: "机场订阅", type: "import", url: "https://sub.example/airport", filename: "airport.yaml" };
+    const customFile = { id: 2, name: "自选专线", type: "create", filename: "custom.yaml", traffic_limit: 150 };
+    const external = [{ id: 3, name: "机场源", url: "https://sub.example/airport", node_count: 5, traffic_mode: "both" }];
+    const providers = [{ id: 9, external_subscription_id: 3, name: "hk-provider", type: "http", process_mode: "client" }];
+
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path, [extFile, customFile], external, providers) as T);
+    render(<SubscribeFilesPage />);
+
+    // Initially external tab
+    expect(await screen.findByText("机场订阅")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /外部订阅/ })).toHaveClass("is-active");
+
+    // Click custom combination tab
+    fireEvent.click(screen.getByRole("tab", { name: /自行组合/ }));
+    expect(await screen.findByText("自选专线")).toBeInTheDocument();
+    expect(screen.getByText("150 GB 阀门")).toBeInTheDocument();
+
+    // Click mixed provider tab
+    fireEvent.click(screen.getByRole("tab", { name: /混合订阅/ }));
+    expect(await screen.findByText("hk-provider")).toBeInTheDocument();
+    expect(screen.getByText("混合订阅原理：1 外部订阅 ＋ 2 自行组合 ＝ 3 混合调度")).toBeInTheDocument();
+  });
+
+  it("creates a custom combination subscription with a total traffic valve in GB", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path) as T);
+    const post = vi.spyOn(api, "post").mockResolvedValue({
+      file: { id: 88, name: "自选套餐", filename: "my-package.yaml", type: "create" },
+    });
+    const put = vi.spyOn(api, "put").mockResolvedValue({});
+
+    render(<SubscribeFilesPage />);
+
+    // Switch to custom combination tab
+    fireEvent.click(await screen.findByRole("tab", { name: /自行组合/ }));
+    fireEvent.click((await screen.findAllByRole("button", { name: "创建自选订阅" }))[0]);
+
+    expect(screen.getByRole("dialog", { name: "创建自选订阅" })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "订阅名称" }), { target: { value: "自选套餐" } });
+    fireEvent.change(screen.getByRole("textbox", { name: /文件名/ }), { target: { value: "my-package.yaml" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: /总流量阀门/ }), { target: { value: "200" } });
+    fireEvent.click(within(screen.getByRole("dialog", { name: "创建自选订阅" })).getByRole("button", { name: "创建自选订阅" }));
+
+    await waitFor(() => {
+      expect(post).toHaveBeenCalledWith("/api/admin/subscribe-files/create-from-config", {
+        name: "自选套餐",
+        description: "",
+        filename: "my-package.yaml",
+        content: "proxies: []\n",
+      });
+    });
+
+    await waitFor(() => {
+      expect(put).toHaveBeenCalledWith("/api/admin/subscribe-files/88", expect.objectContaining({
+        traffic_limit: 200,
+        type: "create",
+      }));
+    });
+  });
 });
 
 describe("content workbench certificates", () => {

@@ -756,14 +756,14 @@ describe("content workbench subscriptions", () => {
     expect(screen.getByRole("tab", { name: /外部订阅/ })).toHaveClass("is-active");
 
     // Click custom combination tab
-    fireEvent.click(screen.getByRole("tab", { name: /自行组合/ }));
+    fireEvent.click(screen.getByRole("tab", { name: /自选订阅/ }));
     expect(await screen.findByText("自选专线")).toBeInTheDocument();
     expect(screen.getByText("150 GB 阀门")).toBeInTheDocument();
 
     // Click mixed provider tab
     fireEvent.click(screen.getByRole("tab", { name: /混合订阅/ }));
     expect(await screen.findByText("hk-provider")).toBeInTheDocument();
-    expect(screen.getByText("混合订阅原理：1 外部订阅 ＋ 2 自行组合 ＝ 3 混合调度")).toBeInTheDocument();
+    expect(screen.getByText("混合订阅原理：1 外部订阅 ＋ 2 自选订阅 ＝ 3 混合调度")).toBeInTheDocument();
   });
 
   it("creates a custom combination subscription with a total traffic valve in GB", async () => {
@@ -776,10 +776,14 @@ describe("content workbench subscriptions", () => {
     render(<SubscribeFilesPage />);
 
     // Switch to custom combination tab
-    fireEvent.click(await screen.findByRole("tab", { name: /自行组合/ }));
+    fireEvent.click(await screen.findByRole("tab", { name: /自选订阅/ }));
     fireEvent.click((await screen.findAllByRole("button", { name: "创建自选订阅" }))[0]);
 
     expect(screen.getByRole("dialog", { name: "创建自选订阅" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /配置覆写规则/ })).not.toBeInTheDocument();
+    expect(screen.getByText("选择自选节点")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "全选" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "清空" })).toBeInTheDocument();
     fireEvent.change(screen.getByRole("textbox", { name: "订阅名称" }), { target: { value: "自选套餐" } });
     fireEvent.change(screen.getByRole("textbox", { name: /文件名/ }), { target: { value: "my-package.yaml" } });
     fireEvent.change(screen.getByRole("spinbutton", { name: /总流量阀门/ }), { target: { value: "200" } });

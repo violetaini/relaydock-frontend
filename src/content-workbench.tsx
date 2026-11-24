@@ -1096,7 +1096,7 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
     <section className="cw-page">
       <PageHeader
         title="订阅管理"
-        description="维护第三方外部订阅、自建专线组合与多源混合 Provider。"
+        description="维护第三方外部订阅、自选节点订阅与多源混合 Provider。"
         actions={
           <>
             {onOpenCustomRules ? <Button variant="secondary" onClick={onOpenCustomRules}><Braces size={16} />覆写规则</Button> : null}
@@ -1155,7 +1155,7 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
               onClick={() => { userSelectedTabRef.current = true; setTab("custom"); }}
             >
               <SlidersHorizontal size={15} />
-              自行组合 ({customFiles.length})
+              自选订阅 ({customFiles.length})
             </button>
             <button
               type="button"
@@ -1264,7 +1264,7 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
         <Surface className="table-surface cw-subscription-surface">
           <div className="surface-heading">
             <div>
-              <h2>自行组合</h2>
+              <h2>自选订阅</h2>
               <small>由自建/转发节点组装而成的专线订阅，可设置专属流量阀门与分流模板</small>
             </div>
             <span className="cw-category-count">{filteredCustomFiles.length} 个自选订阅</span>
@@ -1272,7 +1272,7 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
           {customFiles.length === 0 ? (
             <EmptyState
               icon={<SlidersHorizontal size={24} />}
-              title="暂无自选组合订阅"
+              title="暂无自选订阅"
               description="自选自建与转发节点，设定专属流量阀门与分流模板，生成专属订阅。"
               action={<Button onClick={() => setShowCreateCustom(true)}><Plus size={16} />创建自选订阅</Button>}
             />
@@ -1358,7 +1358,7 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
           <div className="cw-mixed-subscription-hero">
             <div className="cw-mixed-hero-header">
               <div className="cw-mixed-hero-badge"><Sparkles size={15} /> 多源融合架构</div>
-              <h3>混合订阅原理：1 外部订阅 ＋ 2 自行组合 ＝ 3 混合调度</h3>
+              <h3>混合订阅原理：1 外部订阅 ＋ 2 自选订阅 ＝ 3 混合调度</h3>
               <p>在 Mihomo 规则模板中通过 Proxy Provider 挂载第三方外部源，结合本地自建中继专线，既保证核心业务稳定性，又享受外部多节点高可用备援。</p>
             </div>
             <div className="cw-mixed-hero-flow">
@@ -1373,7 +1373,7 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
               <div className="cw-mixed-flow-card">
                 <div className="cw-mixed-flow-step">2</div>
                 <div className="cw-mixed-flow-info">
-                  <strong>自选专线组合 (Proxies)</strong>
+                  <strong>自选节点订阅 (Proxies)</strong>
                   <span>自建核心节点与转发中继，支持总流量阀门与精细化限流</span>
                 </div>
               </div>
@@ -1634,18 +1634,15 @@ function ImportSubscriptionDialog({ templates, rules, scripts, onClose, onComple
 function CreateCustomSubscriptionDialog({
   nodes,
   templates,
-  rules,
-  scripts,
-  servers,
   isAdmin,
   onClose,
   onComplete,
 }: {
   nodes: NodeItem[];
   templates: string[];
-  rules: CustomRuleOption[];
-  scripts: OverrideScriptOption[];
-  servers: RemoteServerItem[];
+  rules?: CustomRuleOption[];
+  scripts?: OverrideScriptOption[];
+  servers?: RemoteServerItem[];
   isAdmin: boolean;
   onClose: () => void;
   onComplete: () => void;
@@ -1657,12 +1654,6 @@ function CreateCustomSubscriptionDialog({
   const [trafficLimit, setTrafficLimit] = useState("");
   const [selectedNodeIDs, setSelectedNodeIDs] = useState<Set<number>>(() => new Set(nodes.filter((n) => n.enabled).map((n) => n.id)));
   const [nodeFilter, setNodeFilter] = useState("");
-  const [autoSync, setAutoSync] = useState(true);
-  const [rawOutput, setRawOutput] = useState(false);
-  const [selectedRuleIDs, setSelectedRuleIDs] = useState<Set<number>>(new Set());
-  const [selectedScriptIDs, setSelectedScriptIDs] = useState<Set<number>>(new Set());
-  const [selectedServerIDs, setSelectedServerIDs] = useState<Set<number>>(new Set());
-  const [advanced, setAdvanced] = useState(false);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
 
@@ -1728,12 +1719,12 @@ function CreateCustomSubscriptionDialog({
         template_filename: templateFilename,
         selected_node_ids: [...selectedNodeIDs],
         selected_tags: [],
-        selected_custom_rule_ids: [...selectedRuleIDs],
-        selected_override_script_ids: [...selectedScriptIDs],
-        stats_server_ids: [...selectedServerIDs].join(","),
+        selected_custom_rule_ids: [],
+        selected_override_script_ids: [],
+        stats_server_ids: "",
         traffic_limit: isAdmin ? limit : null,
-        auto_sync_custom_rules: autoSync,
-        raw_output: rawOutput,
+        auto_sync_custom_rules: true,
+        raw_output: false,
         auto_update_interval: 0,
       });
 
@@ -1785,16 +1776,21 @@ function CreateCustomSubscriptionDialog({
           <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="可选备注说明" />
         </Field>
 
-        <div className="cw-form-section">
-          <div className="cw-node-picker-head">
-            <strong>选择自选节点</strong>
-            <span className="cw-node-picker-counter">已选 {selectedNodeIDs.size} / {nodes.length} 个节点</span>
+        <div className="cw-form-section cw-node-picker-section">
+          <div className="cw-node-picker-toolbar">
+            <div className="cw-node-picker-title-group">
+              <strong className="cw-node-picker-title">选择自选节点</strong>
+              <span className="badge badge-info cw-node-picker-counter">
+                已选 {selectedNodeIDs.size} / {nodes.length} 个节点
+              </span>
+            </div>
             <div className="cw-node-picker-actions">
-              <Button type="button" variant="ghost" onClick={selectAllNodes}>全选</Button>
-              <Button type="button" variant="ghost" onClick={deselectAllNodes}>清空</Button>
+              <button type="button" className="button button-secondary button-sm" onClick={selectAllNodes}>全选</button>
+              <button type="button" className="button button-secondary button-sm" onClick={deselectAllNodes}>清空</button>
             </div>
           </div>
-          <div className="nw-search-box" style={{ margin: "8px 0" }}>
+
+          <div className="search-box nw-search cw-node-picker-search">
             <Search size={16} />
             <input
               type="search"
@@ -1802,82 +1798,55 @@ function CreateCustomSubscriptionDialog({
               onChange={(e) => setNodeFilter(e.target.value)}
               placeholder="搜索节点名称、协议或标签..."
             />
+            {nodeFilter ? (
+              <button type="button" className="nw-search-clear" onClick={() => setNodeFilter("")} title="清除搜索">
+                <X size={14} />
+              </button>
+            ) : null}
           </div>
+
           {nodes.length === 0 ? (
             <p className="cw-section-hint">当前系统暂无可用节点，可在「节点管理」中先添加节点。</p>
+          ) : visibleNodes.length === 0 ? (
+            <div className="cw-node-picker-empty">
+              <span>未找到与“{nodeFilter}”匹配的节点</span>
+            </div>
           ) : (
-            <div className="cw-option-grid cw-node-select-grid">
+            <div className="cw-node-select-grid">
               {visibleNodes.map((node) => {
                 const isChecked = selectedNodeIDs.has(node.id);
                 return (
-                  <label className={`cw-option-check ${isChecked ? "is-selected" : ""}`} key={node.id}>
+                  <label
+                    className={`cw-node-card ${isChecked ? "is-selected" : ""} ${!node.enabled ? "is-disabled" : ""}`}
+                    key={node.id}
+                  >
                     <input
                       type="checkbox"
                       checked={isChecked}
                       onChange={() => toggle(setSelectedNodeIDs, node.id)}
                     />
-                    <span>
-                      <strong>{node.node_name}</strong>
-                      <small>{node.protocol || "未知协议"}{node.enabled ? "" : " · 已停用"}</small>
-                    </span>
+                    <div className="cw-node-card-body">
+                      <div className="cw-node-card-header">
+                        <strong title={node.node_name}>{node.node_name}</strong>
+                      </div>
+                      <div className="cw-node-card-meta">
+                        <span className="cw-node-proto-tag">{node.protocol || "未知协议"}</span>
+                        {!node.enabled ? (
+                          <span className="cw-node-status-tag">已停用</span>
+                        ) : null}
+                        {node.tags && node.tags.length > 0 ? (
+                          <span className="cw-node-tag-item" title={node.tags.join(", ")}>
+                            {node.tags.slice(0, 2).join(", ")}
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
                   </label>
                 );
               })}
             </div>
           )}
         </div>
-
-        <Button type="button" variant="ghost" onClick={() => setAdvanced((v) => !v)}>
-          <Settings2 size={16} />
-          {advanced ? "收起高级配置" : "配置覆写规则、脚本与服务器统计"}
-        </Button>
-
-        {advanced ? (
-          <>
-            <div className="cw-checkboxes">
-              <Toggle checked={autoSync} onChange={setAutoSync} label="自动同步自定义规则" />
-              <Toggle checked={rawOutput} onChange={setRawOutput} label="输出原始配置" />
-            </div>
-            <div className="cw-form-grid">
-              <div className="cw-form-section">
-                <strong>指定覆写规则</strong>
-                <p className="cw-section-hint">不选表示全部已启用规则。</p>
-                <div className="cw-option-stack">
-                  {rules.map((rule) => (
-                    <label className="cw-option-check" key={rule.id}>
-                      <input type="checkbox" checked={selectedRuleIDs.has(rule.id)} onChange={() => toggle(setSelectedRuleIDs, rule.id)} />
-                      <span><strong>{rule.name}</strong><small>{rule.type}</small></span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <div className="cw-form-section">
-                <strong>指定覆写脚本</strong>
-                <p className="cw-section-hint">不选表示全部已启用脚本。</p>
-                <div className="cw-option-stack">
-                  {scripts.map((script) => (
-                    <label className="cw-option-check" key={script.id}>
-                      <input type="checkbox" checked={selectedScriptIDs.has(script.id)} onChange={() => toggle(setSelectedScriptIDs, script.id)} />
-                      <span><strong>{script.name}</strong><small>{script.hook}</small></span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <div className="cw-form-section">
-              <strong>流量统计服务器</strong>
-              <p className="cw-section-hint">不选表示汇总全部服务器。</p>
-              <div className="cw-option-grid">
-                {servers.map((server) => (
-                  <label className="cw-option-check" key={server.id}>
-                    <input type="checkbox" checked={selectedServerIDs.has(server.id)} onChange={() => toggle(setSelectedServerIDs, server.id)} />
-                    <span><strong>{server.name}</strong><small>服务器 #{server.id}</small></span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          </>
-        ) : null}
 
         <div className="dialog-actions">
           <Button type="button" variant="secondary" disabled={working} onClick={onClose}>取消</Button>

@@ -817,6 +817,10 @@ export function SubscriptionGeneratorPage({ notify = noNotify }: ContentPageProp
   return (
     <section className="cw-page">
       <PageHeader title="订阅生成器" description="从节点管理选择节点，使用规则分类或模板生成可直接使用的 Mihomo 配置。" actions={<IconButton label="刷新节点和模板" onClick={() => void load()}><RefreshCw size={18} /></IconButton>} />
+      <div className="cw-help" style={{ marginBottom: 16 }}>
+        <Info size={16} />
+        <span>本生成器与「订阅管理 - 自选订阅」全面打通互通，在此生成的配置保存后将自动归入自选专线订阅，支持统一维护流量阀门与分流。</span>
+      </div>
       {error ? <ErrorState message={error} /> : null}
       {loading ? <Surface className="cw-loading"><Spinner /></Surface> : (
         <Surface className="cw-generator-workbench">
@@ -875,27 +879,93 @@ export function SubscriptionGeneratorPage({ notify = noNotify }: ContentPageProp
           </section>
         </Surface>
       )}
-      {showSave ? <SaveGeneratedDialog content={output} onClose={() => setShowSave(false)} onSaved={() => { setShowSave(false); notify("订阅已保存"); }} /> : null}
+      {showSave ? (
+        <SaveGeneratedDialog
+          content={output}
+          template={mode === "template" ? template : ""}
+          selectedNodeIDs={[...selectedNodes]}
+          onClose={() => setShowSave(false)}
+          onSaved={() => { setShowSave(false); notify("订阅已保存至自选订阅"); }}
+        />
+      ) : null}
     </section>
   );
 }
 
-function SaveGeneratedDialog({ content, onClose, onSaved }: { content: string; onClose: () => void; onSaved: () => void }) {
+function SaveGeneratedDialog({
+  content,
+  template = "",
+  selectedNodeIDs = [],
+  onClose,
+  onSaved,
+}: {
+  content: string;
+  template?: string;
+  selectedNodeIDs?: number[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [filename, setFilename] = useState("");
+  const [trafficLimit, setTrafficLimit] = useState("");
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setWorking(true); setError("");
     try {
-      await api.post("/api/admin/subscribe-files/create-from-config", { name, description, filename: normalizedFilename(filename || name), content });
+      const cleanFilename = normalizedFilename(filename || name);
+      const res = await api.post<{ file?: SubscribeFile }>("/api/admin/subscribe-files/create-from-config", {
+        name: name.trim(),
+        description: description.trim(),
+        filename: cleanFilename,
+        content,
+      });
+      const file = res.file;
+      if (file?.id) {
+        const limit = trafficLimit.trim() ? Number(trafficLimit) : null;
+        await api.put(`/api/admin/subscribe-files/${file.id}`, {
+          name: file.name,
+          description: file.description || description.trim(),
+          type: "create",
+          filename: file.filename,
+          template_filename: template,
+          selected_node_ids: selectedNodeIDs,
+          selected_tags: [],
+          selected_custom_rule_ids: [],
+          selected_override_script_ids: [],
+          stats_server_ids: "",
+          traffic_limit: limit,
+          auto_sync_custom_rules: true,
+          raw_output: false,
+          auto_update_interval: 0,
+        });
+      }
       onSaved();
     } catch (reason) { setError(fail(reason, "保存订阅失败")); }
     finally { setWorking(false); }
   };
-  return <Dialog title="保存生成的订阅" description="保存后可在订阅管理中继续编辑和分配" onClose={onClose}><form className="cw-form" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}<Field label="订阅名称"><input required value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：日常使用" /></Field><Field label="文件名"><input value={filename} onChange={(event) => setFilename(event.target.value)} placeholder="留空则根据名称生成" /></Field><Field label="说明"><textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="可选" /></Field><div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在保存" /> : "保存"}</Button></div></form></Dialog>;
+  return (
+    <Dialog title="保存生成的自选订阅" description="保存后将直接收录至「订阅管理 - 自选订阅」，支持持续统计与配置维护" onClose={onClose}>
+      <form className="cw-form" onSubmit={submit}>
+        {error ? <ErrorState message={error} /> : null}
+        <Field label="订阅名称"><input required value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：日常使用" /></Field>
+        <div className="cw-form-grid">
+          <Field label="文件名" hint="留空则根据名称自动生成"><input value={filename} onChange={(event) => setFilename(event.target.value)} placeholder="留空则根据名称生成" /></Field>
+          <Field label="总流量阀门（GB）" hint="达到该流量后自动阻断；留空不限制">
+            <input type="number" min="0" step="0.1" value={trafficLimit} onChange={(event) => setTrafficLimit(event.target.value)} placeholder="例如：100（单位 GB）" />
+          </Field>
+        </div>
+        <Field label="说明"><textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="可选" /></Field>
+        <div className="dialog-actions">
+          <Button type="button" variant="secondary" onClick={onClose}>取消</Button>
+          <Button type="submit" disabled={working}>{working ? <Spinner label="正在保存" /> : "保存到自选订阅"}</Button>
+        </div>
+      </form>
+    </Dialog>
+  );
 }
 
 function subscribeFilePayload(file: SubscribeFile, overrides: Partial<SubscribeFile> = {}) {
@@ -972,11 +1042,39 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
   const [strategyError, setStrategyError] = useState("");
   const [showComposer, setShowComposer] = useState(true);
 
+  // 自选订阅生成工作台状态
+  const [showCustomComposer, setShowCustomComposer] = useState(false);
+  const [customGenName, setCustomGenName] = useState("");
+  const [customGenFilename, setCustomGenFilename] = useState("");
+  const [customGenTemplate, setCustomGenTemplate] = useState("");
+  const [customGenLimit, setCustomGenLimit] = useState("");
+  const [customGenDesc, setCustomGenDesc] = useState("");
+  const [customGenMode, setCustomGenMode] = useState<"rules" | "template">("template");
+  const [customGenSelectedRules, setCustomGenSelectedRules] = useState<Set<string>>(() => new Set(defaultRuleKeys));
+  const [selectedCustomNodeIDs, setSelectedCustomNodeIDs] = useState<Set<number>>(() => new Set());
+  const [customNodeFilter, setCustomNodeFilter] = useState("");
+  const [customOutput, setCustomOutput] = useState("");
+  const [customGenerating, setCustomGenerating] = useState(false);
+  const [customSaving, setCustomSaving] = useState(false);
+  const [customGenError, setCustomGenError] = useState("");
+
   useEffect(() => {
     if (!strategyTemplate && templates.length > 0) {
       setStrategyTemplate(templates[0]);
     }
   }, [templates, strategyTemplate]);
+
+  useEffect(() => {
+    if (nodes.length > 0 && selectedCustomNodeIDs.size === 0) {
+      setSelectedCustomNodeIDs(new Set(nodes.filter((n) => n.enabled).map((n) => n.id)));
+    }
+  }, [nodes]);
+
+  useEffect(() => {
+    if (!customGenTemplate && templates.length > 0) {
+      setCustomGenTemplate(templates[0]);
+    }
+  }, [templates, customGenTemplate]);
 
   const load = useCallback(async () => {
     setLoading(true); setError(""); setLoadWarning("");
@@ -999,13 +1097,6 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
     } else {
       const sortedFiles = (fileResult.value.files ?? []).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
       setFiles(sortedFiles);
-      if (!userSelectedTabRef.current) {
-        const extCount = sortedFiles.filter((f) => f.type === "import" || f.type === "upload" || Boolean(f.url)).length;
-        const custCount = sortedFiles.filter((f) => f.type === "create" || f.type === "package" || (!f.url && f.type !== "import" && f.type !== "upload")).length;
-        if (extCount === 0 && custCount > 0) {
-          setTab("custom");
-        }
-      }
     }
     if (results[1].status === "fulfilled") setExternal(Array.isArray(results[1].value) ? results[1].value : []);
     if (results[2].status === "fulfilled") setToken(results[2].value);
@@ -1259,6 +1350,184 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
       setStrategyError(fail(reason, "生成策略订阅失败"));
     } finally {
       setStrategyWorking(false);
+    }
+  };
+
+  const visibleCustomNodes = useMemo(() => {
+    if (!customNodeFilter.trim()) return nodes;
+    const q = customNodeFilter.trim().toLowerCase();
+    return nodes.filter(
+      (n) =>
+        n.node_name.toLowerCase().includes(q) ||
+        (n.protocol && n.protocol.toLowerCase().includes(q)) ||
+        (n.tags && n.tags.some((t) => t.toLowerCase().includes(q)))
+    );
+  }, [nodes, customNodeFilter]);
+
+  const isAllVisibleCustomNodesSelected =
+    visibleCustomNodes.length > 0 && visibleCustomNodes.every((n) => selectedCustomNodeIDs.has(n.id));
+
+  const toggleSelectAllCustomNodes = () => {
+    if (isAllVisibleCustomNodesSelected) {
+      setSelectedCustomNodeIDs((curr) => {
+        const next = new Set(curr);
+        visibleCustomNodes.forEach((n) => next.delete(n.id));
+        return next;
+      });
+    } else {
+      setSelectedCustomNodeIDs((curr) => {
+        const next = new Set(curr);
+        visibleCustomNodes.forEach((n) => next.add(n.id));
+        return next;
+      });
+    }
+  };
+
+  const deselectAllCustomNodes = () => {
+    setSelectedCustomNodeIDs(new Set());
+  };
+
+  const toggleCustomNode = (id: number) => {
+    setSelectedCustomNodeIDs((curr) => {
+      const next = new Set(curr);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleCustomRule = (key: string) => {
+    setCustomGenSelectedRules((curr) => {
+      const next = new Set(curr);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const handleGenerateCustomOutput = async () => {
+    const selectedProxies = nodes
+      .filter((n) => selectedCustomNodeIDs.has(n.id))
+      .map(safeProxy)
+      .filter((p): p is Record<string, unknown> => Boolean(p));
+
+    if (selectedProxies.length === 0) {
+      setCustomGenError("请至少选择一个节点");
+      return;
+    }
+
+    setCustomGenerating(true);
+    setCustomGenError("");
+    try {
+      if (customGenMode === "template") {
+        if (!customGenTemplate) throw new Error("请选择规则模板");
+        const res = await api
+          .post<{ content: string }>("/api/admin/rule-templates/process", {
+            template_name: customGenTemplate,
+            proxies: selectedProxies,
+          })
+          .catch(() =>
+            api.post<{ content: string }>("/api/admin/template-v3/process", {
+              template_name: customGenTemplate,
+              proxies: selectedProxies,
+            })
+          );
+        setCustomOutput(res.content || "");
+      } else {
+        setCustomOutput(customClashConfig(selectedProxies, customGenSelectedRules));
+      }
+      notify("自选订阅配置已生成");
+    } catch (reason) {
+      setCustomGenError(fail(reason, "生成配置失败"));
+    } finally {
+      setCustomGenerating(false);
+    }
+  };
+
+  const handleSaveCustomSubscription = async () => {
+    setCustomSaving(true);
+    setCustomGenError("");
+    try {
+      if (!customGenName.trim()) throw new Error("请输入自选订阅名称");
+      if (selectedCustomNodeIDs.size === 0) throw new Error("请至少选择一个自选节点");
+
+      const limit = customGenLimit.trim() ? Number(customGenLimit) : null;
+      if (limit != null && (!Number.isFinite(limit) || limit < 0)) {
+        throw new Error("总流量阀门必须是大于等于 0 的 GB 数值");
+      }
+      if (!isAdmin && limit != null) {
+        throw new Error("普通用户无权设置或修改流量限制");
+      }
+
+      let contentToSave = customOutput;
+      if (!contentToSave) {
+        const selectedProxies = nodes
+          .filter((n) => selectedCustomNodeIDs.has(n.id))
+          .map(safeProxy)
+          .filter((p): p is Record<string, unknown> => Boolean(p));
+        if (customGenMode === "template" && customGenTemplate) {
+          try {
+            const res = await api
+              .post<{ content: string }>("/api/admin/rule-templates/process", {
+                template_name: customGenTemplate,
+                proxies: selectedProxies,
+              })
+              .catch(() =>
+                api.post<{ content: string }>("/api/admin/template-v3/process", {
+                  template_name: customGenTemplate,
+                  proxies: selectedProxies,
+                })
+              );
+            contentToSave = res.content || "proxies: []\n";
+          } catch {
+            contentToSave = "proxies: []\n";
+          }
+        } else {
+          contentToSave = customClashConfig(selectedProxies, customGenSelectedRules);
+        }
+      }
+
+      const cleanFilename = normalizedFilename(customGenFilename || customGenName);
+      const createRes = await api.post<{ file?: SubscribeFile }>("/api/admin/subscribe-files/create-from-config", {
+        name: customGenName.trim(),
+        description: customGenDesc.trim(),
+        filename: cleanFilename,
+        content: contentToSave || "proxies: []\n",
+      });
+
+      const file = createRes.file;
+      if (!file?.id) {
+        throw new Error("订阅创建失败，后端未返回文件 ID");
+      }
+
+      await api.put(`/api/admin/subscribe-files/${file.id}`, {
+        name: file.name,
+        description: file.description || customGenDesc.trim(),
+        type: "create",
+        filename: file.filename,
+        template_filename: customGenMode === "template" ? customGenTemplate : "",
+        selected_node_ids: [...selectedCustomNodeIDs],
+        selected_tags: [],
+        selected_custom_rule_ids: [],
+        selected_override_script_ids: [],
+        stats_server_ids: "",
+        traffic_limit: isAdmin ? limit : null,
+        auto_sync_custom_rules: true,
+        raw_output: false,
+        auto_update_interval: 0,
+      });
+
+      notify("自选订阅已成功创建并保存");
+      setCustomGenName("");
+      setCustomGenFilename("");
+      setCustomGenLimit("");
+      setCustomGenDesc("");
+      setCustomOutput("");
+      await load();
+    } catch (reason) {
+      setCustomGenError(fail(reason, "保存自选订阅失败"));
+    } finally {
+      setCustomSaving(false);
     }
   };
 
@@ -1685,7 +1954,285 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
           )}
         </Surface>
       ) : tab === "custom" ? (
-        <Surface className="table-surface cw-subscription-surface">
+        <>
+          <Surface className="cw-generator-workbench cw-custom-sub-composer">
+            <div className="cw-strategy-composer-head">
+              <div>
+                <h2>
+                  <WandSparkles size={18} style={{ color: "var(--accent)" }} />
+                  自选订阅生成工作台
+                </h2>
+                <small>遵循「选择节点 → 规则/模板模式 → 参数与总流量阀门 → 实时生成与预览」引导流程，生成专属自选专线订阅。</small>
+              </div>
+              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => setShowCustomComposer(!showCustomComposer)}
+                >
+                  <SlidersHorizontal size={15} />
+                  {showCustomComposer ? "收起生成工作台" : "展开生成工作台"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => setShowCreateCustom(true)}
+                >
+                  <Plus size={15} />
+                  弹窗向导
+                </Button>
+              </div>
+            </div>
+
+            {showCustomComposer ? (
+              <div className="cw-generator-flow">
+                {customGenError ? <ErrorState message={customGenError} /> : null}
+
+                {/* 步骤 1：选择自选节点 */}
+                <section className="cw-workbench-section cw-node-section">
+                  <div className="cw-section-title">
+                    <div>
+                      <h2><span className="cw-step-badge">1</span>挑选自选专线节点</h2>
+                      <p>从已启用的自建节点与转发中继中自选组装专线集合</p>
+                    </div>
+                    <span className="cw-category-count">已选 {selectedCustomNodeIDs.size} / {nodes.length} 个节点</span>
+                  </div>
+
+                  <div className="cw-node-picker-toolbar">
+                    <div className="search-box nw-search cw-node-picker-search" style={{ flex: 1, margin: 0 }}>
+                      <Search size={16} />
+                      <input
+                        type="search"
+                        value={customNodeFilter}
+                        onChange={(e) => setCustomNodeFilter(e.target.value)}
+                        placeholder="搜索节点名称、协议或标签..."
+                        aria-label="搜索自选节点"
+                      />
+                    </div>
+                    <div className="cw-node-picker-actions">
+                      <button
+                        type="button"
+                        className="button button-secondary button-sm"
+                        onClick={toggleSelectAllCustomNodes}
+                        title={isAllVisibleCustomNodesSelected ? "当前已全选，点击清除" : "全选当前可见节点"}
+                      >
+                        全选节点
+                      </button>
+                      <button
+                        type="button"
+                        className="button button-secondary button-sm"
+                        onClick={deselectAllCustomNodes}
+                      >
+                        清空节点
+                      </button>
+                    </div>
+                  </div>
+
+                  {nodes.length === 0 ? (
+                    <div className="cw-empty-inline">暂无可用节点，请先在节点管理中添加并启用节点。</div>
+                  ) : visibleCustomNodes.length === 0 ? (
+                    <div className="cw-node-picker-empty">
+                      <Search size={24} />
+                      <p>未找到匹配的节点</p>
+                    </div>
+                  ) : (
+                    <div className="cw-node-select-grid">
+                      {visibleCustomNodes.map((node) => {
+                        const isChecked = selectedCustomNodeIDs.has(node.id);
+                        return (
+                          <label
+                            key={node.id}
+                            className={`cw-node-card ${isChecked ? "is-selected" : ""} ${!node.enabled ? "is-disabled" : ""}`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => toggleCustomNode(node.id)}
+                              aria-label={`自选工作台 节点 ${node.node_name}`}
+                            />
+                            <div className="cw-node-card-body">
+                              <div className="cw-node-card-header">
+                                <strong title={node.node_name}>{node.node_name}</strong>
+                              </div>
+                              <div className="cw-node-card-meta">
+                                <span className="cw-node-proto-tag">{node.protocol || "未知协议"}</span>
+                                {node.tags && node.tags.length > 0 ? (
+                                  <span className="cw-node-tag-item">{node.tags.slice(0, 2).join(", ")}</span>
+                                ) : null}
+                              </div>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </section>
+
+                {/* 步骤 2：规则模式与分流 */}
+                <section className="cw-workbench-section">
+                  <div className="cw-section-title">
+                    <div>
+                      <h2><span className="cw-step-badge">2</span>规则模式与分流</h2>
+                      <p>选择绑定 V3 规则模板，或使用可视化规则分类生成配置</p>
+                    </div>
+                  </div>
+                  <div className="cw-mode" role="tablist" aria-label="自选规则模式">
+                    <button
+                      type="button"
+                      className={customGenMode === "template" ? "is-active" : ""}
+                      onClick={() => setCustomGenMode("template")}
+                    >
+                      <FileCode2 size={16} />使用 V3 模板
+                    </button>
+                    <button
+                      type="button"
+                      className={customGenMode === "rules" ? "is-active" : ""}
+                      onClick={() => setCustomGenMode("rules")}
+                    >
+                      <Settings2 size={16} />自定义规则分类
+                    </button>
+                  </div>
+                  {customGenMode === "template" ? (
+                    <div className="cw-template-field">
+                      <Field label="绑定 V3 分流模板" hint="自选节点将自动注入到所选模板的策略组中">
+                        <select
+                          value={customGenTemplate}
+                          onChange={(e) => setCustomGenTemplate(e.target.value)}
+                          aria-label="选择自选分流模板"
+                        >
+                          <option value="">不绑定模板（仅输出纯节点）</option>
+                          {templates.map((tpl) => (
+                            <option value={tpl} key={tpl}>{tpl}</option>
+                          ))}
+                        </select>
+                      </Field>
+                    </div>
+                  ) : (
+                    <div style={{ marginTop: 14 }}>
+                      <div className="cw-section-title" style={{ marginBottom: 10 }}>
+                        <small style={{ color: "var(--text-muted)" }}>点击分类勾选生效的常用分流规则：</small>
+                      </div>
+                      <div className="cw-rules">
+                        {ruleCategories.map((item) => (
+                          <button
+                            type="button"
+                            className={`cw-rule ${customGenSelectedRules.has(item.key) ? "is-selected" : ""}`}
+                            key={item.key}
+                            onClick={() => toggleCustomRule(item.key)}
+                          >
+                            <span>{item.emoji}</span>
+                            <span>{item.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </section>
+
+                {/* 步骤 3：订阅参数与总流量阀门 */}
+                <section className="cw-workbench-section">
+                  <div className="cw-section-title">
+                    <div>
+                      <h2><span className="cw-step-badge">3</span>订阅参数与总流量阀门</h2>
+                      <p>指定订阅名称、短文件名与专属流量阀门上限</p>
+                    </div>
+                  </div>
+                  <div className="cw-form-grid">
+                    <Field label="订阅名称">
+                      <input
+                        required
+                        value={customGenName}
+                        onChange={(e) => setCustomGenName(e.target.value)}
+                        placeholder="例如：自建专线集合"
+                        aria-label="自选订阅名称"
+                      />
+                    </Field>
+                    <Field label="文件名" hint="留空根据名称自动生成 .yaml 结尾">
+                      <input
+                        value={customGenFilename}
+                        onChange={(e) => setCustomGenFilename(e.target.value)}
+                        placeholder="my-custom-sub.yaml"
+                        aria-label="自选文件名"
+                      />
+                    </Field>
+                  </div>
+                  <div className="cw-form-grid" style={{ marginTop: 12 }}>
+                    <Field label="总流量阀门（GB）" hint={isAdmin ? "自选订阅达到该流量后自动阻断；留空表示不限制" : "仅管理员有权配置流量限制"}>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        disabled={!isAdmin}
+                        value={customGenLimit}
+                        onChange={(e) => setCustomGenLimit(e.target.value)}
+                        placeholder={isAdmin ? "例如：150（单位 GB）" : "无权限配置"}
+                        aria-label="自选总流量阀门"
+                      />
+                    </Field>
+                    <Field label="备注说明" hint="可选备注信息">
+                      <input
+                        value={customGenDesc}
+                        onChange={(e) => setCustomGenDesc(e.target.value)}
+                        placeholder="例如：核心业务自建中继专线"
+                        aria-label="自选备注说明"
+                      />
+                    </Field>
+                  </div>
+                </section>
+
+                {/* 步骤 4：生成与实时预览 */}
+                <section className={`cw-workbench-section cw-output-section ${customOutput ? "has-output" : ""}`}>
+                  <div className="cw-section-title">
+                    <div>
+                      <h2><span className="cw-step-badge">4</span>实时生成与保存入库</h2>
+                      <p>可实时预览配置内容，校验无误后一键保存到自选订阅列表</p>
+                    </div>
+                  </div>
+
+                  {customOutput ? (
+                    <div className="cw-generator-output">
+                      <textarea
+                        className="cw-code"
+                        aria-label="生成的自选订阅配置"
+                        rows={14}
+                        value={customOutput}
+                        onChange={(e) => setCustomOutput(e.target.value)}
+                        placeholder="选择节点与规则后生成的完整 Mihomo 配置..."
+                        spellCheck={false}
+                      />
+                      <div className="cw-output-actions">
+                        <IconButton label="复制配置" onClick={async () => { await copyText(customOutput); notify("配置已复制"); }}><Copy size={16} /></IconButton>
+                        <IconButton label="下载配置" onClick={() => downloadText(customGenFilename || "subscription.yaml", customOutput)}><Download size={16} /></IconButton>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="cw-card-actions cw-generator-actions" style={{ marginTop: 14 }}>
+                    <Button
+                      type="button"
+                      onClick={() => void handleGenerateCustomOutput()}
+                      disabled={customGenerating || selectedCustomNodeIDs.size === 0}
+                    >
+                      {customGenerating ? <Spinner label="正在生成..." /> : <><WandSparkles size={16} />生成订阅配置预览</>}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="primary"
+                      onClick={() => void handleSaveCustomSubscription()}
+                      disabled={customSaving || selectedCustomNodeIDs.size === 0 || !customGenName.trim()}
+                    >
+                      {customSaving ? <Spinner label="正在保存..." /> : <><Save size={16} />保存到自选订阅</>}
+                    </Button>
+                    {customOutput ? (
+                      <Button variant="secondary" onClick={() => setCustomOutput("")}>清空输出</Button>
+                    ) : null}
+                  </div>
+                </section>
+              </div>
+            ) : null}
+          </Surface>
+
+          <Surface className="table-surface cw-subscription-surface">
           <div className="surface-heading">
             <div>
               <h2>自选订阅</h2>
@@ -1777,7 +2324,8 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
             </div>
           )}
         </Surface>
-      ) : (
+      </>
+    ) : (
         <>
           <Surface className="cw-strategy-composer">
             <div className="cw-strategy-composer-head">

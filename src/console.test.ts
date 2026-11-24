@@ -113,7 +113,7 @@ describe("member console navigation permissions", () => {
     expect(screen.queryByRole("button", { name: "套餐管理" })).not.toBeInTheDocument();
   });
 
-  it("hides nodes and subscriptions when permissions do not include them", async () => {
+  it("hides nodes, subscriptions, and certificates when permissions do not include them", async () => {
     location.hash = "/nodes";
     renderMemberConsole([]);
 
@@ -122,5 +122,21 @@ describe("member console navigation permissions", () => {
     expect(screen.queryByRole("button", { name: "订阅链接" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "生成订阅" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "订阅管理" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "证书管理" })).not.toBeInTheDocument();
+  });
+
+  it("shows certificates when user has certificate page permission", async () => {
+    const get = renderMemberConsole(["certificates"]);
+
+    expect(await screen.findByRole("button", { name: "证书管理" })).toBeInTheDocument();
+    expect(get).toHaveBeenCalledWith("/api/user/permissions");
+  });
+
+  it("redirects direct access to /certificates when user lacks server entitlement", async () => {
+    location.hash = "/certificates";
+    renderMemberConsole([]);
+
+    await waitFor(() => expect(location.hash).toBe("#/dashboard"));
+    expect(screen.queryByRole("button", { name: "证书管理" })).not.toBeInTheDocument();
   });
 });

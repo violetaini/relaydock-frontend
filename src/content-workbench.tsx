@@ -1043,7 +1043,7 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
   const [showComposer, setShowComposer] = useState(true);
 
   // 自选订阅生成工作台状态
-  const [showCustomComposer, setShowCustomComposer] = useState(false);
+  const [showCustomComposer, setShowCustomComposer] = useState(true);
   const [customGenName, setCustomGenName] = useState("");
   const [customGenFilename, setCustomGenFilename] = useState("");
   const [customGenTemplate, setCustomGenTemplate] = useState("");
@@ -1995,7 +1995,7 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
                       <h2><span className="cw-step-badge">1</span>挑选自选专线节点</h2>
                       <p>从已启用的自建节点与转发中继中自选组装专线集合</p>
                     </div>
-                    <span className="cw-category-count">已选 {selectedCustomNodeIDs.size} / {nodes.length} 个节点</span>
+                    <span className="cw-category-count">工作台已选 {selectedCustomNodeIDs.size} / {nodes.length} 个节点</span>
                   </div>
 
                   <div className="cw-node-picker-toolbar">
@@ -2138,26 +2138,26 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
                     </div>
                   </div>
                   <div className="cw-form-grid">
-                    <Field label="订阅名称">
+                    <Field label="专线订阅名称">
                       <input
                         required
                         value={customGenName}
                         onChange={(e) => setCustomGenName(e.target.value)}
                         placeholder="例如：自建专线集合"
-                        aria-label="自选订阅名称"
+                        aria-label="工作台专线名称"
                       />
                     </Field>
-                    <Field label="文件名" hint="留空根据名称自动生成 .yaml 结尾">
+                    <Field label="目标配置文件" hint="留空根据名称自动生成 .yaml 结尾">
                       <input
                         value={customGenFilename}
                         onChange={(e) => setCustomGenFilename(e.target.value)}
                         placeholder="my-custom-sub.yaml"
-                        aria-label="自选文件名"
+                        aria-label="工作台目标文件"
                       />
                     </Field>
                   </div>
                   <div className="cw-form-grid" style={{ marginTop: 12 }}>
-                    <Field label="总流量阀门（GB）" hint={isAdmin ? "自选订阅达到该流量后自动阻断；留空表示不限制" : "仅管理员有权配置流量限制"}>
+                    <Field label="专线流量上限（GB）" hint={isAdmin ? "自选订阅达到该流量后自动阻断；留空表示不限制" : "仅管理员有权配置流量限制"}>
                       <input
                         type="number"
                         min="0"
@@ -2166,7 +2166,7 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
                         value={customGenLimit}
                         onChange={(e) => setCustomGenLimit(e.target.value)}
                         placeholder={isAdmin ? "例如：150（单位 GB）" : "无权限配置"}
-                        aria-label="自选总流量阀门"
+                        aria-label="工作台流量上限"
                       />
                     </Field>
                     <Field label="备注说明" hint="可选备注信息">
@@ -2174,7 +2174,7 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
                         value={customGenDesc}
                         onChange={(e) => setCustomGenDesc(e.target.value)}
                         placeholder="例如：核心业务自建中继专线"
-                        aria-label="自选备注说明"
+                        aria-label="工作台备注说明"
                       />
                     </Field>
                   </div>

@@ -935,7 +935,7 @@ function formatInterval(seconds?: number) {
 }
 
 export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpenRulesConfig, isAdmin = true }: ContentPageProps) {
-  const [tab, setTab] = useState<"external" | "custom" | "providers">("external");
+  const [tab, setTab] = useState<"all" | "external" | "custom" | "providers">("all");
   const userSelectedTabRef = useRef(false);
   const [search, setSearch] = useState("");
   const [files, setFiles] = useState<SubscribeFile[]>([]);
@@ -1103,22 +1103,41 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
     });
   }, [providers, external, search]);
 
+  type UnifiedSubscriptionItem =
+    | { kind: "external"; file: SubscribeFile }
+    | { kind: "custom"; file: SubscribeFile }
+    | { kind: "provider"; provider: ProxyProviderConfig };
+
+  const allFilteredItems = useMemo<UnifiedSubscriptionItem[]>(() => {
+    const list: UnifiedSubscriptionItem[] = [];
+    filteredExternalFiles.forEach((file) => list.push({ kind: "external", file }));
+    filteredCustomFiles.forEach((file) => list.push({ kind: "custom", file }));
+    filteredProviders.forEach((provider) => list.push({ kind: "provider", provider }));
+    return list;
+  }, [filteredExternalFiles, filteredCustomFiles, filteredProviders]);
+
   return (
     <section className="cw-page">
       <PageHeader
         title="订阅管理"
-        description="维护第三方外部订阅、自选节点订阅与多源混合 Provider。"
+        description="维护第三方外部订阅、自选节点订阅与策略调度订阅。"
         actions={
           <>
             {onOpenCustomRules ? <Button variant="secondary" onClick={onOpenCustomRules}><Braces size={16} />覆写规则</Button> : null}
             {onOpenRulesConfig ? <Button variant="secondary" onClick={onOpenRulesConfig}><FileCode2 size={16} />规则配置</Button> : null}
             <IconButton label="刷新订阅管理" onClick={() => void load()}><RefreshCw size={18} /></IconButton>
-            {tab === "external" ? (
+            {tab === "all" ? (
+              <>
+                <Button onClick={() => setShowImport(true)} aria-label="添加订阅"><Plus size={16} />添加外部订阅</Button>
+                <Button variant="secondary" onClick={() => setShowCreateCustom(true)}><Plus size={16} />创建自选订阅</Button>
+                <Button variant="secondary" onClick={() => setEditingProvider("new")} aria-label="Proxy Provider"><Plus size={16} />创建策略订阅</Button>
+              </>
+            ) : tab === "external" ? (
               <Button onClick={() => setShowImport(true)} aria-label="添加订阅"><Plus size={16} />添加外部订阅</Button>
             ) : tab === "custom" ? (
               <Button onClick={() => setShowCreateCustom(true)}><Plus size={16} />创建自选订阅</Button>
             ) : (
-              <Button onClick={() => setEditingProvider("new")}><Plus size={16} />Proxy Provider</Button>
+              <Button onClick={() => setEditingProvider("new")} aria-label="Proxy Provider"><Plus size={16} />创建策略订阅</Button>
             )}
           </>
         }
@@ -1133,11 +1152,13 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder={
-                tab === "external"
+                tab === "all"
+                  ? "搜索全部订阅名称、文件名、模板或策略..."
+                  : tab === "external"
                   ? "搜索外部订阅名称、文件名或链接..."
                   : tab === "custom"
                   ? "搜索自选订阅名称、文件名或模板..."
-                  : "搜索 Provider 名称或节点过滤规则..."
+                  : "搜索策略订阅名称或节点过滤规则..."
               }
               aria-label="搜索订阅"
             />
@@ -1148,6 +1169,16 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
             ) : null}
           </div>
           <div className="segmented-control cw-subscription-tabs" role="tablist" aria-label="订阅管理分类">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "all"}
+              className={tab === "all" ? "is-active" : ""}
+              onClick={() => { userSelectedTabRef.current = true; setTab("all"); }}
+            >
+              <Layers size={15} />
+              全部订阅 ({files.length + providers.length})
+            </button>
             <button
               type="button"
               role="tab"
@@ -1172,11 +1203,13 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
               type="button"
               role="tab"
               aria-selected={tab === "providers"}
+              aria-label={`策略订阅 Provider (${providers.length})`}
               className={tab === "providers" ? "is-active" : ""}
               onClick={() => { userSelectedTabRef.current = true; setTab("providers"); }}
+              title="策略订阅 (Proxy Provider)"
             >
               <Server size={15} />
-              混合订阅 / Provider ({providers.length})
+              策略订阅 ({providers.length})
             </button>
           </div>
         </div>
@@ -1187,6 +1220,190 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
 
       {loading ? (
         <Surface className="cw-loading"><Spinner /></Surface>
+      ) : tab === "all" ? (
+        <Surface className="table-surface cw-subscription-surface">
+          <div className="surface-heading">
+            <div>
+              <h2>全部订阅</h2>
+              <small>所有订阅种类集中在此统一查看与维护，包含外部订阅、自选订阅与策略订阅</small>
+            </div>
+            <span className="cw-category-count">{allFilteredItems.length} 个订阅</span>
+          </div>
+          {files.length === 0 && providers.length === 0 ? (
+            <EmptyState
+              icon={<Layers size={24} />}
+              title="暂无订阅"
+              description="您可以添加外部订阅源、创建自选组合订阅或策略订阅。"
+              action={
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", justifyContent: "center" }}>
+                  <Button onClick={() => setShowImport(true)} aria-label="添加订阅"><Plus size={16} />添加外部订阅</Button>
+                  <Button variant="secondary" onClick={() => setShowCreateCustom(true)}><Plus size={16} />创建自选订阅</Button>
+                  <Button variant="secondary" onClick={() => setEditingProvider("new")} aria-label="Proxy Provider"><Plus size={16} />创建策略订阅</Button>
+                </div>
+              }
+            />
+          ) : allFilteredItems.length === 0 ? (
+            <EmptyState icon={<Search size={24} />} title="未找到匹配的订阅" description="请尝试输入不同的搜索关键字。" />
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>订阅名称</th>
+                    <th>种类</th>
+                    <th>配置 / 规则 / 阀门</th>
+                    <th>同步 / 状态</th>
+                    <th>更新时间</th>
+                    <th aria-label="操作" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {allFilteredItems.map((item) => {
+                    if (item.kind === "external") {
+                      const file = item.file;
+                      const subItem: SubscriptionItem = { ...file, id: file.id, filename: file.filename, type: file.type };
+                      const url = resolveSubscriptionURL(subItem, token);
+                      const isExternal = file.type === "import" || Boolean(file.url);
+                      return (
+                        <tr key={`ext-${file.id}`}>
+                          <td>
+                            <div className="cw-file-name">
+                              <span className="cw-file-icon"><Globe size={18} /></span>
+                              <span>
+                                <strong>{file.name}</strong>
+                                <small>{file.filename}{file.latest_version ? ` · v${file.latest_version}` : ""}</small>
+                              </span>
+                            </div>
+                          </td>
+                          <td>
+                            <Badge tone="info">外部订阅</Badge>
+                            <span className="cw-table-note">{file.type === "upload" ? "本地上传" : "链接导入"}</span>
+                          </td>
+                          <td>
+                            <strong>{file.template_filename || "未绑定模板"}</strong>
+                            <span className="cw-table-note">{file.auto_sync_custom_rules ? "自动同步自定义规则" : "手动同步"}</span>
+                          </td>
+                          <td>
+                            <strong>{isExternal ? formatInterval(file.auto_update_interval) : "-"}</strong>
+                            <span className="cw-table-note">
+                              {isExternal ? (file.last_sync_at ? `上次同步 ${formatDate(file.last_sync_at)}` : "未同步") : "本地订阅"}
+                            </span>
+                          </td>
+                          <td>{formatDate(file.updated_at)}</td>
+                          <td>
+                            <div className="cw-table-actions">
+                              <IconButton label={`复制 ${file.name} 链接`} onClick={async () => { await copyText(url); notify("订阅链接已复制"); }}><Copy size={16} /></IconButton>
+                              {isExternal ? <IconButton label={`立即同步 ${file.name}`} disabled={working} onClick={() => void syncSubscribeFile(file)}><RotateCw size={16} /></IconButton> : null}
+                              <IconButton label={`编辑 ${file.name} 内容`} onClick={() => setEditingContent(file)}><FileCode2 size={16} /></IconButton>
+                              <IconButton label={`编辑 ${file.name}`} onClick={() => setEditingFile(file)}><Pencil size={16} /></IconButton>
+                              <IconButton label={`${file.auto_sync_custom_rules ? "关闭" : "开启"} ${file.name} 自动同步`} onClick={() => void updateFile(file, { auto_sync_custom_rules: !file.auto_sync_custom_rules })}><Sparkles size={16} /></IconButton>
+                              <IconButton label={`删除 ${file.name}`} onClick={() => setPending({ kind: "delete-file", item: file })}><Trash2 size={16} /></IconButton>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    if (item.kind === "custom") {
+                      const file = item.file;
+                      const subItem: SubscriptionItem = { ...file, id: file.id, filename: file.filename, type: file.type };
+                      const url = resolveSubscriptionURL(subItem, token);
+                      const selectedCount = file.selected_node_ids?.length ?? 0;
+                      const hasLimit = file.traffic_limit != null && file.traffic_limit > 0;
+                      return (
+                        <tr key={`cust-${file.id}`}>
+                          <td>
+                            <div className="cw-file-name">
+                              <span className="cw-file-icon"><SlidersHorizontal size={18} /></span>
+                              <span>
+                                <strong>{file.name}</strong>
+                                <small>{file.filename}{file.latest_version ? ` · v${file.latest_version}` : ""}</small>
+                              </span>
+                            </div>
+                          </td>
+                          <td>
+                            <Badge tone="good">自选订阅</Badge>
+                            <span className="cw-table-note">
+                              {selectedCount > 0 ? `${selectedCount} 个自选节点` : file.selected_tags?.length ? `标签: ${file.selected_tags.join(", ")}` : "全部可用节点"}
+                            </span>
+                          </td>
+                          <td>
+                            {hasLimit ? (
+                              <Badge tone="good">
+                                <Gauge size={13} style={{ marginRight: 4, verticalAlign: "middle" }} />
+                                {file.traffic_limit} GB 阀门
+                              </Badge>
+                            ) : (
+                              <strong>{file.template_filename || "未绑定模板"}</strong>
+                            )}
+                            <span className="cw-table-note">{hasLimit ? (file.template_filename || "未绑定模板") : (file.auto_sync_custom_rules ? "自动同步规则" : "跟随系统默认")}</span>
+                          </td>
+                          <td>
+                            <strong>自建专线</strong>
+                            <span className="cw-table-note">{file.auto_sync_custom_rules ? "自动同步自定义规则" : "手动同步"}</span>
+                          </td>
+                          <td>{formatDate(file.updated_at)}</td>
+                          <td>
+                            <div className="cw-table-actions">
+                              <IconButton label={`复制 ${file.name} 链接`} onClick={async () => { await copyText(url); notify("订阅链接已复制"); }}><Copy size={16} /></IconButton>
+                              <IconButton label={`编辑 ${file.name} 内容`} onClick={() => setEditingContent(file)}><FileCode2 size={16} /></IconButton>
+                              <IconButton label={`编辑 ${file.name}`} onClick={() => setEditingFile(file)}><Pencil size={16} /></IconButton>
+                              <IconButton label={`${file.auto_sync_custom_rules ? "关闭" : "开启"} ${file.name} 自动同步`} onClick={() => void updateFile(file, { auto_sync_custom_rules: !file.auto_sync_custom_rules })}><Sparkles size={16} /></IconButton>
+                              <IconButton label={`删除 ${file.name}`} onClick={() => setPending({ kind: "delete-file", item: file })}><Trash2 size={16} /></IconButton>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    const provider = item.provider;
+                    const source = external.find((entry) => entry.id === provider.external_subscription_id);
+                    const mode = proxyProviderMode(provider.process_mode);
+                    return (
+                      <tr key={`prov-${provider.id}`}>
+                        <td>
+                          <div className="cw-file-name">
+                            <span className="cw-file-icon"><Server size={18} /></span>
+                            <span>
+                              <strong>{provider.name}</strong>
+                              <small>HTTP · {provider.interval || 0} 秒</small>
+                            </span>
+                          </div>
+                        </td>
+                        <td>
+                          <Badge tone="warn">策略订阅</Badge>
+                          <span className="cw-table-note">来源: {source?.name || `外部订阅 #${provider.external_subscription_id}`}</span>
+                        </td>
+                        <td>
+                          <strong>{provider.filter || "全部节点"}</strong>
+                          <span className="cw-table-note">
+                            {provider.exclude_filter ? `排除 ${provider.exclude_filter}` : provider.geo_ip_filter ? `GeoIP ${provider.geo_ip_filter}` : "按规则策略分流"}
+                          </span>
+                        </td>
+                        <td>
+                          <Badge tone={provider.health_check_enabled ? "good" : "neutral"}>
+                            {provider.health_check_enabled ? "健康检查开启" : "健康检查未开"}
+                          </Badge>
+                          <span className="cw-table-note">
+                            {mode === "server" ? "Arcway 展开节点" : "Mihomo 客户端拉取"}
+                          </span>
+                        </td>
+                        <td>{formatDate(provider.updated_at)}</td>
+                        <td>
+                          <div className="cw-table-actions">
+                            <IconButton label={`编辑 Provider ${provider.name}`} onClick={() => setEditingProvider(provider)}><Pencil size={16} /></IconButton>
+                            <IconButton label={`轮换 Provider ${provider.name} 访问凭据`} onClick={() => { setPendingError(""); setPending({ kind: "rotate-provider", item: provider }); }}><RotateCw size={16} /></IconButton>
+                            <IconButton label={`删除 Provider ${provider.name}`} onClick={() => setPending({ kind: "delete-provider", item: provider })}><Trash2 size={16} /></IconButton>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Surface>
       ) : tab === "external" ? (
         <Surface className="table-surface cw-subscription-surface">
           <div className="surface-heading">
@@ -1369,7 +1586,7 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
           <div className="cw-mixed-subscription-hero">
             <div className="cw-mixed-hero-header">
               <div className="cw-mixed-hero-badge"><Sparkles size={15} /> 多源融合架构</div>
-              <h3>混合订阅原理：1 外部订阅 ＋ 2 自选订阅 ＝ 3 混合调度</h3>
+              <h3>策略订阅调度原理：1 外部订阅 ＋ 2 自选订阅 ＝ 3 策略调度</h3>
               <p>在 Mihomo 规则模板中通过 Proxy Provider 挂载第三方外部源，结合本地自建中继专线，既保证核心业务稳定性，又享受外部多节点高可用备援。</p>
             </div>
             <div className="cw-mixed-hero-flow">
@@ -1392,7 +1609,7 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
               <div className="cw-mixed-flow-card is-highlight">
                 <div className="cw-mixed-flow-step">3</div>
                 <div className="cw-mixed-flow-info">
-                  <strong>混合订阅 (Mihomo 规则调度)</strong>
+                  <strong>策略订阅 (Mihomo 规则调度)</strong>
                   <span>在模板策略组中按节点健康检查、时延或分流标签智能分流</span>
                 </div>
               </div>
@@ -1402,20 +1619,20 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
           <Surface className="table-surface cw-subscription-surface">
             <div className="surface-heading">
               <div>
-                <h2>Proxy Provider 列表</h2>
-                <small>把外部订阅作为 Mihomo provider 使用，完整保留过滤、健康检查和处理模式</small>
+                <h2>策略订阅列表</h2>
+                <small>把外部订阅作为 Mihomo 策略源（Proxy Provider）调度使用，完整保留过滤、健康检查与处理模式</small>
               </div>
-              <span className="cw-category-count">{filteredProviders.length} 个 Provider</span>
+              <span className="cw-category-count">{filteredProviders.length} 个策略订阅</span>
             </div>
             {providers.length === 0 ? (
               <EmptyState
                 icon={<Server size={24} />}
-                title="暂无 Proxy Provider"
-                description="先在「外部订阅」添加来源，再创建一个可复用的 provider 配置。"
-                action={<Button onClick={() => setEditingProvider("new")}><Plus size={16} />创建 Provider</Button>}
+                title="暂无策略订阅"
+                description="先在「外部订阅」添加来源，再创建一个可复用的策略订阅配置。"
+                action={<Button onClick={() => setEditingProvider("new")}><Plus size={16} />创建策略订阅</Button>}
               />
             ) : filteredProviders.length === 0 ? (
-              <EmptyState icon={<Search size={24} />} title="未找到匹配的 Provider" description="请尝试输入不同的搜索关键字。" />
+              <EmptyState icon={<Search size={24} />} title="未找到匹配的策略订阅" description="请尝试输入不同的搜索关键字。" />
             ) : (
               <div className="table-wrap">
                 <table>
@@ -1509,7 +1726,7 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
       {editingFile ? <EditSubscribeFileDialog item={editingFile} nodes={nodes} templates={templates} rules={rules} scripts={scripts} servers={servers} onClose={() => setEditingFile(null)} onComplete={async () => { setEditingFile(null); notify("订阅信息已更新"); await load(); }} /> : null}
       {editingContent ? <EditSubscribeContentDialog item={editingContent} onClose={() => setEditingContent(null)} onComplete={async () => { setEditingContent(null); notify("订阅内容已保存"); await load(); }} /> : null}
       {editingExternal ? <ExternalSubscriptionDialog item={editingExternal === "new" ? undefined : editingExternal} onClose={() => setEditingExternal(null)} onComplete={async () => { setEditingExternal(null); notify(editingExternal === "new" ? "外部订阅已添加" : "外部订阅已更新"); await load(); }} /> : null}
-      {editingProvider ? <ProxyProviderDialog item={editingProvider === "new" ? undefined : editingProvider} subscriptions={external} onClose={() => setEditingProvider(null)} onComplete={async () => { setEditingProvider(null); notify(editingProvider === "new" ? "Proxy Provider 已创建" : "Proxy Provider 已更新"); await load(); }} /> : null}
+      {editingProvider ? <ProxyProviderDialog item={editingProvider === "new" ? undefined : editingProvider} subscriptions={external} onClose={() => setEditingProvider(null)} onComplete={async () => { setEditingProvider(null); notify(editingProvider === "new" ? "策略订阅已创建" : "策略订阅已更新"); await load(); }} /> : null}
       {pending ? <ConfirmDialog title={pending.kind === "delete-file" ? "删除订阅文件" : pending.kind === "delete-external" ? "删除外部订阅" : pending.kind === "delete-provider" ? "删除 Proxy Provider" : "轮换 Provider 访问凭据"} description={pending.kind === "delete-file" ? `将永久删除“${pending.item.name}”及其 YAML 文件，已分配链接会立即失效。` : pending.kind === "delete-external" ? `将删除“${pending.item.name}”的同步源；已经保存的节点不会自动删除。` : pending.kind === "delete-provider" ? `将删除“${pending.item.name}”的 Provider 配置；引用它的模板需要同步调整。` : `将立即撤销“${pending.item.name}”的旧访问凭据。现有 Mihomo 配置需要重新获取订阅后才能继续更新此 Provider。`} confirmLabel={pending.kind === "rotate-provider" ? "确认轮换" : "确认删除"} tone={pending.kind === "rotate-provider" ? "primary" : "danger"} working={working} error={pendingError} onCancel={() => { setPendingError(""); setPending(null); }} onConfirm={() => void confirmPending()} /> : null}
     </section>
   );
@@ -2091,17 +2308,17 @@ function ProxyProviderDialog({ item, subscriptions, onClose, onComplete }: { ite
     finally { setWorking(false); }
   };
 
-  return <Dialog title={item ? "编辑 Proxy Provider" : "创建 Proxy Provider"} description="从外部订阅生成可复用的 Mihomo 节点来源" onClose={onClose} dismissible={!working} wide><form className="cw-form" onSubmit={submit} aria-busy={working}>{error ? <ErrorState message={error} /> : null}
+  return <Dialog title={item ? "编辑策略订阅 (Proxy Provider)" : "创建策略订阅 (Proxy Provider)"} description="从外部订阅生成可复用的 Mihomo 策略调度节点来源" onClose={onClose} dismissible={!working} wide><form className="cw-form" onSubmit={submit} aria-busy={working}>{error ? <ErrorState message={error} /> : null}
     {subscriptions.length === 0 ? <ErrorState message="尚无外部订阅，必须先在“外部订阅”页添加来源。" /> : null}
     <fieldset className="cw-lock-fields" disabled={working}>
     {legacyUnsupportedFields.length ? <div className="cw-help" role="alert"><Info size={16} /><span>此旧配置包含当前运行时不支持的字段：{legacyUnsupportedFields.join("、")}。保存前必须确认移除这些字段。</span></div> : null}
     {legacyUnsupportedFields.length ? <Toggle checked={legacyResetConfirmed} onChange={setLegacyResetConfirmed} label="确认移除旧版不兼容字段" /> : null}
-    <div className="cw-form-grid"><Field label="Provider 名称"><input required value={name} onChange={(event) => setName(event.target.value)} placeholder="airport-hk" /></Field><Field label="外部订阅"><select required value={subscriptionID} onChange={(event) => setSubscriptionID(Number(event.target.value))}><option value={0}>请选择</option>{subscriptions.map((subscription) => <option value={subscription.id} key={subscription.id}>{subscription.name}</option>)}</select></Field><Field label="Provider 类型" hint="Arcway 通过受保护的 HTTP 端点提供节点内容"><select aria-label="Provider 类型" value="http" disabled><option value="http">HTTP</option></select></Field><Field label="处理模式" hint={processMode === "server" ? "Arcway 在生成订阅时拉取并展开节点" : "Mihomo 从 Arcway 的受保护端点按需拉取节点"}><select aria-label="处理模式" value={processMode} onChange={(event) => { const mode = proxyProviderMode(event.target.value); if (mode) setProcessMode(mode); }}><option value="client">Mihomo 拉取（客户端）</option><option value="server">Arcway 展开（服务端）</option></select></Field><Field label="更新间隔（秒）"><input type="number" min="60" max="604800" value={interval} onChange={(event) => setInterval(Number(event.target.value))} /></Field><Field label="拉取代理" hint="可填代理组名称或 DIRECT"><input value={proxy} onChange={(event) => setProxy(event.target.value)} placeholder="DIRECT" /></Field></div>
+    <div className="cw-form-grid"><Field label="策略订阅名称"><input required value={name} onChange={(event) => setName(event.target.value)} placeholder="airport-hk" aria-label="Provider 名称" /></Field><Field label="外部订阅"><select required value={subscriptionID} onChange={(event) => setSubscriptionID(Number(event.target.value))}><option value={0}>请选择</option>{subscriptions.map((subscription) => <option value={subscription.id} key={subscription.id}>{subscription.name}</option>)}</select></Field><Field label="Provider 类型" hint="Arcway 通过受保护的 HTTP 端点提供节点内容"><select aria-label="Provider 类型" value="http" disabled><option value="http">HTTP</option></select></Field><Field label="处理模式" hint={processMode === "server" ? "Arcway 在生成订阅时拉取并展开节点" : "Mihomo 从 Arcway 的受保护端点按需拉取节点"}><select aria-label="处理模式" value={processMode} onChange={(event) => { const mode = proxyProviderMode(event.target.value); if (mode) setProcessMode(mode); }}><option value="client">Mihomo 拉取（客户端）</option><option value="server">Arcway 展开（服务端）</option></select></Field><Field label="更新间隔（秒）"><input type="number" min="60" max="604800" value={interval} onChange={(event) => setInterval(Number(event.target.value))} /></Field><Field label="拉取代理" hint="可填代理组名称或 DIRECT"><input value={proxy} onChange={(event) => setProxy(event.target.value)} placeholder="DIRECT" /></Field></div>
     <div className="cw-form-section"><strong>节点连通性检查</strong><Toggle checked={healthEnabled} onChange={setHealthEnabled} label="由 Mihomo 定时测试 Provider 节点连通性" />{healthEnabled ? <><Field label="节点测试 URL"><input required type="url" value={healthURL} onChange={(event) => setHealthURL(event.target.value)} /></Field><div className="cw-form-grid"><Field label="检查间隔（秒）"><input type="number" min="60" max="604800" value={healthInterval} onChange={(event) => setHealthInterval(Number(event.target.value))} /></Field><Field label="超时（毫秒）"><input type="number" min="100" max="60000" value={healthTimeout} onChange={(event) => setHealthTimeout(Number(event.target.value))} /></Field><Field label="预期 HTTP 状态"><input type="number" min="100" max="599" value={expectedStatus} onChange={(event) => setExpectedStatus(Number(event.target.value))} /></Field><div className="cw-toggle-field"><Toggle checked={healthLazy} onChange={setHealthLazy} label="Lazy 检测" /></div></div><div className="cw-help"><Info size={16} /><span>该 URL 由 Mihomo 通过各节点请求，用于判断连通性和延迟；Arcway 不会用它测试外部订阅地址。</span></div></> : null}</div>
     <div className="cw-form-section"><strong>节点过滤</strong><div className="cw-form-grid"><Field label="包含名称（正则）"><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="香港|HK" /></Field><Field label="排除名称（正则）"><input value={excludeFilter} onChange={(event) => setExcludeFilter(event.target.value)} placeholder="测试|到期" /></Field><Field label="排除协议类型（正则）"><input value={excludeType} onChange={(event) => setExcludeType(event.target.value)} placeholder="ss|vmess" /></Field></div><div className="cw-toolbar"><Button type="button" variant="secondary" onClick={() => void checkFilter()} disabled={checking || !subscriptionID}>{checking ? <Spinner label="正在检查" /> : "检查匹配"}</Button>{filterResult ? <Badge tone={filterResult.startsWith("匹配") ? "good" : "warn"}>{filterResult}</Badge> : null}</div></div>
     <Button type="button" variant="ghost" onClick={() => setAdvanced((value) => !value)}><Settings2 size={16} />{advanced ? "收起高级字段" : "展开高级字段"}</Button>
     {advanced ? <div className="cw-form-section"><strong>高级限制</strong><Field label="内容大小上限（字节）" hint="0 表示使用 Arcway 全局安全上限"><input type="number" min="0" max="52428800" value={sizeLimit} onChange={(event) => setSizeLimit(Number(event.target.value))} /></Field><div className="cw-help"><Info size={16} /><span>上游 User-Agent 请在外部订阅中设置；运行时 Provider 不接受任意请求头或未定义的 Override 原文。</span></div></div> : null}
-    <div className="dialog-actions"><Button type="button" variant="secondary" disabled={working} onClick={onClose}>取消</Button><Button type="submit" disabled={working || checking || subscriptions.length === 0 || (legacyUnsupportedFields.length > 0 && !legacyResetConfirmed)}>{working ? <Spinner label="正在保存" /> : "保存 Provider"}</Button></div>
+    <div className="dialog-actions"><Button type="button" variant="secondary" disabled={working} onClick={onClose}>取消</Button><Button type="submit" aria-label="保存 Provider" disabled={working || checking || subscriptions.length === 0 || (legacyUnsupportedFields.length > 0 && !legacyResetConfirmed)}>{working ? <Spinner label="正在保存" /> : "保存策略订阅"}</Button></div>
     </fieldset>
   </form></Dialog>;
 }

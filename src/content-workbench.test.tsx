@@ -721,10 +721,10 @@ describe("content workbench subscriptions", () => {
     expect(screen.queryByRole("button", { name: "关闭" })).not.toBeInTheDocument();
     fireEvent.keyDown(document, { key: "Escape" });
     fireEvent.mouseDown(screen.getByRole("presentation"));
-    expect(screen.getByRole("dialog", { name: "创建 Proxy Provider" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: /Proxy Provider/ })).toBeInTheDocument();
 
     resolveSave({ id: 9 });
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "创建 Proxy Provider" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /Proxy Provider/ })).not.toBeInTheDocument());
   });
 
   it("requires confirmation before clearing unsupported legacy Provider fields", async () => {
@@ -742,7 +742,7 @@ describe("content workbench subscriptions", () => {
     expect(save).not.toBeDisabled();
   });
 
-  it("navigates across 3 subscription tabs: external, custom combination, and mixed provider", async () => {
+  it("navigates across 4 subscription tabs: all, external, custom combination, and strategy provider", async () => {
     const extFile = { id: 1, name: "机场订阅", type: "import", url: "https://sub.example/airport", filename: "airport.yaml" };
     const customFile = { id: 2, name: "自选专线", type: "create", filename: "custom.yaml", traffic_limit: 150 };
     const external = [{ id: 3, name: "机场源", url: "https://sub.example/airport", node_count: 5, traffic_mode: "both" }];
@@ -751,19 +751,32 @@ describe("content workbench subscriptions", () => {
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path, [extFile, customFile], external, providers) as T);
     render(<SubscribeFilesPage />);
 
-    // Initially external tab
+    // Initially all tab shows all subscription kinds
     expect(await screen.findByText("机场订阅")).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /外部订阅/ })).toHaveClass("is-active");
+    expect(screen.getByText("自选专线")).toBeInTheDocument();
+    expect(screen.getByText("hk-provider")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /全部订阅/ })).toHaveClass("is-active");
+
+    // Click external tab
+    fireEvent.click(screen.getByRole("tab", { name: /外部订阅/ }));
+    expect(screen.getByText("机场订阅")).toBeInTheDocument();
+    expect(screen.queryByText("自选专线")).not.toBeInTheDocument();
 
     // Click custom combination tab
     fireEvent.click(screen.getByRole("tab", { name: /自选订阅/ }));
-    expect(await screen.findByText("自选专线")).toBeInTheDocument();
+    expect(screen.getByText("自选专线")).toBeInTheDocument();
     expect(screen.getByText("150 GB 阀门")).toBeInTheDocument();
 
-    // Click mixed provider tab
-    fireEvent.click(screen.getByRole("tab", { name: /混合订阅/ }));
+    // Click strategy provider tab
+    fireEvent.click(screen.getByRole("tab", { name: /策略订阅/ }));
     expect(await screen.findByText("hk-provider")).toBeInTheDocument();
-    expect(screen.getByText("混合订阅原理：1 外部订阅 ＋ 2 自选订阅 ＝ 3 混合调度")).toBeInTheDocument();
+    expect(screen.getByText(/策略订阅调度原理/)).toBeInTheDocument();
+
+    // Click back to all tab
+    fireEvent.click(screen.getByRole("tab", { name: /全部订阅/ }));
+    expect(screen.getByText("机场订阅")).toBeInTheDocument();
+    expect(screen.getByText("自选专线")).toBeInTheDocument();
+    expect(screen.getByText("hk-provider")).toBeInTheDocument();
   });
 
   it("creates a custom combination subscription with a total traffic valve in GB", async () => {

@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
-import { extractList, ForwardingManagement, groupTunnelTemplates, isReverseHops } from "./forwarding-management";
+import { extractList, ForwardingManagement, ForwardWizard, groupGrants, groupTunnelTemplates, isReverseHops, type TunnelGrant, type TunnelTemplate } from "./forwarding-management";
 import type { RemoteServer } from "./types";
 
 vi.hoisted(() => {
@@ -1094,5 +1094,129 @@ describe("administrator tunnel composition", () => {
     fireEvent.change(sourceSelect, { target: { value: "package" } });
     expect(screen.getByText("alice")).toBeInTheDocument();
     expect(screen.queryByText("charlie")).not.toBeInTheDocument();
+  });
+
+  it("groups bidirectional grants into one card and toggles direction with live flow animation updates", async () => {
+    const singleTunnel = {
+      id: 1,
+      name: "单向路线",
+      state: "active",
+      network: "tcp_udp",
+      hops: [
+        { position: 0, server_id: 10, server_name: "Oracle SJC" },
+        { position: 1, server_id: 11, server_name: "KMQANS KT" },
+      ],
+    };
+    const bidiForwardTunnel = {
+      id: 2,
+      name: "港台",
+      state: "active",
+      network: "tcp_udp",
+      hops: [
+        { position: 0, server_id: 21, server_name: "Bestvm TW" },
+        { position: 1, server_id: 22, server_name: "Bestvm HK" },
+      ],
+    };
+    const bidiReverseTunnel = {
+      id: 3,
+      name: "港台",
+      state: "active",
+      network: "tcp_udp",
+      hops: [
+        { position: 0, server_id: 22, server_name: "Bestvm HK" },
+        { position: 1, server_id: 21, server_name: "Bestvm TW" },
+      ],
+    };
+
+    const grant1 = {
+      id: 101,
+      tunnel_id: 1,
+      tunnel_name: "单向路线",
+      state: "active",
+      tunnel: singleTunnel,
+    };
+    const grant2 = {
+      id: 102,
+      tunnel_id: 2,
+      tunnel_name: "港台",
+      state: "active",
+      tunnel: bidiForwardTunnel,
+    };
+    const grant3 = {
+      id: 103,
+      tunnel_id: 3,
+      tunnel_name: "港台",
+      state: "active",
+      tunnel: bidiReverseTunnel,
+    };
+
+    const testGrants = [grant1, grant2, grant3] as unknown as TunnelGrant[];
+    const testTemplates = [singleTunnel, bidiForwardTunnel, bidiReverseTunnel] as unknown as TunnelTemplate[];
+
+    // 1. 测试 groupGrants 逻辑：3 个 grant 合并为 2 个 group
+    const groups = groupGrants(testGrants, testTemplates);
+    expect(groups).toHaveLength(2);
+    expect(groups[0].name).toBe("单向路线");
+    expect(groups[0].isBidirectional).toBe(false);
+
+    expect(groups[1].name).toBe("港台");
+    expect(groups[1].isBidirectional).toBe(true);
+    expect(groups[1].forwardGrant.id).toBe(102);
+    expect(groups[1].reverseGrant?.id).toBe(103);
+
+    // 2. 测试 ForwardWizard 渲染：
+    const testNodes = [
+      { id: 201, node_name: "台湾节点", protocol: "vless", enabled: true, original_server: "Bestvm TW" },
+      { id: 202, node_name: "香港节点", protocol: "trojan", enabled: true, original_server: "Bestvm HK" },
+    ] as unknown as import("./types").NodeItem[];
+
+    render(
+      <ForwardWizard
+        grants={testGrants}
+        initialGrantID="102"
+        nodes={testNodes}
+        templates={testTemplates}
+        onClose={vi.fn()}
+        onComplete={vi.fn()}
+      />
+    );
+
+    // Step 1: 验证双向隧道只显示一个卡片，且带有 "双向" 标签
+    const bidiTag = screen.getByText("双向");
+    expect(bidiTag).toBeInTheDocument();
+    // 两个按钮卡片：单向路线 与 港台（不重复）
+    const choiceButtons = screen.getAllByRole("button").filter((btn) => btn.className.includes("is-active") || btn.querySelector(".fm-route-line"));
+    expect(choiceButtons).toHaveLength(2);
+
+    // 进入 Step 2: 选择目标
+    fireEvent.click(screen.getByRole("button", { name: /下一步/ }));
+
+    // 验证出现正向和反向的滑块切换按钮
+    const forwardBtn = screen.getByRole("button", { name: /正向/ });
+    const reverseBtn = screen.getByRole("button", { name: /反向/ });
+    expect(forwardBtn).toBeInTheDocument();
+    expect(reverseBtn).toBeInTheDocument();
+    expect(forwardBtn).toHaveClass("is-active");
+
+    // 检查此时下方动图显示正向拓扑：入口为 Bestvm TW，出口为 Bestvm HK
+    const flowViz = screen.getByLabelText("流量走向动效图");
+    expect(flowViz).toBeInTheDocument();
+    expect(within(flowViz).getByText("Bestvm TW")).toBeInTheDocument();
+    expect(within(flowViz).getByText("入口 (第1跳)")).toBeInTheDocument();
+    expect(within(flowViz).getByText("Bestvm HK")).toBeInTheDocument();
+    expect(within(flowViz).getByText("出口 (第2跳)")).toBeInTheDocument();
+
+    // 点击 "反向" 滑块
+    fireEvent.click(reverseBtn);
+    expect(reverseBtn).toHaveClass("is-active");
+    expect(forwardBtn).not.toHaveClass("is-active");
+
+    // 验证动图立即动态更新：入口翻转为 Bestvm HK，出口翻转为 Bestvm TW
+    const hopEntries = within(flowViz).getAllByText(/第[12]跳/);
+    expect(hopEntries).toHaveLength(2);
+    // 第一跳对应的父级节点显示 Bestvm HK
+    expect(hopEntries[0].closest(".fm-flow-node-meta")).toHaveTextContent("Bestvm HK");
+    // 第二跳对应的父级节点显示 Bestvm TW
+    expect(hopEntries[1].closest(".fm-flow-node-meta")).toHaveTextContent("Bestvm TW");
   });
 });

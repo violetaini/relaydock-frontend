@@ -528,6 +528,81 @@ function tunnelName(grant: TunnelGrant, templates: TunnelTemplate[]): string {
   return grant.tunnel_name || grant.name || tunnelForGrant(grant, templates)?.name || `隧道 ${grant.tunnel_id ?? grant.id}`;
 }
 
+export interface GrantChoiceGroup {
+  key: string;
+  name: string;
+  isBidirectional: boolean;
+  forwardGrant: TunnelGrant;
+  reverseGrant?: TunnelGrant;
+  forwardTemplate?: TunnelTemplate;
+  reverseTemplate?: TunnelTemplate;
+  hops: Array<{ id: number; name: string }>;
+  speedMbps?: number;
+  connectionLimit?: number;
+  expiresAt?: string | null;
+}
+
+export function groupGrants(
+  grants: TunnelGrant[],
+  templates: TunnelTemplate[] = []
+): GrantChoiceGroup[] {
+  const groups: GrantChoiceGroup[] = [];
+  const used = new Set<string>();
+
+  for (let i = 0; i < grants.length; i++) {
+    const primary = grants[i];
+    const primaryID = String(resourceID(primary));
+    if (used.has(primaryID)) continue;
+
+    const primaryTemplate = tunnelForGrant(primary, templates);
+    const primaryHops = primaryTemplate ? routeHops(primaryTemplate) : [];
+    const pName = tunnelName(primary, templates).trim();
+    let partner: TunnelGrant | undefined;
+    let partnerTemplate: TunnelTemplate | undefined;
+
+    if (primaryHops.length >= 2) {
+      for (let j = i + 1; j < grants.length; j++) {
+        const candidate = grants[j];
+        const candidateID = String(resourceID(candidate));
+        if (used.has(candidateID)) continue;
+
+        const cName = tunnelName(candidate, templates).trim();
+        if (pName === cName) {
+          const cTemplate = tunnelForGrant(candidate, templates);
+          if (cTemplate) {
+            const candidateHops = routeHops(cTemplate);
+            if (isReverseHops(primaryHops, candidateHops)) {
+              partner = candidate;
+              partnerTemplate = cTemplate;
+              used.add(candidateID);
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    used.add(primaryID);
+
+    const isBidirectional = Boolean(partner);
+    groups.push({
+      key: partner ? `${primaryID}-${String(resourceID(partner))}` : primaryID,
+      name: pName,
+      isBidirectional,
+      forwardGrant: primary,
+      reverseGrant: partner,
+      forwardTemplate: primaryTemplate,
+      reverseTemplate: partnerTemplate,
+      hops: primaryHops,
+      speedMbps: primary.per_forward_speed_mbps,
+      connectionLimit: primary.per_forward_connection_limit,
+      expiresAt: primary.expires_at,
+    });
+  }
+
+  return groups;
+}
+
 export function forwardState(forward: ForwardRule): string {
   return forward.observed_state || forward.state || forward.desired_state || "pending";
 }
@@ -2840,6 +2915,37 @@ export function ForwardWizard({
     requestedEntryPort: "",
     sourceCIDRs: "",
   });
+  const grantGroups = useMemo(() => groupGrants(grants, templates), [grants, templates]);
+  const activeGroup = useMemo(() => {
+    return (
+      grantGroups.find(
+        (g) =>
+          sameID(resourceID(g.forwardGrant), draft.grantID) ||
+          (g.reverseGrant && sameID(resourceID(g.reverseGrant), draft.grantID))
+      ) || grantGroups[0]
+    );
+  }, [grantGroups, draft.grantID]);
+
+  const isReverse = Boolean(
+    activeGroup?.reverseGrant && sameID(resourceID(activeGroup.reverseGrant), draft.grantID)
+  );
+  const direction: "forward" | "reverse" = isReverse ? "reverse" : "forward";
+
+  const forwardHops = useMemo(() => {
+    if (!activeGroup) return [];
+    return activeGroup.forwardTemplate ? routeHops(activeGroup.forwardTemplate) : activeGroup.hops;
+  }, [activeGroup]);
+
+  const reverseHops = useMemo(() => {
+    if (!activeGroup?.reverseGrant) return [];
+    return activeGroup.reverseTemplate
+      ? routeHops(activeGroup.reverseTemplate)
+      : [...forwardHops].reverse();
+  }, [activeGroup, forwardHops]);
+
+  const forwardHopsText = forwardHops.map((h) => h.name).join(" ➔ ");
+  const reverseHopsText = reverseHops.map((h) => h.name).join(" ➔ ");
+
   const [selectedServer, setSelectedServer] = useState<string>(
     () => matchedTarget?.original_server?.trim() || "",
   );
@@ -2968,27 +3074,55 @@ export function ForwardWizard({
     catch (reason) { setError(reason instanceof Error ? reason.message : "转发创建失败"); setWorking(""); }
   };
   return <Dialog title="创建用户转发" description="TCP 与 UDP 共用端口，支持双向隧道两端使用相同入口端口。" onClose={onClose} wide dismissible={!working}><div className="fm-wizard"><ol className="fm-steps" aria-label="创建转发步骤">{([[1, "选择隧道"], [2, "选择目标"], [3, "转发设置"], [4, "确认创建"]] as const).map(([number, label]) => <li key={number} className={step === number ? "is-active" : step > number ? "is-done" : ""}><span>{step > number ? <Check size={14} /> : number}</span><strong>{label}</strong></li>)}</ol>{error ? <ErrorState message={error} /> : null}
-    <div className="fm-wizard-content">{step === 1 ? (!grants.length ? <EmptyState icon={<Route size={25} />} title="暂无可用隧道" description="管理员尚未开通可用路线或模板未激活" /> : <div className="fm-choice-grid">{grants.map((item) => { const template = tunnelForGrant(item, templates); return <button type="button" key={String(resourceID(item))} className={sameID(resourceID(item), draft.grantID) ? "is-active" : ""} onClick={() => update("grantID", String(resourceID(item)))}><span><Route size={19} /><strong>{tunnelName(item, templates)}</strong></span>{template ? <RouteLine hops={routeHops(template).map((hop) => ({ name: hop.name }))} /> : null}<small>{item.per_forward_speed_mbps ? `${item.per_forward_speed_mbps} Mbps` : "不限速"} · {item.per_forward_connection_limit ? `${item.per_forward_connection_limit} 连接` : "不限连接"} · 至 {displayDate(item.expires_at)}</small></button>; })}</div>) : null}
+    <div className="fm-wizard-content">{step === 1 ? (!grantGroups.length ? <EmptyState icon={<Route size={25} />} title="暂无可用隧道" description="管理员尚未开通可用路线或模板未激活" /> : <div className="fm-choice-grid">{grantGroups.map((group) => { const isSelected = sameID(resourceID(group.forwardGrant), draft.grantID) || (group.reverseGrant && sameID(resourceID(group.reverseGrant), draft.grantID)); return <button type="button" key={group.key} className={isSelected ? "is-active" : ""} onClick={() => update("grantID", String(resourceID(group.forwardGrant)))}><span><Route size={19} /><strong>{group.name}</strong>{group.isBidirectional ? <span className="fm-badge-bidi">双向</span> : null}</span><RouteLine hops={group.hops.map((hop) => ({ name: hop.name }))} bidirectional={group.isBidirectional} /><small>{group.speedMbps ? `${group.speedMbps} Mbps` : "不限速"} · {group.connectionLimit ? `${group.connectionLimit} 连接` : "不限连接"} · 至 {displayDate(group.expiresAt)}</small></button>; })}</div>) : null}
       {step === 2 ? <>
-        <div className="fm-target-segmented">
-          <button
-            type="button"
-            className={draft.targetType === "managed_node" ? "is-active" : ""}
-            onClick={() => update("targetType", "managed_node")}
-          >
-            <Server size={14} />
-            <span>受管节点</span>
-            {draft.targetType === "managed_node" ? <Check size={13} /> : null}
-          </button>
-          <button
-            type="button"
-            className={draft.targetType === "custom" ? "is-active" : ""}
-            onClick={() => update("targetType", "custom")}
-          >
-            <Network size={14} />
-            <span>自定义公网目标</span>
-            {draft.targetType === "custom" ? <Check size={13} /> : null}
-          </button>
+        <div className="fm-step2-header">
+          <div className="fm-target-segmented">
+            <button
+              type="button"
+              className={draft.targetType === "managed_node" ? "is-active" : ""}
+              onClick={() => update("targetType", "managed_node")}
+            >
+              <Server size={14} />
+              <span>受管节点</span>
+              {draft.targetType === "managed_node" ? <Check size={13} /> : null}
+            </button>
+            <button
+              type="button"
+              className={draft.targetType === "custom" ? "is-active" : ""}
+              onClick={() => update("targetType", "custom")}
+            >
+              <Network size={14} />
+              <span>自定义公网目标</span>
+              {draft.targetType === "custom" ? <Check size={13} /> : null}
+            </button>
+          </div>
+
+          {activeGroup?.isBidirectional ? (
+            <div className="fm-direction-slider" role="radiogroup" aria-label="隧道流向切换">
+              <button
+                type="button"
+                className={`fm-direction-btn ${direction === "forward" ? "is-active" : ""}`}
+                onClick={() => update("grantID", String(resourceID(activeGroup.forwardGrant)))}
+              >
+                <span className="fm-dir-badge">正向</span>
+                <span className="fm-dir-text">{forwardHopsText}</span>
+                {direction === "forward" ? <Check size={13} /> : null}
+              </button>
+              <button
+                type="button"
+                className={`fm-direction-btn ${direction === "reverse" ? "is-active" : ""}`}
+                onClick={() =>
+                  activeGroup.reverseGrant &&
+                  update("grantID", String(resourceID(activeGroup.reverseGrant)))
+                }
+              >
+                <span className="fm-dir-badge">反向</span>
+                <span className="fm-dir-text">{reverseHopsText}</span>
+                {direction === "reverse" ? <Check size={13} /> : null}
+              </button>
+            </div>
+          ) : null}
         </div>
         {draft.targetType === "custom" ? (
           <div className="fm-form" style={{ marginTop: 10 }}>

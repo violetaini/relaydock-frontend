@@ -776,6 +776,100 @@
   border-style: dashed;
 }
 
+.fm-step2-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.fm-step2-header .fm-target-segmented {
+  flex: 1 1 320px;
+  margin-bottom: 0;
+}
+
+.fm-direction-slider {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 3px;
+  height: 38px;
+  box-sizing: border-box;
+}
+
+.fm-direction-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-soft);
+  padding: 4px 10px;
+  height: 30px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  white-space: nowrap;
+}
+
+.fm-direction-btn:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface-muted) 80%, var(--surface-raised));
+}
+
+.fm-direction-btn.is-active {
+  background: color-mix(in srgb, var(--accent) 15%, var(--surface));
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.fm-dir-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--border) 60%, transparent);
+  color: var(--text-soft);
+}
+
+.fm-direction-btn.is-active .fm-dir-badge {
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+  color: var(--accent);
+}
+
+.fm-dir-text {
+  font-size: 12px;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-badge-bidi {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.15);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  color: #7dd3fc;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
 /* Traffic Flow Visualizer & Live Data Stream Animation (Compact) */
 .fm-flow-visualizer {
   position: relative;

@@ -1414,6 +1414,164 @@
   font-weight: 600;
 }
 
+/* Diagnostic Dialog & Visual Topology */
+.fm-diag-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 0;
+}
+
+.fm-diag-summary {
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.fm-diag-summary.is-good {
+  border-color: color-mix(in srgb, var(--green, #398b65) 60%, var(--border));
+  background: color-mix(in srgb, var(--green, #398b65) 10%, var(--surface));
+}
+
+.fm-diag-summary.is-warning {
+  border-color: color-mix(in srgb, var(--warning, #e6a23c) 60%, var(--border));
+  background: color-mix(in srgb, var(--warning, #e6a23c) 10%, var(--surface));
+}
+
+.fm-diag-summary.is-bad {
+  border-color: color-mix(in srgb, var(--red, #c94b45) 60%, var(--border));
+  background: color-mix(in srgb, var(--red, #c94b45) 10%, var(--surface));
+}
+
+.fm-diag-summary-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.fm-diag-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+}
+
+.fm-diag-total-latency {
+  font-size: 14px;
+}
+
+.fm-diag-message {
+  margin-top: 8px;
+  margin-bottom: 0;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.fm-diag-flow-wrapper {
+  overflow-x: auto;
+  padding: 8px 0;
+}
+
+.fm-diag-flow {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 100%;
+  justify-content: flex-start;
+  padding: 12px 6px;
+}
+
+.fm-diag-hop-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.fm-diag-node {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 140px;
+  padding: 10px 14px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.fm-diag-node.is-ok {
+  border-color: color-mix(in srgb, var(--green, #398b65) 45%, var(--border));
+}
+
+.fm-diag-node.is-error {
+  border-color: color-mix(in srgb, var(--red, #c94b45) 65%, var(--border));
+  background: color-mix(in srgb, var(--red, #c94b45) 8%, var(--surface-muted));
+}
+
+.fm-diag-node-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-soft);
+  text-transform: uppercase;
+}
+
+.fm-diag-node strong {
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.fm-diag-node small {
+  font-size: 11px;
+  color: var(--text-soft);
+  font-family: monospace;
+}
+
+.fm-diag-connector {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  color: var(--text-soft);
+}
+
+.fm-diag-connector.is-ok {
+  color: var(--green, #398b65);
+}
+
+.fm-diag-connector.is-error {
+  color: var(--red, #c94b45);
+}
+
+.fm-diag-link-latency {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.fm-diag-breakdown h4 {
+  margin: 12px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.fm-diag-table code {
+  font-size: 12px;
+  padding: 2px 4px;
+  background: var(--surface-muted);
+  border-radius: 4px;
+}
+
 @media (max-width: 480px) {
   .fm-metrics { grid-template-columns: 1fr; }
   .fm-metric { min-height: 84px; border-right: 0; border-bottom: 1px solid var(--border); }

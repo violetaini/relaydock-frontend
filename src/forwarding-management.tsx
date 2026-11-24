@@ -2124,13 +2124,209 @@ export function ForwardEditDialog({
   );
 }
 
+interface ForwardProbeSegment {
+  type: "entry" | "tunnel" | "target";
+  source_name: string;
+  target_name: string;
+  target_host: string;
+  target_port: number;
+  success: boolean;
+  latency_ms: number;
+  status: "healthy" | "degraded" | "error";
+  error?: string;
+}
+
 interface ForwardHealthResult {
   loading?: boolean;
   success?: boolean;
   latency?: number;
+  tunnel_latency?: number;
+  target_latency?: number;
   status?: "healthy" | "degraded" | "error";
   message?: string;
+  entry_host?: string;
+  entry_port?: number;
+  segments?: ForwardProbeSegment[];
   checkedAt?: number;
+}
+
+function formatHealthTooltip(health?: ForwardHealthResult, entryHost?: string, entryPort?: number): string {
+  if (!health) {
+    return entryHost && entryPort ? `点击测试全链路健康与延迟 (${entryHost}:${entryPort})` : "测试链路健康状态";
+  }
+  if (health.loading) {
+    return "正在执行全链路探针检测...";
+  }
+  const lines: string[] = [];
+  if (health.success) {
+    lines.push(`🟢 全链路通畅 · 往返延迟 ${Math.round(health.latency || 0)} ms`);
+    if (health.tunnel_latency != null && health.target_latency != null) {
+      lines.push(`   (隧道: ${Math.round(health.tunnel_latency)} ms · 落地: ${Math.round(health.target_latency)} ms)`);
+    }
+  } else {
+    lines.push(`🔴 链路异常 · ${health.message || "存在故障节点"}`);
+  }
+  lines.push("----------------------------------------");
+  if (health.segments && health.segments.length > 0) {
+    for (const seg of health.segments) {
+      const typeLabel = seg.type === "entry" ? "🌐 [入口]" : seg.type === "tunnel" ? "🚇 [隧道]" : "🎯 [落地]";
+      if (seg.success) {
+        lines.push(`${typeLabel} ${seg.source_name} ➔ ${seg.target_name}: ${Math.round(seg.latency_ms)} ms`);
+      } else {
+        lines.push(`❌ ${typeLabel} ${seg.source_name} ➔ ${seg.target_name}: 失败 (${seg.error || "未响应"})`);
+      }
+    }
+  } else if (health.message) {
+    lines.push(health.message);
+  }
+  lines.push("----------------------------------------");
+  lines.push("点击查看完整拓扑与链路诊断");
+  return lines.join("\n");
+}
+
+function ForwardDiagnosticDialog({
+  forward,
+  health,
+  onClose,
+  onRecheck,
+}: {
+  forward: ForwardRule;
+  health?: ForwardHealthResult;
+  onClose: () => void;
+  onRecheck: () => void;
+}) {
+  const isHealthy = health?.success && health.status === "healthy";
+  const isDegraded = health?.success && health.status === "degraded";
+  const isError = health?.status === "error";
+
+  return (
+    <Dialog
+      title={`链路健康与延迟诊断 · ${forward.name}`}
+      description="基于各节点 Agent 探针测量端到端分段延迟、链路质量与服务连通性"
+      onClose={onClose}
+      wide
+    >
+      <div className="fm-diag-container">
+        <div className={`fm-diag-summary ${isHealthy ? "is-good" : isDegraded ? "is-warning" : isError ? "is-bad" : ""}`}>
+          <div className="fm-diag-summary-header">
+            <div className="fm-diag-status-pill">
+              {health?.loading ? <Spinner label="" /> : <Zap size={18} />}
+              <strong>
+                {health?.loading
+                  ? "正在诊断全链路..."
+                  : isHealthy
+                  ? "全链路通畅"
+                  : isDegraded
+                  ? "部分分段延迟偏高"
+                  : isError
+                  ? "链路存在异常"
+                  : "尚未检测"}
+              </strong>
+            </div>
+            {health?.latency != null ? (
+              <div className="fm-diag-total-latency">
+                <span>往返总延迟: <strong>{Math.round(health.latency)} ms</strong></span>
+                {health?.tunnel_latency != null && health?.target_latency != null ? (
+                  <small className="muted"> (隧道 {Math.round(health.tunnel_latency)} ms + 落地 {Math.round(health.target_latency)} ms)</small>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+          {health?.message ? <p className="fm-diag-message">{health.message}</p> : null}
+        </div>
+
+        {health?.segments && health.segments.length > 0 ? (
+          <div className="fm-diag-flow-wrapper">
+            <div className="fm-diag-flow">
+              {health.segments.map((seg, idx) => (
+                <div key={idx} className="fm-diag-hop-wrap">
+                  <div className={`fm-diag-node ${seg.success ? "is-ok" : "is-error"}`}>
+                    <span className="fm-diag-node-badge">
+                      {seg.type === "entry" ? <Globe size={13} /> : seg.type === "tunnel" ? <Route size={13} /> : <Radio size={13} />}
+                      {seg.type === "entry" ? "入口监听" : seg.type === "tunnel" ? `隧道跳 #${idx}` : "最终目标"}
+                    </span>
+                    <strong>{seg.target_name}</strong>
+                    <small>{seg.target_host}:{seg.target_port}</small>
+                  </div>
+                  {idx < (health.segments?.length || 0) - 1 ? (
+                    <div className={`fm-diag-connector ${seg.success ? "is-ok" : "is-error"}`}>
+                      <span className="fm-diag-link-latency">
+                        {seg.success ? `${Math.round(seg.latency_ms)} ms` : "断开"}
+                      </span>
+                      <ArrowRight size={16} />
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {health?.segments && health.segments.length > 0 ? (
+          <div className="fm-diag-breakdown">
+            <h4>分段探测明细</h4>
+            <div className="table-wrap">
+              <table className="fm-table fm-diag-table">
+                <thead>
+                  <tr>
+                    <th>分段类型</th>
+                    <th>起始节点 ➔ 目标</th>
+                    <th>目标地址</th>
+                    <th>分段延迟</th>
+                    <th>状态</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {health.segments.map((seg, idx) => (
+                    <tr key={idx}>
+                      <td>
+                        <Badge tone={seg.type === "tunnel" ? "info" : seg.type === "entry" ? "neutral" : "good"}>
+                          {seg.type === "entry" ? "入口握手" : seg.type === "tunnel" ? "隧道穿透" : "落地目标"}
+                        </Badge>
+                      </td>
+                      <td>
+                        <strong>{seg.source_name}</strong>
+                        <span className="muted"> ➔ </span>
+                        <strong>{seg.target_name}</strong>
+                      </td>
+                      <td><code>{seg.target_host}:{seg.target_port}</code></td>
+                      <td>
+                        {seg.success ? (
+                          <span className={seg.latency_ms > 300 ? "text-warning" : "text-success"} style={{ fontWeight: 700 }}>
+                            {Math.round(seg.latency_ms)} ms
+                          </span>
+                        ) : (
+                          <span className="text-danger" style={{ fontWeight: 700 }}>失败</span>
+                        )}
+                      </td>
+                      <td>
+                        {seg.success ? (
+                          <Badge tone="good">正常</Badge>
+                        ) : (
+                          <div>
+                            <Badge tone="bad">异常</Badge>
+                            {seg.error ? <small className="fm-cell-note" style={{ color: "var(--red, #c94b45)" }}>{seg.error}</small> : null}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="dialog-actions">
+          <Button variant="secondary" onClick={onClose}>关闭</Button>
+          <Button disabled={health?.loading} onClick={onRecheck}>
+            {health?.loading ? <Spinner label="" /> : <RefreshCw size={15} />}
+            <span>重新检测</span>
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
 }
 
 function ForwardTable({ forwards, templates, servers = [], admin = false, onAction, onDelete, onCopy, onEdit }: {
@@ -2148,6 +2344,7 @@ function ForwardTable({ forwards, templates, servers = [], admin = false, onActi
   const [workingID, setWorkingID] = useState<ResourceID | null>(null);
   const [healthMap, setHealthMap] = useState<Record<string, ForwardHealthResult>>({});
   const [testingAll, setTestingAll] = useState(false);
+  const [diagForward, setDiagForward] = useState<ForwardRule | null>(null);
 
   const probeForward = async (forward: ForwardRule) => {
     const fwdID = String(resourceID(forward));
@@ -2162,10 +2359,13 @@ function ForwardTable({ forwards, templates, servers = [], admin = false, onActi
       const res = await api.post<{
         success: boolean;
         latency_ms: number;
+        tunnel_latency_ms?: number;
+        target_latency_ms?: number;
         status: "healthy" | "degraded" | "error";
         message?: string;
         entry_host?: string;
         entry_port?: number;
+        segments?: ForwardProbeSegment[];
       }>(endpoint, {});
       setHealthMap((prev) => ({
         ...prev,
@@ -2173,8 +2373,13 @@ function ForwardTable({ forwards, templates, servers = [], admin = false, onActi
           loading: false,
           success: res.success,
           latency: res.latency_ms,
+          tunnel_latency: res.tunnel_latency_ms,
+          target_latency: res.target_latency_ms,
           status: res.status,
           message: res.message,
+          entry_host: res.entry_host,
+          entry_port: res.entry_port,
+          segments: res.segments,
           checkedAt: Date.now(),
         },
       }));
@@ -2232,8 +2437,10 @@ function ForwardTable({ forwards, templates, servers = [], admin = false, onActi
     const isGrantPlaceholder = !rawTunnelName || rawTunnelName.startsWith("授权") || rawTunnelName.startsWith("grt_");
     const tunnelTitle = isGrantPlaceholder ? "" : rawTunnelName;
     const health = healthMap[String(id)];
-    return <tr key={String(id)}>{admin ? <td><strong>{forward.username || "-"}</strong></td> : null}<td className="fm-primary-cell"><strong>{forward.name}</strong><small>{state === "active" && entry.host && entry.port ? `${entry.host}:${entry.port}` : "入口尚未可用"}</small></td><td>{tunnelTitle ? <span>{tunnelTitle}</span> : null}{template ? <RouteLine hops={routeHops(template).map((hop) => ({ name: hop.name }))} /> : null}</td><td><span>{forward.target_type === "custom" || !forward.target_node_id ? (forward.target_host ? `${forward.target_host}:${forward.target_port}` : forward.target_name || "自定义目标") : (forward.target_node_name || forward.target_name || forward.target_host || `节点 #${forward.target_node_id || "-"}`)}</span><small className="fm-cell-note">{forward.target_type === "custom" || !forward.target_node_id ? "自定义目标 · TCP + UDP" : `TCP + UDP · ${forward.target_port || "节点服务端口"}`}</small></td><td><span>{formatBytes(forward.traffic_used_bytes)}</span><small className="fm-cell-note">{forward.speed_limit_mbps ? `${forward.speed_limit_mbps} Mbps` : "不限速"} · {forward.connection_limit ? `${forward.connection_limit} 连接` : "不限连接"}</small></td><td className="fm-cell-health">{state === "active" && entry.host && entry.port ? <button type="button" className={`fm-health-button ${health?.loading ? "is-loading" : health?.success ? "is-good" : health?.status === "error" ? "is-bad" : ""}`} disabled={health?.loading} title={health?.message ? `${health.message}${health.latency ? ` · 往返延迟 ${Math.round(health.latency)} ms` : ""}（点击重新检测）` : `测试入口连通性与健康状态 (${entry.host}:${entry.port})`} onClick={() => void probeForward(forward)}>{health?.loading ? <Spinner label="" /> : <Zap size={14} />}<span>{health?.loading ? "检测中" : health?.success ? `${Math.round(health.latency || 0)} ms` : health?.status === "error" ? "异常" : "测健康"}</span></button> : <span className="muted" title="入口尚未生效">-</span>}</td><td><Badge tone={stateTone(state)}>{stateLabel(state)}</Badge>{forward.effective_expires_at ? <small className="fm-cell-note">至 {displayDate(forward.effective_expires_at)}</small> : null}</td><td><div className="fm-row-actions">{onCopy ? <IconButton label={`复制 ${forward.name} 入口`} disabled={state !== "active" || !entry.host || !entry.port} onClick={() => void onCopy(forward)}><Copy size={18} /></IconButton> : null}{state === "active" && entry.host && entry.port ? <IconButton label={`检测 ${forward.name} 健康与延迟`} disabled={health?.loading} onClick={() => void probeForward(forward)}><Activity size={18} /></IconButton> : null}{onEdit ? <IconButton label={`编辑 ${forward.name}`} onClick={() => onEdit(forward)}><Pencil size={18} /></IconButton> : null}{state === "active" ? <IconButton label={`暂停 ${forward.name}`} disabled={sameID(workingID, id)} onClick={() => void act(forward, "suspend")}><CirclePause size={18} /></IconButton> : <IconButton label={`恢复 ${forward.name}`} disabled={sameID(workingID, id) || ["pending", "provisioning", "cleanup_pending"].includes(state)} onClick={() => void act(forward, "resume")}><CirclePlay size={18} /></IconButton>}{["error", "degraded"].includes(state) ? <IconButton label={`重试 ${forward.name}`} disabled={sameID(workingID, id)} onClick={() => void act(forward, "retry")}><RefreshCw size={18} /></IconButton> : null}<IconButton label={`删除 ${forward.name}`} onClick={() => onDelete(forward)}><Trash2 size={18} /></IconButton></div></td></tr>;
-  })}</tbody></table></div></Surface>}</div>;
+    return <tr key={String(id)}>{admin ? <td><strong>{forward.username || "-"}</strong></td> : null}<td className="fm-primary-cell"><strong>{forward.name}</strong><small>{state === "active" && entry.host && entry.port ? `${entry.host}:${entry.port}` : "入口尚未可用"}</small></td><td>{tunnelTitle ? <span>{tunnelTitle}</span> : null}{template ? <RouteLine hops={routeHops(template).map((hop) => ({ name: hop.name }))} /> : null}</td><td><span>{forward.target_type === "custom" || !forward.target_node_id ? (forward.target_host ? `${forward.target_host}:${forward.target_port}` : forward.target_name || "自定义目标") : (forward.target_node_name || forward.target_name || forward.target_host || `节点 #${forward.target_node_id || "-"}`)}</span><small className="fm-cell-note">{forward.target_type === "custom" || !forward.target_node_id ? "自定义目标 · TCP + UDP" : `TCP + UDP · ${forward.target_port || "节点服务端口"}`}</small></td><td><span>{formatBytes(forward.traffic_used_bytes)}</span><small className="fm-cell-note">{forward.speed_limit_mbps ? `${forward.speed_limit_mbps} Mbps` : "不限速"} · {forward.connection_limit ? `${forward.connection_limit} 连接` : "不限连接"}</small></td><td className="fm-cell-health">{state === "active" && entry.host && entry.port ? <button type="button" className={`fm-health-button ${health?.loading ? "is-loading" : health?.success ? "is-good" : health?.status === "error" ? "is-bad" : ""}`} disabled={health?.loading} title={formatHealthTooltip(health, entry.host, entry.port)} onClick={() => { if (health?.segments && health.segments.length > 0) { setDiagForward(forward); } else { void probeForward(forward); } }}>{health?.loading ? <Spinner label="" /> : <Zap size={14} />}<span>{health?.loading ? "检测中" : health?.success ? `${Math.round(health.tunnel_latency || health.latency || 0)} ms` : health?.status === "error" ? "异常" : "测健康"}</span></button> : <span className="muted" title="入口尚未生效">-</span>}</td><td><Badge tone={stateTone(state)}>{stateLabel(state)}</Badge>{forward.effective_expires_at ? <small className="fm-cell-note">至 {displayDate(forward.effective_expires_at)}</small> : null}</td><td><div className="fm-row-actions">{onCopy ? <IconButton label={`复制 ${forward.name} 入口`} disabled={state !== "active" || !entry.host || !entry.port} onClick={() => void onCopy(forward)}><Copy size={18} /></IconButton> : null}{state === "active" && entry.host && entry.port ? <IconButton label={`链路诊断 ${forward.name}`} onClick={() => { setDiagForward(forward); if (!health || !health.segments) { void probeForward(forward); } }}><Activity size={18} /></IconButton> : null}{onEdit ? <IconButton label={`编辑 ${forward.name}`} onClick={() => onEdit(forward)}><Pencil size={18} /></IconButton> : null}{state === "active" ? <IconButton label={`暂停 ${forward.name}`} disabled={sameID(workingID, id)} onClick={() => void act(forward, "suspend")}><CirclePause size={18} /></IconButton> : <IconButton label={`恢复 ${forward.name}`} disabled={sameID(workingID, id) || ["pending", "provisioning", "cleanup_pending"].includes(state)} onClick={() => void act(forward, "resume")}><CirclePlay size={18} /></IconButton>}{["error", "degraded"].includes(state) ? <IconButton label={`重试 ${forward.name}`} disabled={sameID(workingID, id)} onClick={() => void act(forward, "retry")}><RefreshCw size={18} /></IconButton> : null}<IconButton label={`删除 ${forward.name}`} onClick={() => onDelete(forward)}><Trash2 size={18} /></IconButton></div></td></tr>;
+  })}</tbody></table></div></Surface>}
+  {diagForward ? <ForwardDiagnosticDialog forward={diagForward} health={healthMap[String(resourceID(diagForward))]} onClose={() => setDiagForward(null)} onRecheck={() => void probeForward(diagForward)} /> : null}
+  </div>;
 }
 
 function UserForwarding({ notify }: { notify: Notify }) {

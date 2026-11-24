@@ -567,16 +567,15 @@ export function groupGrants(
         if (used.has(candidateID)) continue;
 
         const cName = tunnelName(candidate, templates).trim();
-        if (pName === cName) {
-          const cTemplate = tunnelForGrant(candidate, templates);
-          if (cTemplate) {
-            const candidateHops = routeHops(cTemplate);
-            if (isReverseHops(primaryHops, candidateHops)) {
-              partner = candidate;
-              partnerTemplate = cTemplate;
-              used.add(candidateID);
-              break;
-            }
+        const nameMatch = pName === cName || pName.replace(/[\(（]反向[\)）]/g, "").trim() === cName.replace(/[\(（]反向[\)）]/g, "").trim();
+        const cTemplate = tunnelForGrant(candidate, templates);
+        if (cTemplate) {
+          const candidateHops = routeHops(cTemplate);
+          if ((nameMatch || pName === "" || cName === "") && isReverseHops(primaryHops, candidateHops)) {
+            partner = candidate;
+            partnerTemplate = cTemplate;
+            used.add(candidateID);
+            break;
           }
         }
       }
@@ -2645,7 +2644,7 @@ function UserForwarding({ notify }: { notify: Notify }) {
     {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}{loading ? <div className="center-state"><Spinner label="正在加载转发" /></div> : null}
     {!loading && tab === "forwards" ? <><ForwardTable forwards={forwards} templates={templates} onAction={runForwardAction} onCopy={copyEntry} onEdit={setEditingForward} onDelete={(forward) => setConfirm({ title: "删除转发", description: `将停止“${forward.name}”入口并清理每一跳端口。此操作无法撤销。`, confirmLabel: "确认删除", run: async () => { await api.delete(`/api/user/forwards/${encodeURIComponent(resourceID(forward))}`, undefined, { idempotencyKey: idempotencyKey() }); notify("转发删除任务已提交"); } })} />{!forwards.length && activeGrants.length ? <div className="fm-empty-action"><Button onClick={() => { setWizardGrantID(undefined); setWizard(true); }}><Plus size={17} />创建第一条转发</Button></div> : null}</> : null}
     {!loading && tab === "grants" ? <UserGrantCards grants={grants} onCreate={(grant) => { if ((grant.effective_state || grant.state || "active") !== "active") return; setWizardGrantID(String(resourceID(grant))); setWizard(true); }} /> : null}
-    {wizard ? <ForwardWizard grants={activeGrants} initialGrantID={wizardGrantID} nodes={nodes.filter((node) => node.enabled)} onClose={() => { setWizard(false); setWizardGrantID(undefined); }} onComplete={async () => { setWizard(false); setWizardGrantID(undefined); notify("转发创建任务已提交"); setTab("forwards"); await load(true); }} /> : null}
+    {wizard ? <ForwardWizard grants={activeGrants} initialGrantID={wizardGrantID} nodes={nodes.filter((node) => node.enabled)} templates={templates} onClose={() => { setWizard(false); setWizardGrantID(undefined); }} onComplete={async () => { setWizard(false); setWizardGrantID(undefined); notify("转发创建任务已提交"); setTab("forwards"); await load(true); }} /> : null}
     {editingForward ? (
       <ForwardEditDialog
         forward={editingForward}

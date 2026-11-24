@@ -505,7 +505,7 @@ describe("content workbench subscriptions", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: /Edge HK/ }));
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
 
-    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/subscribe-files/import", { name: "新订阅", description: "", url: "https://sub.example/new", filename: "" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/subscribe-files/import", { name: "新订阅", description: "", url: "https://sub.example/new", filename: "", auto_update_interval: 0 }));
     await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/subscribe-files/15", expect.objectContaining({
       template_filename: "edge_v3.yaml",
       selected_node_ids: [7],
@@ -590,6 +590,36 @@ describe("content workbench subscriptions", () => {
 
     resolveImport({ file: created });
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "添加订阅" })).not.toBeInTheDocument());
+  });
+
+  it("syncs an external subscribe file directly from the subscription list action button", async () => {
+    const externalFile = {
+      id: 15,
+      name: "外部订阅文件",
+      description: "",
+      type: "import",
+      url: "https://sub.example/test",
+      filename: "ext.yaml",
+      auto_sync_custom_rules: false,
+      auto_update_interval: 3600,
+      last_sync_at: "2026-11-24T08:00:00Z",
+    };
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/subscribe-files") return { files: [externalFile] } as T;
+      return subscribeLoad(path) as T;
+    });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ file: { ...externalFile, last_sync_at: "2026-11-24T08:30:00Z" } });
+    const notify = vi.fn();
+    render(<SubscribeFilesPage notify={notify} />);
+
+    expect(await screen.findByText("外部订阅文件")).toBeInTheDocument();
+    expect(screen.getByText("每 1 小时")).toBeInTheDocument();
+
+    const syncButton = screen.getByRole("button", { name: "立即同步 外部订阅文件" });
+    fireEvent.click(syncButton);
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/subscribe-files/15/sync"));
+    await waitFor(() => expect(notify).toHaveBeenCalledWith("“外部订阅文件”外部订阅同步成功"));
   });
 
   it("rotates a Provider access link only after confirmation and never displays it", async () => {

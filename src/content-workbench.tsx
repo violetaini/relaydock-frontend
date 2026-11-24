@@ -96,6 +96,7 @@ interface SubscribeFile {
   id: number;
   name: string;
   description?: string;
+  url?: string;
   type: string;
   filename: string;
   file_short_code?: string;
@@ -111,6 +112,8 @@ interface SubscribeFile {
   sort_order?: number;
   raw_output?: boolean;
   created_by?: string;
+  auto_update_interval?: number;
+  last_sync_at?: string;
   updated_at?: string;
   latest_version?: number;
 }
@@ -894,6 +897,7 @@ function subscribeFilePayload(file: SubscribeFile, overrides: Partial<SubscribeF
     custom_short_code: next.custom_short_code ?? "",
     raw_output: next.raw_output ?? false,
     sort_order: next.sort_order ?? 0,
+    auto_update_interval: next.auto_update_interval ?? 0,
   };
 }
 
@@ -903,8 +907,16 @@ type FilePendingAction =
   | { kind: "delete-provider"; item: ProxyProviderConfig }
   | { kind: "rotate-provider"; item: ProxyProviderConfig };
 
+function formatInterval(seconds?: number) {
+  if (!seconds || seconds <= 0) return "手动同步";
+  if (seconds % 86400 === 0) return `每 ${seconds / 86400} 天`;
+  if (seconds % 3600 === 0) return `每 ${seconds / 3600} 小时`;
+  if (seconds % 60 === 0) return `每 ${seconds / 60} 分钟`;
+  return `${seconds} 秒`;
+}
+
 export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpenRulesConfig, isAdmin = true }: ContentPageProps) {
-  const [tab, setTab] = useState<"files" | "external" | "providers">("files");
+  const [tab, setTab] = useState<"files" | "providers">("files");
   const [files, setFiles] = useState<SubscribeFile[]>([]);
   const [external, setExternal] = useState<ExternalSubscription[]>([]);
   const [providers, setProviders] = useState<ProxyProviderConfig[]>([]);
@@ -1008,6 +1020,16 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
     finally { setWorking(false); }
   };
 
+  const syncSubscribeFile = async (file: SubscribeFile) => {
+    setWorking(true); setError("");
+    try {
+      await api.post(`/api/admin/subscribe-files/${file.id}/sync`);
+      notify(`“${file.name}”外部订阅同步成功`);
+      await load();
+    } catch (reason) { setError(fail(reason, "同步外部订阅失败")); }
+    finally { setWorking(false); }
+  };
+
   const syncExternal = async (id?: number) => {
     setWorking(true); setError("");
     try {
@@ -1021,29 +1043,19 @@ export function SubscribeFilesPage({ notify = noNotify, onOpenCustomRules, onOpe
 
   return (
     <section className="cw-page">
-      <PageHeader title="订阅管理" description="维护订阅文件、第三方订阅源和 Mihomo Proxy Provider。" actions={<>{onOpenCustomRules ? <Button variant="secondary" onClick={onOpenCustomRules}><Braces size={16} />覆写规则</Button> : null}{onOpenRulesConfig ? <Button variant="secondary" onClick={onOpenRulesConfig}><FileCode2 size={16} />规则配置</Button> : null}<IconButton label="刷新订阅管理" onClick={() => void load()}><RefreshCw size={18} /></IconButton>{tab === "files" ? <Button onClick={() => setShowImport(true)}><Plus size={16} />添加订阅</Button> : tab === "external" ? <><Button variant="secondary" onClick={() => void syncExternal()} disabled={working || external.length === 0}><RotateCw size={16} />同步全部</Button><Button onClick={() => setEditingExternal("new")}><Plus size={16} />外部订阅</Button></> : <Button onClick={() => setEditingProvider("new")}><Plus size={16} />Proxy Provider</Button>}</>} />
-      <div className="cw-tabs cw-tabs-three" role="tablist" aria-label="订阅管理分类"><button type="button" role="tab" aria-selected={tab === "files"} className={tab === "files" ? "is-active" : ""} onClick={() => setTab("files")}><FileText size={16} />订阅列表 <span>{files.length}</span></button><button type="button" role="tab" aria-selected={tab === "external"} className={tab === "external" ? "is-active" : ""} onClick={() => setTab("external")}><CloudDownload size={16} />外部订阅 <span>{external.length}</span></button><button type="button" role="tab" aria-selected={tab === "providers"} className={tab === "providers" ? "is-active" : ""} onClick={() => setTab("providers")}><Server size={16} />Provider <span>{providers.length}</span></button></div>
+      <PageHeader title="订阅管理" description="维护订阅文件、第三方订阅源和 Mihomo Proxy Provider。" actions={<>{onOpenCustomRules ? <Button variant="secondary" onClick={onOpenCustomRules}><Braces size={16} />覆写规则</Button> : null}{onOpenRulesConfig ? <Button variant="secondary" onClick={onOpenRulesConfig}><FileCode2 size={16} />规则配置</Button> : null}<IconButton label="刷新订阅管理" onClick={() => void load()}><RefreshCw size={18} /></IconButton>{tab === "files" ? <Button onClick={() => setShowImport(true)}><Plus size={16} />添加订阅</Button> : <Button onClick={() => setEditingProvider("new")}><Plus size={16} />Proxy Provider</Button>}</>} />
+      <div className="cw-tabs" role="tablist" aria-label="订阅管理分类"><button type="button" role="tab" aria-selected={tab === "files"} className={tab === "files" ? "is-active" : ""} onClick={() => setTab("files")}><FileText size={16} />订阅列表 <span>{files.length}</span></button><button type="button" role="tab" aria-selected={tab === "providers"} className={tab === "providers" ? "is-active" : ""} onClick={() => setTab("providers")}><Server size={16} />Provider <span>{providers.length}</span></button></div>
       {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
       {loadWarning ? <div className="cw-help"><Info size={16} /><span>{loadWarning}</span></div> : null}
       {loading ? <Surface className="cw-loading"><Spinner /></Surface> : tab === "files" ? (
         <Surface className="table-surface cw-compact-table">
           <div className="surface-heading"><div><h2>订阅列表</h2><small>已添加的订阅文件，可编辑内容与同步策略</small></div></div>
           {files.length === 0 ? <EmptyState icon={<FileText size={23} />} title="暂无订阅" description="从链接导入或上传本地 YAML 文件。" action={<Button onClick={() => setShowImport(true)}><Plus size={16} />添加订阅</Button>} /> : (
-            <div className="table-wrap"><table><thead><tr><th>订阅</th><th>来源</th><th>模板 / 同步</th><th>更新时间</th><th aria-label="操作" /></tr></thead><tbody>{files.map((file, index) => {
+            <div className="table-wrap"><table><thead><tr><th>订阅</th><th>来源</th><th>模板 / 规则</th><th>自动更新</th><th>更新时间</th><th aria-label="操作" /></tr></thead><tbody>{files.map((file, index) => {
               const item: SubscriptionItem = { ...file, id: file.id, filename: file.filename, type: file.type };
               const url = resolveSubscriptionURL(item, token);
-              return <tr key={file.id}><td><div className="cw-file-name"><span className="cw-file-icon"><FileText size={16} /></span><span><strong>{file.name}</strong><small>{file.filename}{file.latest_version ? ` · v${file.latest_version}` : ""}</small></span></div></td><td><Badge tone={file.type === "import" ? "info" : "neutral"}>{file.type === "upload" ? "上传" : file.type === "import" ? "链接导入" : file.type === "create" ? "生成" : file.type}</Badge><span className="cw-table-note">{file.created_by || "系统"}</span></td><td><strong>{file.template_filename || "未绑定模板"}</strong><span className="cw-table-note">{file.auto_sync_custom_rules ? "自动同步自定义规则" : "手动同步"}</span></td><td>{formatDate(file.updated_at)}</td><td><div className="cw-table-actions"><IconButton label={`上移 ${file.name}`} disabled={index === 0} onClick={() => void reorder(file, -1)}><ArrowUp size={16} /></IconButton><IconButton label={`下移 ${file.name}`} disabled={index === files.length - 1} onClick={() => void reorder(file, 1)}><ArrowDown size={16} /></IconButton><IconButton label={`复制 ${file.name} 链接`} onClick={async () => { await copyText(url); notify("订阅链接已复制"); }}><Copy size={16} /></IconButton><IconButton label={`编辑 ${file.name} 内容`} onClick={() => setEditingContent(file)}><FileCode2 size={16} /></IconButton><IconButton label={`编辑 ${file.name}`} onClick={() => setEditingFile(file)}><Pencil size={16} /></IconButton><IconButton label={`${file.auto_sync_custom_rules ? "关闭" : "开启"} ${file.name} 自动同步`} onClick={() => void updateFile(file, { auto_sync_custom_rules: !file.auto_sync_custom_rules })}><RotateCw size={16} /></IconButton><IconButton label={`删除 ${file.name}`} onClick={() => setPending({ kind: "delete-file", item: file })}><Trash2 size={16} /></IconButton></div></td></tr>;
-            })}</tbody></table></div>
-          )}
-        </Surface>
-      ) : tab === "external" ? (
-        <Surface className="table-surface cw-compact-table">
-          <div className="surface-heading"><div><h2>外部订阅</h2><small>从第三方订阅同步节点，并保留流量与到期信息</small></div></div>
-          {external.length === 0 ? <EmptyState icon={<CloudDownload size={23} />} title="暂无外部订阅" description="添加第三方订阅地址后可手动同步节点。" action={<Button onClick={() => setEditingExternal("new")}><Plus size={16} />添加外部订阅</Button>} /> : (
-            <div className="table-wrap"><table><thead><tr><th>订阅源</th><th>节点</th><th>流量</th><th>上次同步</th><th aria-label="操作" /></tr></thead><tbody>{external.map((item) => {
-              const used = (item.upload ?? 0) + (item.download ?? 0);
-              const percent = item.total ? Math.min(100, used / item.total * 100) : 0;
-              return <tr key={item.id}><td><div className="cw-file-name"><span className="cw-file-icon"><Globe2 size={16} /></span><span><strong>{item.name}</strong><small title={item.url}>{item.username ? `${item.username} · ` : ""}{item.url}</small></span></div></td><td><strong>{item.node_count ?? 0}</strong><span className="cw-table-note">个节点</span></td><td><div className="cw-usage"><strong>{formatBytes(used)} / {item.total ? formatBytes(item.total) : "不限"}</strong>{item.total ? <div className="cw-usage-track"><span style={{ width: `${percent}%` }} /></div> : null}<span className="cw-table-note">{item.expire ? `到期 ${formatDate(item.expire)}` : "无到期信息"}</span></div></td><td>{formatDate(item.last_sync_at)}</td><td><div className="cw-table-actions"><IconButton label={`同步 ${item.name}`} disabled={working} onClick={() => void syncExternal(item.id)}><RotateCw size={16} /></IconButton><IconButton label={`编辑 ${item.name}`} onClick={() => setEditingExternal(item)}><Pencil size={16} /></IconButton><IconButton label={`删除 ${item.name}`} onClick={() => setPending({ kind: "delete-external", item })}><Trash2 size={16} /></IconButton></div></td></tr>;
+              const isExternal = file.type === "import" || Boolean(file.url);
+              return <tr key={file.id}><td><div className="cw-file-name"><span className="cw-file-icon"><FileText size={16} /></span><span><strong>{file.name}</strong><small>{file.filename}{file.latest_version ? ` · v${file.latest_version}` : ""}</small></span></div></td><td><Badge tone={isExternal ? "info" : "neutral"}>{file.type === "upload" ? "上传" : file.type === "import" ? "链接导入" : file.type === "create" ? "生成" : file.type}</Badge><span className="cw-table-note">{file.created_by || "系统"}</span></td><td><strong>{file.template_filename || "未绑定模板"}</strong><span className="cw-table-note">{file.auto_sync_custom_rules ? "自动同步自定义规则" : "手动同步"}</span></td><td><strong>{isExternal ? formatInterval(file.auto_update_interval) : "-"}</strong><span className="cw-table-note">{isExternal ? (file.last_sync_at ? `上次同步 ${formatDate(file.last_sync_at)}` : "未同步") : "本地订阅"}</span></td><td>{formatDate(file.updated_at)}</td><td><div className="cw-table-actions"><IconButton label={`上移 ${file.name}`} disabled={index === 0} onClick={() => void reorder(file, -1)}><ArrowUp size={16} /></IconButton><IconButton label={`下移 ${file.name}`} disabled={index === files.length - 1} onClick={() => void reorder(file, 1)}><ArrowDown size={16} /></IconButton><IconButton label={`复制 ${file.name} 链接`} onClick={async () => { await copyText(url); notify("订阅链接已复制"); }}><Copy size={16} /></IconButton>{isExternal ? <IconButton label={`立即同步 ${file.name}`} disabled={working} onClick={() => void syncSubscribeFile(file)}><RotateCw size={16} /></IconButton> : null}<IconButton label={`编辑 ${file.name} 内容`} onClick={() => setEditingContent(file)}><FileCode2 size={16} /></IconButton><IconButton label={`编辑 ${file.name}`} onClick={() => setEditingFile(file)}><Pencil size={16} /></IconButton><IconButton label={`${file.auto_sync_custom_rules ? "关闭" : "开启"} ${file.name} 自动同步`} onClick={() => void updateFile(file, { auto_sync_custom_rules: !file.auto_sync_custom_rules })}><Sparkles size={16} /></IconButton><IconButton label={`删除 ${file.name}`} onClick={() => setPending({ kind: "delete-file", item: file })}><Trash2 size={16} /></IconButton></div></td></tr>;
             })}</tbody></table></div>
           )}
         </Surface>
@@ -1092,6 +1104,7 @@ function ImportSubscriptionDialog({ nodes, templates, rules, scripts, servers, o
   const [selectedServerIDs, setSelectedServerIDs] = useState<Set<number>>(new Set());
   const [trafficLimit, setTrafficLimit] = useState("");
   const [autoSync, setAutoSync] = useState(false);
+  const [autoUpdateInterval, setAutoUpdateInterval] = useState(0);
   const [rawOutput, setRawOutput] = useState(false);
   const [createdFile, setCreatedFile] = useState<SubscribeFile | null>(null);
   const [working, setWorking] = useState(false);
@@ -1109,7 +1122,13 @@ function ImportSubscriptionDialog({ nodes, templates, rules, scripts, servers, o
       if (!importedFile) {
         let result: { file?: SubscribeFile };
         if (mode === "url") {
-          result = await api.post<{ file?: SubscribeFile }>("/api/admin/subscribe-files/import", { name, description, url, filename: filename ? normalizedFilename(filename) : "" });
+          result = await api.post<{ file?: SubscribeFile }>("/api/admin/subscribe-files/import", {
+            name,
+            description,
+            url,
+            filename: filename ? normalizedFilename(filename) : "",
+            auto_update_interval: autoUpdateInterval,
+          });
         } else {
           if (!file) throw new Error("请选择 YAML 文件");
           const form = new FormData(); form.set("file", file); form.set("name", name || file.name.replace(/\.ya?ml$/i, "")); form.set("description", description); if (filename) form.set("filename", normalizedFilename(filename));
@@ -1129,6 +1148,7 @@ function ImportSubscriptionDialog({ nodes, templates, rules, scripts, servers, o
           traffic_limit: limit,
           auto_sync_custom_rules: autoSync,
           raw_output: rawOutput,
+          auto_update_interval: autoUpdateInterval,
         }));
       }
       onComplete();
@@ -1136,7 +1156,7 @@ function ImportSubscriptionDialog({ nodes, templates, rules, scripts, servers, o
     finally { setWorking(false); }
   };
   const toggle = (setter: Dispatch<SetStateAction<Set<number>>>, id: number) => setter((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
-  return <Dialog title="添加订阅" description="从 Clash 订阅链接导入或上传本地 YAML 文件" onClose={close} dismissible={!working} wide><form className="cw-form" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}{createdFile ? <div className="cw-help"><Info size={16} /><span>订阅“{createdFile.name}”已导入；再次提交只会重试尚未保存的高级设置，不会重复创建。</span></div> : null}<div className="cw-mode"><button type="button" disabled={Boolean(createdFile)} className={mode === "url" ? "is-active" : ""} onClick={() => setMode("url")}><Link2 size={16} />链接导入</button><button type="button" disabled={Boolean(createdFile)} className={mode === "upload" ? "is-active" : ""} onClick={() => setMode("upload")}><Upload size={16} />本地文件</button></div><div className="cw-form-grid"><Field label="订阅名称"><input disabled={Boolean(createdFile)} required={mode === "url"} value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：机场订阅" /></Field><Field label="文件名" hint="留空时自动生成"><input disabled={Boolean(createdFile)} value={filename} onChange={(event) => setFilename(event.target.value)} placeholder="subscription.yaml" /></Field></div>{mode === "url" ? <Field label="订阅 URL"><input disabled={Boolean(createdFile)} required type="url" value={url} onChange={(event) => setURL(event.target.value)} placeholder="https://example.com/subscribe" /></Field> : <Field label="YAML 文件"><input disabled={Boolean(createdFile)} required type="file" accept=".yaml,.yml,application/yaml,text/yaml" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></Field>}<Field label="说明"><textarea disabled={Boolean(createdFile)} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="可选" /></Field><Button type="button" variant="ghost" disabled={Boolean(createdFile)} onClick={() => setAdvanced((value) => !value)}><Settings2 size={16} />{advanced ? "收起高级设置" : "配置模板、节点与覆写范围"}</Button>{advanced ? <>
+  return <Dialog title="添加订阅" description="从 Clash 订阅链接导入或上传本地 YAML 文件" onClose={close} dismissible={!working} wide><form className="cw-form" onSubmit={submit}>{error ? <ErrorState message={error} /> : null}{createdFile ? <div className="cw-help"><Info size={16} /><span>订阅“{createdFile.name}”已导入；再次提交只会重试尚未保存的高级设置，不会重复创建。</span></div> : null}<div className="cw-mode"><button type="button" disabled={Boolean(createdFile)} className={mode === "url" ? "is-active" : ""} onClick={() => setMode("url")}><Link2 size={16} />链接导入</button><button type="button" disabled={Boolean(createdFile)} className={mode === "upload" ? "is-active" : ""} onClick={() => setMode("upload")}><Upload size={16} />本地文件</button></div><div className="cw-form-grid"><Field label="订阅名称"><input disabled={Boolean(createdFile)} required={mode === "url"} value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：机场订阅" /></Field><Field label="文件名" hint="留空时自动生成"><input disabled={Boolean(createdFile)} value={filename} onChange={(event) => setFilename(event.target.value)} placeholder="subscription.yaml" /></Field></div>{mode === "url" ? <><Field label="订阅 URL"><input disabled={Boolean(createdFile)} required type="url" value={url} onChange={(event) => setURL(event.target.value)} placeholder="https://example.com/subscribe" /></Field><Field label="自动更新时间" hint="系统将按设定周期自动重新拉取外部链接并更新订阅文件"><select disabled={Boolean(createdFile)} value={autoUpdateInterval} onChange={(event) => setAutoUpdateInterval(Number(event.target.value))}><option value={0}>不自动更新（仅手动同步）</option><option value={3600}>每 1 小时</option><option value={7200}>每 2 小时</option><option value={21600}>每 6 小时</option><option value={43200}>每 12 小时</option><option value={86400}>每 24 小时（1 天）</option><option value={172800}>每 48 小时（2 天）</option><option value={604800}>每周（7 天）</option></select></Field></> : <Field label="YAML 文件"><input disabled={Boolean(createdFile)} required type="file" accept=".yaml,.yml,application/yaml,text/yaml" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></Field>}<Field label="说明"><textarea disabled={Boolean(createdFile)} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="可选" /></Field><Button type="button" variant="ghost" disabled={Boolean(createdFile)} onClick={() => setAdvanced((value) => !value)}><Settings2 size={16} />{advanced ? "收起高级设置" : "配置模板、节点与覆写范围"}</Button>{advanced ? <>
     <div className="cw-form-grid"><Field label="V3 模板"><select value={templateFilename} onChange={(event) => setTemplateFilename(event.target.value)}><option value="">不绑定模板</option>{templates.map((template) => <option value={template} key={template}>{template}</option>)}</select></Field><Field label="手动流量上限（GB）"><input type="number" min="0" step="0.1" value={trafficLimit} onChange={(event) => setTrafficLimit(event.target.value)} placeholder="留空跟随服务器" /></Field></div>
     <div className="cw-checkboxes"><Toggle checked={autoSync} onChange={setAutoSync} label="自动同步自定义规则" /><Toggle checked={rawOutput} onChange={setRawOutput} label="输出原始配置" /></div>
     <div className="cw-form-section"><strong>节点范围</strong><div className="cw-option-grid">{nodes.map((node) => <label className="cw-option-check" key={node.id}><input type="checkbox" checked={selectedNodeIDs.has(node.id)} onChange={() => toggle(setSelectedNodeIDs, node.id)} /><span><strong>{node.node_name}</strong><small>{node.protocol || "未知协议"}</small></span></label>)}</div></div>
@@ -1160,6 +1180,7 @@ function EditSubscribeFileDialog({ item, nodes, templates, rules, scripts, serve
   const [description, setDescription] = useState(item.description || "");
   const [filename, setFilename] = useState(item.filename);
   const [shortCode, setShortCode] = useState(item.custom_short_code || "");
+  const [autoUpdateInterval, setAutoUpdateInterval] = useState(item.auto_update_interval ?? 0);
   const [rawOutput, setRawOutput] = useState(Boolean(item.raw_output));
   const [autoSync, setAutoSync] = useState(item.auto_sync_custom_rules);
   const [templateFilename, setTemplateFilename] = useState(item.template_filename || "");
@@ -1199,6 +1220,7 @@ function EditSubscribeFileDialog({ item, nodes, templates, rules, scripts, serve
         selected_override_script_ids: scriptScope === "all" ? [] : [...selectedScriptIDs],
         stats_server_ids: [...selectedServerIDs].join(","),
         traffic_limit: limit,
+        auto_update_interval: autoUpdateInterval,
       }));
       onComplete();
     } catch (reason) { setError(fail(reason, "更新订阅失败")); }
@@ -1208,6 +1230,7 @@ function EditSubscribeFileDialog({ item, nodes, templates, rules, scripts, serve
     <div className="cw-form-grid"><Field label="订阅名称"><input required value={name} onChange={(event) => setName(event.target.value)} /></Field><Field label="文件名"><input required value={filename} onChange={(event) => setFilename(event.target.value)} /></Field></div>
     <Field label="说明"><textarea value={description} onChange={(event) => setDescription(event.target.value)} /></Field>
     <div className="cw-form-grid"><Field label="自定义短码" hint="留空使用系统短码；普通用户不能修改全局短码"><input value={shortCode} onChange={(event) => setShortCode(event.target.value)} /></Field><Field label="V3 模板"><select value={templateFilename} onChange={(event) => setTemplateFilename(event.target.value)}><option value="">不绑定模板</option>{templates.map((template) => <option value={template} key={template}>{template}</option>)}</select></Field></div>
+    {item.type === "import" || Boolean(item.url) ? <Field label="自动更新时间" hint={item.last_sync_at ? `上次同步时间：${formatDate(item.last_sync_at)}` : "定期自动重新拉取外部订阅链接并更新配置文件"}><select value={autoUpdateInterval} onChange={(event) => setAutoUpdateInterval(Number(event.target.value))}><option value={0}>不自动更新（仅手动同步）</option><option value={3600}>每 1 小时</option><option value={7200}>每 2 小时</option><option value={21600}>每 6 小时</option><option value={43200}>每 12 小时</option><option value={86400}>每 24 小时（1 天）</option><option value={172800}>每 48 小时（2 天）</option><option value={604800}>每周（7 天）</option></select></Field> : null}
     <div className="cw-checkboxes"><Toggle checked={autoSync} onChange={setAutoSync} label="自动同步自定义规则" /><Toggle checked={rawOutput} onChange={setRawOutput} label="输出原始配置" /></div>
     <div className="cw-form-section"><strong>节点范围</strong><p className="cw-section-hint">选择节点 ID 时优先使用该范围；不选节点时才按下方标签过滤，两者都为空表示全部可用节点。</p><div className="cw-option-grid">{nodes.map((node) => <label className="cw-option-check" key={node.id}><input type="checkbox" checked={selectedNodeIDs.has(node.id)} onChange={() => toggleID(setSelectedNodeIDs, node.id)} /><span><strong>{node.node_name}</strong><small>{node.protocol || "未知协议"}{node.enabled ? "" : " · 已停用"}</small></span></label>)}</div><Field label="旧版标签范围" hint="逗号分隔；仅在未选择节点 ID 时生效"><input value={selectedTags} onChange={(event) => setSelectedTags(event.target.value)} placeholder="hk, premium" /></Field></div>
     <div className="cw-form-grid">

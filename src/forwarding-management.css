@@ -862,7 +862,7 @@
 /* Track container */
 .fm-flow-track {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 4px;
   overflow-x: auto;
@@ -980,13 +980,14 @@
   flex: 1 1 36px;
   min-width: 36px;
   padding: 0 2px;
-  top: -9px; /* align with 32px icons */
+  margin-top: 15px; /* exactly center 2px line with 32px circle */
+  top: 0;
 }
 
 .fm-flow-line {
   position: relative;
   width: 100%;
-  height: 2.5px;
+  height: 2px;
   background: color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: 2px;
   overflow: hidden;
@@ -1504,7 +1505,8 @@
   flex: 1 1 56px;
   min-width: 56px;
   padding: 0 4px;
-  top: -8px;
+  margin-top: 15px; /* exactly center 2px line with 32px circle */
+  top: 0;
 }
 
 .fm-diag-flow-badge-wrap {

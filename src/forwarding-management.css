@@ -1558,6 +1558,10 @@
   border: 1px solid var(--border);
 }
 
+.fm-diag-breakdown {
+  margin-top: 4px;
+}
+
 .fm-diag-breakdown h4 {
   margin: 12px 0 8px;
   font-size: 13px;
@@ -1565,11 +1569,114 @@
   color: var(--text);
 }
 
-.fm-diag-table code {
-  font-size: 12px;
-  padding: 2px 4px;
+.fm-diag-table-wrap {
+  width: 100%;
+  overflow-x: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.fm-diag-table {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+
+.fm-diag-table th {
+  height: 38px;
+  padding: 0 12px;
   background: var(--surface-muted);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 11.5px;
+  font-weight: 700;
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.fm-diag-table td {
+  min-height: auto;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-soft);
+  font-size: 12.5px;
+  vertical-align: middle;
+}
+
+.fm-diag-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.fm-diag-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--surface-muted) 50%, transparent);
+}
+
+.fm-diag-col-type {
+  width: 88px;
+}
+
+.fm-diag-col-route {
+  width: auto;
+}
+
+.fm-diag-route-cell {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  line-height: 1.4;
+}
+
+.fm-diag-route-cell strong {
+  color: var(--text);
+  font-size: 12.5px;
+  word-break: break-word;
+}
+
+.fm-diag-route-arrow {
+  color: var(--text-faint);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.fm-diag-col-addr {
+  width: 175px;
+}
+
+.fm-diag-table code {
+  font-size: 11.5px;
+  padding: 2px 6px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
   border-radius: 4px;
+  font-family: var(--font-mono, monospace);
+  word-break: break-all;
+  display: inline-block;
+  max-width: 100%;
+}
+
+.fm-diag-col-latency {
+  width: 85px;
+  text-align: right !important;
+}
+
+.fm-diag-col-status {
+  width: 75px;
+  text-align: center !important;
+}
+
+@media (max-width: 520px) {
+  .fm-diag-table-wrap {
+    overflow-x: auto;
+  }
+  .fm-diag-table {
+    min-width: 480px !important;
+  }
 }
 
 @media (max-width: 480px) {

@@ -2265,32 +2265,36 @@ function ForwardDiagnosticDialog({
         {health?.segments && health.segments.length > 0 ? (
           <div className="fm-diag-breakdown">
             <h4>分段探测明细</h4>
-            <div className="table-wrap">
-              <table className="fm-table fm-diag-table">
+            <div className="fm-diag-table-wrap">
+              <table className="fm-diag-table">
                 <thead>
                   <tr>
-                    <th>分段类型</th>
-                    <th>起始节点 ➔ 目标</th>
-                    <th>目标地址</th>
-                    <th>分段延迟</th>
-                    <th>状态</th>
+                    <th className="fm-diag-col-type">分段类型</th>
+                    <th className="fm-diag-col-route">起始节点 ➔ 目标</th>
+                    <th className="fm-diag-col-addr">目标地址</th>
+                    <th className="fm-diag-col-latency">分段延迟</th>
+                    <th className="fm-diag-col-status">状态</th>
                   </tr>
                 </thead>
                 <tbody>
                   {health.segments.map((seg, idx) => (
                     <tr key={idx}>
-                      <td>
+                      <td className="fm-diag-col-type">
                         <Badge tone={seg.type === "tunnel" ? "info" : seg.type === "entry" ? "neutral" : "good"}>
                           {seg.type === "entry" ? "入口握手" : seg.type === "tunnel" ? "隧道穿透" : "落地目标"}
                         </Badge>
                       </td>
-                      <td>
-                        <strong>{seg.source_name}</strong>
-                        <span className="muted"> ➔ </span>
-                        <strong>{seg.target_name}</strong>
+                      <td className="fm-diag-col-route">
+                        <div className="fm-diag-route-cell">
+                          <strong>{seg.source_name}</strong>
+                          <span className="fm-diag-route-arrow">➔</span>
+                          <strong>{seg.target_name}</strong>
+                        </div>
                       </td>
-                      <td><code>{seg.target_host}:{seg.target_port}</code></td>
-                      <td>
+                      <td className="fm-diag-col-addr">
+                        <code>{seg.target_host}:{seg.target_port}</code>
+                      </td>
+                      <td className="fm-diag-col-latency">
                         {seg.success ? (
                           <span className={seg.latency_ms > 300 ? "text-warning" : "text-success"} style={{ fontWeight: 700 }}>
                             {Math.round(seg.latency_ms)} ms
@@ -2299,7 +2303,7 @@ function ForwardDiagnosticDialog({
                           <span className="text-danger" style={{ fontWeight: 700 }}>失败</span>
                         )}
                       </td>
-                      <td>
+                      <td className="fm-diag-col-status">
                         {seg.success ? (
                           <Badge tone="good">正常</Badge>
                         ) : (

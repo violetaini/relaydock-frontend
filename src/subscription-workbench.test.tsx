@@ -157,4 +157,88 @@ describe("unified subscription wizard", () => {
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/subscribe-files/generation/preview", expect.objectContaining({ generation: expect.objectContaining({ outputs: [expect.objectContaining({ rule_mode: "custom", rule_categories: [] })] }) })));
   });
 
+  it("splits exclude/include name keywords into deletable chips, selects protocols via dropdown, and previews Cloudflare-style rules", async () => {
+    const post = vi.spyOn(api, "post").mockResolvedValue(preview);
+    render(<SubscriptionWizard {...props} kind="strategy" sourceIDs={[1, 2]} />);
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+
+    // Row 1: exclude name with separator auto-tokenization + delete chip
+    const excludeInput = screen.getByRole("textbox", { name: "排除名称 1" });
+    fireEvent.change(excludeInput, { target: { value: "到期|剩余流量|官网" } });
+    expect(screen.getByRole("button", { name: "删除关键词 到期" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除关键词 剩余流量" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除关键词 官网" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "删除关键词 剩余流量" }));
+    expect(screen.queryByRole("button", { name: "删除关键词 剩余流量" })).not.toBeInTheDocument();
+
+    // Add Row 2 with And -> defaults to include_match ("仅保留名称")
+    fireEvent.click(screen.getByRole("button", { name: "And" }));
+    const includeInput = screen.getByRole("textbox", { name: "仅保留名称 2" });
+    fireEvent.change(includeInput, { target: { value: "香港, HK" } });
+    expect(screen.getByRole("button", { name: "删除关键词 香港" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除关键词 HK" })).toBeInTheDocument();
+
+    // Add Row 3 with And -> defaults to protocol dropdown ("排除协议")
+    fireEvent.click(screen.getAllByRole("button", { name: "And" })[1]);
+    const protoSelect = screen.getByRole("combobox", { name: "排除协议 3" });
+    fireEvent.change(protoSelect, { target: { value: "ss" } });
+    fireEvent.change(protoSelect, { target: { value: "vmess" } });
+    expect(screen.getByRole("button", { name: "删除协议 ss" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除协议 vmess" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "删除协议 vmess" }));
+    expect(screen.queryByRole("button", { name: "删除协议 vmess" })).not.toBeInTheDocument();
+
+    // Expression preview updates cleanly
+    const previewRegion = screen.getByRole("region", { name: "过滤表达式预览" });
+    expect(previewRegion).toHaveTextContent(`(node.name =~ "香港|HK") and (node.name !~ "到期|官网") and (node.protocol not in {"ss"})`);
+
+    // Proceed to outputs & preview
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    fireEvent.click(screen.getByRole("button", { name: "生成预览" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/subscribe-files/generation/preview", expect.objectContaining({
+      generation: expect.objectContaining({
+        processing: expect.objectContaining({
+          exclude: "到期|官网",
+          include: "香港|HK",
+          exclude_types: ["ss"],
+        }),
+      }),
+    })));
+  });
+
+  it("supports switching between Cloudflare rule builder and raw expression editor and Or branches", () => {
+    const file: SubscribeFile = {
+      id: 9,
+      name: "既有策略",
+      filename: "existing.yaml",
+      type: "create",
+      auto_sync_custom_rules: false,
+      generation: {
+        kind: "strategy",
+        source_ids: [1],
+        processing: { deduplicate: true, remove_dead: false, exclude: "测试|维护", exclude_types: ["ssr"] },
+        outputs: [{ client: "clashmeta", mode: "nodes" }],
+      },
+    };
+    render(<SubscriptionWizard {...props} kind="strategy" file={file} />);
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+
+    // Existing saved values initialize as chips
+    expect(screen.getByRole("button", { name: "删除关键词 测试" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除关键词 维护" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除协议 ssr" })).toBeInTheDocument();
+
+    // Clicking Or adds another branch of same operator
+    fireEvent.click(screen.getAllByRole("button", { name: "Or" })[0]);
+    expect(screen.getByRole("textbox", { name: "排除名称 2" })).toBeInTheDocument();
+
+    // Switch to raw expression edit mode and back
+    fireEvent.click(screen.getByRole("button", { name: "编辑表达式" }));
+    expect(screen.getByRole("textbox", { name: /排除名称（正则）/ })).toHaveValue("测试|维护");
+    fireEvent.change(screen.getByRole("textbox", { name: /排除名称（正则）/ }), { target: { value: "过期|备用" } });
+    fireEvent.click(screen.getByRole("button", { name: "可视化规则构建" }));
+    expect(screen.getByRole("button", { name: "删除关键词 过期" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除关键词 备用" })).toBeInTheDocument();
+  });
+
 });

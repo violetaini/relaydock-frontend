@@ -292,11 +292,15 @@ describe("unified subscription wizard", () => {
     expect(screen.getByText(/协议大类顺序/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "上移 协议大类 vless" }));
 
-    // 4. Moving an individual node directly promotes to 自定义节点 order
-    fireEvent.click(screen.getByRole("button", { name: "上移 HK SS" }));
-    expect(screen.getByRole("tab", { name: "自定义节点" })).toHaveAttribute("aria-selected", "true");
+    // 4. Switch to 按地区排序 -> displays horizontal region flag cards and allows left/right reordering
+    fireEvent.click(screen.getByRole("tab", { name: "按地区排序" }));
+    expect(await screen.findByRole("list", { name: "地区横向排序列表" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "左移地区 HK" }));
 
-    // Advance and preview -> sends reordered source_ids [2, 1], sort: "custom", sort_direction: "desc", type_order preserved
+    // 5. Moving an individual node directly promotes to 自定义节点 order
+    fireEvent.click(screen.getByRole("button", { name: "上移 JP VLess" }));
+
+    // Advance and preview -> sends reordered source_ids [2, 1], sort: "custom", sort_direction: "desc", type_order & region_order preserved
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     fireEvent.click(screen.getByRole("button", { name: "生成预览" }));
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/subscribe-files/generation/preview", expect.objectContaining({
@@ -306,7 +310,8 @@ describe("unified subscription wizard", () => {
           sort: "custom",
           sort_direction: "desc",
           type_order: ["ss", "vless"],
-          custom_order: ["k2", "k1"],
+          region_order: ["JP", "HK"],
+          custom_order: ["k1", "k2"],
         }),
       }),
     })));

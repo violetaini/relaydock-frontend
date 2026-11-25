@@ -483,6 +483,7 @@ interface CreateServerForm {
   ipv6Enabled: boolean;
   ddnsEnabled: boolean;
   ddnsProviderID: string;
+  countryCode: string;
   stealMode: string;
   siteType: string;
   siteValue: string;
@@ -507,10 +508,31 @@ const emptyCreateForm: CreateServerForm = {
   ipv6Enabled: true,
   ddnsEnabled: false,
   ddnsProviderID: "0",
+  countryCode: "",
   stealMode: "default",
   siteType: "static",
   siteValue: "",
 };
+
+const serverRegionOptions: Array<{ code: string; label: string }> = [
+  { code: "", label: "自动识别（按首次 IP 归属）" },
+  { code: "HK", label: "香港 (HK)" },
+  { code: "TW", label: "台湾 (TW)" },
+  { code: "JP", label: "日本 (JP)" },
+  { code: "SG", label: "新加坡 (SG)" },
+  { code: "KR", label: "韩国 (KR)" },
+  { code: "US", label: "美国 (US)" },
+  { code: "GB", label: "英国 (GB)" },
+  { code: "DE", label: "德国 (DE)" },
+  { code: "FR", label: "法国 (FR)" },
+  { code: "NL", label: "荷兰 (NL)" },
+  { code: "CA", label: "加拿大 (CA)" },
+  { code: "AU", label: "澳大利亚 (AU)" },
+  { code: "RU", label: "俄罗斯 (RU)" },
+  { code: "TR", label: "土耳其 (TR)" },
+  { code: "IN", label: "印度 (IN)" },
+  { code: "MO", label: "澳门 (MO)" },
+];
 
 function assertSuccess<T extends ActionResponse>(response: T, fallback: string): T {
   if (!response || response.success === false) throw new Error(response?.error || response?.message || fallback);
@@ -2719,6 +2741,21 @@ function ServerFormFields({ form, setForm, editing = false }: { form: CreateServ
         </select>
       </Field>
     </div>
+    {editing ? (
+      <Field label="服务器地区" hint="动态 IP 服务器默认保留首次上线识别的地区；可在此手动修正，所属节点自动继承">
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <CountryFlag countryCode={form.countryCode} fallbackSize={18} />
+          <select aria-label="服务器地区" value={form.countryCode} onChange={(event) => patch("countryCode", event.target.value)}>
+            {serverRegionOptions.map((opt) => (
+              <option key={opt.code || "auto"} value={opt.code}>{opt.label}</option>
+            ))}
+            {form.countryCode && !serverRegionOptions.some((opt) => opt.code === form.countryCode) ? (
+              <option value={form.countryCode}>{form.countryCode}</option>
+            ) : null}
+          </select>
+        </div>
+      </Field>
+    ) : null}
 
     <details className="service-advanced-settings-accordion" open={editing}>
       <summary className="service-advanced-settings-summary">
@@ -2999,6 +3036,7 @@ function formFromServer(server: ManagedServer): CreateServerForm {
     ipv6Enabled: server.ipv6_enabled,
     ddnsEnabled: Boolean(server.ddns_enabled),
     ddnsProviderID: String(server.ddns_provider_id ?? 0),
+    countryCode: (server.country_code || "").toUpperCase(),
     stealMode: server.steal_mode || "default",
     siteType: server.site_type || "static",
     siteValue: server.site_value || "",
@@ -3044,6 +3082,7 @@ function EditServerDialog({ server, onClose, onSaved }: { server: ManagedServer;
         ipv6_enabled: form.ipv6Enabled,
         ddns_enabled: form.ddnsEnabled,
         ddns_provider_id: Number(form.ddnsProviderID) || 0,
+        country_code: form.countryCode.trim().toUpperCase(),
         site_type: form.siteType,
         site_value: form.siteValue.trim(),
       };

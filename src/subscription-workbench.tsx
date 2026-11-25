@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Check, ChevronDown, ChevronsUp, Code2, Copy, Eye, FileInput, GripVertical, Layers, Link2, MoreHorizontal, Pencil, Plus, RefreshCw, Search, Settings2, ShieldCheck, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import { api } from "./api";
+import { CountryFlag, normalizeCountryCode } from "./country-flag";
 import { isAnyDoorNode } from "./managed-node-presets";
 import { Badge, Button, ConfirmDialog, Dialog, EmptyState, ErrorState, Field, IconButton, PageHeader, Spinner, Surface, Toggle } from "./ui";
 import type { ContentPageProps, CustomRuleOption, NodeItem, OverrideScriptOption, SubscribeFile } from "./content-workbench";
@@ -9,9 +10,9 @@ import ruleCategories from "./subscription-rule-categories.json";
 import "./subscription-workbench.css";
 
 type Kind = "external" | "custom" | "strategy";
-export type SortMode = "source" | "name" | "type" | "custom";
+export type SortMode = "source" | "name" | "type" | "region" | "custom";
 export type SortDirection = "asc" | "desc";
-export interface PreviewNodeSummary { key: string; name: string; type: string }
+export interface PreviewNodeSummary { key: string; name: string; type: string; country_code?: string }
 export interface SubscriptionOutput { client: string; mode: "full" | "source" | "nodes"; template_filename?: string; rule_mode?: "template" | "custom"; rule_categories?: string[] }
 export interface SubscriptionGeneration {
   kind: Kind;
@@ -25,6 +26,7 @@ export interface SubscriptionGeneration {
     sort?: SortMode | string;
     sort_direction?: SortDirection;
     type_order?: string[];
+    region_order?: string[];
     custom_order?: string[];
   };
   outputs: SubscriptionOutput[];
@@ -956,8 +958,111 @@ const sortModeOptions: Array<{ id: SortMode; label: string }> = [
   { id: "source", label: "按来源顺序" },
   { id: "name", label: "按节点名称" },
   { id: "type", label: "按节点类型" },
-  { id: "custom", label: "自定义节点" },
+  { id: "region", label: "按地区排序" },
 ];
+
+const regionLabelMap: Record<string, string> = {
+  HK: "香港",
+  TW: "台湾",
+  JP: "日本",
+  SG: "新加坡",
+  KR: "韩国",
+  US: "美国",
+  GB: "英国",
+  DE: "德国",
+  FR: "法国",
+  NL: "荷兰",
+  CA: "加拿大",
+  AU: "澳大利亚",
+  RU: "俄罗斯",
+  TR: "土耳其",
+  IN: "印度",
+  MO: "澳门",
+  UN: "未知地区",
+};
+
+function inferClientRegionCode(name: string, explicit?: string): string {
+  const norm = normalizeCountryCode(explicit);
+  if (norm && norm !== "UN") return norm;
+  const upper = name.toUpperCase();
+  if (name.includes("🇭🇰") || name.includes("香港") || upper.includes("HK")) return "HK";
+  if (name.includes("🇯🇵") || name.includes("日本") || name.includes("东京") || name.includes("大阪") || upper.includes("JP")) return "JP";
+  if (name.includes("🇹🇼") || name.includes("台湾") || name.includes("台北") || upper.includes("TW")) return "TW";
+  if (name.includes("🇺🇸") || name.includes("美国") || name.includes("洛杉矶") || name.includes("圣何塞") || upper.includes("US")) return "US";
+  if (name.includes("🇸🇬") || name.includes("新加坡") || name.includes("狮城") || upper.includes("SG")) return "SG";
+  if (name.includes("🇰🇷") || name.includes("韩国") || name.includes("首尔") || upper.includes("KR")) return "KR";
+  if (name.includes("🇬🇧") || name.includes("英国") || name.includes("伦敦") || upper.includes("UK") || upper.includes("GB")) return "GB";
+  if (name.includes("🇩🇪") || name.includes("德国") || name.includes("法兰克福") || upper.includes("DE")) return "DE";
+  if (name.includes("🇫🇷") || name.includes("法国")) return "FR";
+  if (name.includes("🇳🇱") || name.includes("荷兰")) return "NL";
+  if (name.includes("🇨🇦") || name.includes("加拿大")) return "CA";
+  if (name.includes("🇦🇺") || name.includes("澳大利亚") || name.includes("澳洲")) return "AU";
+  if (name.includes("🇷🇺") || name.includes("俄罗斯") || upper.includes("RU")) return "RU";
+  if (name.includes("🇹🇷") || name.includes("土耳其")) return "TR";
+  if (name.includes("🇮🇳") || name.includes("印度")) return "IN";
+  if (name.includes("🇲🇴") || name.includes("澳门")) return "MO";
+  return "UN";
+}
+
+function HorizontalRegionOrderList({
+  items,
+  onReorder,
+}: {
+  items: Array<{ code: string; count: number }>;
+  onReorder: (nextItems: Array<{ code: string; count: number }>) => void;
+}) {
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [overIndex, setOverIndex] = useState<number | null>(null);
+
+  const move = (from: number, to: number) => {
+    if (to < 0 || to >= items.length || from === to) return;
+    const next = [...items];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    onReorder(next);
+  };
+
+  return (
+    <ul className="sm-region-grid" aria-label="地区横向排序列表">
+      {items.map((item, idx) => {
+        const label = regionLabelMap[item.code] ? `${regionLabelMap[item.code]} (${item.code === "UN" ? "未知" : item.code})` : item.code;
+        return (
+          <li
+            key={item.code}
+            className={`sm-region-chip ${dragIndex === idx ? "is-dragging" : ""} ${overIndex === idx && dragIndex !== idx ? "is-drag-over" : ""}`}
+            draggable={items.length > 1}
+            onDragStart={() => { setDragIndex(idx); setOverIndex(idx); }}
+            onDragOver={e => { e.preventDefault(); if (overIndex !== idx) setOverIndex(idx); }}
+            onDrop={e => {
+              e.preventDefault();
+              if (dragIndex !== null && dragIndex !== idx) move(dragIndex, idx);
+              setDragIndex(null);
+              setOverIndex(null);
+            }}
+            onDragEnd={() => { setDragIndex(null); setOverIndex(null); }}
+          >
+            <span className="sm-sort-grip" aria-hidden="true"><GripVertical size={13} /></span>
+            <CountryFlag countryCode={item.code} className="sm-region-flag" fallbackSize={15} />
+            <span className="sm-region-chip-label">
+              <span>{label}</span>
+              <Badge tone="info">{item.count}</Badge>
+            </span>
+            {items.length > 1 && (
+              <span className="sm-region-chip-actions">
+                <IconButton label={`左移地区 ${item.code}`} disabled={idx === 0} onClick={() => move(idx, idx - 1)}>
+                  <ArrowLeft size={12} />
+                </IconButton>
+                <IconButton label={`右移地区 ${item.code}`} disabled={idx === items.length - 1} onClick={() => move(idx, idx + 1)}>
+                  <ArrowRight size={12} />
+                </IconButton>
+              </span>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
 
 function NodeSortPanel({
   processing,
@@ -1074,6 +1179,41 @@ function NodeSortPanel({
     onChangeProcessing({ sort: "type", type_order: persisted });
   };
 
+  const regionGroups = useMemo(() => {
+    const counts = new Map<string, number>();
+    const order: string[] = [];
+    for (const n of sortedNodes) {
+      const code = inferClientRegionCode(n.name, n.country_code);
+      if (!counts.has(code)) order.push(code);
+      counts.set(code, (counts.get(code) || 0) + 1);
+    }
+    if (processing.region_order?.length) {
+      const rank = new Map(processing.region_order.map((c, idx) => [c.toUpperCase(), idx]));
+      const ordered = [...order].sort((a, b) => {
+        const ra = rank.get(a) ?? processing.region_order!.length;
+        const rb = rank.get(b) ?? processing.region_order!.length;
+        if (ra !== rb) return ra - rb;
+        return order.indexOf(a) - order.indexOf(b);
+      });
+      const finalOrder = direction === "desc" ? [...ordered].reverse() : ordered;
+      return finalOrder.map(code => ({ code, count: counts.get(code) || 0 }));
+    }
+    return order.map(code => ({ code, count: counts.get(code) || 0 }));
+  }, [direction, processing.region_order, sortedNodes]);
+
+  const handleReorderRegions = (nextGroups: Array<{ code: string; count: number }>) => {
+    const nextCodes = nextGroups.map(g => g.code);
+    const rank = new Map(nextCodes.map((c, idx) => [c, idx]));
+    const reorderedNodes = [...sortedNodes].sort((a, b) => {
+      const ra = rank.get(inferClientRegionCode(a.name, a.country_code)) ?? nextCodes.length;
+      const rb = rank.get(inferClientRegionCode(b.name, b.country_code)) ?? nextCodes.length;
+      return ra - rb;
+    });
+    setSortedNodes(reorderedNodes);
+    const persisted = direction === "desc" ? [...nextCodes].reverse() : nextCodes;
+    onChangeProcessing({ sort: "region", region_order: persisted });
+  };
+
   return (
     <section className="sm-sort-card" aria-label="节点与来源排序">
       <div className="sm-sort-head">
@@ -1162,6 +1302,15 @@ function NodeSortPanel({
         </div>
       )}
 
+      {sortMode === "region" && regionGroups.length > 0 && (
+        <div className="sm-sort-body">
+          <div className="sm-sort-toolbar">
+            <span>地区国旗排序（共 <strong>{regionGroups.length}</strong> 个地区 · 支持上下左右拖拽或点击左右箭头调整）</span>
+          </div>
+          <HorizontalRegionOrderList items={regionGroups} onReorder={handleReorderRegions} />
+        </div>
+      )}
+
       <div className="sm-sort-body">
         <div className="sm-sort-toolbar">
           <span>
@@ -1185,6 +1334,7 @@ function NodeSortPanel({
             allowPinTop
             renderMeta={node => (
               <>
+                <CountryFlag countryCode={inferClientRegionCode(node.name, node.country_code)} className="sm-region-node-flag" fallbackSize={13} />
                 <strong>{node.name}</strong>
                 <Badge tone="info">{node.type || "unknown"}</Badge>
               </>

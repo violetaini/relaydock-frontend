@@ -120,6 +120,40 @@ describe("custom rules workbench", () => {
     }));
   });
 
+  it("builds Cloudflare-style route rules visually and shows merge before/after guide", async () => {
+    mockCustomRuleLoads();
+    const post = vi.spyOn(api, "post").mockResolvedValue({
+      id: 22,
+      name: "公司域名直连",
+      type: "rules",
+      mode: "prepend",
+      content: "- DOMAIN-SUFFIX,corp.example,DIRECT\n- IP-CIDR,10.0.0.0/8,DIRECT,no-resolve\n",
+      enabled: true,
+    });
+    render(<CustomRulesWorkbenchPage notify={vi.fn()} />);
+
+    await screen.findByText("安全 DNS");
+    fireEvent.click(screen.getByRole("button", { name: "新建覆写" }));
+    const dialog = screen.getByRole("dialog", { name: "新建覆写" });
+    expect(within(dialog).getByText(/原有内容/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/生效结果/)).toBeInTheDocument();
+
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "名称" }), { target: { value: "公司域名直连" } });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "匹配值 1" }), { target: { value: "corp.example" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "添加匹配条件" }));
+    fireEvent.change(within(dialog).getByRole("combobox", { name: "匹配维度 2" }), { target: { value: "IP-CIDR" } });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "匹配值 2" }), { target: { value: "10.0.0.0/8" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/custom-rules", {
+      name: "公司域名直连",
+      type: "rules",
+      mode: "prepend",
+      content: "- DOMAIN-SUFFIX,corp.example,DIRECT\n- IP-CIDR,10.0.0.0/8,DIRECT,no-resolve\n",
+      enabled: true,
+    }));
+  });
+
   it("edits a script without dropping hook, order, enabled state, or content", async () => {
     mockCustomRuleLoads();
     const put = vi.spyOn(api, "put").mockImplementation(async <T,>(_path: string, body?: unknown): Promise<T> => ({ id: 12, ...(body as object) }) as T);

@@ -256,4 +256,27 @@
 }
 .sm-external-source-hint strong { color:var(--text); }
 
+/* Override rules & scripts picker in subscription wizard */
+.sm-override-picker { display:grid;gap:10px; }
+.sm-override-groups { display:grid;gap:12px; }
+.sm-override-group { display:grid;gap:8px; }
+.sm-override-group > small { font-size:12px;font-weight:600;color:var(--text-soft); }
+.sm-override-checks { display:flex;flex-wrap:wrap;gap:8px; }
+.sm-override-chip {
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  padding:8px 12px;
+  border-radius:8px;
+  border:1px solid var(--border);
+  background:var(--surface-muted);
+  font-size:13px;
+  color:var(--text);
+  cursor:pointer;
+  transition:border-color .15s, background .15s;
+}
+.sm-override-chip:hover { border-color:var(--border-strong); }
+.sm-override-chip.is-selected { border-color:var(--accent);background:var(--accent-soft); }
+.sm-override-chip input { margin:0; }
+
 

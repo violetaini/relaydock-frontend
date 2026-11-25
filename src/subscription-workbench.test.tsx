@@ -88,6 +88,36 @@ describe("unified subscription wizard", () => {
     });
   });
 
+  it("allows selecting override rules and scripts when creating or editing a subscription", async () => {
+    const post = vi.spyOn(api, "post").mockResolvedValue(preview);
+    render(
+      <SubscriptionWizard
+        {...props}
+        kind="strategy"
+        sourceIDs={[1]}
+        rules={[{ id: 5, name: "内网直连规则", type: "rules", enabled: true }]}
+        scripts={[{ id: 9, name: "替换关键字脚本", hook: "post_fetch", enabled: true }]}
+      />
+    );
+    advanceToOutputs();
+    fireEvent.click(screen.getByRole("checkbox", { name: /内网直连规则/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /替换关键字脚本/ }));
+    fireEvent.click(screen.getByRole("button", { name: "生成预览" }));
+    await screen.findByText("预览已生成");
+    fireEvent.change(screen.getByRole("textbox", { name: "订阅名称" }), { target: { value: "带覆写策略" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存订阅" }));
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith(
+        "/api/admin/subscribe-files/generation",
+        expect.objectContaining({
+          selected_custom_rule_ids: [5],
+          selected_override_script_ids: [9],
+        })
+      )
+    );
+  });
+
   it("saves different templates for independent client outputs", async () => {
     const post = vi.spyOn(api, "post").mockResolvedValue(preview);
     render(<SubscriptionWizard {...props} kind="strategy" sourceIDs={[1, 2]} />);

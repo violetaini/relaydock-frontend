@@ -1516,20 +1516,22 @@ export function SubscriptionManager({ notify = noNotify, isAdmin = true, onOpenR
       <div className="sm-list-footer"><small>{visible.length} 个订阅{tab === "strategy" ? " · 单个来源也可以创建策略" : " · 可勾选外部、自选订阅组合"}</small><div>{onOpenRulesConfig && <Button variant="ghost" onClick={onOpenRulesConfig}>模板管理</Button>}{onOpenCustomRules && <Button variant="ghost" onClick={onOpenCustomRules}>覆写规则</Button>}</div></div>
     </Surface>
     {showImport && <ImportDialog templates={templates} rules={rules} scripts={scripts} onClose={created => { setShowImport(false); if (created) { notify("订阅已导入，但高级设置尚未保存", "error"); void load(); } }} onComplete={() => { setShowImport(false); notify("外部订阅已添加"); void load(); }} />}
-    {wizard && <SubscriptionWizard {...wizard} isAdmin={isAdmin} files={files} nodes={nodes} templates={templates} onClose={() => setWizard(null)} onSaved={() => { const kind = wizard.kind; setWizard(null); setTab(kind); setSelected([]); notify("订阅配置已保存"); void load(); }} onManageTemplates={onOpenRulesConfig} />}
+    {wizard && <SubscriptionWizard {...wizard} isAdmin={isAdmin} files={files} nodes={nodes} templates={templates} rules={rules} scripts={scripts} onClose={() => setWizard(null)} onSaved={() => { const kind = wizard.kind; setWizard(null); setTab(kind); setSelected([]); notify("订阅配置已保存"); void load(); }} onManageTemplates={onOpenRulesConfig} onManageCustomRules={onOpenCustomRules} />}
     {content && <ContentDialog item={content} onClose={() => setContent(null)} onComplete={() => { setContent(null); void load(); }} />}
     {pending && <ConfirmDialog title="删除订阅" description={`删除“${pending.name}”后，引用它的策略订阅需要重新选择来源；原有链接将失效。`} confirmLabel="删除" tone="danger" working={busy} error={error} onCancel={() => setPending(null)} onConfirm={() => void run(async () => { await api.delete(`/api/admin/subscribe-files/${pending.id}`); setPending(null); }, "订阅已删除")} />}
     {linkFile && <Dialog title={`${linkFile.name} · 订阅链接`} description="同一订阅按客户端生成配置，来源更新后链接保持不变。" onClose={() => setLinkFile(null)} wide><div className="sm-link-list">{error && <ErrorState message={error} />}{(linkFile.generation?.outputs.length ? linkFile.generation.outputs : [{ client: "clashmeta", mode: "full" }, { client: "v2ray", mode: "nodes" }]).map(out => <div key={out.client}><strong>{clientName(out.client)}</strong><div className="sm-link-line"><input aria-label={`${clientName(out.client)}订阅地址`} type={linksVisible ? "text" : "password"} readOnly value={link(linkFile, out.client)} /><IconButton label={`复制 ${clientName(out.client)} 链接`} onClick={() => { void navigator.clipboard.writeText(link(linkFile, out.client)).then(() => notify("链接已复制")); }}><Copy size={16} /></IconButton></div></div>)}{linkFile.generation?.outputs.some(out => out.client === "v2ray") && <div className="sm-route-download"><Button variant="secondary" disabled={busy} onClick={() => void downloadRoutes(linkFile)}>导出 Xray 路由 JSON</Button><p className="sm-hint">路由需在客户端单独导入。策略组映射为 proxy，直连为 direct，拦截为 block。</p></div>}<Button variant="ghost" onClick={() => setLinksVisible(value => !value)}>{linksVisible ? "隐藏链接" : "显示链接"}</Button></div></Dialog>}
   </section>;
 }
 
-interface WizardProps { kind: Kind; file?: SubscribeFile; sourceIDs?: number[]; files: SubscribeFile[]; nodes: NodeItem[]; templates: string[]; isAdmin?: boolean; onClose: () => void; onSaved: () => void; onManageTemplates?: () => void }
-export function SubscriptionWizard({ kind, file, sourceIDs = [], files, nodes, templates, isAdmin = true, onClose, onSaved, onManageTemplates }: WizardProps) {
+interface WizardProps { kind: Kind; file?: SubscribeFile; sourceIDs?: number[]; files: SubscribeFile[]; nodes: NodeItem[]; templates: string[]; rules?: CustomRuleOption[]; scripts?: OverrideScriptOption[]; isAdmin?: boolean; onClose: () => void; onSaved: () => void; onManageTemplates?: () => void; onManageCustomRules?: () => void }
+export function SubscriptionWizard({ kind, file, sourceIDs = [], files, nodes, templates, rules = [], scripts = [], isAdmin = true, onClose, onSaved, onManageTemplates, onManageCustomRules }: WizardProps) {
   const [step, setStep] = useState(0);
   const [name, setName] = useState(file?.name || "");
   const [filename, setFilename] = useState(file?.filename || "");
   const [selectedSources, setSelectedSources] = useState<number[]>(file?.generation?.source_ids || sourceIDs);
   const [selectedNodes, setSelectedNodes] = useState<number[]>(file?.selected_node_ids || []);
+  const [selectedRuleIDs, setSelectedRuleIDs] = useState<number[]>(file?.selected_custom_rule_ids || []);
+  const [selectedScriptIDs, setSelectedScriptIDs] = useState<number[]>(file?.selected_override_script_ids || []);
   const [query, setQuery] = useState("");
   const [processing, setProcessing] = useState<SubscriptionGeneration["processing"]>(file?.generation?.processing || { deduplicate: true, remove_dead: false, sort: "source" });
   const [outputs, setOutputs] = useState<SubscriptionOutput[]>(file?.generation?.outputs || [{ client: "clashmeta", mode: kind === "external" ? "source" : templates.length ? "full" : "nodes", template_filename: file?.template_filename || templates[0] || "" }]);
@@ -1623,7 +1625,7 @@ export function SubscriptionWizard({ kind, file, sourceIDs = [], files, nodes, t
   };
   const canInherit = kind === "external" || kind === "strategy" && selectedSources.length === 1 && selectedSourceFiles.length === 1 && subscriptionKind(selectedSourceFiles[0]) === "external";
   const generation = (): SubscriptionGeneration => ({ kind, source_ids: kind === "strategy" ? selectedSources : [], processing, outputs: outputs.map(out => ({ ...out, mode: out.mode === "source" && !canInherit ? "nodes" : out.mode })) });
-  const payload = () => ({ ...(file ? { id: file.id } : {}), name: name.trim(), description: file?.description || "", filename: safeFilename(filename || name || "subscription"), selected_node_ids: kind === "custom" ? selectedNodes : [], generation: generation() });
+  const payload = () => ({ ...(file ? { id: file.id } : {}), name: name.trim(), description: file?.description || "", filename: safeFilename(filename || name || "subscription"), selected_node_ids: kind === "custom" ? selectedNodes : [], selected_custom_rule_ids: selectedRuleIDs, selected_override_script_ids: selectedScriptIDs, generation: generation() });
   const toggleID = (id: number, selected: number[], change: (next: number[]) => void) => change(selected.includes(id) ? selected.filter(value => value !== id) : [...selected, id]);
   const invalidate = () => { requestVersion.current += 1; setPreview(null); setError(""); };
   const setOutput = (index: number, next: Partial<SubscriptionOutput>) => { invalidate(); setOutputs(current => current.map((out, i) => i === index ? { ...out, ...next } : out)); };
@@ -1737,7 +1739,56 @@ export function SubscriptionWizard({ kind, file, sourceIDs = [], files, nodes, t
       )}
       {outputs.map((out, index) => <section className="sm-output" key={index} aria-label={`客户端输出 ${index + 1}`}><div className="sm-output-heading"><strong>{index === 0 ? "默认客户端" : "附加客户端"}</strong>{index > 0 && <IconButton label={`移除客户端 ${index + 1}`} onClick={() => { invalidate(); setOutputs(current => current.filter((_, i) => i !== index)); }}><X size={15} /></IconButton>}</div><div className="sm-form-grid"><Field label={`输出客户端${index ? ` ${index + 1}` : ""}`}><select value={out.client} onChange={e => { const id = e.target.value; setOutput(index, { client: id, mode: id === "v2ray" ? "nodes" : canInherit && id === "clashmeta" ? "source" : templates.length ? "full" : "nodes", template_filename: out.template_filename || templates[0] || "" }); }}>
       {clients.map(client => <option key={client.id} value={client.id} disabled={outputs.some((other, i) => i !== index && other.client === client.id)}>{client.name}</option>)}{["shadowrocket", "uri"].includes(out.client) && <option value={out.client}>{clientName(out.client)}</option>}
-    </select></Field><Field label={`规则配置${index ? ` ${index + 1}` : ""}`}><select value={out.mode} onChange={e => setOutput(index, { mode: e.target.value as SubscriptionOutput["mode"] })}>{out.client !== "v2ray" && out.client !== "shadowrocket" && out.client !== "uri" && <option value="full">完整配置（分流规则）</option>}{canInherit && out.client === "clashmeta" && <option value="source">保留上游规则</option>}<option value="nodes">仅输出节点</option></select></Field></div><SubscriptionOutputRules out={out} index={index} templates={templates} onChange={next => setOutput(index, next)} onManageTemplates={onManageTemplates} />{out.client === "clash-to-shadowrocket" && <p className="sm-client-hint">完整配置生成小火箭 .conf；仅节点模式提供独立节点订阅。</p>}{out.mode === "source" && <p className="sm-client-hint">保留该外部来源的分组、分流和 DNS，导入原文保持不变。</p>}</section>)}{outputs.length < clients.length && <Button variant="ghost" onClick={() => { const client = clients.find(c => !outputs.some(out => out.client === c.id)); if (client) { invalidate(); setOutputs(current => [...current, { client: client.id, mode: client.full && templates.length ? "full" : "nodes", template_filename: templates[0] || "" }]); } }}><Plus size={15} />添加其他客户端输出</Button>}</div>}
+    </select></Field><Field label={`规则配置${index ? ` ${index + 1}` : ""}`}><select value={out.mode} onChange={e => setOutput(index, { mode: e.target.value as SubscriptionOutput["mode"] })}>{out.client !== "v2ray" && out.client !== "shadowrocket" && out.client !== "uri" && <option value="full">完整配置（分流规则）</option>}{canInherit && out.client === "clashmeta" && <option value="source">保留上游规则</option>}<option value="nodes">仅输出节点</option></select></Field></div><SubscriptionOutputRules out={out} index={index} templates={templates} onChange={next => setOutput(index, next)} onManageTemplates={onManageTemplates} />{out.client === "clash-to-shadowrocket" && <p className="sm-client-hint">完整配置生成小火箭 .conf；仅节点模式提供独立节点订阅。</p>}{out.mode === "source" && <p className="sm-client-hint">保留该外部来源的分组、分流和 DNS，导入原文保持不变。</p>}</section>)}{outputs.length < clients.length && <Button variant="ghost" onClick={() => { const client = clients.find(c => !outputs.some(out => out.client === c.id)); if (client) { invalidate(); setOutputs(current => [...current, { client: client.id, mode: client.full && templates.length ? "full" : "nodes", template_filename: templates[0] || "" }]); } }}><Plus size={15} />添加其他客户端输出</Button>}
+      <section className="sm-output sm-override-picker" aria-label="附加覆写规则与脚本">
+        <div className="sm-output-heading">
+          <strong>附加覆写规则与处理脚本（可选）</strong>
+          {onManageCustomRules && <Button variant="ghost" onClick={onManageCustomRules}>管理覆写规则</Button>}
+        </div>
+        {(rules.filter(r => r.enabled).length === 0 && scripts.filter(s => s.enabled).length === 0) ? (
+          <p className="sm-client-hint">暂无已启用的覆写规则或 JS 处理脚本，可在「覆写管理」中创建后再勾选。</p>
+        ) : (
+          <div className="sm-override-groups">
+            {rules.filter(r => r.enabled).length > 0 && (
+              <div className="sm-override-group">
+                <small>YAML 覆写规则（DNS / 分流规则 / 规则集）</small>
+                <div className="sm-override-checks">
+                  {rules.filter(r => r.enabled).map(rule => (
+                    <label key={rule.id} className={`sm-override-chip ${selectedRuleIDs.includes(rule.id) ? "is-selected" : ""}`}>
+                      <input
+                        type="checkbox"
+                        checked={selectedRuleIDs.includes(rule.id)}
+                        onChange={() => { invalidate(); toggleID(rule.id, selectedRuleIDs, setSelectedRuleIDs); }}
+                      />
+                      <span>{rule.name}</span>
+                      <Badge>{rule.type === "dns" ? "DNS" : rule.type === "rule-providers" ? "规则集" : "规则"}</Badge>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+            {scripts.filter(s => s.enabled).length > 0 && (
+              <div className="sm-override-group">
+                <small>JavaScript 处理脚本</small>
+                <div className="sm-override-checks">
+                  {scripts.filter(s => s.enabled).map(script => (
+                    <label key={script.id} className={`sm-override-chip ${selectedScriptIDs.includes(script.id) ? "is-selected" : ""}`}>
+                      <input
+                        type="checkbox"
+                        checked={selectedScriptIDs.includes(script.id)}
+                        onChange={() => { invalidate(); toggleID(script.id, selectedScriptIDs, setSelectedScriptIDs); }}
+                      />
+                      <span>{script.name}</span>
+                      <Badge tone="info">JS</Badge>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
+    </div>}
     {step === lastStep && preview && <div className="sm-review"><div className="sm-form-grid"><Field label="订阅名称"><input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder={kind === "strategy" ? "例如：日常多线订阅" : "例如：自建专线"} /></Field><div className="sm-review-summary"><Badge tone="good"><Check size={13} />预览已生成</Badge><span>{clientName(preview.client)} · {outputs.length} 个客户端输出</span></div></div><div className="sm-preview-counts"><div><small>输入节点</small><strong>{preview.input}</strong></div><div><small>去重 / 过滤 / 失效</small><strong>{preview.duplicate} / {preview.filtered} / {preview.dead}</strong></div><div><small>输出节点</small><strong>{preview.output}</strong></div></div>{preview.unknown > 0 && processing.remove_dead && <p className="sm-hint">{preview.unknown} 个节点暂无近期检测结果，已保留。</p>}{[...new Set([...(preview.warnings || []), ...(preview.outputs || []).flatMap(out => out.warnings || [])])].map(warn => <div className="sm-notice" key={warn}>{warn}</div>)}{kind === "strategy" && <div className="sm-bound-sources"><small>持续绑定来源</small><div>{selectedSourceFiles.map(source => <Badge key={source.id}>{source.name}</Badge>)}</div></div>}<Field label="链接文件名（可选）" hint={file ? "保持原文件名，现有订阅链接继续使用。" : "留空按订阅名称生成。"}><input value={filename} disabled={Boolean(file)} onChange={e => setFilename(e.target.value)} placeholder="subscription.yaml" /></Field><p className="sm-hint">用户额度在用户管理中设置，下发时使用当前用户的独立凭据与流量额度。</p><Button variant="ghost" onClick={() => setShowCode(value => !value)}><Eye size={15} />{showCode ? "收起配置预览" : "查看生成配置"}</Button>{showCode && <div className="sm-code-view">{(preview.outputs?.length || 0) > 1 && <Field label="预览客户端"><select value={previewIndex} onChange={e => setPreviewIndex(Number(e.target.value))}>{preview.outputs!.map((out, i) => <option key={out.client} value={i}>{clientName(out.client)} · {out.output} 个节点</option>)}</select></Field>}<pre className="sm-code">{preview.outputs?.[previewIndex]?.content || preview.content}</pre></div>}</div>}
     <div className="sm-wizard-footer"><Button variant="secondary" onClick={step === 0 ? onClose : () => { setStep(value => value - 1); setError(""); }} disabled={busy}><ArrowLeft size={15} />{step === 0 ? "取消" : "上一步"}</Button><span className="sm-step-hint">{step + 1} / {titles.length}</span><Button onClick={() => void (step === lastStep ? save() : next())} disabled={busy || step < outputStep && !validSelection}>{busy ? <Spinner label={step === lastStep ? "正在保存" : "正在生成预览"} /> : <>{step === lastStep ? "保存订阅" : step === outputStep ? "生成预览" : "下一步"}<ArrowRight size={15} /></>}</Button></div>
     </fieldset>

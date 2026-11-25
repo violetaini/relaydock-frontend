@@ -62,6 +62,7 @@ import {
   formatBytes,
 } from "./ui";
 import "./content-workbench.css";
+import { CountryFlag, GLOBAL_COUNTRY_REGIONS } from "./country-flag";
 import { SubscriptionManager, SubscriptionOutputRules, type SubscriptionGeneration, type SubscriptionOutput } from "./subscription-workbench";
 
 export type ContentNotify = (message: string, tone?: "success" | "error") => void;
@@ -722,11 +723,19 @@ export function SubscribeFilesPage(props: ContentPageProps) {
   return <SubscriptionManager {...props} ImportDialog={ImportSubscriptionDialog} ContentDialog={EditSubscribeContentDialog} />;
 }
 
+interface ParsedImportNode {
+  key: string;
+  name: string;
+  type: string;
+  country_code: string;
+}
+
 function ImportSubscriptionDialog({ templates, onClose, onComplete }: {
   templates: string[];
   onClose: (created: boolean) => void;
   onComplete: () => void;
 }) {
+  const [step, setStep] = useState<1 | 2>(1);
   const [mode, setMode] = useState<"url" | "local">("url");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -739,91 +748,268 @@ function ImportSubscriptionDialog({ templates, onClose, onComplete }: {
   const [output, setOutput] = useState<SubscriptionOutput>({ client: "clashmeta", mode: "source", template_filename: templates[0] || "" });
   const [autoUpdateInterval, setAutoUpdateInterval] = useState(0);
   const [createdFile, setCreatedFile] = useState<SubscribeFile | null>(null);
+  const [parsedNodes, setParsedNodes] = useState<ParsedImportNode[]>([]);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
   const close = () => { if (!working) onClose(Boolean(createdFile)); };
-  const submit = async (event: FormEvent) => {
+
+  const handleNextToPreview = async (event: FormEvent) => {
     event.preventDefault();
     if (working) return;
-    setWorking(true); setError("");
+    if (!name.trim()) {
+      setError("请填写订阅名称");
+      return;
+    }
+    if (mode === "url" && !url.trim()) {
+      setError("请填写订阅 URL");
+      return;
+    }
+    if (mode === "local" && !pastedContent.trim()) {
+      setError("请选择订阅文件或粘贴节点内容");
+      return;
+    }
+    setWorking(true);
+    setError("");
     try {
-      if (advanced && output.mode === "full" && output.rule_mode !== "custom" && !output.template_filename) throw new Error("请选择规则模板或使用自定义规则");
+      const res = await api.post<{ nodes?: ParsedImportNode[]; count?: number }>("/api/admin/subscribe-files/parse-preview", {
+        url: mode === "url" ? url.trim() : "",
+        content: mode === "local" ? pastedContent.trim() : "",
+      });
+      if (!res.nodes || res.nodes.length === 0) {
+        throw new Error("未能从该订阅解析到有效代理节点（proxies）");
+      }
+      setParsedNodes(res.nodes);
+      setStep(2);
+    } catch (reason) {
+      setError(fail(reason, "解析订阅节点失败"));
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const handleNodeRegionChange = (index: number, code: string) => {
+    setParsedNodes(current => {
+      const copy = [...current];
+      copy[index] = { ...copy[index], country_code: code };
+      return copy;
+    });
+  };
+
+  const handleFinalSubmit = async () => {
+    if (working) return;
+    setWorking(true);
+    setError("");
+    try {
+      if (advanced && output.mode === "full" && output.rule_mode !== "custom" && !output.template_filename) {
+        throw new Error("请选择规则模板或使用自定义规则");
+      }
+      const nodeRegions: Record<string, string> = {};
+      for (const n of parsedNodes) {
+        if (n.country_code) {
+          nodeRegions[n.key] = n.country_code;
+        }
+      }
       let importedFile = createdFile;
       if (!importedFile) {
         let result: { file?: SubscribeFile };
         if (mode === "url") {
           result = await api.post<{ file?: SubscribeFile }>("/api/admin/subscribe-files/import", {
-            name, description, url, filename: filename ? normalizedFilename(filename) : "", auto_update_interval: autoUpdateInterval,
+            name,
+            description,
+            url,
+            filename: filename ? normalizedFilename(filename) : "",
+            auto_update_interval: autoUpdateInterval,
+            node_regions: nodeRegions,
           });
         } else {
           if (!pastedContent.trim()) throw new Error("请选择订阅文件或粘贴节点内容");
           const upload = new File([pastedContent], normalizedFilename(filename || file?.name || name || "subscription"), { type: "text/plain" });
           const form = new FormData();
-          form.set("file", upload); form.set("name", name || upload.name.replace(/\.ya?ml$/i, "")); form.set("description", description);
+          form.set("file", upload);
+          form.set("name", name || upload.name.replace(/\.ya?ml$/i, ""));
+          form.set("description", description);
           if (filename) form.set("filename", normalizedFilename(filename));
           result = await request<{ file?: SubscribeFile }>("/api/admin/subscribe-files/upload", { method: "POST", body: form });
         }
         if (!result.file?.id) throw new Error("订阅已导入，但未能读取文件信息，请刷新后重试");
-        importedFile = result.file; setCreatedFile(result.file);
+        importedFile = result.file;
+        setCreatedFile(result.file);
       }
-      if (advanced) await api.post("/api/admin/subscribe-files/generation", {
-        id: importedFile.id,
-        generation: { kind: "external", source_ids: [], processing: { deduplicate: false, remove_dead: false, sort: "source" }, outputs: [output] },
-      });
+      if (advanced || Object.keys(nodeRegions).length > 0) {
+        await api.post("/api/admin/subscribe-files/generation", {
+          id: importedFile.id,
+          generation: {
+            kind: "external",
+            source_ids: [],
+            processing: { deduplicate: false, remove_dead: false, sort: "source", node_regions: nodeRegions },
+            outputs: [output],
+          },
+        });
+      }
       onComplete();
-    } catch (reason) { setError(fail(reason, "添加订阅失败")); }
-    finally { setWorking(false); }
+    } catch (reason) {
+      setError(fail(reason, "添加订阅失败"));
+    } finally {
+      setWorking(false);
+    }
   };
+
   const readLocalFile = async (selected: File | undefined) => {
     if (!selected) return;
-    setWorking(true); setError("");
-    try { const content = await selected.text(); setPastedContent(content); setFile(selected); }
-    catch { setError("读取文件失败，请重新选择或直接粘贴内容"); }
-    finally { setWorking(false); }
+    setWorking(true);
+    setError("");
+    try {
+      const content = await selected.text();
+      setPastedContent(content);
+      setFile(selected);
+    } catch {
+      setError("读取文件失败，请重新选择或直接粘贴内容");
+    } finally {
+      setWorking(false);
+    }
   };
-  return <Dialog title="添加订阅" description="通过链接或本地内容导入，支持 Clash YAML、JSON 与 URI / Base64 节点订阅" onClose={close} dismissible={!working} wide>
-    <form onSubmit={submit}><fieldset className="cw-form cw-import-fields" disabled={working}>
+
+  return (
+    <Dialog
+      title={step === 1 ? "添加订阅" : `确认节点与地区（${name}）`}
+      description={step === 1 ? "通过链接或本地内容导入，支持 Clash YAML、JSON 与 URI / Base64 节点订阅" : `已识别出 ${parsedNodes.length} 个节点，可确认或改选所属地区`}
+      onClose={close}
+      dismissible={!working}
+      wide
+    >
       {error && <ErrorState message={error} />}
-      {createdFile && <div className="cw-help"><Info size={16} /><span>订阅“{createdFile.name}”已导入；再次提交只会重试尚未保存的高级设置，不会重复创建。</span></div>}
-      <div className="cw-mode">
-        <button type="button" disabled={Boolean(createdFile)} className={mode === "url" ? "is-active" : ""} onClick={() => setMode("url")}><Link2 size={16} />链接导入</button>
-        <button type="button" disabled={Boolean(createdFile)} className={mode === "local" ? "is-active" : ""} onClick={() => setMode("local")}><Upload size={16} />本地导入</button>
-      </div>
-      <div className="cw-form-grid">
-        <Field label="订阅名称"><input disabled={Boolean(createdFile)} required={mode === "url"} value={name} onChange={event => setName(event.target.value)} placeholder="例如：机场订阅" /></Field>
-        <Field label="文件名" hint="留空时自动生成"><input disabled={Boolean(createdFile)} value={filename} onChange={event => setFilename(event.target.value)} placeholder="subscription.yaml" /></Field>
-      </div>
-      {mode === "url" ? <>
-        <Field label="订阅 URL"><input disabled={Boolean(createdFile)} required type="url" value={url} onChange={event => setURL(event.target.value)} placeholder="https://example.com/subscribe" /></Field>
-        <Field label="自动更新时间" hint="按设定周期重新拉取链接；本地导入的内容不会自动更新">
-          <select disabled={Boolean(createdFile)} value={autoUpdateInterval} onChange={event => setAutoUpdateInterval(Number(event.target.value))}>
-            <option value={0}>不自动更新（仅手动同步）</option><option value={3600}>每 1 小时</option><option value={7200}>每 2 小时</option><option value={21600}>每 6 小时</option><option value={43200}>每 12 小时</option><option value={86400}>每 24 小时（1 天）</option><option value={172800}>每 48 小时（2 天）</option><option value={604800}>每周（7 天）</option>
-          </select>
-        </Field>
-      </> : <>
-        <div className="cw-local-file">
-          <span className="field-label">订阅文件</span>
-          <input ref={fileInput} hidden aria-label="选择订阅文件" disabled={Boolean(createdFile)} type="file" accept=".yaml,.yml,.json,.txt,.conf,application/yaml,text/yaml,application/json,text/plain" onChange={event => { void readLocalFile(event.target.files?.[0]); event.target.value = ""; }} />
-          <div className={`cw-file-picker ${file ? "has-file" : ""}`}>
-            <span className="cw-file-symbol"><FileText size={23} /></span>
-            <div className="cw-file-info"><strong>{file?.name || "尚未选择文件"}</strong><small>{file ? "内容已填入下方，可继续修改" : "支持 YAML、JSON、TXT 或节点订阅文件"}</small></div>
-            <Button type="button" variant="secondary" disabled={Boolean(createdFile)} onClick={() => fileInput.current?.click()}><Upload size={15} />{file ? "重新选择" : "选择文件"}</Button>
+      {step === 1 ? (
+        <form onSubmit={handleNextToPreview}>
+          <fieldset className="cw-form cw-import-fields" disabled={working}>
+            {createdFile && (
+              <div className="cw-help">
+                <Info size={16} />
+                <span>订阅“{createdFile.name}”已导入；再次提交只会重试尚未保存的高级设置，不会重复创建。</span>
+              </div>
+            )}
+            <div className="cw-mode">
+              <button type="button" disabled={Boolean(createdFile)} className={mode === "url" ? "is-active" : ""} onClick={() => setMode("url")}><Link2 size={16} />链接导入</button>
+              <button type="button" disabled={Boolean(createdFile)} className={mode === "local" ? "is-active" : ""} onClick={() => setMode("local")}><Upload size={16} />本地导入</button>
+            </div>
+            <div className="cw-form-grid">
+              <Field label="订阅名称"><input disabled={Boolean(createdFile)} required value={name} onChange={event => setName(event.target.value)} placeholder="例如：机场订阅" /></Field>
+              <Field label="文件名" hint="留空时自动生成"><input disabled={Boolean(createdFile)} value={filename} onChange={event => setFilename(event.target.value)} placeholder="subscription.yaml" /></Field>
+            </div>
+            {mode === "url" ? (
+              <>
+                <Field label="订阅 URL"><input disabled={Boolean(createdFile)} required type="url" value={url} onChange={event => setURL(event.target.value)} placeholder="https://example.com/subscribe" /></Field>
+                <Field label="自动更新时间" hint="按设定周期重新拉取链接；本地导入的内容不会自动更新">
+                  <select disabled={Boolean(createdFile)} value={autoUpdateInterval} onChange={event => setAutoUpdateInterval(Number(event.target.value))}>
+                    <option value={0}>不自动更新（仅手动同步）</option>
+                    <option value={3600}>每 1 小时</option>
+                    <option value={7200}>每 2 小时</option>
+                    <option value={21600}>每 6 小时</option>
+                    <option value={43200}>每 12 小时</option>
+                    <option value={86400}>每 24 小时（1 天）</option>
+                    <option value={172800}>每 48 小时（2 天）</option>
+                    <option value={604800}>每周（7 天）</option>
+                  </select>
+                </Field>
+              </>
+            ) : (
+              <>
+                <div className="cw-local-file">
+                  <span className="field-label">订阅文件</span>
+                  <input ref={fileInput} hidden aria-label="选择订阅文件" disabled={Boolean(createdFile)} type="file" accept=".yaml,.yml,.json,.txt,.conf,application/yaml,text/yaml,application/json,text/plain" onChange={event => { void readLocalFile(event.target.files?.[0]); event.target.value = ""; }} />
+                  <div className={`cw-file-picker ${file ? "has-file" : ""}`}>
+                    <span className="cw-file-symbol"><FileText size={23} /></span>
+                    <div className="cw-file-info">
+                      <strong>{file?.name || "尚未选择文件"}</strong>
+                      <small>{file ? "内容已填入下方，可继续修改" : "支持 YAML、JSON、TXT 或节点订阅文件"}</small>
+                    </div>
+                    <Button type="button" variant="secondary" disabled={Boolean(createdFile)} onClick={() => fileInput.current?.click()}><Upload size={15} />{file ? "重新选择" : "选择文件"}</Button>
+                  </div>
+                </div>
+                <Field label="订阅内容" hint="可直接粘贴，或选择文件自动填入；最终以下方编辑内容为准。">
+                  <textarea required disabled={Boolean(createdFile)} value={pastedContent} onChange={event => setPastedContent(event.target.value)} placeholder="粘贴 Clash YAML、JSON、节点分享链接或 Base64 订阅" spellCheck={false} />
+                </Field>
+              </>
+            )}
+            <Field label="说明"><textarea disabled={Boolean(createdFile)} value={description} onChange={event => setDescription(event.target.value)} placeholder="可选" /></Field>
+            <Button type="button" variant="ghost" disabled={Boolean(createdFile)} aria-expanded={advanced} onClick={() => setAdvanced(value => !value)}><Settings2 size={16} />{advanced ? "收起高级配置" : "高级配置 · 分流规则"}</Button>
+            {advanced && (
+              <section className="cw-import-rules" aria-label="分流规则配置">
+                <Field label="规则配置"><select value={output.mode} onChange={event => setOutput(current => ({ ...current, mode: event.target.value as SubscriptionOutput["mode"] }))}><option value="full">完整配置（分流规则）</option><option value="source">保留上游规则</option><option value="nodes">仅输出节点</option></select></Field>
+                <SubscriptionOutputRules out={output} index={0} templates={templates} onChange={next => setOutput(current => ({ ...current, ...next }))} />
+                {output.mode === "source" && <p className="sm-hint">保留导入内容中的分组、分流和 DNS。</p>}
+              </section>
+            )}
+            <div className="dialog-actions cw-import-actions">
+              <Button type="button" variant="secondary" onClick={close}>取消</Button>
+              <Button type="submit">{working ? <Spinner label="正在解析节点..." /> : "下一步：预览节点"}</Button>
+            </div>
+          </fieldset>
+        </form>
+      ) : (
+        <div className="cw-form">
+          {createdFile && (
+            <div className="cw-help">
+              <Info size={16} />
+              <span>订阅“{createdFile.name}”已导入；再次提交只会重试尚未保存的高级设置，不会重复创建。</span>
+            </div>
+          )}
+          <div className="cw-import-step-heading">
+            <span>已成功识别 <strong>{parsedNodes.length}</strong> 个节点。若识别有误，可点击地区下拉框改选：</span>
+          </div>
+          <div className="cw-import-nodes-wrap">
+            <table className="cw-import-nodes-table">
+              <thead>
+                <tr>
+                  <th style={{ width: "210px" }}>识别地区（可改选）</th>
+                  <th>节点名称</th>
+                  <th style={{ width: "90px", textAlign: "center" }}>类型</th>
+                </tr>
+              </thead>
+              <tbody>
+                {parsedNodes.map((n, idx) => (
+                  <tr key={n.key || idx}>
+                    <td>
+                      <div className="cw-import-region-cell">
+                        <CountryFlag countryCode={n.country_code} fallbackSize={15} />
+                        <select
+                          className="cw-import-region-select"
+                          aria-label={`修改 ${n.name} 的地区`}
+                          value={n.country_code || ""}
+                          onChange={e => handleNodeRegionChange(idx, e.target.value)}
+                        >
+                          <option value="">🌐 未知 (UN)</option>
+                          {GLOBAL_COUNTRY_REGIONS.map(reg => (
+                            <option key={reg.code} value={reg.code}>
+                              {reg.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </td>
+                    <td>
+                      <span className="cw-import-node-name" title={n.name}>
+                        {n.name}
+                      </span>
+                    </td>
+                    <td style={{ textAlign: "center" }}>
+                      <Badge tone="neutral">{(n.type || "SS").toUpperCase()}</Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="dialog-actions cw-import-actions">
+            <Button type="button" variant="secondary" onClick={close} disabled={working}>取消</Button>
+            <Button type="button" variant="secondary" onClick={() => setStep(1)} disabled={working}>上一步</Button>
+            <Button type="button" onClick={handleFinalSubmit} disabled={working}>
+              {working ? <Spinner label="正在导入..." /> : createdFile ? "重试高级设置" : "完成导入"}
+            </Button>
           </div>
         </div>
-        <Field label="订阅内容" hint="可直接粘贴，或选择文件自动填入；最终以下方编辑内容为准。">
-          <textarea required disabled={Boolean(createdFile)} value={pastedContent} onChange={event => setPastedContent(event.target.value)} placeholder="粘贴 Clash YAML、JSON、节点分享链接或 Base64 订阅" spellCheck={false} />
-        </Field>
-      </>}
-      <Field label="说明"><textarea disabled={Boolean(createdFile)} value={description} onChange={event => setDescription(event.target.value)} placeholder="可选" /></Field>
-      <Button type="button" variant="ghost" disabled={Boolean(createdFile)} aria-expanded={advanced} onClick={() => setAdvanced(value => !value)}><Settings2 size={16} />{advanced ? "收起高级配置" : "高级配置 · 分流规则"}</Button>
-      {advanced && <section className="cw-import-rules" aria-label="分流规则配置">
-        <Field label="规则配置"><select value={output.mode} onChange={event => setOutput(current => ({ ...current, mode: event.target.value as SubscriptionOutput["mode"] }))}><option value="full">完整配置（分流规则）</option><option value="source">保留上游规则</option><option value="nodes">仅输出节点</option></select></Field>
-        <SubscriptionOutputRules out={output} index={0} templates={templates} onChange={next => setOutput(current => ({ ...current, ...next }))} />
-        {output.mode === "source" && <p className="sm-hint">保留导入内容中的分组、分流和 DNS。</p>}
-      </section>}
-      <div className="dialog-actions cw-import-actions"><Button type="button" variant="secondary" onClick={close}>取消</Button><Button type="submit">{working ? <Spinner label={createdFile ? "正在保存" : "正在导入"} /> : createdFile ? "重试高级设置" : "添加"}</Button></div>
-    </fieldset></form>
-  </Dialog>;
+      )}
+    </Dialog>
+  );
 }
 
 function CreateCustomSubscriptionDialog({

@@ -414,7 +414,10 @@ describe("content workbench subscriptions", () => {
   it("applies template output immediately after a URL import returns its file ID", async () => {
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path) as T);
     const created = { id: 15, name: "新订阅", description: "", type: "import", filename: "new.yaml", auto_sync_custom_rules: false };
-    const post = vi.spyOn(api, "post").mockResolvedValue({ file: created });
+    const post = vi.spyOn(api, "post").mockImplementation(async (path) => {
+      if (path.endsWith("/parse-preview")) return { count: 1, nodes: [{ key: "n1", name: "Node 1", type: "ss", country_code: "HK" }] };
+      return { file: created };
+    });
     const put = vi.spyOn(api, "put").mockResolvedValue({});
     render(<SubscribeFilesPage />);
 
@@ -425,9 +428,19 @@ describe("content workbench subscriptions", () => {
     expect(screen.getByRole("combobox", { name: "规则配置" })).toHaveValue("source");
     fireEvent.change(screen.getByRole("combobox", { name: "规则配置" }), { target: { value: "full" } });
     fireEvent.change(screen.getByRole("combobox", { name: /^规则模板/ }), { target: { value: "edge_v3.yaml" } });
-    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    fireEvent.click(screen.getByRole("button", { name: "下一步：预览节点" }));
 
-    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/subscribe-files/import", { name: "新订阅", description: "", url: "https://sub.example/new", filename: "", auto_update_interval: 0 }));
+    expect(await screen.findByText("Node 1")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "完成导入" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/subscribe-files/import", {
+      name: "新订阅",
+      description: "",
+      url: "https://sub.example/new",
+      filename: "",
+      auto_update_interval: 0,
+      node_regions: { n1: "HK" },
+    }));
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/subscribe-files/generation", expect.objectContaining({
       id: 15, generation: expect.objectContaining({ kind: "external", outputs: [expect.objectContaining({ mode: "full", template_filename: "edge_v3.yaml" })] }),
     })));
@@ -441,6 +454,7 @@ describe("content workbench subscriptions", () => {
     const created = { id: 15, name: "新订阅", description: "", type: "import", filename: "new.yaml", auto_sync_custom_rules: false };
     let attempts = 0;
     const post = vi.spyOn(api, "post").mockImplementation(async (path) => {
+      if (path.endsWith("/parse-preview")) return { count: 1, nodes: [{ key: "n1", name: "Node 1", type: "ss", country_code: "HK" }] };
       if (path.endsWith("/generation") && ++attempts === 1) throw new Error("高级设置暂不可用");
       return { file: created };
     });
@@ -453,11 +467,13 @@ describe("content workbench subscriptions", () => {
     expect(screen.getByRole("combobox", { name: "规则配置" })).toHaveValue("source");
     fireEvent.change(screen.getByRole("combobox", { name: "规则配置" }), { target: { value: "full" } });
     fireEvent.change(screen.getByRole("combobox", { name: /^规则模板/ }), { target: { value: "edge_v3.yaml" } });
-    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    fireEvent.click(screen.getByRole("button", { name: "下一步：预览节点" }));
+
+    expect(await screen.findByText("Node 1")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "完成导入" }));
 
     expect(await screen.findByText("高级设置暂不可用")).toBeInTheDocument();
     expect(screen.getByText(/已导入；再次提交只会重试/)).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "订阅名称" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "重试高级设置" }));
 
     await waitFor(() => expect(post.mock.calls.filter(([path]) => path.endsWith("/generation"))).toHaveLength(2));
@@ -475,6 +491,7 @@ describe("content workbench subscriptions", () => {
       return subscribeLoad(path) as T;
     });
     vi.spyOn(api, "post").mockImplementation(async (path) => {
+      if (path.endsWith("/parse-preview")) return { count: 1, nodes: [{ key: "n1", name: "Node 1", type: "ss", country_code: "HK" }] };
       if (path.endsWith("/generation")) throw new Error("高级设置暂不可用");
       return { file: created };
     });
@@ -485,12 +502,15 @@ describe("content workbench subscriptions", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "订阅名称" }), { target: { value: "新订阅" } });
     fireEvent.change(screen.getByRole("textbox", { name: "订阅 URL" }), { target: { value: "https://sub.example/new" } });
     fireEvent.click(screen.getByRole("button", { name: "高级配置 · 分流规则" }));
-    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    fireEvent.click(screen.getByRole("button", { name: "下一步：预览节点" }));
+
+    expect(await screen.findByText("Node 1")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "完成导入" }));
 
     expect(await screen.findByText("高级设置暂不可用")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
 
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "添加订阅" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /确认节点与地区/ })).not.toBeInTheDocument());
     await waitFor(() => expect(screen.getByText("新订阅")).toBeInTheDocument());
     expect(fileLoads).toBeGreaterThanOrEqual(2);
     expect(notify).toHaveBeenCalledWith("订阅已导入，但高级设置尚未保存", "error");
@@ -500,22 +520,62 @@ describe("content workbench subscriptions", () => {
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path) as T);
     const created = { id: 15, name: "新订阅", description: "", type: "import", filename: "new.yaml", auto_sync_custom_rules: false };
     let resolveImport!: (value: { file: typeof created }) => void;
-    vi.spyOn(api, "post").mockImplementation(() => new Promise((resolve) => { resolveImport = resolve; }));
+    vi.spyOn(api, "post").mockImplementation(async (path) => {
+      if (path.endsWith("/parse-preview")) return { count: 1, nodes: [{ key: "n1", name: "Node 1", type: "ss", country_code: "HK" }] };
+      if (path.endsWith("/generation")) return {};
+      return new Promise((resolve) => { resolveImport = resolve; });
+    });
     render(<SubscribeFilesPage />);
 
     fireEvent.click((await screen.findAllByRole("button", { name: "添加外部订阅" }))[0]);
     fireEvent.change(screen.getByRole("textbox", { name: "订阅名称" }), { target: { value: "新订阅" } });
     fireEvent.change(screen.getByRole("textbox", { name: "订阅 URL" }), { target: { value: "https://sub.example/new" } });
-    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    fireEvent.click(screen.getByRole("button", { name: "下一步：预览节点" }));
 
-    await waitFor(() => expect(screen.getByRole("button", { name: "取消" })).toBeDisabled());
+    expect(await screen.findByText("Node 1")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "完成导入" }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "上一步" })).toBeDisabled());
     expect(screen.queryByRole("button", { name: "关闭" })).not.toBeInTheDocument();
     fireEvent.keyDown(document, { key: "Escape" });
     fireEvent.mouseDown(screen.getByRole("presentation"));
-    expect(screen.getByRole("dialog", { name: "添加订阅" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: /确认节点与地区/ })).toBeInTheDocument();
 
     resolveImport({ file: created });
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "添加订阅" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /确认节点与地区/ })).not.toBeInTheDocument());
+  });
+
+  it("allows overriding node region during external subscription preview before import", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path) as T);
+    const created = { id: 16, name: "节点改区订阅", description: "", type: "import", filename: "preview.yaml", auto_sync_custom_rules: false };
+    const post = vi.spyOn(api, "post").mockImplementation(async (path) => {
+      if (path.endsWith("/parse-preview")) {
+        return { count: 2, nodes: [
+          { key: "k1", name: "HK-01", type: "ss", country_code: "HK" },
+          { key: "k2", name: "Unknown-Node", type: "vless", country_code: "" }
+        ] };
+      }
+      return { file: created };
+    });
+    render(<SubscribeFilesPage />);
+
+    fireEvent.click((await screen.findAllByRole("button", { name: "添加外部订阅" }))[0]);
+    fireEvent.change(screen.getByRole("textbox", { name: "订阅名称" }), { target: { value: "节点改区订阅" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "订阅 URL" }), { target: { value: "https://sub.example/preview" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步：预览节点" }));
+
+    expect(await screen.findByText("HK-01")).toBeInTheDocument();
+    expect(screen.getByText("Unknown-Node")).toBeInTheDocument();
+
+    const node2Select = screen.getByLabelText("修改 Unknown-Node 的地区");
+    fireEvent.change(node2Select, { target: { value: "JP" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "完成导入" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/subscribe-files/import", expect.objectContaining({
+      name: "节点改区订阅",
+      node_regions: { k1: "HK", k2: "JP" },
+    })));
   });
 
   it("syncs an external subscribe file directly from the subscription list action button", async () => {

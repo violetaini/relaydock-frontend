@@ -131,6 +131,7 @@ export interface SubscribeFile {
   created_by?: string;
   auto_update_interval?: number;
   last_sync_at?: string;
+  last_sync_error?: string;
   updated_at?: string;
   latest_version?: number;
 }
@@ -1353,14 +1354,108 @@ function EditSubscribeContentDialog({ item, onClose, onComplete }: { item: Subsc
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
-  useEffect(() => { void api.get<{ content?: string }>(`/api/admin/subscribe-files/${encodeURIComponent(item.filename)}/content`).then((payload) => setContent(payload.content || "")).catch((reason) => setError(fail(reason, "读取订阅内容失败"))).finally(() => setLoading(false)); }, [item.filename]);
-  const save = async () => {
-    setWorking(true); setError("");
-    try { await api.put(`/api/admin/subscribe-files/${encodeURIComponent(item.filename)}/content`, { content }); onComplete(); }
-    catch (reason) { setError(fail(reason, "保存订阅内容失败")); }
-    finally { setWorking(false); }
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    void api
+      .get<{ content?: string }>(`/api/admin/subscribe-files/${encodeURIComponent(item.filename)}/content`)
+      .then((payload) => setContent(payload.content || ""))
+      .catch((reason) => setError(fail(reason, "读取订阅内容失败")))
+      .finally(() => setLoading(false));
+  }, [item.filename]);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const text = String(evt.target?.result || "");
+      if (text.trim()) {
+        setContent(text);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
   };
-  return <Dialog title="编辑订阅配置" description="保存时会校验 YAML，并创建可回溯版本" onClose={onClose} wide>{error ? <ErrorState message={error} /> : null}{loading ? <div className="cw-loading"><Spinner /></div> : <Field label={item.filename}><textarea className="cw-dialog-code" value={content} onChange={(event) => setContent(event.target.value)} spellCheck={false} /></Field>}<div className="dialog-actions"><Button variant="secondary" onClick={onClose}>取消</Button><Button onClick={() => void save()} disabled={working || loading || !content.trim()}>{working ? <Spinner label="正在校验并保存" /> : "保存配置"}</Button></div></Dialog>;
+
+  const proxyCount = useMemo(() => {
+    if (!content) return 0;
+    const matches = content.match(/^\s*-\s*(?:name:|\{)/gm);
+    return matches ? matches.length : 0;
+  }, [content]);
+
+  const save = async () => {
+    setWorking(true);
+    setError("");
+    try {
+      await api.put(`/api/admin/subscribe-files/${encodeURIComponent(item.filename)}/content`, { content });
+      onComplete();
+    } catch (reason) {
+      setError(fail(reason, "保存订阅内容失败"));
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  return (
+    <Dialog
+      title={`修改配置内容 · ${item.name}`}
+      description="可直接编辑配置文本，或上传本地文件覆盖；保存后自动重新识别节点与地区并创建版本备份"
+      onClose={onClose}
+      wide
+    >
+      {error ? <ErrorState message={error} /> : null}
+      {loading ? (
+        <div className="cw-loading">
+          <Spinner />
+        </div>
+      ) : (
+        <>
+          <div className="cw-edit-content-tools">
+            <div className="cw-edit-content-meta">
+              <span className="cw-edit-content-filename">{item.filename}</span>
+              {proxyCount > 0 ? (
+                <Badge tone="info">{proxyCount} 个代理节点</Badge>
+              ) : (
+                <span className="sm-hint">（未检测到标准 proxies 列表，保存时将尝试解析）</span>
+              )}
+            </div>
+            <div className="cw-edit-content-actions">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".yaml,.yml,.txt,.conf"
+                style={{ display: "none" }}
+                onChange={handleFileChange}
+              />
+              <Button type="button" variant="secondary" onClick={() => fileInputRef.current?.click()}>
+                <Upload size={14} />
+                从本地文件替换
+              </Button>
+            </div>
+          </div>
+          <Field label="配置内容 (支持 Clash YAML、Base64 或节点链接)">
+            <textarea
+              className="cw-dialog-code"
+              rows={16}
+              value={content}
+              onChange={(event) => setContent(event.target.value)}
+              spellCheck={false}
+              placeholder="在此粘贴 Clash YAML、Base64 或节点链接..."
+            />
+          </Field>
+        </>
+      )}
+      <div className="dialog-actions">
+        <Button variant="secondary" onClick={onClose}>
+          取消
+        </Button>
+        <Button onClick={() => void save()} disabled={working || loading || !content.trim()}>
+          {working ? <Spinner label="正在校验并保存" /> : "保存并更新"}
+        </Button>
+      </div>
+    </Dialog>
+  );
 }
 
 function ExternalSubscriptionDialog({ item, onClose, onComplete }: { item?: ExternalSubscription; onClose: () => void; onComplete: () => void }) {

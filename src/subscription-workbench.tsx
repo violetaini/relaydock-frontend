@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, AlertTriangle, Check, ChevronDown, ChevronsUp, Code2, Copy, Eye, FileCode, FileInput, GripVertical, Layers, Link2, MoreHorizontal, Pencil, Plus, RefreshCw, Search, Settings2, ShieldCheck, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, AlertTriangle, Check, ChevronDown, ChevronsUp, Code2, Copy, Eye, FileCode, FileInput, GripVertical, Layers, Link2, MoreHorizontal, Pencil, Plus, RefreshCw, Save, Search, Settings2, ShieldCheck, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import { api } from "./api";
 import { CountryFlag, getCountryRegionLabel, normalizeCountryCode } from "./country-flag";
@@ -1540,7 +1540,64 @@ export function SubscriptionWizard({ kind, file, sourceIDs = [], files, nodes, t
   const [error, setError] = useState("");
   const [filterExprError, setFilterExprError] = useState("");
   const requestVersion = useRef(0);
-  const titles = kind === "strategy" ? ["选择来源", "节点处理", "客户端与规则", "预览保存"] : kind === "custom" ? ["选择节点", "客户端与规则", "预览保存"] : ["客户端与规则", "预览保存"];
+
+  const isLocalImport = kind === "external" && !file?.url;
+  const [localContent, setLocalContent] = useState<string>("");
+  const [contentLoading, setContentLoading] = useState(false);
+  const [contentLoaded, setContentLoaded] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isLocalImport && file?.filename && !contentLoaded) {
+      setContentLoading(true);
+      api.get<{ content?: string }>(`/api/admin/subscribe-files/${encodeURIComponent(file.filename)}/content`)
+        .then(res => {
+          setLocalContent(res.content || "");
+          setContentLoaded(true);
+        })
+        .catch(err => {
+          setError(message(err));
+        })
+        .finally(() => setContentLoading(false));
+    }
+  }, [isLocalImport, file?.filename, contentLoaded]);
+
+  const localProxyCount = useMemo(() => {
+    if (!localContent) return 0;
+    const matches = localContent.match(/^\s*-\s*(?:name:|\{)/gm);
+    return matches ? matches.length : 0;
+  }, [localContent]);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = e.target.files?.[0];
+    if (!picked) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const text = String(evt.target?.result || "");
+      if (text.trim()) {
+        invalidate();
+        setLocalContent(text);
+      }
+    };
+    reader.readAsText(picked);
+    e.target.value = "";
+  };
+
+  const saveContentOnly = async () => {
+    if (!localContent.trim()) { setError("配置内容不能为空"); return; }
+    if (!file?.filename) return;
+    setBusy(true); setError("");
+    try {
+      await api.put(`/api/admin/subscribe-files/${encodeURIComponent(file.filename)}/content`, { content: localContent });
+      onSaved();
+    } catch (reason) {
+      setError(message(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const titles = kind === "strategy" ? ["选择来源", "节点处理", "客户端与规则", "预览保存"] : kind === "custom" ? ["选择节点", "客户端与规则", "预览保存"] : isLocalImport ? ["配置内容", "客户端与规则", "预览保存"] : ["客户端与规则", "预览保存"];
   const outputStep = titles.length - 2; const lastStep = titles.length - 1;
   const candidates = files.filter(source => source.id !== file?.id && subscriptionKind(source) !== "strategy");
   const selectedSourceFiles = selectedSources
@@ -1576,6 +1633,22 @@ export function SubscriptionWizard({ kind, file, sourceIDs = [], files, nodes, t
   useEffect(() => { if (!canInherit) setOutputs(current => current.map(out => out.mode === "source" ? { ...out, mode: templates.length ? "full" : "nodes", template_filename: out.template_filename || templates[0] || "" } : out)); }, [canInherit, templates]);
   const next = async () => {
     setError("");
+    if (isLocalImport && step === 0) {
+      if (!localContent.trim()) { setError("配置内容不能为空"); return; }
+      if (file?.filename) {
+        setBusy(true);
+        try {
+          await api.put(`/api/admin/subscribe-files/${encodeURIComponent(file.filename)}/content`, { content: localContent });
+        } catch (reason) {
+          setError(message(reason));
+          return;
+        } finally {
+          setBusy(false);
+        }
+      }
+      setStep(value => value + 1);
+      return;
+    }
     if (!validSelection) { setError(kind === "strategy" ? "请至少选择一个可用的来源订阅" : "请选择可按用户统计的节点，并取消不支持的节点"); return; }
     if (kind === "strategy" && step === 1) {
       const filterErr = filterExprError || validateRegexPattern(processing.include) || validateRegexPattern(processing.exclude);
@@ -1597,13 +1670,72 @@ export function SubscriptionWizard({ kind, file, sourceIDs = [], files, nodes, t
     finally { setBusy(false); }
   };
   const filteredNodes = nodes.filter(node => (!isAnyDoorNode(node) || retainedNodeIDs.has(node.id)) && `${node.node_name} ${node.protocol}`.toLowerCase().includes(query.toLowerCase()));
-  return <Dialog title={`${file ? "编辑" : "创建"}${kindLabel[kind]}`} description={kind === "strategy" ? "选择来源与处理方式，自动跟随来源更新。" : kind === "custom" ? "使用面板节点创建订阅，配置变更自动同步。" : "保留导入原文，为不同客户端配置输出方式。"} onClose={onClose} wide dismissible={!busy}>
+  return <Dialog title={`${file ? "编辑" : "创建"}${isLocalImport ? "本地导入订阅" : kindLabel[kind]}`} description={kind === "strategy" ? "选择来源与处理方式，自动跟随来源更新。" : kind === "custom" ? "使用面板节点创建订阅，配置变更自动同步。" : isLocalImport ? "可修改配置文本或上传文件覆盖，并为不同客户端配置输出规则。" : "保留导入原文，为不同客户端配置输出方式。"} onClose={onClose} wide dismissible={!busy}>
     <fieldset className="sm-wizard" disabled={busy}><ol className="sm-steps" aria-label="订阅创建步骤">{titles.map((title, index) => <li key={title} className={step === index ? "is-active" : index < step ? "is-done" : ""}><button type="button" disabled={busy || index > step} onClick={() => { setStep(index); setError(""); }} aria-current={step === index ? "step" : undefined}><span>{index < step ? <Check size={13} /> : index + 1}</span>{title}</button></li>)}</ol>
     {error && <ErrorState message={error} />}
+    {isLocalImport && step === 0 && (
+      <div className="sm-content-step">
+        <div className="cw-edit-content-tools">
+          <div className="cw-edit-content-meta">
+            <span className="cw-edit-content-filename">{file?.filename || filename || "subscription.yaml"}</span>
+            {localProxyCount > 0 ? (
+              <Badge tone="good">{localProxyCount} 个代理节点</Badge>
+            ) : (
+              <Badge tone="warn">未检测到代理节点</Badge>
+            )}
+          </div>
+          <div className="cw-edit-content-actions">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".yaml,.yml,.txt,.conf"
+              style={{ display: "none" }}
+              onChange={handleFileChange}
+            />
+            <Button type="button" variant="secondary" onClick={() => fileInputRef.current?.click()}>
+              <Upload size={14} />
+              从本地文件替换
+            </Button>
+            <Button
+              type="button"
+              disabled={busy || contentLoading || !localContent.trim()}
+              onClick={() => void saveContentOnly()}
+            >
+              <Save size={14} />
+              直接保存配置
+            </Button>
+          </div>
+        </div>
+        <Field label="配置内容 (支持 Clash YAML、Base64 或节点链接)" hint="直接编辑下方配置文本，或点击上方按钮上传新文件替换；保存后将自动重新识别节点与地区。">
+          {contentLoading ? (
+            <div className="cw-loading"><Spinner /></div>
+          ) : (
+            <textarea
+              className="cw-dialog-code sm-wizard-code"
+              rows={14}
+              value={localContent}
+              onChange={e => { invalidate(); setLocalContent(e.target.value); }}
+              spellCheck={false}
+              placeholder="在此粘贴或编辑 Clash YAML、Base64 或节点链接..."
+            />
+          )}
+        </Field>
+      </div>
+    )}
     {kind === "strategy" && step === 0 && <><div className="sm-picker-header"><span>已选 <strong>{selectedSources.length}</strong> 个来源</span><div className="sm-search"><Search size={15} /><input type="search" aria-label="搜索订阅来源" placeholder="搜索外部、自选订阅" value={query} onChange={e => setQuery(e.target.value)} /></div></div><div className="sm-source-grid">{candidates.filter(source => source.name.toLowerCase().includes(query.toLowerCase())).map(source => <label key={source.id} className={`sm-source ${selectedSources.includes(source.id) ? "is-selected" : ""}`}><input type="checkbox" aria-label={`绑定来源 ${source.name}`} checked={selectedSources.includes(source.id)} onChange={() => { invalidate(); toggleID(source.id, selectedSources, setSelectedSources); }} /><span><strong>{source.name}</strong><small>{kindLabel[subscriptionKind(source)]} · {source.url ? intervalLabel(source.auto_update_interval) : source.filename}</small></span></label>)}</div>{!candidates.length && <EmptyState icon={<FileInput size={24} />} title="暂无可用来源" description="请先添加外部订阅或创建自选订阅。" />}<p className="sm-hint">单个来源也可以创建策略。来源更新后，处理结果自动跟随。</p></>}
     {kind === "custom" && step === 0 && <><div className="sm-picker-header"><span>已选 <strong>{selectedNodes.length}</strong> 个节点</span><div className="sm-search"><Search size={15} /><input type="search" aria-label="搜索面板节点" placeholder="搜索名称或协议" value={query} onChange={e => setQuery(e.target.value)} /></div></div><div className="sm-picker-shortcuts"><Button variant="ghost" onClick={() => { invalidate(); setSelectedNodes([...new Set([...selectedNodes, ...filteredNodes.filter(node => node.enabled && node.subscription_eligible !== false && !isAnyDoorNode(node)).map(node => node.id)])]); }}>选择可用节点</Button><Button variant="ghost" onClick={() => { invalidate(); setSelectedNodes([]); }}>清空选择</Button>{selectedNodes.some(id => nodes.some(node => node.id === id && node.subscription_eligible === false)) && <Button variant="ghost" onClick={() => { invalidate(); setSelectedNodes(selectedNodes.filter(id => nodes.some(node => node.id === id && node.enabled && node.subscription_eligible !== false && !isAnyDoorNode(node)))); }}>移除不可统计节点</Button>}</div><div className="sm-source-grid">{filteredNodes.map(node => <label className={`sm-source ${selectedNodes.includes(node.id) ? "is-selected" : ""}`} key={node.id}><input type="checkbox" aria-label={`选择节点 ${node.node_name}`} disabled={(!node.enabled || node.subscription_eligible === false) && !selectedNodes.includes(node.id) && !retainedNodeIDs.has(node.id)} checked={selectedNodes.includes(node.id)} onChange={() => { invalidate(); toggleID(node.id, selectedNodes, setSelectedNodes); }} /><span><strong>{node.node_name}</strong><small>{node.node_type === "routed" ? "路由转发 · " : ""}{node.protocol} · {!node.enabled ? "已停用" : node.subscription_eligible === false ? node.subscription_ineligible_reason || "无法按用户统计" : "支持按用户统计"}</small></span></label>)}</div></>}
     {kind === "strategy" && step === 1 && <div className="sm-processing"><div className="sm-process-toggle"><div><strong>自动去重</strong><p>按完整连接配置去重，名称不同也能识别。</p></div><Toggle checked={processing.deduplicate} onChange={value => { invalidate(); setProcessing(current => ({ ...current, deduplicate: value })); }} label="自动去重" /></div><div className="sm-process-toggle"><div><strong>自动剔除失效节点</strong><p>面板经真实代理协议检测，连续失败 3 次后暂时移出；恢复后重新加入。</p></div><Toggle checked={processing.remove_dead} onChange={value => { invalidate(); setProcessing(current => ({ ...current, remove_dead: value })); }} label="自动剔除失效节点" /></div><div className="sm-notice"><ShieldCheck size={17} /><span>未检测、过期结果及无法检测的节点保留。全部失败时不清空订阅。检测位置：面板服务器；需要已有 Mihomo 核心。</span></div><NodeSortPanel processing={processing} selectedSources={selectedSources} sourceFiles={selectedSourceFiles} onChangeProcessing={patch => { invalidate(); setProcessing(current => ({ ...current, ...patch })); }} onReorderSources={nextIDs => { invalidate(); setSelectedSources(nextIDs); }} fetchSortedNodes={fetchSortedNodes} /><NodeFilterRuleBuilder processing={processing} nodes={nodes} onChange={patch => { invalidate(); setProcessing(current => ({ ...current, ...patch })); }} onExprError={setFilterExprError} /></div>}
-    {step === outputStep && <div className="sm-output-list">{outputs.map((out, index) => <section className="sm-output" key={index} aria-label={`客户端输出 ${index + 1}`}><div className="sm-output-heading"><strong>{index === 0 ? "默认客户端" : "附加客户端"}</strong>{index > 0 && <IconButton label={`移除客户端 ${index + 1}`} onClick={() => { invalidate(); setOutputs(current => current.filter((_, i) => i !== index)); }}><X size={15} /></IconButton>}</div><div className="sm-form-grid"><Field label={`输出客户端${index ? ` ${index + 1}` : ""}`}><select value={out.client} onChange={e => { const id = e.target.value; setOutput(index, { client: id, mode: id === "v2ray" ? "nodes" : canInherit && id === "clashmeta" ? "source" : templates.length ? "full" : "nodes", template_filename: out.template_filename || templates[0] || "" }); }}>
+    {step === outputStep && <div className="sm-output-list">
+      {isLocalImport && (
+        <div className="sm-external-source-hint">
+          <span>配置来源：<strong>{file?.filename}</strong>（包含 {localProxyCount} 个代理节点）</span>
+          <Button variant="ghost" onClick={() => setStep(0)}>
+            <FileCode size={14} />
+            修改配置内容
+          </Button>
+        </div>
+      )}
+      {outputs.map((out, index) => <section className="sm-output" key={index} aria-label={`客户端输出 ${index + 1}`}><div className="sm-output-heading"><strong>{index === 0 ? "默认客户端" : "附加客户端"}</strong>{index > 0 && <IconButton label={`移除客户端 ${index + 1}`} onClick={() => { invalidate(); setOutputs(current => current.filter((_, i) => i !== index)); }}><X size={15} /></IconButton>}</div><div className="sm-form-grid"><Field label={`输出客户端${index ? ` ${index + 1}` : ""}`}><select value={out.client} onChange={e => { const id = e.target.value; setOutput(index, { client: id, mode: id === "v2ray" ? "nodes" : canInherit && id === "clashmeta" ? "source" : templates.length ? "full" : "nodes", template_filename: out.template_filename || templates[0] || "" }); }}>
       {clients.map(client => <option key={client.id} value={client.id} disabled={outputs.some((other, i) => i !== index && other.client === client.id)}>{client.name}</option>)}{["shadowrocket", "uri"].includes(out.client) && <option value={out.client}>{clientName(out.client)}</option>}
     </select></Field><Field label={`规则配置${index ? ` ${index + 1}` : ""}`}><select value={out.mode} onChange={e => setOutput(index, { mode: e.target.value as SubscriptionOutput["mode"] })}>{out.client !== "v2ray" && out.client !== "shadowrocket" && out.client !== "uri" && <option value="full">完整配置（分流规则）</option>}{canInherit && out.client === "clashmeta" && <option value="source">保留上游规则</option>}<option value="nodes">仅输出节点</option></select></Field></div><SubscriptionOutputRules out={out} index={index} templates={templates} onChange={next => setOutput(index, next)} onManageTemplates={onManageTemplates} />{out.client === "clash-to-shadowrocket" && <p className="sm-client-hint">完整配置生成小火箭 .conf；仅节点模式提供独立节点订阅。</p>}{out.mode === "source" && <p className="sm-client-hint">保留该外部来源的分组、分流和 DNS，导入原文保持不变。</p>}</section>)}{outputs.length < clients.length && <Button variant="ghost" onClick={() => { const client = clients.find(c => !outputs.some(out => out.client === c.id)); if (client) { invalidate(); setOutputs(current => [...current, { client: client.id, mode: client.full && templates.length ? "full" : "nodes", template_filename: templates[0] || "" }]); } }}><Plus size={15} />添加其他客户端输出</Button>}</div>}
     {step === lastStep && preview && <div className="sm-review"><div className="sm-form-grid"><Field label="订阅名称"><input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder={kind === "strategy" ? "例如：日常多线订阅" : "例如：自建专线"} /></Field><div className="sm-review-summary"><Badge tone="good"><Check size={13} />预览已生成</Badge><span>{clientName(preview.client)} · {outputs.length} 个客户端输出</span></div></div><div className="sm-preview-counts"><div><small>输入节点</small><strong>{preview.input}</strong></div><div><small>去重 / 过滤 / 失效</small><strong>{preview.duplicate} / {preview.filtered} / {preview.dead}</strong></div><div><small>输出节点</small><strong>{preview.output}</strong></div></div>{preview.unknown > 0 && processing.remove_dead && <p className="sm-hint">{preview.unknown} 个节点暂无近期检测结果，已保留。</p>}{[...new Set([...(preview.warnings || []), ...(preview.outputs || []).flatMap(out => out.warnings || [])])].map(warn => <div className="sm-notice" key={warn}>{warn}</div>)}{kind === "strategy" && <div className="sm-bound-sources"><small>持续绑定来源</small><div>{selectedSourceFiles.map(source => <Badge key={source.id}>{source.name}</Badge>)}</div></div>}<Field label="链接文件名（可选）" hint={file ? "保持原文件名，现有订阅链接继续使用。" : "留空按订阅名称生成。"}><input value={filename} disabled={Boolean(file)} onChange={e => setFilename(e.target.value)} placeholder="subscription.yaml" /></Field><p className="sm-hint">用户额度在用户管理中设置，下发时使用当前用户的独立凭据与流量额度。</p><Button variant="ghost" onClick={() => setShowCode(value => !value)}><Eye size={15} />{showCode ? "收起配置预览" : "查看生成配置"}</Button>{showCode && <div className="sm-code-view">{(preview.outputs?.length || 0) > 1 && <Field label="预览客户端"><select value={previewIndex} onChange={e => setPreviewIndex(Number(e.target.value))}>{preview.outputs!.map((out, i) => <option key={out.client} value={i}>{clientName(out.client)} · {out.output} 个节点</option>)}</select></Field>}<pre className="sm-code">{preview.outputs?.[previewIndex]?.content || preview.content}</pre></div>}</div>}

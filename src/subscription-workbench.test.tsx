@@ -58,6 +58,36 @@ describe("unified subscription wizard", () => {
     expect(screen.getByText(/普通 URI.*仅携带节点/)).toBeInTheDocument();
   });
 
+  it("allows editing configuration content for local imported external subscriptions", async () => {
+    const localFile: SubscribeFile = {
+      id: 10,
+      name: "本地导入测试",
+      filename: "local-test.yaml",
+      type: "upload",
+      auto_sync_custom_rules: false,
+    };
+    vi.spyOn(api, "get").mockResolvedValue({ content: "proxies:\n  - name: node-1\n    type: ss\n" });
+    const put = vi.spyOn(api, "put").mockResolvedValue({ status: "updated" });
+
+    render(<SubscriptionWizard {...props} kind="external" file={localFile} />);
+    expect(screen.getByText("配置内容")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "从本地文件替换" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "直接保存配置" })).toBeInTheDocument();
+
+    const textarea = await screen.findByPlaceholderText(/在此粘贴或编辑/);
+    expect(textarea).toHaveValue("proxies:\n  - name: node-1\n    type: ss\n");
+
+    fireEvent.change(textarea, { target: { value: "proxies:\n  - name: node-updated\n    type: ss\n" } });
+    fireEvent.click(screen.getByRole("button", { name: "直接保存配置" }));
+
+    await waitFor(() => {
+      expect(put).toHaveBeenCalledWith(
+        "/api/admin/subscribe-files/local-test.yaml/content",
+        { content: "proxies:\n  - name: node-updated\n    type: ss\n" }
+      );
+    });
+  });
+
   it("saves different templates for independent client outputs", async () => {
     const post = vi.spyOn(api, "post").mockResolvedValue(preview);
     render(<SubscriptionWizard {...props} kind="strategy" sourceIDs={[1, 2]} />);

@@ -232,13 +232,32 @@ describe("unified subscription wizard", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Or" })[0]);
     expect(screen.getByRole("textbox", { name: "排除名称 2" })).toBeInTheDocument();
 
-    // Switch to raw expression edit mode and back
+    // Switch to expression editor while keeping top And/Or rule rows visible
     fireEvent.click(screen.getByRole("button", { name: "编辑表达式" }));
-    expect(screen.getByRole("textbox", { name: /排除名称（正则）/ })).toHaveValue("测试|维护");
-    fireEvent.change(screen.getByRole("textbox", { name: /排除名称（正则）/ }), { target: { value: "过期|备用" } });
-    fireEvent.click(screen.getByRole("button", { name: "可视化规则构建" }));
+    expect(screen.getByRole("button", { name: "删除关键词 测试" })).toBeInTheDocument();
+    const exprBox = screen.getByRole("textbox", { name: "过滤表达式编辑器" });
+    expect(exprBox).toHaveValue(`(node.name !~ "测试|维护") and (node.protocol not in {"ssr"})`);
+
+    // Invalid expression displays clear syntax error and blocks advancing to next step
+    fireEvent.change(exprBox, { target: { value: `(node.name =~ "unclosed` } });
+    expect(screen.getByRole("alert")).toHaveTextContent("引号未闭合");
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByRole("button", { name: /节点处理/ })).toHaveAttribute("aria-current", "step");
+    expect(screen.getAllByRole("alert")[0]).toHaveTextContent("引号未闭合");
+
+    // Valid edited expression immediately syncs top rule rows & chips
+    fireEvent.change(exprBox, { target: { value: `(node.name =~ "香港|HK") and (node.name !~ "过期|备用") and (node.protocol not in {"ss" "vmess"})` } });
+    expect(screen.getByText(/表达式有效/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除关键词 香港" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除关键词 HK" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "删除关键词 过期" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "删除关键词 备用" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除协议 ss" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除协议 vmess" })).toBeInTheDocument();
+
+    // Editing a top chip also updates the bottom expression live
+    fireEvent.click(screen.getByRole("button", { name: "删除关键词 过期" }));
+    expect(exprBox).toHaveValue(`(node.name =~ "香港|HK") and (node.name !~ "备用") and (node.protocol not in {"ss" "vmess"})`);
   });
 
 });

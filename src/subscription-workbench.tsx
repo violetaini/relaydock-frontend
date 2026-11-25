@@ -164,7 +164,7 @@ function parseNameInput(prevDraft: string, rawValue: string, existingTokens: str
   return { tokens: uniqueItems([...existingTokens, ...segments]), draft: trailing };
 }
 
-function buildRuleRows(processing: SubscriptionGeneration["processing"], makeID: () => string): FilterRuleRow[] {
+function buildRuleRows(processing: Pick<SubscriptionGeneration["processing"], "include" | "exclude" | "exclude_types">, makeID: () => string): FilterRuleRow[] {
   const rows: FilterRuleRow[] = [];
   if (processing.exclude?.trim()) {
     rows.push({ id: makeID(), connector: "and", field: "name", operator: "exclude_match", tokens: splitFilterTokens(processing.exclude), draft: "" });
@@ -198,6 +198,315 @@ function validateRegexPattern(pattern?: string): string {
     return "";
   } catch {
     return "正则表达式语法无效，请检查括号或转义符";
+  }
+}
+
+function escapeExprString(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function formatFilterExpression(processing: Pick<SubscriptionGeneration["processing"], "include" | "exclude" | "exclude_types">): string {
+  const parts: string[] = [];
+  if (processing.include?.trim()) parts.push(`(node.name =~ "${escapeExprString(processing.include.trim())}")`);
+  if (processing.exclude?.trim()) parts.push(`(node.name !~ "${escapeExprString(processing.exclude.trim())}")`);
+  if (processing.exclude_types?.length) {
+    parts.push(`(node.protocol not in {"${processing.exclude_types.map(escapeExprString).join('" "')}"})`);
+  }
+  return parts.join(" and ");
+}
+
+type ExprToken =
+  | { type: "word"; value: string }
+  | { type: "str"; value: string }
+  | { type: "op"; value: string }
+  | { type: "punct"; value: string };
+
+type ExprAst =
+  | { kind: "and" | "or"; left: ExprAst; right: ExprAst }
+  | { kind: "not"; inner: ExprAst }
+  | { kind: "include" | "exclude"; pattern: string }
+  | { kind: "include_types" | "exclude_types"; values: string[] };
+
+interface CompiledFilterClause {
+  include?: string;
+  excludePatterns: string[];
+  excludeTypes: string[];
+}
+
+function tokenizeFilterExpr(input: string): { tokens: ExprToken[]; error?: string } {
+  const tokens: ExprToken[] = [];
+  let i = 0;
+  while (i < input.length) {
+    const ch = input[i];
+    if (/\s/.test(ch)) { i += 1; continue; }
+    const two = input.slice(i, i + 2);
+    if (["=~", "!~", "!=", "==", "&&", "||"].includes(two)) {
+      tokens.push({ type: "op", value: two });
+      i += 2;
+      continue;
+    }
+    if (ch === "!") {
+      tokens.push({ type: "op", value: "!" });
+      i += 1;
+      continue;
+    }
+    if ("(){}[] ,".includes(ch)) {
+      tokens.push({ type: "punct", value: ch });
+      i += 1;
+      continue;
+    }
+    // Cloudflare-style r"..." raw string or standard "..." / '...' string
+    const isRaw = (ch === "r" || ch === "R") && (input[i + 1] === '"' || input[i + 1] === "'");
+    if (isRaw || ch === '"' || ch === "'") {
+      const quote = isRaw ? input[i + 1] : ch;
+      i += isRaw ? 2 : 1;
+      let val = "";
+      let closed = false;
+      while (i < input.length) {
+        const cur = input[i];
+        if (!isRaw && cur === "\\" && i + 1 < input.length) {
+          const nextCh = input[i + 1];
+          val += nextCh === quote || nextCh === "\\" ? nextCh : `\\${nextCh}`;
+          i += 2;
+          continue;
+        }
+        if (cur === quote) {
+          closed = true;
+          i += 1;
+          break;
+        }
+        val += cur;
+        i += 1;
+      }
+      if (!closed) return { tokens: [], error: "语法错误：引号未闭合" };
+      tokens.push({ type: "str", value: val });
+      continue;
+    }
+    if (/[a-zA-Z0-9_.-]/.test(ch)) {
+      let word = "";
+      while (i < input.length && /[a-zA-Z0-9_.-]/.test(input[i])) {
+        word += input[i];
+        i += 1;
+      }
+      tokens.push({ type: "word", value: word });
+      continue;
+    }
+    return { tokens: [], error: `无法识别的字符：${ch}` };
+  }
+  return { tokens };
+}
+
+function compileExprAst(node: ExprAst, negated = false): { ok: true; clause: CompiledFilterClause } | { ok: false; error: string } {
+  if (node.kind === "not") return compileExprAst(node.inner, !negated);
+
+  if (node.kind === "include") {
+    return {
+      ok: true,
+      clause: negated ? { excludePatterns: [node.pattern], excludeTypes: [] } : { include: node.pattern, excludePatterns: [], excludeTypes: [] },
+    };
+  }
+  if (node.kind === "exclude") {
+    return {
+      ok: true,
+      clause: negated ? { include: node.pattern, excludePatterns: [], excludeTypes: [] } : { excludePatterns: [node.pattern], excludeTypes: [] },
+    };
+  }
+  if (node.kind === "exclude_types") {
+    if (negated) return { ok: false, error: "协议筛选目前仅支持剔除模式，请使用 node.protocol not in {...} 或 !=" };
+    return { ok: true, clause: { excludePatterns: [], excludeTypes: node.values } };
+  }
+  if (node.kind === "include_types") {
+    if (!negated) return { ok: false, error: "协议筛选目前仅支持剔除模式，请使用 node.protocol not in {...} 或 !=" };
+    return { ok: true, clause: { excludePatterns: [], excludeTypes: node.values } };
+  }
+
+  if (node.kind !== "and" && node.kind !== "or") return { ok: false, error: "不支持的表达式节点" };
+  // De Morgan: !(A && B) === (!A || !B), !(A || B) === (!A && !B)
+  const effectiveOp = negated ? (node.kind === "and" ? "or" : "and") : node.kind;
+  const left = compileExprAst(node.left, negated);
+  if (!left.ok) return left;
+  const right = compileExprAst(node.right, negated);
+  if (!right.ok) return right;
+
+  if (effectiveOp === "and") {
+    if (left.clause.include && right.clause.include) {
+      return { ok: false, error: "暂不支持用 and 组合多个保留名称条件，请用 or 合并（例如 node.name =~ \"A|B\"）" };
+    }
+    return {
+      ok: true,
+      clause: {
+        include: left.clause.include || right.clause.include,
+        excludePatterns: uniqueItems([...left.clause.excludePatterns, ...right.clause.excludePatterns]),
+        excludeTypes: uniqueItems([...left.clause.excludeTypes, ...right.clause.excludeTypes]),
+      },
+    };
+  }
+
+  // OR is supported across pure include-name clauses (a or b -> a|b)
+  const leftIncludeOnly = Boolean(left.clause.include) && !left.clause.excludePatterns.length && !left.clause.excludeTypes.length;
+  const rightIncludeOnly = Boolean(right.clause.include) && !right.clause.excludePatterns.length && !right.clause.excludeTypes.length;
+  if (leftIncludeOnly && rightIncludeOnly) {
+    return {
+      ok: true,
+      clause: {
+        include: uniqueItems([left.clause.include!, right.clause.include!]).join("|"),
+        excludePatterns: [],
+        excludeTypes: [],
+      },
+    };
+  }
+  return { ok: false, error: "暂不支持跨条件使用 or 组合，请改用 and 连接不同条件（同名关键词可用 | 或 or 合并）" };
+}
+
+function parseFilterExpression(
+  input: string,
+): { ok: true; value: Pick<SubscriptionGeneration["processing"], "include" | "exclude" | "exclude_types"> } | { ok: false; error: string } {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return { ok: true, value: { include: undefined, exclude: undefined, exclude_types: undefined } };
+  }
+  const { tokens, error: tokErr } = tokenizeFilterExpr(trimmed);
+  if (tokErr) return { ok: false, error: tokErr };
+  if (!tokens.length) return { ok: true, value: { include: undefined, exclude: undefined, exclude_types: undefined } };
+
+  let pos = 0;
+  const peek = () => tokens[pos];
+  const next = () => tokens[pos++];
+  const isWord = (tok: ExprToken | undefined, ...words: string[]) =>
+    tok?.type === "word" && words.includes(tok.value.toLowerCase());
+
+  const parseOr = (): ExprAst => {
+    let left = parseAnd();
+    while (isWord(peek(), "or") || (peek()?.type === "op" && peek()?.value === "||")) {
+      next();
+      left = { kind: "or", left, right: parseAnd() };
+    }
+    return left;
+  };
+
+  const parseAnd = (): ExprAst => {
+    let left = parseUnary();
+    while (isWord(peek(), "and") || (peek()?.type === "op" && peek()?.value === "&&")) {
+      next();
+      left = { kind: "and", left, right: parseUnary() };
+    }
+    return left;
+  };
+
+  const parseUnary = (): ExprAst => {
+    if (isWord(peek(), "not") || (peek()?.type === "op" && peek()?.value === "!")) {
+      next();
+      return { kind: "not", inner: parseUnary() };
+    }
+    return parsePrimary();
+  };
+
+  const readStringValue = (label: string): string => {
+    const tok = next();
+    if (!tok || (tok.type !== "str" && tok.type !== "word")) {
+      throw new Error(`语法错误：${label} 需要引号包裹的字符串值`);
+    }
+    if (!tok.value.trim()) throw new Error(`${label} 值不能为空`);
+    return tok.value.trim();
+  };
+
+  const readProtocolList = (): string[] => {
+    const open = next();
+    if (!open || open.type !== "punct" || (open.value !== "{" && open.value !== "[")) {
+      throw new Error("语法错误：not in / in 后面需要用 {...} 或 [...] 包裹协议列表");
+    }
+    const closeChar = open.value === "{" ? "}" : "]";
+    const items: string[] = [];
+    while (peek() && !(peek()?.type === "punct" && peek()?.value === closeChar)) {
+      if (peek()?.type === "punct" && peek()?.value === ",") { next(); continue; }
+      const tok = next();
+      if (!tok || (tok.type !== "str" && tok.type !== "word")) {
+        throw new Error("语法错误：协议列表中包含无效项");
+      }
+      const val = tok.value.trim().toLowerCase();
+      if (val) items.push(val);
+    }
+    const close = next();
+    if (!close || close.type !== "punct" || close.value !== closeChar) {
+      throw new Error(`语法错误：缺少闭合符号 ${closeChar}`);
+    }
+    if (!items.length) throw new Error("协议列表不能为空");
+    return uniqueItems(items);
+  };
+
+  const parsePrimary = (): ExprAst => {
+    const tok = peek();
+    if (!tok) throw new Error("表达式不完整，请补全过滤条件");
+    if (tok.type === "punct" && tok.value === "(") {
+      next();
+      const inner = parseOr();
+      const close = next();
+      if (!close || close.type !== "punct" || close.value !== ")") {
+        throw new Error("语法错误：缺少右括号 )");
+      }
+      return inner;
+    }
+    if (tok.type !== "word") throw new Error(`意外的符号：${tok.value}`);
+    const field = next()!.value.toLowerCase();
+    if (field === "node.name") {
+      let negatedOp = false;
+      if (isWord(peek(), "not")) { next(); negatedOp = true; }
+      const op = next();
+      if (!op) throw new Error("语法错误：node.name 后缺少运算符（支持 =~、!~、contains）");
+      if (!negatedOp && (op.type === "op" && op.value === "=~" || isWord(op, "contains"))) {
+        const pattern = readStringValue("node.name");
+        const err = validateRegexPattern(pattern);
+        if (err) throw new Error(err);
+        return { kind: "include", pattern };
+      }
+      if ((op.type === "op" && op.value === "!~" && !negatedOp) || (negatedOp && isWord(op, "contains"))) {
+        const pattern = readStringValue("node.name");
+        const err = validateRegexPattern(pattern);
+        if (err) throw new Error(err);
+        return { kind: "exclude", pattern };
+      }
+      throw new Error("字段 node.name 仅支持 =~、!~、contains 或 not contains");
+    }
+    if (field === "node.protocol") {
+      let negatedOp = false;
+      if (isWord(peek(), "not")) { next(); negatedOp = true; }
+      const op = next();
+      if (!op) throw new Error("语法错误：node.protocol 后缺少运算符（支持 not in、!=、ne）");
+      if (isWord(op, "in")) {
+        return { kind: negatedOp ? "exclude_types" : "include_types", values: readProtocolList() };
+      }
+      if (!negatedOp && ((op.type === "op" && op.value === "!=") || isWord(op, "ne"))) {
+        return { kind: "exclude_types", values: [readStringValue("node.protocol").toLowerCase()] };
+      }
+      if (!negatedOp && ((op.type === "op" && op.value === "==") || isWord(op, "eq"))) {
+        return { kind: "include_types", values: [readStringValue("node.protocol").toLowerCase()] };
+      }
+      throw new Error("字段 node.protocol 仅支持 not in {...}、!= 或 ne");
+    }
+    throw new Error(`不支持的字段「${field}」，仅支持 node.name 与 node.protocol`);
+  };
+
+  try {
+    const ast = parseOr();
+    if (pos < tokens.length) {
+      throw new Error(`意外的多余内容「${tokens[pos].value}」，请检查是否缺少 and / or`);
+    }
+    const compiled = compileExprAst(ast);
+    if (!compiled.ok) return compiled;
+    const include = compiled.clause.include || undefined;
+    const exclude = compiled.clause.excludePatterns.length ? compiled.clause.excludePatterns.join("|") : undefined;
+    const err = validateRegexPattern(include) || validateRegexPattern(exclude);
+    if (err) return { ok: false, error: err };
+    return {
+      ok: true,
+      value: {
+        include,
+        exclude,
+        exclude_types: compiled.clause.excludeTypes.length ? compiled.clause.excludeTypes : undefined,
+      },
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "表达式语法无效" };
   }
 }
 
@@ -245,15 +554,19 @@ function NodeFilterRuleBuilder({
   processing,
   nodes,
   onChange,
+  onExprError,
 }: {
   processing: SubscriptionGeneration["processing"];
   nodes: NodeItem[];
   onChange: (patch: Partial<SubscriptionGeneration["processing"]>) => void;
+  onExprError?: (error: string) => void;
 }) {
   const nextID = useRef(1);
   const makeID = () => `filter-row-${nextID.current++}`;
   const [rows, setRows] = useState<FilterRuleRow[]>(() => buildRuleRows(processing, makeID));
-  const [rawMode, setRawMode] = useState(false);
+  const [editExprMode, setEditExprMode] = useState(false);
+  const [exprDraft, setExprDraft] = useState(() => formatFilterExpression(processing));
+  const [exprError, setExprError] = useState("");
 
   const protocolOptions = useMemo(() => {
     const map = new Map<string, string>(knownProtocols.map(p => [p.value, p.label]));
@@ -268,8 +581,12 @@ function NodeFilterRuleBuilder({
 
   const commitRows = (updater: (current: FilterRuleRow[]) => FilterRuleRow[]) => {
     const next = updater(rows);
+    const compiled = compileRuleRows(next);
     setRows(next);
-    onChange(compileRuleRows(next));
+    setExprDraft(formatFilterExpression(compiled));
+    setExprError("");
+    onExprError?.("");
+    onChange(compiled);
   };
 
   const handleFieldChange = (id: string, field: FilterField) => {
@@ -343,22 +660,46 @@ function NodeFilterRuleBuilder({
 
   const clearAll = () => {
     setRows([{ id: makeID(), connector: "and", field: "name", operator: "exclude_match", tokens: [], draft: "" }]);
+    setExprDraft("");
+    setExprError("");
+    onExprError?.("");
     onChange({ include: undefined, exclude: undefined, exclude_types: undefined });
   };
 
-  const toggleRawMode = () => {
-    if (rawMode) setRows(buildRuleRows(processing, makeID));
-    setRawMode(v => !v);
+  const handleExprChange = (value: string) => {
+    setExprDraft(value);
+    const result = parseFilterExpression(value);
+    if (result.ok) {
+      setExprError("");
+      onExprError?.("");
+      onChange(result.value);
+      setRows(buildRuleRows(result.value, makeID));
+    } else {
+      setExprError(result.error);
+      onExprError?.(result.error);
+    }
+  };
+
+  const toggleExprEditor = () => {
+    if (editExprMode) {
+      if (exprError) {
+        setExprDraft(formatFilterExpression(processing));
+        setExprError("");
+        onExprError?.("");
+      }
+      setEditExprMode(false);
+    } else {
+      setExprDraft(formatFilterExpression(processing));
+      setExprError("");
+      onExprError?.("");
+      setEditExprMode(true);
+    }
   };
 
   const hasAnyFilter = Boolean(processing.include?.trim() || processing.exclude?.trim() || processing.exclude_types?.length);
-  const exprParts: string[] = [];
-  if (processing.include?.trim()) exprParts.push(`(node.name =~ "${processing.include.trim()}")`);
-  if (processing.exclude?.trim()) exprParts.push(`(node.name !~ "${processing.exclude.trim()}")`);
-  if (processing.exclude_types?.length) exprParts.push(`(node.protocol not in {"${processing.exclude_types.join('" "')}"})`);
-  const expressionPreview = exprParts.join(" and ");
+  const expressionPreview = formatFilterExpression(processing);
   const maxRegexLen = Math.max(processing.include?.length || 0, processing.exclude?.length || 0);
-  const regexWarning = validateRegexPattern(processing.include) || validateRegexPattern(processing.exclude);
+  const activeWarning = exprError || validateRegexPattern(processing.include) || validateRegexPattern(processing.exclude);
 
   return (
     <section className="sm-cf-card" aria-label="节点过滤规则">
@@ -367,149 +708,131 @@ function NodeFilterRuleBuilder({
           <strong>当传入节点匹配时...</strong>
           <small>关键词用 | 或逗号 , 分隔（回车确认）自动识别为标签块，点击块可删除；协议直接下拉选择。</small>
         </div>
-        {hasAnyFilter && <Button variant="ghost" onClick={clearAll}>清空过滤</Button>}
+        {(hasAnyFilter || exprDraft.trim() !== "") && <Button variant="ghost" onClick={clearAll}>清空过滤</Button>}
       </div>
 
-      {!rawMode ? (
-        <>
-          <div className="sm-cf-head" aria-hidden="true">
-            <span>字段</span>
-            <span>运算符</span>
-            <span>值</span>
-            <span>逻辑</span>
-          </div>
-          <div className="sm-cf-rows">
-            {rows.map((row, index) => (
-              <div key={row.id}>
-                {index > 0 && (
-                  <div className="sm-cf-connector">
-                    <span>{row.connector === "or" ? "Or" : "And"}</span>
-                  </div>
-                )}
-                <div className="sm-cf-row">
-                  <select
-                    aria-label={`规则字段 ${index + 1}`}
-                    value={row.field}
-                    onChange={e => handleFieldChange(row.id, e.target.value as FilterField)}
-                  >
-                    <option value="name">节点名称</option>
-                    <option value="protocol">节点协议</option>
-                  </select>
-
-                  <select
-                    aria-label={`规则运算符 ${index + 1}`}
-                    value={row.operator}
-                    disabled={row.field === "protocol"}
-                    onChange={e => handleOperatorChange(row.id, e.target.value as FilterOperator)}
-                  >
-                    {row.field === "name" ? (
-                      <>
-                        <option value="exclude_match">剔除</option>
-                        <option value="include_match">保留</option>
-                      </>
-                    ) : (
-                      <option value="exclude_protocol">剔除</option>
-                    )}
-                  </select>
-
-                  <div className="sm-cf-value">
-                    {row.field === "name" ? (
-                      <>
-                        <input
-                          value={row.draft}
-                          aria-label={row.operator === "include_match" ? `仅保留名称 ${index + 1}` : `排除名称 ${index + 1}`}
-                          placeholder={row.operator === "include_match" ? "用 | 或 , 分隔，如：香港|HK" : "用 | 或 , 分隔，如：到期|剩余流量|官网"}
-                          onChange={e => handleNameChange(row.id, e.target.value)}
-                          onBlur={() => commitNameDraft(row.id)}
-                          onKeyDown={e => {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              commitNameDraft(row.id);
-                            } else if (e.key === "Backspace" && !row.draft && row.tokens.length > 0) {
-                              removeToken(row.id, row.tokens[row.tokens.length - 1]);
-                            }
-                          }}
-                        />
-                        <TokenChips tokens={row.tokens} onRemove={token => removeToken(row.id, token)} />
-                      </>
-                    ) : (
-                      <>
-                        <ProtocolSelect
-                          selected={row.tokens}
-                          options={protocolOptions}
-                          label={`排除协议 ${index + 1}`}
-                          onAdd={proto => addToken(row.id, proto)}
-                        />
-                        <TokenChips tokens={row.tokens} labelMap={protocolLabelMap} isProtocol onRemove={proto => removeToken(row.id, proto)} />
-                      </>
-                    )}
-                  </div>
-
-                  <div className="sm-cf-actions">
-                    <Button variant="secondary" className="sm-cf-logic-btn" onClick={() => addRowAfter(row.id, "and")}>And</Button>
-                    <Button variant="secondary" className="sm-cf-logic-btn" onClick={() => addRowAfter(row.id, "or")}>Or</Button>
-                    {(rows.length > 1 || row.tokens.length > 0 || row.draft.trim() !== "") && (
-                      <IconButton label={`删除规则行 ${index + 1}`} onClick={() => removeRow(row.id)}><Trash2 size={14} /></IconButton>
-                    )}
-                  </div>
-                </div>
+      <div className="sm-cf-head" aria-hidden="true">
+        <span>字段</span>
+        <span>运算符</span>
+        <span>值</span>
+        <span>逻辑</span>
+      </div>
+      <div className="sm-cf-rows">
+        {rows.map((row, index) => (
+          <div key={row.id}>
+            {index > 0 && (
+              <div className="sm-cf-connector">
+                <span>{row.connector === "or" ? "Or" : "And"}</span>
               </div>
-            ))}
-          </div>
-        </>
-      ) : (
-        <div className="sm-cf-raw-grid">
-          <div className="sm-form-grid">
-            <Field label="排除名称（正则）" hint="使用 | 分隔正则表达式或关键词">
-              <input
-                value={processing.exclude || ""}
-                placeholder="到期|剩余流量|官网"
-                onChange={e => onChange({ exclude: e.target.value || undefined })}
-              />
-            </Field>
-            <Field label="仅保留名称（正则）" hint="使用 | 分隔正则表达式或关键词">
-              <input
-                value={processing.include || ""}
-                placeholder="香港|HK"
-                onChange={e => onChange({ include: e.target.value || undefined })}
-              />
-            </Field>
-          </div>
-          <Field label="排除协议" hint="从下拉菜单直接选择需要排除的协议，点击下方标签块可删除">
-            <div className="sm-cf-value">
-              <ProtocolSelect
-                selected={(processing.exclude_types || []).map(t => t.toLowerCase())}
-                options={protocolOptions}
-                label="排除协议"
-                onAdd={proto => onChange({ exclude_types: uniqueItems([...(processing.exclude_types || []).map(t => t.toLowerCase()), proto]) })}
-              />
-              <TokenChips
-                tokens={(processing.exclude_types || []).map(t => t.toLowerCase())}
-                labelMap={protocolLabelMap}
-                isProtocol
-                onRemove={proto => {
-                  const next = (processing.exclude_types || []).map(t => t.toLowerCase()).filter(t => t !== proto);
-                  onChange({ exclude_types: next.length ? next : undefined });
-                }}
-              />
+            )}
+            <div className="sm-cf-row">
+              <select
+                aria-label={`规则字段 ${index + 1}`}
+                value={row.field}
+                onChange={e => handleFieldChange(row.id, e.target.value as FilterField)}
+              >
+                <option value="name">节点名称</option>
+                <option value="protocol">节点协议</option>
+              </select>
+
+              <select
+                aria-label={`规则运算符 ${index + 1}`}
+                value={row.operator}
+                disabled={row.field === "protocol"}
+                onChange={e => handleOperatorChange(row.id, e.target.value as FilterOperator)}
+              >
+                {row.field === "name" ? (
+                  <>
+                    <option value="exclude_match">剔除</option>
+                    <option value="include_match">保留</option>
+                  </>
+                ) : (
+                  <option value="exclude_protocol">剔除</option>
+                )}
+              </select>
+
+              <div className="sm-cf-value">
+                {row.field === "name" ? (
+                  <>
+                    <input
+                      value={row.draft}
+                      aria-label={row.operator === "include_match" ? `仅保留名称 ${index + 1}` : `排除名称 ${index + 1}`}
+                      placeholder={row.operator === "include_match" ? "用 | 或 , 分隔，如：香港|HK" : "用 | 或 , 分隔，如：到期|剩余流量|官网"}
+                      onChange={e => handleNameChange(row.id, e.target.value)}
+                      onBlur={() => commitNameDraft(row.id)}
+                      onKeyDown={e => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          commitNameDraft(row.id);
+                        } else if (e.key === "Backspace" && !row.draft && row.tokens.length > 0) {
+                          removeToken(row.id, row.tokens[row.tokens.length - 1]);
+                        }
+                      }}
+                    />
+                    <TokenChips tokens={row.tokens} onRemove={token => removeToken(row.id, token)} />
+                  </>
+                ) : (
+                  <>
+                    <ProtocolSelect
+                      selected={row.tokens}
+                      options={protocolOptions}
+                      label={`排除协议 ${index + 1}`}
+                      onAdd={proto => addToken(row.id, proto)}
+                    />
+                    <TokenChips tokens={row.tokens} labelMap={protocolLabelMap} isProtocol onRemove={proto => removeToken(row.id, proto)} />
+                  </>
+                )}
+              </div>
+
+              <div className="sm-cf-actions">
+                <Button variant="secondary" className="sm-cf-logic-btn" onClick={() => addRowAfter(row.id, "and")}>And</Button>
+                <Button variant="secondary" className="sm-cf-logic-btn" onClick={() => addRowAfter(row.id, "or")}>Or</Button>
+                {(rows.length > 1 || row.tokens.length > 0 || row.draft.trim() !== "") && (
+                  <IconButton label={`删除规则行 ${index + 1}`} onClick={() => removeRow(row.id)}><Trash2 size={14} /></IconButton>
+                )}
+              </div>
             </div>
-          </Field>
-        </div>
-      )}
+          </div>
+        ))}
+      </div>
 
       <div className="sm-cf-preview">
         <div className="sm-cf-preview-head">
-          <span>表达式预览</span>
-          <Button variant="ghost" onClick={toggleRawMode}>
+          <span>{editExprMode ? "表达式编辑器" : "表达式预览"}</span>
+          <Button variant="ghost" onClick={toggleExprEditor}>
             <Code2 size={14} />
-            {rawMode ? "可视化规则构建" : "编辑表达式"}
+            {editExprMode ? "完成表达式编辑" : "编辑表达式"}
           </Button>
         </div>
-        <div className={`sm-cf-expr-box ${!expressionPreview ? "is-empty" : ""}`} role="region" aria-label="过滤表达式预览">
-          {expressionPreview ? <code>{expressionPreview}</code> : <span>未设置过滤条件（保留全部来源节点）</span>}
-        </div>
+
+        {editExprMode ? (
+          <>
+            <textarea
+              className={`sm-cf-expr-input ${exprError ? "is-invalid" : ""}`}
+              aria-label="过滤表达式编辑器"
+              spellCheck={false}
+              value={exprDraft}
+              placeholder={'例如：(node.name =~ "香港|HK") and (node.name !~ "到期|官网") and (node.protocol not in {"ss" "vmess"})'}
+              onChange={e => handleExprChange(e.target.value)}
+            />
+            <span className="sm-cf-expr-help">
+              支持语法：<code>node.name =~ &quot;保留正则&quot;</code>、<code>node.name !~ &quot;剔除正则&quot;</code>、<code>node.protocol not in &#123;&quot;ss&quot; &quot;vmess&quot;&#125;</code>，用 <code>and</code> / <code>or</code> 连接；修改后将实时校验并同步至上方规则。
+            </span>
+          </>
+        ) : (
+          <div className={`sm-cf-expr-box ${!expressionPreview ? "is-empty" : ""}`} role="region" aria-label="过滤表达式预览">
+            {expressionPreview ? <code>{expressionPreview}</code> : <span>未设置过滤条件（保留全部来源节点）</span>}
+          </div>
+        )}
+
         <div className="sm-cf-expr-meta">
-          {regexWarning ? <span className="sm-cf-expr-warn" role="alert">{regexWarning}</span> : <span />}
+          {activeWarning ? (
+            <span className="sm-cf-expr-warn" role="alert">{activeWarning}</span>
+          ) : editExprMode && exprDraft.trim() ? (
+            <span className="sm-cf-expr-ok">✓ 表达式有效，已同步至上方规则</span>
+          ) : (
+            <span />
+          )}
           <span>{maxRegexLen} / 512 characters</span>
         </div>
       </div>
@@ -590,6 +913,7 @@ export function SubscriptionManager({ notify = noNotify, isAdmin = true, onOpenR
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [filterExprError, setFilterExprError] = useState("");
   const [warning, setWarning] = useState("");
   const [showImport, setShowImport] = useState(false);
   const [wizard, setWizard] = useState<{ kind: Kind; file?: SubscribeFile; sourceIDs?: number[] } | null>(null);
@@ -683,6 +1007,7 @@ export function SubscriptionWizard({ kind, file, sourceIDs = [], files, nodes, t
   const [previewIndex, setPreviewIndex] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [filterExprError, setFilterExprError] = useState("");
   const requestVersion = useRef(0);
   const titles = kind === "strategy" ? ["选择来源", "节点处理", "客户端与规则", "预览保存"] : kind === "custom" ? ["选择节点", "客户端与规则", "预览保存"] : ["客户端与规则", "预览保存"];
   const outputStep = titles.length - 2; const lastStep = titles.length - 1;
@@ -702,7 +1027,7 @@ export function SubscriptionWizard({ kind, file, sourceIDs = [], files, nodes, t
     setError("");
     if (!validSelection) { setError(kind === "strategy" ? "请至少选择一个可用的来源订阅" : "请选择可按用户统计的节点，并取消不支持的节点"); return; }
     if (kind === "strategy" && step === 1) {
-      const filterErr = validateRegexPattern(processing.include) || validateRegexPattern(processing.exclude);
+      const filterErr = filterExprError || validateRegexPattern(processing.include) || validateRegexPattern(processing.exclude);
       if (filterErr) { setError(filterErr); return; }
     }
     if (step < outputStep) { setStep(value => value + 1); return; }
@@ -726,7 +1051,7 @@ export function SubscriptionWizard({ kind, file, sourceIDs = [], files, nodes, t
     {error && <ErrorState message={error} />}
     {kind === "strategy" && step === 0 && <><div className="sm-picker-header"><span>已选 <strong>{selectedSources.length}</strong> 个来源</span><div className="sm-search"><Search size={15} /><input type="search" aria-label="搜索订阅来源" placeholder="搜索外部、自选订阅" value={query} onChange={e => setQuery(e.target.value)} /></div></div><div className="sm-source-grid">{candidates.filter(source => source.name.toLowerCase().includes(query.toLowerCase())).map(source => <label key={source.id} className={`sm-source ${selectedSources.includes(source.id) ? "is-selected" : ""}`}><input type="checkbox" aria-label={`绑定来源 ${source.name}`} checked={selectedSources.includes(source.id)} onChange={() => { invalidate(); toggleID(source.id, selectedSources, setSelectedSources); }} /><span><strong>{source.name}</strong><small>{kindLabel[subscriptionKind(source)]} · {source.url ? intervalLabel(source.auto_update_interval) : source.filename}</small></span></label>)}</div>{!candidates.length && <EmptyState icon={<FileInput size={24} />} title="暂无可用来源" description="请先添加外部订阅或创建自选订阅。" />}<p className="sm-hint">单个来源也可以创建策略。来源更新后，处理结果自动跟随。</p></>}
     {kind === "custom" && step === 0 && <><div className="sm-picker-header"><span>已选 <strong>{selectedNodes.length}</strong> 个节点</span><div className="sm-search"><Search size={15} /><input type="search" aria-label="搜索面板节点" placeholder="搜索名称或协议" value={query} onChange={e => setQuery(e.target.value)} /></div></div><div className="sm-picker-shortcuts"><Button variant="ghost" onClick={() => { invalidate(); setSelectedNodes([...new Set([...selectedNodes, ...filteredNodes.filter(node => node.enabled && node.subscription_eligible !== false).map(node => node.id)])]); }}>选择可用节点</Button><Button variant="ghost" onClick={() => { invalidate(); setSelectedNodes([]); }}>清空选择</Button>{selectedNodes.some(id => nodes.some(node => node.id === id && node.subscription_eligible === false)) && <Button variant="ghost" onClick={() => { invalidate(); setSelectedNodes(selectedNodes.filter(id => nodes.some(node => node.id === id && node.enabled && node.subscription_eligible !== false))); }}>移除不可统计节点</Button>}</div><div className="sm-source-grid">{filteredNodes.map(node => <label className={`sm-source ${selectedNodes.includes(node.id) ? "is-selected" : ""}`} key={node.id}><input type="checkbox" aria-label={`选择节点 ${node.node_name}`} disabled={(!node.enabled || node.subscription_eligible === false) && !selectedNodes.includes(node.id) && !retainedNodeIDs.has(node.id)} checked={selectedNodes.includes(node.id)} onChange={() => { invalidate(); toggleID(node.id, selectedNodes, setSelectedNodes); }} /><span><strong>{node.node_name}</strong><small>{node.protocol} · {!node.enabled ? "已停用" : node.subscription_eligible === false ? node.subscription_ineligible_reason || "无法按用户统计" : "支持按用户统计"}</small></span></label>)}</div></>}
-    {kind === "strategy" && step === 1 && <div className="sm-processing"><div className="sm-process-toggle"><div><strong>自动去重</strong><p>按完整连接配置去重，名称不同也能识别。</p></div><Toggle checked={processing.deduplicate} onChange={value => { invalidate(); setProcessing(current => ({ ...current, deduplicate: value })); }} label="自动去重" /></div><div className="sm-process-toggle"><div><strong>自动剔除失效节点</strong><p>面板经真实代理协议检测，连续失败 3 次后暂时移出；恢复后重新加入。</p></div><Toggle checked={processing.remove_dead} onChange={value => { invalidate(); setProcessing(current => ({ ...current, remove_dead: value })); }} label="自动剔除失效节点" /></div><div className="sm-notice"><ShieldCheck size={17} /><span>未检测、过期结果及无法检测的节点保留。全部失败时不清空订阅。检测位置：面板服务器；需要已有 Mihomo 核心。</span></div><Field label="节点排序"><select value={processing.sort || "source"} onChange={e => { invalidate(); setProcessing(current => ({ ...current, sort: e.target.value })); }}><option value="source">按来源顺序</option><option value="name">按节点名称</option></select></Field><NodeFilterRuleBuilder processing={processing} nodes={nodes} onChange={patch => { invalidate(); setProcessing(current => ({ ...current, ...patch })); }} /></div>}
+    {kind === "strategy" && step === 1 && <div className="sm-processing"><div className="sm-process-toggle"><div><strong>自动去重</strong><p>按完整连接配置去重，名称不同也能识别。</p></div><Toggle checked={processing.deduplicate} onChange={value => { invalidate(); setProcessing(current => ({ ...current, deduplicate: value })); }} label="自动去重" /></div><div className="sm-process-toggle"><div><strong>自动剔除失效节点</strong><p>面板经真实代理协议检测，连续失败 3 次后暂时移出；恢复后重新加入。</p></div><Toggle checked={processing.remove_dead} onChange={value => { invalidate(); setProcessing(current => ({ ...current, remove_dead: value })); }} label="自动剔除失效节点" /></div><div className="sm-notice"><ShieldCheck size={17} /><span>未检测、过期结果及无法检测的节点保留。全部失败时不清空订阅。检测位置：面板服务器；需要已有 Mihomo 核心。</span></div><Field label="节点排序"><select value={processing.sort || "source"} onChange={e => { invalidate(); setProcessing(current => ({ ...current, sort: e.target.value })); }}><option value="source">按来源顺序</option><option value="name">按节点名称</option></select></Field><NodeFilterRuleBuilder processing={processing} nodes={nodes} onChange={patch => { invalidate(); setProcessing(current => ({ ...current, ...patch })); }} onExprError={setFilterExprError} /></div>}
     {step === outputStep && <div className="sm-output-list">{outputs.map((out, index) => <section className="sm-output" key={index} aria-label={`客户端输出 ${index + 1}`}><div className="sm-output-heading"><strong>{index === 0 ? "默认客户端" : "附加客户端"}</strong>{index > 0 && <IconButton label={`移除客户端 ${index + 1}`} onClick={() => { invalidate(); setOutputs(current => current.filter((_, i) => i !== index)); }}><X size={15} /></IconButton>}</div><div className="sm-form-grid"><Field label={`输出客户端${index ? ` ${index + 1}` : ""}`}><select value={out.client} onChange={e => { const id = e.target.value; setOutput(index, { client: id, mode: id === "v2ray" ? "nodes" : canInherit && id === "clashmeta" ? "source" : templates.length ? "full" : "nodes", template_filename: out.template_filename || templates[0] || "" }); }}>
       {clients.map(client => <option key={client.id} value={client.id} disabled={outputs.some((other, i) => i !== index && other.client === client.id)}>{client.name}</option>)}{["shadowrocket", "uri"].includes(out.client) && <option value={out.client}>{clientName(out.client)}</option>}
     </select></Field><Field label={`规则配置${index ? ` ${index + 1}` : ""}`}><select value={out.mode} onChange={e => setOutput(index, { mode: e.target.value as SubscriptionOutput["mode"] })}>{out.client !== "v2ray" && out.client !== "shadowrocket" && out.client !== "uri" && <option value="full">完整配置（分流规则）</option>}{canInherit && out.client === "clashmeta" && <option value="source">保留上游规则</option>}<option value="nodes">仅输出节点</option></select></Field></div><SubscriptionOutputRules out={out} index={index} templates={templates} onChange={next => setOutput(index, next)} onManageTemplates={onManageTemplates} />{out.client === "clash-to-shadowrocket" && <p className="sm-client-hint">完整配置生成小火箭 .conf；仅节点模式提供独立节点订阅。</p>}{out.mode === "source" && <p className="sm-client-hint">保留该外部来源的分组、分流和 DNS，导入原文保持不变。</p>}</section>)}{outputs.length < clients.length && <Button variant="ghost" onClick={() => { const client = clients.find(c => !outputs.some(out => out.client === c.id)); if (client) { invalidate(); setOutputs(current => [...current, { client: client.id, mode: client.full && templates.length ? "full" : "nodes", template_filename: templates[0] || "" }]); } }}><Plus size={15} />添加其他客户端输出</Button>}</div>}

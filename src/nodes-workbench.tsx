@@ -482,6 +482,7 @@ export function nodeDuplicateIdentity(node: WorkbenchNode): string {
 function managedSelfServiceConfigSupported(protocol: string, rawConfig: string, managedMultiUser = false): boolean {
   const normalizedProtocol = nodeProtocolKey(protocol);
   if (normalizedProtocol === "wireguard") return false;
+  if (normalizedProtocol === "chitanda") return managedMultiUser;
   if (normalizedProtocol !== "ss") return true;
   try {
     const config = parseClashProxyInput(rawConfig || "{}");
@@ -2630,7 +2631,16 @@ export function NodeEditor({ node, forwardTarget, availableNodes = [], available
       if (!config.name || !config.type || !config.server || !portNum) throw new Error("名称、协议、服务器地址和端口均为必填项");
       if (portNum < 1 || portNum > 65535) throw new Error("端口必须在 1-65535 之间");
       if (form.selfService && tunnelNode) throw new Error("Tunnel 转发节点不能发布到用户自助目录");
-      if (form.selfService && !managedSelfServiceConfigSupported(form.protocol, JSON.stringify(config), managedMultiUser)) throw new Error(nodeProtocolKey(form.protocol) === "wireguard" ? "WireGuard 暂不支持按用户自助开通；管理员创建的普通节点仍可分配到套餐和订阅" : "导入或旧版经典 Shadowsocks 无法确认多用户入站结构，不能直接发布；请从服务器创建经典 AES-GCM 节点，或改用 Shadowsocks 2022");
+      if (form.selfService && !managedSelfServiceConfigSupported(form.protocol, JSON.stringify(config), managedMultiUser)) {
+        const protoKey = nodeProtocolKey(form.protocol);
+        throw new Error(
+          protoKey === "wireguard"
+            ? "WireGuard 暂不支持按用户自助开通；管理员创建的普通节点仍可分配到套餐和订阅"
+            : protoKey === "chitanda"
+              ? "旧版共享 PSK 的 Chitanda 节点不支持按用户多凭据统计；请从服务器新建或升级为 users[] 多用户入站"
+              : "导入或旧版经典 Shadowsocks 无法确认多用户入站结构，不能直接发布；请从服务器创建经典 AES-GCM 节点，或改用 Shadowsocks 2022",
+        );
+      }
       const configJSON = JSON.stringify(config);
       const payload = {
         raw_url: form.rawURL.trim(),
@@ -3412,12 +3422,12 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
                   <option value="h1">h1 · 纯 IP 全双工 (HTTP/1.1 · PSK-AEAD · 免证书)</option>
                 </select>
               </Field>
-              <Field label="PSK 共享密钥 (Pre-Shared Key)" hint="通信主凭据（32 字节推荐）">
+              <Field label="PSK 共享密钥 (Pre-Shared Key)" hint="主用户初始凭据（至少 32 字节）">
                 <div className="nw-copy-field">
                   <input
                     value={draft.password}
                     onChange={(event) => setDraft({ ...draft, password: event.target.value.trim() })}
-                    placeholder="32 字节预共享密钥"
+                    placeholder="至少 32 字节预共享密钥"
                   />
                   <IconButton
                     label="生成随机 32 字节 PSK"

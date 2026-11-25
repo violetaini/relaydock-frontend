@@ -212,6 +212,10 @@ export function isPackageNodeEligible(node: {
     return false;
   }
 
+  if (proto === "chitanda") {
+    return Boolean(node.managed_multi_user);
+  }
+
   return true;
 }
 
@@ -797,8 +801,18 @@ export function buildManagedInboundRequest(
         streamSettings = sSettings;
       }
 
+      const psk = requirePassword(draft.password);
+      if (new TextEncoder().encode(psk).length < 32) {
+        throw new Error("Chitanda PSK 长度至少需要 32 字节");
+      }
       const settings: Record<string, unknown> = {
-        psk: requirePassword(draft.password),
+        users: [
+          {
+            email: "admin",
+            psk,
+            level: 0,
+          },
+        ],
         transport,
       };
 

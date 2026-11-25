@@ -395,7 +395,8 @@ describe("managed node protocol presets", () => {
     expect(isPackageNodeEligible({ protocol: "ss", parsed_config: JSON.stringify({ cipher: "2022-blake3-aes-128-gcm" }) })).toBe(true);
     expect(isPackageNodeEligible({ protocol: "vless", inbound_tag: "vless-in" })).toBe(true);
     expect(isPackageNodeEligible({ protocol: "trojan", inbound_tag: "tr-in" })).toBe(true);
-    expect(isPackageNodeEligible({ protocol: "chitanda", inbound_tag: "ch-in" })).toBe(true);
+    expect(isPackageNodeEligible({ protocol: "chitanda", inbound_tag: "ch-in" })).toBe(false);
+    expect(isPackageNodeEligible({ protocol: "chitanda", inbound_tag: "ch-in", managed_multi_user: true })).toBe(true);
     expect(isPackageNodeEligible({ protocol: "hysteria2", inbound_tag: "hy2-in" })).toBe(true);
     expect(isPackageNodeEligible({ package_eligible: false, protocol: "vless" })).toBe(false);
     expect(isPackageNodeEligible({ package_eligible: true, protocol: "tunnel" })).toBe(true);
@@ -512,6 +513,35 @@ describe("managed node protocol presets", () => {
         ...extraSettings,
       },
     });
+  });
+
+  it("builds a multi-user chitanda inbound with users[] and rejects short PSKs", () => {
+    const psk = "0123456789abcdef0123456789abcdef";
+    const request = buildManagedInboundRequest({
+      ...newManagedInboundDraft(),
+      protocol: "chitanda",
+      name: "HK Chitanda",
+      password: psk,
+      chitandaTransport: "stream",
+    });
+    expect(request.inbound).toMatchObject({
+      protocol: "chitanda",
+      settings: {
+        users: [{ email: "admin", psk, level: 0 }],
+        transport: "stream",
+      },
+    });
+    expect((request.inbound as { settings: Record<string, unknown> }).settings.psk).toBeUndefined();
+
+    expect(() =>
+      buildManagedInboundRequest({
+        ...newManagedInboundDraft(),
+        protocol: "chitanda",
+        name: "HK Chitanda Short",
+        password: "too-short-psk",
+        chitandaTransport: "stream",
+      }),
+    ).toThrow(/32/);
   });
 });
 

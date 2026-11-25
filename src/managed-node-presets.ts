@@ -207,7 +207,7 @@ export function isPackageNodeEligible(node: {
         if (match) cipher = match[1].trim().toLowerCase();
       }
     }
-    if (cipher.startsWith("2022-")) return true;
+    if (cipher.startsWith("2022-")) return !cipher.includes("chacha20");
     if ((cipher === "aes-128-gcm" || cipher === "aes-256-gcm") && (Boolean(node.managed_multi_user) || node.node_type === "routed")) return true;
     return false;
   }

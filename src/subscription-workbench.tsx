@@ -1671,7 +1671,11 @@ export function SubscriptionWizard({ kind, file, sourceIDs = [], files, nodes, t
     catch (reason) { setError(message(reason)); }
     finally { setBusy(false); }
   };
-  const filteredNodes = nodes.filter(node => (!isAnyDoorNode(node) || retainedNodeIDs.has(node.id)) && `${node.node_name} ${node.protocol}`.toLowerCase().includes(query.toLowerCase()));
+  const filteredNodes = nodes.filter(
+    node =>
+      ((node.subscription_eligible !== false && !isAnyDoorNode(node)) || selectedNodes.includes(node.id) || retainedNodeIDs.has(node.id))
+      && `${node.node_name} ${node.protocol}`.toLowerCase().includes(query.toLowerCase()),
+  );
   return <Dialog title={`${file ? "编辑" : "创建"}${isLocalImport ? "本地导入订阅" : kindLabel[kind]}`} description={kind === "strategy" ? "选择来源与处理方式，自动跟随来源更新。" : kind === "custom" ? "使用面板节点创建订阅，配置变更自动同步。" : isLocalImport ? "可修改配置文本或上传文件覆盖，并为不同客户端配置输出规则。" : "保留导入原文，为不同客户端配置输出方式。"} onClose={onClose} wide dismissible={!busy}>
     <fieldset className="sm-wizard" disabled={busy}><ol className="sm-steps" aria-label="订阅创建步骤">{titles.map((title, index) => <li key={title} className={step === index ? "is-active" : index < step ? "is-done" : ""}><button type="button" disabled={busy || index > step} onClick={() => { setStep(index); setError(""); }} aria-current={step === index ? "step" : undefined}><span>{index < step ? <Check size={13} /> : index + 1}</span>{title}</button></li>)}</ol>
     {error && <ErrorState message={error} />}

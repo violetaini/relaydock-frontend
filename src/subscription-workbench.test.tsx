@@ -394,17 +394,19 @@ describe("unified subscription wizard", () => {
     expect(post).toHaveBeenCalledTimes(1);
   });
 
-  it("hides AnyDoor nodes and keeps routed forwarding nodes selectable in custom subscription wizard", () => {
+  it("hides AnyDoor and ineligible non-multi-user nodes while keeping routed forwarding nodes selectable in custom subscription wizard", () => {
     const customNodes = [
       { id: 10, node_name: "HK 路由转发 01", protocol: "shadowsocks", node_type: "routed", inbound_tag: "inbound-568", clash_config: "{}", enabled: true, subscription_eligible: true },
       { id: 11, node_name: "阿里云 任意门 01", protocol: "dokodemo-door", node_type: "physical", inbound_tag: "inbound-2133", clash_config: "{}", enabled: true, subscription_eligible: false },
       { id: 12, node_name: "friend | Tunnel", protocol: "shadowsocks", node_type: "forwarded", inbound_tag: "anydoor-node-41", clash_config: "{}", enabled: true, subscription_eligible: false },
+      { id: 13, node_name: "HK DMIT 01 [SS-2022]", protocol: "ss", node_type: "physical", inbound_tag: "inbound-2024", clash_config: "{}", enabled: true, subscription_eligible: false, subscription_ineligible_reason: "Shadowsocks 节点加密方式不支持多用户" },
     ];
     render(<SubscriptionWizard {...props} nodes={customNodes} kind="custom" />);
     expect(screen.getByRole("checkbox", { name: "选择节点 HK 路由转发 01" })).toBeInTheDocument();
     expect(screen.getByText(/路由转发 · shadowsocks · 支持按用户统计/)).toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: "选择节点 阿里云 任意门 01" })).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: "选择节点 friend | Tunnel" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "选择节点 HK DMIT 01 [SS-2022]" })).not.toBeInTheDocument();
   });
 
 });

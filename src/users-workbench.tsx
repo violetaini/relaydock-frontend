@@ -530,7 +530,12 @@ function LimitsSettingsPanel({ user, onBack, onComplete }: { user: ManagedUser; 
     } finally { setWorking(false); }
   };
   const visibleNodes = useMemo(
-    () => nodes.filter((node) => !isAnyDoorNode(node) || nodeTraffic[String(node.id)] !== undefined || nodeSpeed[String(node.id)] !== undefined || nodeDevices[String(node.id)] !== undefined),
+    () => nodes.filter((node) => (
+      (!isAnyDoorNode(node) && node.package_eligible !== false)
+      || nodeTraffic[String(node.id)] !== undefined
+      || nodeSpeed[String(node.id)] !== undefined
+      || nodeDevices[String(node.id)] !== undefined
+    )),
     [nodeDevices, nodeSpeed, nodeTraffic, nodes],
   );
   return <form className="form-stack" onSubmit={submit}>

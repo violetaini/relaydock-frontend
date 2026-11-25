@@ -365,7 +365,7 @@ function NodeFilterRuleBuilder({
       <div className="sm-cf-card-head">
         <div>
           <strong>当传入节点匹配时...</strong>
-          <small>支持组合保留名称、排除名称与协议筛选；关键词用 | 或逗号分隔将自动识别为标签块，点击块可删除。</small>
+          <small>关键词用 | 或逗号 , 分隔（回车确认）自动识别为标签块，点击块可删除；协议直接下拉选择。</small>
         </div>
         {hasAnyFilter && <Button variant="ghost" onClick={clearAll}>清空过滤</Button>}
       </div>
@@ -404,11 +404,11 @@ function NodeFilterRuleBuilder({
                   >
                     {row.field === "name" ? (
                       <>
-                        <option value="exclude_match">排除名称（剔除）</option>
-                        <option value="include_match">仅保留名称（保留）</option>
+                        <option value="exclude_match">剔除</option>
+                        <option value="include_match">保留</option>
                       </>
                     ) : (
-                      <option value="exclude_protocol">排除协议（剔除）</option>
+                      <option value="exclude_protocol">剔除</option>
                     )}
                   </select>
 
@@ -418,7 +418,7 @@ function NodeFilterRuleBuilder({
                         <input
                           value={row.draft}
                           aria-label={row.operator === "include_match" ? `仅保留名称 ${index + 1}` : `排除名称 ${index + 1}`}
-                          placeholder={row.operator === "include_match" ? "输入关键词，用 | 或 , 分隔，如：香港|HK" : "输入关键词，用 | 或 , 分隔，如：到期|剩余流量|官网"}
+                          placeholder={row.operator === "include_match" ? "用 | 或 , 分隔，如：香港|HK" : "用 | 或 , 分隔，如：到期|剩余流量|官网"}
                           onChange={e => handleNameChange(row.id, e.target.value)}
                           onBlur={() => commitNameDraft(row.id)}
                           onKeyDown={e => {
@@ -431,7 +431,6 @@ function NodeFilterRuleBuilder({
                           }}
                         />
                         <TokenChips tokens={row.tokens} onRemove={token => removeToken(row.id, token)} />
-                        <span className="sm-cf-value-hint">分隔符号：使用 <code>|</code>（竖线）或 <code>,</code>（逗号）分隔多个关键词（回车确认），将自动识别并转为标签块展示，点击块可删除</span>
                       </>
                     ) : (
                       <>
@@ -442,7 +441,6 @@ function NodeFilterRuleBuilder({
                           onAdd={proto => addToken(row.id, proto)}
                         />
                         <TokenChips tokens={row.tokens} labelMap={protocolLabelMap} isProtocol onRemove={proto => removeToken(row.id, proto)} />
-                        <span className="sm-cf-value-hint">直接从下拉菜单选择要排除的协议，已选协议会转为标签块展示，点击块可删除</span>
                       </>
                     )}
                   </div>

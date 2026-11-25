@@ -973,42 +973,72 @@ function NodeSortPanel({
 }) {
   const sortMode = (processing.sort || "source") as SortMode;
   const direction: SortDirection = processing.sort_direction === "desc" ? "desc" : "asc";
-  const [customNodes, setCustomNodes] = useState<PreviewNodeSummary[]>([]);
+  const [sortedNodes, setSortedNodes] = useState<PreviewNodeSummary[]>([]);
   const [loadingNodes, setLoadingNodes] = useState(false);
   const [nodesError, setNodesError] = useState("");
-  const loadedOnceRef = useRef(false);
+  const fetchRef = useRef(fetchSortedNodes);
+  fetchRef.current = fetchSortedNodes;
+  const reqSeqRef = useRef(0);
+  const loadedKeyRef = useRef("");
 
-  const loadNodes = useCallback(async (seedFrom?: SortMode) => {
+  const fetchKey = useMemo(
+    () =>
+      JSON.stringify([
+        selectedSources,
+        processing.deduplicate,
+        processing.remove_dead,
+        processing.include || "",
+        processing.exclude || "",
+        processing.exclude_types || [],
+        sortMode,
+        direction,
+      ]),
+    [
+      selectedSources,
+      processing.deduplicate,
+      processing.remove_dead,
+      processing.include,
+      processing.exclude,
+      processing.exclude_types,
+      sortMode,
+      direction,
+    ],
+  );
+
+  const loadNodes = useCallback(async (keyForAttempt = fetchKey) => {
+    if (!selectedSources.length) return;
+    loadedKeyRef.current = keyForAttempt;
+    const seq = ++reqSeqRef.current;
     setLoadingNodes(true);
     setNodesError("");
     try {
-      const override = seedFrom ? { sort: seedFrom, custom_order: undefined } : undefined;
-      const list = await fetchSortedNodes(override);
-      setCustomNodes(list);
-      loadedOnceRef.current = true;
-      if (seedFrom) {
-        onChangeProcessing({ sort: "custom", custom_order: list.map(item => item.key) });
-      }
+      const list = await fetchRef.current();
+      if (seq !== reqSeqRef.current) return;
+      setSortedNodes(list);
     } catch (reason) {
+      if (seq !== reqSeqRef.current) return;
       setNodesError(message(reason));
     } finally {
-      setLoadingNodes(false);
+      if (seq === reqSeqRef.current) setLoadingNodes(false);
     }
-  }, [fetchSortedNodes, onChangeProcessing]);
+  }, [fetchKey, selectedSources.length]);
 
   useEffect(() => {
-    if (sortMode === "custom" && !loadedOnceRef.current && !loadingNodes) {
-      void loadNodes();
-    }
-  }, [sortMode, loadingNodes, loadNodes]);
+    if (!selectedSources.length || loadedKeyRef.current === fetchKey) return;
+    const timer = window.setTimeout(() => {
+      void loadNodes(fetchKey);
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [fetchKey, selectedSources.length, loadNodes]);
 
   const handleModeChange = (nextMode: SortMode) => {
     onChangeProcessing({ sort: nextMode });
   };
 
-  const handleReorderCustomNodes = (nextList: PreviewNodeSummary[]) => {
-    setCustomNodes(nextList);
-    onChangeProcessing({ sort: "custom", custom_order: nextList.map(item => item.key) });
+  const handleReorderNodes = (nextList: PreviewNodeSummary[]) => {
+    setSortedNodes(nextList);
+    const nextOrder = direction === "desc" ? [...nextList].reverse().map(item => item.key) : nextList.map(item => item.key);
+    onChangeProcessing({ sort: "custom", custom_order: nextOrder });
   };
 
   return (
@@ -1016,7 +1046,7 @@ function NodeSortPanel({
       <div className="sm-sort-head">
         <div>
           <strong>节点与来源排序</strong>
-          <small>支持拖拽与点击上下调整来源或节点顺序、按类型分组，并一键切换顺逆向输出。</small>
+          <small>自动实时加载排序结果，支持拖拽与点击上下调整来源或节点顺序，并一键切换顺逆向。</small>
         </div>
         <div className="sm-sort-dir" role="group" aria-label="排序方向">
           <button
@@ -1055,88 +1085,62 @@ function NodeSortPanel({
         ))}
       </div>
 
-      {sortMode === "source" && (
-        <div className="sm-sort-body">
-          {sourceFiles.length > 0 ? (
-            <>
-              <SortableOrderList
-                items={sourceFiles}
-                keyOf={src => src.id}
-                labelOf={src => src.name}
-                renderMeta={src => (
-                  <>
-                    <strong>{src.name}</strong>
-                    <Badge tone={subscriptionKind(src) === "external" ? "info" : "good"}>{kindLabel[subscriptionKind(src)]}</Badge>
-                  </>
-                )}
-                onReorder={nextFiles => {
-                  const nextIDs = nextFiles.map(f => f.id);
-                  if (nextIDs.length === selectedSources.length) onReorderSources(nextIDs);
-                }}
-              />
-              <small className="sm-sort-note">
-                {direction === "desc"
-                  ? "已开启逆向：将按上方来源合并后的列表整体倒序输出。"
-                  : sourceFiles.length > 1
-                  ? "可上下拖动或点击箭头调整来源先后顺序，节点将按此来源顺序输出。"
-                  : "单来源订阅将保留原节点顺序。"}
-              </small>
-            </>
-          ) : (
-            <small className="sm-sort-note">请先选择来源订阅。</small>
-          )}
-        </div>
-      )}
-
-      {(sortMode === "name" || sortMode === "type") && (
-        <div className="sm-sort-body sm-sort-summary">
-          <small className="sm-sort-note">
-            {sortMode === "name"
-              ? `按节点名称字母顺序排序（当前：${direction === "desc" ? "逆向 Z → A" : "顺向 A → Z"}）。`
-              : `按节点协议类型归类排序（如 hysteria2、ss、trojan、vless、vmess，当前：${direction === "desc" ? "逆向降序" : "顺向升序"}）。`}
-          </small>
-          <Button variant="ghost" disabled={loadingNodes} onClick={() => void loadNodes(sortMode)}>
-            {loadingNodes ? <Spinner label="正在加载节点" /> : "按此顺序载入并微调"}
-          </Button>
-        </div>
-      )}
-
-      {sortMode === "custom" && (
+      {sortMode === "source" && sourceFiles.length > 0 && (
         <div className="sm-sort-body">
           <div className="sm-sort-toolbar">
-            <span>共 <strong>{customNodes.length}</strong> 个节点 · 可上下拖动或点击箭头调整顺序</span>
-            <Button variant="ghost" disabled={loadingNodes} onClick={() => void loadNodes()}>
-              <RefreshCw size={13} />
-              {loadingNodes ? "加载中..." : "刷新节点列表"}
-            </Button>
+            <span>来源优先级（共 <strong>{sourceFiles.length}</strong> 个来源）</span>
           </div>
-          {nodesError && <ErrorState message={nodesError} />}
-          {loadingNodes && !customNodes.length ? (
-            <div className="sm-sort-loading"><Spinner label="正在读取处理后的节点列表" /></div>
-          ) : customNodes.length > 0 ? (
-            <>
-              <SortableOrderList
-                items={customNodes}
-                keyOf={node => node.key}
-                labelOf={node => node.name}
-                allowPinTop
-                renderMeta={node => (
-                  <>
-                    <strong>{node.name}</strong>
-                    <Badge tone="info">{node.type || "unknown"}</Badge>
-                  </>
-                )}
-                onReorder={handleReorderCustomNodes}
-              />
-              {direction === "desc" && (
-                <small className="sm-sort-note">已开启逆向：生成订阅时将按上方自定义列表倒序输出。</small>
-              )}
-            </>
-          ) : !nodesError ? (
-            <small className="sm-sort-note">暂无可排序节点，请点击「刷新节点列表」加载或检查过滤条件。</small>
-          ) : null}
+          <SortableOrderList
+            items={sourceFiles}
+            keyOf={src => src.id}
+            labelOf={src => src.name}
+            renderMeta={src => (
+              <>
+                <strong>{src.name}</strong>
+                <Badge tone={subscriptionKind(src) === "external" ? "info" : "good"}>{kindLabel[subscriptionKind(src)]}</Badge>
+              </>
+            )}
+            onReorder={nextFiles => {
+              const nextIDs = nextFiles.map(f => f.id);
+              if (nextIDs.length === selectedSources.length) onReorderSources(nextIDs);
+            }}
+          />
         </div>
       )}
+
+      <div className="sm-sort-body">
+        <div className="sm-sort-toolbar">
+          <span>
+            {loadingNodes ? "正在同步节点列表..." : <>当前输出顺序：共 <strong>{sortedNodes.length}</strong> 个节点 · 拖动或点击箭头可微调</>}
+          </span>
+          <Button variant="ghost" disabled={loadingNodes} onClick={() => { loadedKeyRef.current = ""; void loadNodes(fetchKey); }}>
+            <RefreshCw size={13} />
+            {loadingNodes ? "加载中..." : "刷新"}
+          </Button>
+        </div>
+        {nodesError && (
+          <ErrorState message={nodesError} onRetry={() => { loadedKeyRef.current = ""; void loadNodes(fetchKey); }} />
+        )}
+        {loadingNodes && !sortedNodes.length ? (
+          <div className="sm-sort-loading"><Spinner label="正在读取处理后的节点列表" /></div>
+        ) : sortedNodes.length > 0 ? (
+          <SortableOrderList
+            items={sortedNodes}
+            keyOf={node => node.key}
+            labelOf={node => node.name}
+            allowPinTop
+            renderMeta={node => (
+              <>
+                <strong>{node.name}</strong>
+                <Badge tone="info">{node.type || "unknown"}</Badge>
+              </>
+            )}
+            onReorder={handleReorderNodes}
+          />
+        ) : !nodesError ? (
+          <small className="sm-sort-note">暂无匹配节点，请调整上方来源或过滤条件。</small>
+        ) : null}
+      </div>
     </section>
   );
 }

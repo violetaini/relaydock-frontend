@@ -285,17 +285,16 @@ describe("unified subscription wizard", () => {
     fireEvent.click(descBtn);
     expect(descBtn).toHaveAttribute("aria-pressed", "true");
 
-    // 3. Switch to 按节点类型
+    // 3. Switch to 按节点类型 -> auto-loads sorted nodes without requiring manual click
     fireEvent.click(screen.getByRole("tab", { name: "按节点类型" }));
-    expect(screen.getByText(/按节点协议类型归类排序/)).toBeInTheDocument();
-
-    // 4. Switch to 自定义节点 -> loads preview nodes, allows pin-to-top / move up
-    fireEvent.click(screen.getByRole("tab", { name: "自定义节点" }));
     await screen.findByText("HK SS");
     expect(screen.getByText("JP VLess")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "上移 JP VLess" }));
 
-    // Advance and preview -> sends reordered source_ids [2, 1], sort: "custom", sort_direction: "desc", custom_order: ["k2", "k1"]
+    // 4. Moving a node directly promotes to 自定义节点 order
+    fireEvent.click(screen.getByRole("button", { name: "上移 JP VLess" }));
+    expect(screen.getByRole("tab", { name: "自定义节点" })).toHaveAttribute("aria-selected", "true");
+
+    // Advance and preview -> sends reordered source_ids [2, 1], sort: "custom", sort_direction: "desc"
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     fireEvent.click(screen.getByRole("button", { name: "生成预览" }));
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/subscribe-files/generation/preview", expect.objectContaining({
@@ -304,10 +303,18 @@ describe("unified subscription wizard", () => {
         processing: expect.objectContaining({
           sort: "custom",
           sort_direction: "desc",
-          custom_order: ["k2", "k1"],
+          custom_order: ["k1", "k2"],
         }),
       }),
     })));
+  });
+
+  it("stops cleanly and shows retry error instead of looping when auto-load preview fails", async () => {
+    const post = vi.spyOn(api, "post").mockRejectedValue(new Error("无法加载来源节点"));
+    render(<SubscriptionWizard {...props} kind="strategy" sourceIDs={[1]} />);
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("无法加载来源节点");
+    expect(post).toHaveBeenCalledTimes(1);
   });
 
 });

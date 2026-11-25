@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Check, ChevronDown, ChevronsUp, Code2, Copy, Eye, FileInput, GripVertical, Layers, Link2, MoreHorizontal, Pencil, Plus, RefreshCw, Search, Settings2, ShieldCheck, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import { api } from "./api";
-import { CountryFlag, normalizeCountryCode } from "./country-flag";
+import { CountryFlag, getCountryRegionLabel, normalizeCountryCode } from "./country-flag";
 import { isAnyDoorNode } from "./managed-node-presets";
 import { Badge, Button, ConfirmDialog, Dialog, EmptyState, ErrorState, Field, IconButton, PageHeader, Spinner, Surface, Toggle } from "./ui";
 import type { ContentPageProps, CustomRuleOption, NodeItem, OverrideScriptOption, SubscribeFile } from "./content-workbench";
@@ -961,26 +961,6 @@ const sortModeOptions: Array<{ id: SortMode; label: string }> = [
   { id: "region", label: "按地区排序" },
 ];
 
-const regionLabelMap: Record<string, string> = {
-  HK: "香港",
-  TW: "台湾",
-  JP: "日本",
-  SG: "新加坡",
-  KR: "韩国",
-  US: "美国",
-  GB: "英国",
-  DE: "德国",
-  FR: "法国",
-  NL: "荷兰",
-  CA: "加拿大",
-  AU: "澳大利亚",
-  RU: "俄罗斯",
-  TR: "土耳其",
-  IN: "印度",
-  MO: "澳门",
-  UN: "未知地区",
-};
-
 function inferClientRegionCode(name: string, explicit?: string): string {
   const norm = normalizeCountryCode(explicit);
   if (norm && norm !== "UN") return norm;
@@ -1025,7 +1005,7 @@ function HorizontalRegionOrderList({
   return (
     <ul className="sm-region-grid" aria-label="地区横向排序列表">
       {items.map((item, idx) => {
-        const label = regionLabelMap[item.code] ? `${regionLabelMap[item.code]} (${item.code === "UN" ? "未知" : item.code})` : item.code;
+        const label = getCountryRegionLabel(item.code);
         return (
           <li
             key={item.code}

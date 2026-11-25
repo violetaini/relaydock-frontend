@@ -1,6 +1,6 @@
 import { render, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { CountryFlag, normalizeCountryCode } from "./country-flag";
+import { CountryFlag, getCountryRegionLabel, GLOBAL_COUNTRY_REGIONS, normalizeCountryCode } from "./country-flag";
 
 vi.hoisted(() => {
   (globalThis as unknown as { process: { env: { NODE_ENV?: string } } }).process.env.NODE_ENV = "test";
@@ -30,5 +30,13 @@ describe("CountryFlag", () => {
   it("normalizes valid country codes before resolving an asset", () => {
     expect(normalizeCountryCode(" hk ")).toBe("HK");
     expect(normalizeCountryCode("Hong Kong")).toBeUndefined();
+  });
+
+  it("exposes global country/region list with localized labels", () => {
+    expect(GLOBAL_COUNTRY_REGIONS.length).toBeGreaterThan(240);
+    expect(GLOBAL_COUNTRY_REGIONS.some((item) => item.code === "BR")).toBe(true);
+    expect(GLOBAL_COUNTRY_REGIONS.some((item) => item.code === "ZA")).toBe(true);
+    expect(getCountryRegionLabel("JP")).toContain("JP");
+    expect(getCountryRegionLabel("UN")).toContain("未知");
   });
 });

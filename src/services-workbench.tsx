@@ -54,7 +54,7 @@ import {
   portCheckNetworkForProtocol,
   useDebouncedPortCheck,
 } from "./port-check";
-import { CountryFlag } from "./country-flag";
+import { CountryFlag, GLOBAL_COUNTRY_REGIONS, getCountryRegionLabel } from "./country-flag";
 import { NAVIGATION_REQUEST_EVENT, type NavigationRequestDetail } from "./navigation-guard";
 import type { NginxMode, RealtimeMessage, RemoteServer, ServerListResponse, SharedServerToken } from "./types";
 import { validateWSSCamouflageProxyTarget } from "./managed-node-presets";
@@ -514,25 +514,130 @@ const emptyCreateForm: CreateServerForm = {
   siteValue: "",
 };
 
-const serverRegionOptions: Array<{ code: string; label: string }> = [
-  { code: "", label: "自动识别（按首次 IP 归属）" },
-  { code: "HK", label: "香港 (HK)" },
-  { code: "TW", label: "台湾 (TW)" },
-  { code: "JP", label: "日本 (JP)" },
-  { code: "SG", label: "新加坡 (SG)" },
-  { code: "KR", label: "韩国 (KR)" },
-  { code: "US", label: "美国 (US)" },
-  { code: "GB", label: "英国 (GB)" },
-  { code: "DE", label: "德国 (DE)" },
-  { code: "FR", label: "法国 (FR)" },
-  { code: "NL", label: "荷兰 (NL)" },
-  { code: "CA", label: "加拿大 (CA)" },
-  { code: "AU", label: "澳大利亚 (AU)" },
-  { code: "RU", label: "俄罗斯 (RU)" },
-  { code: "TR", label: "土耳其 (TR)" },
-  { code: "IN", label: "印度 (IN)" },
-  { code: "MO", label: "澳门 (MO)" },
-];
+function ServerRegionPicker({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (code: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  const query = search.trim().toLowerCase();
+  const filtered = useMemo(() => {
+    if (!query) return GLOBAL_COUNTRY_REGIONS;
+    return GLOBAL_COUNTRY_REGIONS.filter((item) =>
+      item.code.toLowerCase().includes(query) ||
+      item.zhName.toLowerCase().includes(query) ||
+      item.enName.toLowerCase().includes(query),
+    );
+  }, [query]);
+
+  const selectedLabel = value ? getCountryRegionLabel(value) : "自动识别（按首次 IP 归属）";
+  const showAutoOption = !query || "自动识别按首次ip归属auto".includes(query);
+
+  return (
+    <div className="service-region-picker" ref={containerRef}>
+      <button
+        type="button"
+        className="service-region-trigger"
+        aria-label="服务器地区"
+        aria-expanded={open}
+        onClick={() => {
+          setOpen((current) => !current);
+          setSearch("");
+        }}
+      >
+        <span className="service-region-value">
+          <CountryFlag countryCode={value} fallbackSize={16} />
+          <span>{selectedLabel}</span>
+        </span>
+        <ChevronDown size={15} className="service-region-chevron" aria-hidden="true" />
+      </button>
+      {open ? (
+        <div className="service-region-popover" role="listbox" aria-label="选择服务器地区">
+          <div className="service-region-search">
+            <Search size={14} aria-hidden="true" />
+            <input
+              type="search"
+              autoFocus
+              aria-label="搜索国家或地区"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="搜索中文名、英文名或代码（如 JP、德国、United States）"
+            />
+          </div>
+          <div className="service-region-list">
+            {showAutoOption ? (
+              <button
+                type="button"
+                role="option"
+                aria-selected={value === ""}
+                className={`service-region-option ${value === "" ? "is-selected" : ""}`}
+                onClick={() => {
+                  onChange("");
+                  setOpen(false);
+                }}
+              >
+                <CountryFlag countryCode="" fallbackSize={15} />
+                <span className="service-region-option-names">
+                  <strong>自动识别（按首次 IP 归属）</strong>
+                  <small>Auto</small>
+                </span>
+              </button>
+            ) : null}
+            {filtered.map((item) => {
+              const selected = value.toUpperCase() === item.code;
+              return (
+                <button
+                  key={item.code}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  className={`service-region-option ${selected ? "is-selected" : ""}`}
+                  onClick={() => {
+                    onChange(item.code);
+                    setOpen(false);
+                  }}
+                >
+                  <CountryFlag countryCode={item.code} fallbackSize={15} />
+                  <span className="service-region-option-names">
+                    <strong>{item.zhName}</strong>
+                    <small>{item.enName}</small>
+                  </span>
+                  <span className="service-region-code">{item.code}</span>
+                </button>
+              );
+            })}
+            {!showAutoOption && filtered.length === 0 ? (
+              <div className="service-region-empty">未找到匹配的国家或地区</div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 function assertSuccess<T extends ActionResponse>(response: T, fallback: string): T {
   if (!response || response.success === false) throw new Error(response?.error || response?.message || fallback);
@@ -2742,18 +2847,8 @@ function ServerFormFields({ form, setForm, editing = false }: { form: CreateServ
       </Field>
     </div>
     {editing ? (
-      <Field label="服务器地区" hint="动态 IP 服务器默认保留首次上线识别的地区；可在此手动修正，所属节点自动继承">
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <CountryFlag countryCode={form.countryCode} fallbackSize={18} />
-          <select aria-label="服务器地区" value={form.countryCode} onChange={(event) => patch("countryCode", event.target.value)}>
-            {serverRegionOptions.map((opt) => (
-              <option key={opt.code || "auto"} value={opt.code}>{opt.label}</option>
-            ))}
-            {form.countryCode && !serverRegionOptions.some((opt) => opt.code === form.countryCode) ? (
-              <option value={form.countryCode}>{form.countryCode}</option>
-            ) : null}
-          </select>
-        </div>
+      <Field label="服务器地区" hint="支持全球国家/地区搜索；动态 IP 默认保留首次识别的地区，所属节点自动继承">
+        <ServerRegionPicker value={form.countryCode} onChange={(code) => patch("countryCode", code)} />
       </Field>
     ) : null}
 

@@ -11,7 +11,7 @@ vi.mock("./api", async (importOriginal) => {
 vi.mock("qrcode", () => ({ default: { toDataURL: qrMock } }));
 
 import { api } from "./api";
-import { CertificatesWorkbenchPage, SubscribeFilesPage, SubscriptionGeneratorPage, SubscriptionLinksPage, TemplatesWorkbenchPage } from "./content-workbench";
+import { CertificatesWorkbenchPage, SubscribeFilesPage, SubscriptionLinksPage, TemplatesWorkbenchPage } from "./content-workbench";
 
 vi.hoisted(() => {
   (globalThis as unknown as { process: { env: { NODE_ENV?: string } } }).process.env.NODE_ENV = "test";
@@ -50,7 +50,7 @@ describe("content workbench templates", () => {
     render(<TemplatesWorkbenchPage />);
 
     fireEvent.click(await screen.findByRole("button", { name: "编辑 old.yaml" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "文件名" }), { target: { value: "new" } });
+    fireEvent.change(screen.getByRole("textbox", { name: /文件名/ }), { target: { value: "new" } });
     const editor = await screen.findByRole("textbox", { name: "YAML 内容" });
     fireEvent.change(editor, { target: { value: "rules:\n  - MATCH,PROXY\n" } });
     fireEvent.click(screen.getByRole("button", { name: "保存模板" }));
@@ -316,55 +316,6 @@ describe("content workbench subscriptions", () => {
     expect(screen.queryByText("admin endpoint must not be called")).not.toBeInTheDocument();
   });
 
-  it("includes a normal WireGuard node and GEO defaults in generated subscriptions", async () => {
-    const wireGuard = {
-      id: 12,
-      node_name: "办公室 WireGuard",
-      protocol: "wireguard",
-      enabled: true,
-      tags: ["office"],
-      clash_config: JSON.stringify({
-        name: "办公室 WireGuard",
-        type: "wireguard",
-        server: "edge.example.com",
-        port: 51820,
-        ip: "10.66.66.2",
-        "private-key": "encrypted-client-private-key",
-        "public-key": "server-public-key",
-        "allowed-ips": ["0.0.0.0/0"],
-        udp: true,
-        mtu: 1420,
-      }),
-    };
-    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
-      if (path === "/api/admin/nodes") return { nodes: [wireGuard] } as T;
-      if (path === "/api/admin/template-v3") return { templates: [] } as T;
-      throw new Error(`unexpected GET ${path}`);
-    });
-    const notify = vi.fn();
-    render(<SubscriptionGeneratorPage notify={notify} />);
-
-    fireEvent.click(await screen.findByRole("checkbox", { name: /办公室 WireGuard/ }));
-    fireEvent.click(screen.getByRole("button", { name: "生成订阅文件" }));
-
-    const output = await screen.findByRole("textbox", { name: "生成的订阅配置" });
-    const generated = (output as HTMLTextAreaElement).value;
-    expect(generated).toContain('"type":"wireguard"');
-    expect(generated).toContain('"private-key":"encrypted-client-private-key"');
-    expect(generated).toContain('"allowed-ips":["0.0.0.0/0"]');
-    expect(generated).toContain([
-      "geodata-mode: true",
-      "geo-auto-update: true",
-      "geo-update-interval: 24",
-      "geox-url:",
-      "  geoip: https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat",
-      "  geosite: https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat",
-      "  mmdb: https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/country.mmdb",
-      "  asn: https://github.com/xishang0128/geoip/releases/download/latest/GeoLite2-ASN.mmdb",
-    ].join("\n"));
-    expect(notify).toHaveBeenCalledWith("订阅配置已生成");
-  });
-
   it("keeps rule management entry points with subscription management", async () => {
     const onOpenCustomRules = vi.fn();
     const onOpenRulesConfig = vi.fn();
@@ -373,7 +324,7 @@ describe("content workbench subscriptions", () => {
     render(<SubscribeFilesPage onOpenCustomRules={onOpenCustomRules} onOpenRulesConfig={onOpenRulesConfig} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "覆写规则" }));
-    fireEvent.click(screen.getByRole("button", { name: "规则配置" }));
+    fireEvent.click(screen.getByRole("button", { name: "管理规则模板" }));
 
     expect(onOpenCustomRules).toHaveBeenCalledOnce();
     expect(onOpenRulesConfig).toHaveBeenCalledOnce();
@@ -448,7 +399,8 @@ describe("content workbench subscriptions", () => {
     const put = vi.spyOn(api, "put").mockResolvedValue({});
     render(<SubscribeFilesPage notify={vi.fn()} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "关闭 受限订阅 自动同步" }));
+    fireEvent.click(await screen.findByLabelText("更多操作 受限订阅"));
+    fireEvent.click(screen.getByRole("button", { name: "关闭 受限订阅 自动同步" }));
 
     await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/subscribe-files/4", expect.objectContaining({
       auto_sync_custom_rules: false,
@@ -459,72 +411,48 @@ describe("content workbench subscriptions", () => {
     })));
   });
 
-  it("saves node, template, rule, script and traffic scopes with the exact subscribe-file contract", async () => {
-    const file = { id: 4, name: "高级订阅", description: "", type: "create", filename: "advanced.yaml", auto_sync_custom_rules: false, selected_tags: [], selected_node_ids: [], selected_custom_rule_ids: [], selected_override_script_ids: [], stats_server_ids: "", traffic_limit: null };
-    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path, [file]) as T);
-    const put = vi.spyOn(api, "put").mockResolvedValue({});
-    render(<SubscribeFilesPage />);
-
-    fireEvent.click(await screen.findByRole("button", { name: "编辑 高级订阅" }));
-    fireEvent.change(screen.getByRole("combobox", { name: "V3 模板" }), { target: { value: "edge_v3.yaml" } });
-    fireEvent.click(screen.getByRole("checkbox", { name: /香港 01/ }));
-    const scopes = screen.getAllByRole("combobox", { name: "应用范围" });
-    fireEvent.change(scopes[0], { target: { value: "selected" } });
-    fireEvent.change(scopes[1], { target: { value: "selected" } });
-    fireEvent.click(screen.getByRole("checkbox", { name: /DNS 覆写/ }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /节点整理/ }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /Edge HK/ }));
-    fireEvent.change(screen.getByRole("spinbutton", { name: "手动流量上限（GB）" }), { target: { value: "120.5" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-
-    await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/subscribe-files/4", expect.objectContaining({
-      template_filename: "edge_v3.yaml",
-      selected_node_ids: [7],
-      selected_custom_rule_ids: [11],
-      selected_override_script_ids: [13],
-      stats_server_ids: "2",
-      traffic_limit: 120.5,
-    })));
-  });
-
-  it("applies advanced fields immediately after a URL import returns its file ID", async () => {
+  it("applies template output immediately after a URL import returns its file ID", async () => {
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path) as T);
     const created = { id: 15, name: "新订阅", description: "", type: "import", filename: "new.yaml", auto_sync_custom_rules: false };
     const post = vi.spyOn(api, "post").mockResolvedValue({ file: created });
     const put = vi.spyOn(api, "put").mockResolvedValue({});
     render(<SubscribeFilesPage />);
 
-    fireEvent.click((await screen.findAllByRole("button", { name: "添加订阅" }))[0]);
+    fireEvent.click((await screen.findAllByRole("button", { name: "添加外部订阅" }))[0]);
     fireEvent.change(screen.getByRole("textbox", { name: "订阅名称" }), { target: { value: "新订阅" } });
     fireEvent.change(screen.getByRole("textbox", { name: "订阅 URL" }), { target: { value: "https://sub.example/new" } });
-    fireEvent.click(screen.getByRole("button", { name: "配置分流模板与规则覆写" }));
-    fireEvent.change(screen.getByRole("combobox", { name: "V3 模板" }), { target: { value: "edge_v3.yaml" } });
-    fireEvent.click(screen.getByRole("checkbox", { name: /DNS 覆写/ }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /节点整理/ }));
+    fireEvent.click(screen.getByRole("button", { name: "高级配置 · 分流规则" }));
+    expect(screen.getByRole("combobox", { name: "规则配置" })).toHaveValue("source");
+    fireEvent.change(screen.getByRole("combobox", { name: "规则配置" }), { target: { value: "full" } });
+    fireEvent.change(screen.getByRole("combobox", { name: /^规则模板/ }), { target: { value: "edge_v3.yaml" } });
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/subscribe-files/import", { name: "新订阅", description: "", url: "https://sub.example/new", filename: "", auto_update_interval: 0 }));
-    await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/subscribe-files/15", expect.objectContaining({
-      template_filename: "edge_v3.yaml",
-      selected_custom_rule_ids: [11],
-      selected_override_script_ids: [13],
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/subscribe-files/generation", expect.objectContaining({
+      id: 15, generation: expect.objectContaining({ kind: "external", outputs: [expect.objectContaining({ mode: "full", template_filename: "edge_v3.yaml" })] }),
     })));
+    expect(put).not.toHaveBeenCalled();
+    expect(screen.queryByText("指定覆写规则")).not.toBeInTheDocument();
+    expect(screen.queryByText("指定覆写脚本")).not.toBeInTheDocument();
   });
 
   it("retries only advanced settings when import succeeded before the update failed", async () => {
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path) as T);
     const created = { id: 15, name: "新订阅", description: "", type: "import", filename: "new.yaml", auto_sync_custom_rules: false };
-    const post = vi.spyOn(api, "post").mockResolvedValue({ file: created });
-    const put = vi.spyOn(api, "put")
-      .mockRejectedValueOnce(new Error("高级设置暂不可用"))
-      .mockResolvedValueOnce({});
+    let attempts = 0;
+    const post = vi.spyOn(api, "post").mockImplementation(async (path) => {
+      if (path.endsWith("/generation") && ++attempts === 1) throw new Error("高级设置暂不可用");
+      return { file: created };
+    });
     render(<SubscribeFilesPage />);
 
-    fireEvent.click((await screen.findAllByRole("button", { name: "添加订阅" }))[0]);
+    fireEvent.click((await screen.findAllByRole("button", { name: "添加外部订阅" }))[0]);
     fireEvent.change(screen.getByRole("textbox", { name: "订阅名称" }), { target: { value: "新订阅" } });
     fireEvent.change(screen.getByRole("textbox", { name: "订阅 URL" }), { target: { value: "https://sub.example/new" } });
-    fireEvent.click(screen.getByRole("button", { name: "配置分流模板与规则覆写" }));
-    fireEvent.change(screen.getByRole("combobox", { name: "V3 模板" }), { target: { value: "edge_v3.yaml" } });
+    fireEvent.click(screen.getByRole("button", { name: "高级配置 · 分流规则" }));
+    expect(screen.getByRole("combobox", { name: "规则配置" })).toHaveValue("source");
+    fireEvent.change(screen.getByRole("combobox", { name: "规则配置" }), { target: { value: "full" } });
+    fireEvent.change(screen.getByRole("combobox", { name: /^规则模板/ }), { target: { value: "edge_v3.yaml" } });
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
 
     expect(await screen.findByText("高级设置暂不可用")).toBeInTheDocument();
@@ -532,8 +460,8 @@ describe("content workbench subscriptions", () => {
     expect(screen.getByRole("textbox", { name: "订阅名称" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "重试高级设置" }));
 
-    await waitFor(() => expect(put).toHaveBeenCalledTimes(2));
-    expect(post).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(post.mock.calls.filter(([path]) => path.endsWith("/generation"))).toHaveLength(2));
+    expect(post.mock.calls.filter(([path]) => path === "/api/admin/subscribe-files/import")).toHaveLength(1);
   });
 
   it("reloads an imported file when advanced settings fail and the dialog closes", async () => {
@@ -546,15 +474,17 @@ describe("content workbench subscriptions", () => {
       }
       return subscribeLoad(path) as T;
     });
-    vi.spyOn(api, "post").mockResolvedValue({ file: created });
-    vi.spyOn(api, "put").mockRejectedValue(new Error("高级设置暂不可用"));
+    vi.spyOn(api, "post").mockImplementation(async (path) => {
+      if (path.endsWith("/generation")) throw new Error("高级设置暂不可用");
+      return { file: created };
+    });
     const notify = vi.fn();
     render(<SubscribeFilesPage notify={notify} />);
 
-    fireEvent.click((await screen.findAllByRole("button", { name: "添加订阅" }))[0]);
+    fireEvent.click((await screen.findAllByRole("button", { name: "添加外部订阅" }))[0]);
     fireEvent.change(screen.getByRole("textbox", { name: "订阅名称" }), { target: { value: "新订阅" } });
     fireEvent.change(screen.getByRole("textbox", { name: "订阅 URL" }), { target: { value: "https://sub.example/new" } });
-    fireEvent.click(screen.getByRole("button", { name: "配置分流模板与规则覆写" }));
+    fireEvent.click(screen.getByRole("button", { name: "高级配置 · 分流规则" }));
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
 
     expect(await screen.findByText("高级设置暂不可用")).toBeInTheDocument();
@@ -573,7 +503,7 @@ describe("content workbench subscriptions", () => {
     vi.spyOn(api, "post").mockImplementation(() => new Promise((resolve) => { resolveImport = resolve; }));
     render(<SubscribeFilesPage />);
 
-    fireEvent.click((await screen.findAllByRole("button", { name: "添加订阅" }))[0]);
+    fireEvent.click((await screen.findAllByRole("button", { name: "添加外部订阅" }))[0]);
     fireEvent.change(screen.getByRole("textbox", { name: "订阅名称" }), { target: { value: "新订阅" } });
     fireEvent.change(screen.getByRole("textbox", { name: "订阅 URL" }), { target: { value: "https://sub.example/new" } });
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
@@ -609,7 +539,8 @@ describe("content workbench subscriptions", () => {
     render(<SubscribeFilesPage notify={notify} />);
 
     expect(await screen.findByText("外部订阅文件")).toBeInTheDocument();
-    expect(screen.getByText("每 1 小时")).toBeInTheDocument();
+    expect(screen.getByText("每 1 小时更新")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("更多操作 外部订阅文件"));
 
     const syncButton = screen.getByRole("button", { name: "立即同步 外部订阅文件" });
     fireEvent.click(syncButton);
@@ -618,269 +549,58 @@ describe("content workbench subscriptions", () => {
     await waitFor(() => expect(notify).toHaveBeenCalledWith("“外部订阅文件”外部订阅同步成功"));
   });
 
-  it("rotates a Provider access link only after confirmation and never displays it", async () => {
-    const external = [{ id: 3, name: "Airport", url: "https://sub.example/value", node_count: 10, traffic_mode: "both" }];
-    const providers = [{ id: 9, external_subscription_id: 3, name: "airport-hk", type: "http", interval: 3600, process_mode: "client", health_check_enabled: true, health_check_interval: 300 }];
-    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path, [], external, providers) as T);
-    const post = vi.spyOn(api, "post").mockResolvedValue({ access_token: "rotated-secret-must-not-render" });
-    const notify = vi.fn();
-    render(<SubscribeFilesPage notify={notify} />);
-
-    fireEvent.click(await screen.findByRole("tab", { name: /Provider/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "轮换 Provider airport-hk 访问凭据" }));
-    expect(post).not.toHaveBeenCalled();
-    expect(screen.getByText(/现有 Mihomo 配置需要重新获取订阅/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "确认轮换" }));
-
-    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/user/proxy-provider-configs/rotate?id=9"));
-    await waitFor(() => expect(notify).toHaveBeenCalledWith("Provider 访问凭据已轮换"));
-    expect(screen.queryByText("rotated-secret-must-not-render")).not.toBeInTheDocument();
-  });
-
-  it("keeps Provider rotation errors visible in the confirmation dialog", async () => {
-    const external = [{ id: 3, name: "Airport", url: "https://sub.example/value", node_count: 10, traffic_mode: "both" }];
-    const providers = [{ id: 9, external_subscription_id: 3, name: "airport-hk", type: "http", interval: 3600, process_mode: "client", health_check_enabled: true, health_check_interval: 300 }];
-    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path, [], external, providers) as T);
-    vi.spyOn(api, "post").mockRejectedValue(new Error("rotation denied"));
-    render(<SubscribeFilesPage />);
-
-    fireEvent.click(await screen.findByRole("tab", { name: /Provider/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "轮换 Provider airport-hk 访问凭据" }));
-    fireEvent.click(screen.getByRole("button", { name: "确认轮换" }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("rotation denied");
-    expect(screen.getByRole("dialog", { name: "轮换 Provider 访问凭据" })).toBeInTheDocument();
-  });
-
-  it("creates and validates a Proxy Provider with every backend DTO field", async () => {
-    const external = [{ id: 3, name: "Airport", url: "https://sub.example/value", node_count: 10, traffic_mode: "both" }];
-    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path, [], external) as T);
-    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
-      if (path === "/api/user/external-subscriptions/check-filter") return { has_matches: true, match_count: 4 } as T;
-      if (path === "/api/user/proxy-provider-configs") return { id: 9 } as T;
-      throw new Error(`unexpected POST ${path}`);
-    });
-    render(<SubscribeFilesPage />);
-
-    fireEvent.click(await screen.findByRole("tab", { name: /Provider/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Proxy Provider" }));
-    const providerType = screen.getByRole("combobox", { name: "Provider 类型" });
-    expect(providerType).toBeDisabled();
-    expect(within(providerType).getAllByRole("option").map((option) => option.textContent)).toEqual(["HTTP"]);
-    expect(screen.getByText(/Mihomo 通过各节点请求/)).toBeInTheDocument();
-    expect(screen.getByText(/Arcway 不会用它测试外部订阅地址/)).toBeInTheDocument();
-    fireEvent.change(screen.getByRole("textbox", { name: "Provider 名称" }), { target: { value: "airport-hk" } });
-    fireEvent.change(screen.getByRole("combobox", { name: "处理模式" }), { target: { value: "server" } });
-    fireEvent.change(screen.getByRole("textbox", { name: "包含名称（正则）" }), { target: { value: "香港|HK" } });
-    fireEvent.click(screen.getByRole("button", { name: "检查匹配" }));
-
-    await screen.findByText("匹配 4 个节点");
-    expect(post).toHaveBeenCalledWith("/api/user/external-subscriptions/check-filter", { subscription_id: 3, filter: "香港|HK", exclude_filter: "", geo_ip_filter: "" });
-    fireEvent.click(screen.getByRole("button", { name: "保存 Provider" }));
-
-    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/user/proxy-provider-configs", {
-      external_subscription_id: 3,
-      name: "airport-hk",
-      type: "http",
-      interval: 3600,
-      proxy: "",
-      size_limit: 0,
-      header: "",
-      health_check_enabled: true,
-      health_check_url: "https://cp.cloudflare.com/generate_204",
-      health_check_interval: 300,
-      health_check_timeout: 5000,
-      health_check_lazy: true,
-      health_check_expected_status: 204,
-      filter: "香港|HK",
-      exclude_filter: "",
-      exclude_type: "",
-      geo_ip_filter: "",
-      override: "",
-      process_mode: "server",
-    }));
-  });
-
-  it("cannot dismiss the Provider editor while it is saving", async () => {
-    const external = [{ id: 3, name: "Airport", url: "https://sub.example/value", node_count: 10, traffic_mode: "both" }];
-    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path, [], external) as T);
-    let resolveSave!: (value: { id: number }) => void;
-    vi.spyOn(api, "post").mockImplementation(<T,>(path: string): Promise<T> => {
-      if (path !== "/api/user/proxy-provider-configs") return Promise.reject(new Error(`unexpected POST ${path}`));
-      return new Promise((resolve) => { resolveSave = resolve as (value: { id: number }) => void; });
-    });
-    render(<SubscribeFilesPage />);
-
-    fireEvent.click(await screen.findByRole("tab", { name: /Provider/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Proxy Provider" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Provider 名称" }), { target: { value: "airport-hk" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存 Provider" }));
-
-    await waitFor(() => expect(screen.getByRole("button", { name: "取消" })).toBeDisabled());
-    expect(screen.getByRole("textbox", { name: "Provider 名称" })).toBeDisabled();
-    expect(screen.queryByRole("button", { name: "关闭" })).not.toBeInTheDocument();
-    fireEvent.keyDown(document, { key: "Escape" });
-    fireEvent.mouseDown(screen.getByRole("presentation"));
-    expect(screen.getByRole("dialog", { name: /Proxy Provider/ })).toBeInTheDocument();
-
-    resolveSave({ id: 9 });
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: /Proxy Provider/ })).not.toBeInTheDocument());
-  });
-
-  it("requires confirmation before clearing unsupported legacy Provider fields", async () => {
-    const external = [{ id: 3, name: "Airport", url: "https://sub.example/value", node_count: 10, traffic_mode: "both" }];
-    const providers = [{ id: 9, external_subscription_id: 3, name: "legacy", type: "file", process_mode: "", header: "Authorization: old", geo_ip_filter: "HK", override: "old" }];
-    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path, [], external, providers) as T);
-    render(<SubscribeFilesPage />);
-
-    fireEvent.click(await screen.findByRole("tab", { name: /Provider/ }));
-    fireEvent.click(screen.getByRole("button", { name: "编辑 Provider legacy" }));
-    expect(screen.getByRole("alert")).toHaveTextContent("自定义请求头");
-    const save = screen.getByRole("button", { name: "保存 Provider" });
-    expect(save).toBeDisabled();
-    fireEvent.click(screen.getByRole("switch", { name: "确认移除旧版不兼容字段" }));
-    expect(save).not.toBeDisabled();
-  });
-
   it("navigates across 4 subscription tabs: all, external, custom combination, and strategy provider", async () => {
-    const extFile = { id: 1, name: "机场订阅", type: "import", url: "https://sub.example/airport", filename: "airport.yaml" };
-    const customFile = { id: 2, name: "自选专线", type: "create", filename: "custom.yaml", traffic_limit: 150 };
-    const external = [{ id: 3, name: "机场源", url: "https://sub.example/airport", node_count: 5, traffic_mode: "both" }];
-    const providers = [{ id: 9, external_subscription_id: 3, name: "hk-provider", type: "http", process_mode: "client" }];
-
-    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path, [extFile, customFile], external, providers) as T);
+    const files = [{ id: 1, name: "机场订阅", type: "import", filename: "airport.yaml" }, { id: 2, name: "自选专线", type: "create", filename: "custom.yaml" }, { id: 3, name: "多线策略", type: "create", filename: "strategy.yaml", kind: "strategy", generation: { kind: "strategy", source_ids: [1,2], outputs: [], processing: {} } }];
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path, files) as T);
     render(<SubscribeFilesPage />);
-
-    // Initially all tab shows all subscription kinds
     expect(await screen.findByText("机场订阅")).toBeInTheDocument();
-    expect(screen.getByText("自选专线")).toBeInTheDocument();
-    expect(screen.getByText("hk-provider")).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /全部订阅/ })).toHaveClass("is-active");
-
-    // Click external tab
     fireEvent.click(screen.getByRole("tab", { name: /外部订阅/ }));
-    expect(screen.getByText("机场订阅")).toBeInTheDocument();
-    expect(screen.queryByText("自选专线")).not.toBeInTheDocument();
-
-    // Click custom combination tab
+    expect(screen.getByText("机场订阅")).toBeInTheDocument(); expect(screen.queryByText("自选专线")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: /自选订阅/ }));
-    expect(screen.getByText("自选专线")).toBeInTheDocument();
-    expect(screen.getByText("150 GB 阀门")).toBeInTheDocument();
-
-    // Click strategy provider tab
-    fireEvent.click(screen.getByRole("tab", { name: /策略订阅/ }));
-    expect(await screen.findByText("hk-provider")).toBeInTheDocument();
-    expect(screen.getByText(/选择组合订阅源/)).toBeInTheDocument();
-    expect(screen.getByText("机场订阅")).toBeInTheDocument();
-    expect(screen.getByText("自选专线")).toBeInTheDocument();
-
-    // Click back to all tab
-    fireEvent.click(screen.getByRole("tab", { name: /全部订阅/ }));
-    expect(screen.getByText("机场订阅")).toBeInTheDocument();
-    expect(screen.getByText("自选专线")).toBeInTheDocument();
-    expect(screen.getByText("hk-provider")).toBeInTheDocument();
+    expect(screen.getByText("自选专线")).toBeInTheDocument(); expect(screen.queryByText("机场订阅")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: /策略订阅/ })); expect(screen.getByText("多线策略")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Proxy Provider" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: /全部订阅/ })); expect(screen.getByText("自选专线")).toBeInTheDocument();
   });
 
-  it("creates a custom combination subscription with a total traffic valve in GB", async () => {
+  it("creates a custom subscription without a duplicate file quota", async () => {
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path) as T);
-    const post = vi.spyOn(api, "post").mockResolvedValue({
-      file: { id: 88, name: "自选套餐", filename: "my-package.yaml", type: "create" },
-    });
-    const put = vi.spyOn(api, "put").mockResolvedValue({});
-
+    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => (path.endsWith("preview") ? { input: 1, output: 1, duplicate: 0, filtered: 0, dead: 0, unknown: 1, warnings: [], client: "clashmeta", content: "proxies: []" } : { file: { id: 88 } }) as T);
+    const put = vi.spyOn(api, "put");
     render(<SubscribeFilesPage />);
-
-    // Switch to custom combination tab
-    fireEvent.click(await screen.findByRole("tab", { name: /自选订阅/ }));
     fireEvent.click((await screen.findAllByRole("button", { name: "创建自选订阅" }))[0]);
-
-    expect(screen.getByRole("dialog", { name: "创建自选订阅" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /配置覆写规则/ })).not.toBeInTheDocument();
-    expect(screen.getByText("选择自选节点")).toBeInTheDocument();
-    expect(screen.getByText("已选 1 / 1 个节点")).toBeInTheDocument();
-    const selectAllBtn = screen.getByRole("button", { name: "全选" });
-    expect(selectAllBtn).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "清空" })).toBeInTheDocument();
-
-    // Clicking "全选" when currently all selected clears all selections
-    fireEvent.click(selectAllBtn);
-    expect(screen.getByText("已选 0 / 1 个节点")).toBeInTheDocument();
-
-    // Clicking "全选" again restores all selections
-    fireEvent.click(selectAllBtn);
-    expect(screen.getByText("已选 1 / 1 个节点")).toBeInTheDocument();
-
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择节点 香港 01" }));
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    fireEvent.click(screen.getByRole("button", { name: "生成预览" }));
+    await screen.findByText("预览已生成");
     fireEvent.change(screen.getByRole("textbox", { name: "订阅名称" }), { target: { value: "自选套餐" } });
     fireEvent.change(screen.getByRole("textbox", { name: /文件名/ }), { target: { value: "my-package.yaml" } });
-    fireEvent.change(screen.getByRole("spinbutton", { name: /总流量阀门/ }), { target: { value: "200" } });
-    fireEvent.click(within(screen.getByRole("dialog", { name: "创建自选订阅" })).getByRole("button", { name: "创建自选订阅" }));
-
-    await waitFor(() => {
-      expect(post).toHaveBeenCalledWith("/api/admin/subscribe-files/create-from-config", {
-        name: "自选套餐",
-        description: "",
-        filename: "my-package.yaml",
-        content: "proxies: []\n",
-      });
-    });
-
-    await waitFor(() => {
-      expect(put).toHaveBeenCalledWith("/api/admin/subscribe-files/88", expect.objectContaining({
-        traffic_limit: 200,
-        type: "create",
-      }));
-    });
+    fireEvent.click(screen.getByRole("button", { name: "保存订阅" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/subscribe-files/generation", expect.objectContaining({ name: "自选套餐", filename: "my-package.yaml", selected_node_ids: [7], generation: expect.objectContaining({ kind: "custom" }) })));
+    expect(put).not.toHaveBeenCalled();
   });
 
   it("composes a strategy subscription from existing external and custom subscriptions", async () => {
-    const files = [
-      { id: 1, name: "外部机场", filename: "airport.yaml", type: "import", url: "https://sub.example/1", selected_node_ids: [10, 11] },
-      { id: 2, name: "自选专线", filename: "custom-hk.yaml", type: "create", selected_node_ids: [20, 21], traffic_limit: 100 },
-    ];
+    const files = [{ id: 1, name: "外部机场", filename: "airport.yaml", type: "import", selected_node_ids: [] }, { id: 2, name: "自选专线", filename: "custom.yaml", type: "create", selected_node_ids: [20] }];
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => subscribeLoad(path, files) as T);
-    const post = vi.spyOn(api, "post").mockResolvedValue({
-      file: { id: 99, name: "多源策略调度", filename: "strategy.yaml", type: "create" },
-    });
-    const put = vi.spyOn(api, "put").mockResolvedValue({});
-    const notify = vi.fn();
-
-    render(<SubscribeFilesPage notify={notify} />);
-
-    // Go to strategy tab
-    fireEvent.click(await screen.findByRole("tab", { name: /策略订阅/ }));
-    expect(await screen.findByText("外部机场")).toBeInTheDocument();
-    expect(screen.getByText("自选专线")).toBeInTheDocument();
-
-    // Select candidate subscriptions
-    fireEvent.click(screen.getByRole("checkbox", { name: "选择订阅 外部机场" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "选择订阅 自选专线" }));
-
-    // Fill form
-    fireEvent.change(screen.getByLabelText("策略订阅名称"), { target: { value: "多源策略调度" } });
-    fireEvent.change(screen.getByLabelText("策略文件名"), { target: { value: "strategy.yaml" } });
-    fireEvent.change(screen.getByLabelText("策略总流量阀门"), { target: { value: "500" } });
-
-    // Submit
-    fireEvent.click(screen.getByRole("button", { name: "生成策略订阅" }));
-
-    await waitFor(() => {
-      expect(post).toHaveBeenCalledWith("/api/admin/subscribe-files/create-from-config", {
-        name: "多源策略调度",
-        description: "[策略订阅] 组合源: 外部机场 + 自选专线",
-        filename: "strategy.yaml",
-        content: "proxies: []\n",
-      });
-    });
-
-    await waitFor(() => {
-      expect(put).toHaveBeenCalledWith("/api/admin/subscribe-files/99", expect.objectContaining({
-        traffic_limit: 500,
-        type: "create",
-        selected_node_ids: [10, 11, 20, 21],
-      }));
-    });
-    expect(notify).toHaveBeenCalledWith("策略订阅已成功生成");
+    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => (path.endsWith("preview") ? { input: 4, output: 3, duplicate: 1, filtered: 0, dead: 0, unknown: 4, warnings: [], client: "clashmeta", content: "proxies: []" } : { file: { id: 99 } }) as T);
+    render(<SubscribeFilesPage />);
+    fireEvent.click(await screen.findByRole("checkbox", { name: "选择来源 外部机场" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择来源 自选专线" }));
+    fireEvent.click(screen.getByRole("button", { name: "用所选来源创建策略" }));
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    fireEvent.click(screen.getByRole("switch", { name: "自动剔除失效节点" }));
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByRole("combobox", { name: /^规则模板/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "保留上游规则" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "生成预览" }));
+    await screen.findByText("预览已生成");
+    fireEvent.change(screen.getByRole("textbox", { name: "订阅名称" }), { target: { value: "多源策略调度" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存订阅" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/subscribe-files/generation", expect.objectContaining({ name: "多源策略调度", selected_node_ids: [], generation: expect.objectContaining({ kind: "strategy", source_ids: [1,2], processing: expect.objectContaining({ remove_dead: true }) }) })));
+    expect(post).not.toHaveBeenCalledWith("/api/admin/subscribe-files/create-from-config", expect.anything());
   });
+
 });
 
 describe("content workbench certificates", () => {

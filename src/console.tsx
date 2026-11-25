@@ -78,7 +78,7 @@ import {
   statusTone,
 } from "./ui";
 
-type PageKey = "dashboard" | "subscriptions" | "generator" | "servers" | "nodes" | "forwarding" | "traffic" | "users" | "packages" | "certificates" | "templates" | "subscribeFiles" | "customRules" | "rulesConfig" | "settings" | "account";
+type PageKey = "dashboard" | "subscriptions" | "servers" | "nodes" | "forwarding" | "traffic" | "users" | "packages" | "certificates" | "templates" | "subscribeFiles" | "customRules" | "rulesConfig" | "settings" | "account";
 type UsersScope = "all" | "renewal" | "invites";
 
 interface ToastState { message: string; tone: "success" | "error" }
@@ -89,7 +89,6 @@ const AccountWorkbenchPage = lazy(() => import("./account-workbench").then((modu
 const contentWorkbench = () => import("./content-workbench");
 const CertificatesWorkbenchPage = lazy(() => contentWorkbench().then((module) => ({ default: module.CertificatesWorkbenchPage })));
 const SubscribeFilesPage = lazy(() => contentWorkbench().then((module) => ({ default: module.SubscribeFilesPage })));
-const SubscriptionGeneratorPage = lazy(() => contentWorkbench().then((module) => ({ default: module.SubscriptionGeneratorPage })));
 const SubscriptionLinksPage = lazy(() => contentWorkbench().then((module) => ({ default: module.SubscriptionLinksPage })));
 const TemplatesWorkbenchPage = lazy(() => contentWorkbench().then((module) => ({ default: module.TemplatesWorkbenchPage })));
 const NodesWorkbench = lazy(() => import("./nodes-workbench").then((module) => ({ default: module.NodesWorkbench })));
@@ -107,7 +106,6 @@ const pageLoaders: Partial<Record<PageKey, () => Promise<unknown>>> = {
   account: () => import("./account-workbench"),
   certificates: contentWorkbench,
   subscribeFiles: contentWorkbench,
-  generator: contentWorkbench,
   subscriptions: contentWorkbench,
   templates: contentWorkbench,
   nodes: () => import("./nodes-workbench"),
@@ -141,7 +139,6 @@ export function preloadAllModules(): void {
 const pageTitles: Record<PageKey, string> = {
   dashboard: "流量信息",
   subscriptions: "订阅链接",
-  generator: "生成订阅",
   servers: "服务管理",
   nodes: "节点管理",
   forwarding: "转发管理",
@@ -159,7 +156,8 @@ const pageTitles: Record<PageKey, string> = {
 
 function resolvePage(isAdmin: boolean): PageKey {
   const candidate = location.hash.replace(/^#\/?/, "").split("?")[0] as PageKey;
-  const known: PageKey[] = ["dashboard", "subscriptions", "generator", "servers", "nodes", "forwarding", "traffic", "users", "packages", "certificates", "templates", "subscribeFiles", "customRules", "rulesConfig", "settings", "account"];
+  const known: PageKey[] = ["dashboard", "subscriptions", "servers", "nodes", "forwarding", "traffic", "users", "packages", "certificates", "templates", "subscribeFiles", "customRules", "rulesConfig", "settings", "account"];
+  if ((candidate as string) === "generator") return "subscribeFiles";
   if (!known.includes(candidate)) return "dashboard";
   if (!isAdmin && ["servers", "users", "packages", "rulesConfig", "settings"].includes(candidate)) return "dashboard";
   return candidate;
@@ -173,7 +171,6 @@ function resolveUsersScope(): UsersScope {
 
 const permissionKey: Partial<Record<PageKey, string>> = {
   subscriptions: "subscription",
-  generator: "generator",
   nodes: "nodes",
   forwarding: "forwarding",
   certificates: "certificates",
@@ -227,6 +224,7 @@ function ModuleLoadingFallback({ label }: { label: string }) {
 export function ConsoleApp({ profile, onLogout, onBrandingChange, onWallpaperChange }: { profile: Profile; onLogout: () => void; onBrandingChange?: (branding: Branding) => void; onWallpaperChange?: (wallpaper: string) => void }) {
   const branding = useBranding();
   const [page, setPage] = useState<PageKey>(() => resolvePage(profile.is_admin));
+  useEffect(() => { if (/^#\/?generator(?:\?|$)/.test(location.hash)) history.replaceState(null, "", `${location.pathname}${location.search}#/subscribeFiles`); }, []);
   const [usersScope, setUsersScope] = useState<UsersScope>(resolveUsersScope);
   const [isPending, startTransition] = useTransition();
   const [switchingTarget, setSwitchingTarget] = useState<PageKey | null>(null);
@@ -305,7 +303,7 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange, onWallpaperCha
     let cancelled = false;
     setPermissionsError("");
     api.get<{ pages?: string[] }>("/api/user/permissions")
-      .then((response) => { if (!cancelled) setUserPages(response.pages ?? []); })
+      .then((response) => { if (!cancelled) setUserPages([...new Set((response.pages ?? []).map(page => page === "generator" ? "subscribe-files" : page))]); })
       .catch((reason) => {
         if (!cancelled) {
           setUserPages(null);
@@ -416,7 +414,6 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange, onWallpaperCha
           <NavGroup label="主导航" className="nav-primary">
             <NavItem active={page === "dashboard"} loading={switchingTarget === "dashboard"} icon={<Activity size={18} />} label="流量信息" onClick={() => navigate("dashboard")} onMouseEnter={() => preloadPageModule("dashboard")} />
             {pageAllowed("subscriptions", profile.is_admin, userPages) ? <NavItem active={page === "subscriptions"} loading={switchingTarget === "subscriptions"} icon={<Link2 size={18} />} label="订阅链接" onClick={() => navigate("subscriptions")} onMouseEnter={() => preloadPageModule("subscriptions")} /> : null}
-            {pageAllowed("generator", profile.is_admin, userPages) ? <NavItem active={page === "generator"} loading={switchingTarget === "generator"} icon={<Wrench size={18} />} label="生成订阅" onClick={() => navigate("generator")} onMouseEnter={() => preloadPageModule("generator")} /> : null}
             {pageAllowed("nodes", profile.is_admin, userPages) ? <NavItem active={page === "nodes"} loading={switchingTarget === "nodes"} icon={<Route size={18} />} label="节点管理" onClick={() => navigate("nodes")} onMouseEnter={() => preloadPageModule("nodes")} /> : null}
             {pageAllowed("forwarding", profile.is_admin, userPages) ? <NavItem active={page === "forwarding"} loading={switchingTarget === "forwarding"} icon={<Network size={18} />} label="转发管理" onClick={() => navigate("forwarding")} onMouseEnter={() => preloadPageModule("forwarding")} /> : null}
             <NavItem active={page === "traffic"} loading={switchingTarget === "traffic"} icon={<Gauge size={18} />} label="流量明细" onClick={() => navigate("traffic")} onMouseEnter={() => preloadPageModule("traffic")} />
@@ -478,7 +475,6 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange, onWallpaperCha
               <Suspense fallback={<ModuleLoadingFallback label={`正在载入${pageTitles[page] || "模块"}...`} />}>
                 {page === "dashboard" ? <DashboardPage profile={profile} navigate={navigate} canNavigateNodes={pageAllowed("nodes", profile.is_admin, userPages)} userPages={userPages} /> : null}
                 {page === "subscriptions" && pageAllowed(page, profile.is_admin, userPages) ? <SubscriptionLinksPage notify={notify} /> : null}
-                {page === "generator" && pageAllowed(page, profile.is_admin, userPages) ? <SubscriptionGeneratorPage notify={notify} /> : null}
                 {page === "servers" && profile.is_admin ? <ServicesWorkbenchPage notify={notify} /> : null}
                 {page === "nodes" && pageAllowed(page, profile.is_admin, userPages) ? <NodesWorkbench isAdmin={profile.is_admin} notify={notify} /> : null}
                 {page === "forwarding" && pageAllowed(page, profile.is_admin, userPages) ? <ForwardingManagement isAdmin={profile.is_admin} currentUsername={profile.username} notify={notify} /> : null}
@@ -832,7 +828,7 @@ function UserDashboardPage({ profile, navigate, userPages }: { profile: Profile;
   const canNodes = pageAllowed("nodes", profile.is_admin, userPages);
   const canForwarding = pageAllowed("forwarding", profile.is_admin, userPages);
   const canSubscriptions = pageAllowed("subscriptions", profile.is_admin, userPages);
-  const canGenerator = pageAllowed("generator", profile.is_admin, userPages);
+  const canManageSubscriptions = pageAllowed("subscribeFiles", profile.is_admin, userPages);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1070,14 +1066,14 @@ function UserDashboardPage({ profile, navigate, userPages }: { profile: Profile;
           </Surface>
         ) : null}
 
-        {canGenerator ? (
-          <Surface style={{ padding: "1.1rem", cursor: "pointer" }} onClick={() => navigate("generator")}>
+        {canManageSubscriptions ? (
+          <Surface style={{ padding: "1.1rem", cursor: "pointer" }} onClick={() => navigate("subscribeFiles")}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.5rem" }}>
-              <span style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 600, fontSize: "1rem" }}><Wrench size={20} color="var(--color-primary, #6366f1)" />生成订阅</span>
+              <span style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 600, fontSize: "1rem" }}><Wrench size={20} color="var(--color-primary, #6366f1)" />订阅管理</span>
               <ChevronRight size={18} className="muted" />
             </div>
             <p className="muted" style={{ fontSize: "0.86rem", margin: 0, lineHeight: 1.5 }}>
-              自由挑选节点、自选或创建分流规则模板，一键生成定制客户端订阅。
+              选择节点或组合来源，自定义分流规则或套用模板，统一生成客户端订阅。
             </p>
           </Surface>
         ) : null}

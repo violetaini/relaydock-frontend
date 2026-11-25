@@ -260,14 +260,15 @@ describe("unified subscription wizard", () => {
     expect(exprBox).toHaveValue(`(node.name =~ "香港|HK") and (node.name !~ "备用") and (node.protocol not in {"ss" "vmess"})`);
   });
 
-  it("supports source & custom node reordering (click move + drag), type sort, and one-click asc/desc direction", async () => {
+  it("supports source & dual-level hierarchical node reordering (within group), type/region flag drag sort, and one-click asc/desc direction", async () => {
     const post = vi.spyOn(api, "post").mockImplementation(async (path: string) => {
       if (path.endsWith("preview")) {
         return {
           ...preview,
           nodes: [
-            { key: "k1", name: "HK SS", type: "ss" },
-            { key: "k2", name: "JP VLess", type: "vless" },
+            { key: "k1", name: "HK SS", type: "ss", country_code: "HK" },
+            { key: "k3", name: "HK Trojan", type: "trojan", country_code: "HK" },
+            { key: "k2", name: "JP VLess", type: "vless", country_code: "JP" },
           ],
         };
       }
@@ -285,33 +286,41 @@ describe("unified subscription wizard", () => {
     fireEvent.click(descBtn);
     expect(descBtn).toHaveAttribute("aria-pressed", "true");
 
-    // 3. Switch to 按节点类型 -> auto-loads sorted nodes AND displays draggable/clickable protocol category groups
+    // 3. Switch to 按节点类型 -> auto-loads sorted nodes AND displays protocol category groups
     fireEvent.click(screen.getByRole("tab", { name: "按节点类型" }));
     await screen.findByText("HK SS");
     expect(screen.getByText("JP VLess")).toBeInTheDocument();
     expect(screen.getByText(/协议大类顺序/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "上移 协议大类 vless" }));
 
-    // 4. Switch to 按地区排序 -> displays horizontal region flag cards and allows left/right reordering
+    // 4. Switch to 按地区排序 -> shows compact flag + code chips (no left/right arrows) and supports drag-and-drop
     fireEvent.click(screen.getByRole("tab", { name: "按地区排序" }));
-    expect(await screen.findByRole("list", { name: "地区横向排序列表" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "左移地区 HK" }));
+    const regionList = await screen.findByRole("list", { name: "地区横向排序列表" });
+    expect(within(regionList).queryByRole("button")).not.toBeInTheDocument();
+    const hkChip = within(regionList).getByRole("listitem", { name: "地区 HK" });
+    const jpChip = within(regionList).getByRole("listitem", { name: "地区 JP" });
+    fireEvent.dragStart(hkChip);
+    fireEvent.dragOver(jpChip);
+    fireEvent.drop(jpChip);
 
-    // 5. Moving an individual node directly promotes to 自定义节点 order
-    fireEvent.click(screen.getByRole("button", { name: "上移 JP VLess" }));
+    // 5. Dual-level sort: JP VLess is alone in JP group so its move-up button is disabled (cannot cross into HK),
+    // while HK Trojan can move above HK SS within the HK group and keeps sort="region".
+    expect(screen.getByRole("button", { name: "上移 JP VLess" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "上移 HK Trojan" }));
+    expect(screen.getByRole("tab", { name: "按地区排序" })).toHaveAttribute("aria-selected", "true");
 
-    // Advance and preview -> sends reordered source_ids [2, 1], sort: "custom", sort_direction: "desc", type_order & region_order preserved
+    // Advance and preview -> sends reordered source_ids [2, 1], keeps sort: "region", region_order & intra-group custom_order
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     fireEvent.click(screen.getByRole("button", { name: "生成预览" }));
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/subscribe-files/generation/preview", expect.objectContaining({
       generation: expect.objectContaining({
         source_ids: [2, 1],
         processing: expect.objectContaining({
-          sort: "custom",
+          sort: "region",
           sort_direction: "desc",
-          type_order: ["ss", "vless"],
-          region_order: ["JP", "HK"],
-          custom_order: ["k1", "k2"],
+          type_order: ["trojan", "vless", "ss"],
+          region_order: ["HK", "JP"],
+          custom_order: ["k1", "k3", "k2"],
         }),
       }),
     })));

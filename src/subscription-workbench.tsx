@@ -12,7 +12,7 @@ import "./subscription-workbench.css";
 type Kind = "external" | "custom" | "strategy";
 export type SortMode = "source" | "name" | "type" | "region" | "custom";
 export type SortDirection = "asc" | "desc";
-export interface PreviewNodeSummary { key: string; name: string; type: string; country_code?: string }
+export interface PreviewNodeSummary { key: string; name: string; type: string; country_code?: string; source_index?: number }
 export interface SubscriptionOutput { client: string; mode: "full" | "source" | "nodes"; template_filename?: string; rule_mode?: "template" | "custom"; rule_categories?: string[] }
 export interface SubscriptionGeneration {
   kind: Kind;
@@ -872,6 +872,8 @@ function SortableOrderList<T>({
   renderMeta,
   onReorder,
   allowPinTop = false,
+  groupOf,
+  readOnly = false,
 }: {
   items: T[];
   keyOf: (item: T) => string | number;
@@ -879,34 +881,61 @@ function SortableOrderList<T>({
   renderMeta: (item: T) => ReactNode;
   onReorder: (next: T[]) => void;
   allowPinTop?: boolean;
+  groupOf?: (item: T) => string | number;
+  readOnly?: boolean;
 }) {
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [overIndex, setOverIndex] = useState<number | null>(null);
+
+  const sameGroup = (a: number, b: number) => !groupOf || groupOf(items[a]) === groupOf(items[b]);
 
   return (
     <ul className="sm-sort-list">
       {items.map((item, index) => {
         const isDragging = dragIndex === index;
-        const isOver = overIndex === index && dragIndex !== null && dragIndex !== index;
+        const canDropHere = !readOnly && dragIndex !== null && dragIndex !== index && sameGroup(dragIndex, index);
+        const isOver = overIndex === index && canDropHere;
         const itemLabel = labelOf(item);
+        const groupKey = groupOf ? groupOf(item) : undefined;
+        let firstInGroup = 0;
+        let prevInGroup = index - 1;
+        let nextInGroup = index + 1;
+        if (groupOf) {
+          firstInGroup = items.findIndex(candidate => groupOf(candidate) === groupKey);
+          prevInGroup = -1;
+          for (let k = index - 1; k >= 0; k -= 1) {
+            if (groupOf(items[k]) === groupKey) { prevInGroup = k; break; }
+          }
+          nextInGroup = -1;
+          for (let k = index + 1; k < items.length; k += 1) {
+            if (groupOf(items[k]) === groupKey) { nextInGroup = k; break; }
+          }
+        } else {
+          if (prevInGroup < 0) prevInGroup = -1;
+          if (nextInGroup >= items.length) nextInGroup = -1;
+        }
         return (
           <li
             key={keyOf(item)}
-            draggable
-            className={`sm-sort-item ${isDragging ? "is-dragging" : ""} ${isOver ? "is-drag-over" : ""}`}
+            draggable={!readOnly}
+            className={`sm-sort-item ${readOnly ? "is-readonly" : ""} ${isDragging ? "is-dragging" : ""} ${isOver ? "is-drag-over" : ""}`}
             onDragStart={e => {
+              if (readOnly) return;
               setDragIndex(index);
               e.dataTransfer.effectAllowed = "move";
               e.dataTransfer.setData("text/plain", String(index));
             }}
             onDragOver={e => {
+              if (readOnly) return;
+              if (dragIndex !== null && !sameGroup(dragIndex, index)) return;
               e.preventDefault();
               e.dataTransfer.dropEffect = "move";
               if (overIndex !== index) setOverIndex(index);
             }}
             onDrop={e => {
+              if (readOnly) return;
               e.preventDefault();
-              if (dragIndex !== null && dragIndex !== index) {
+              if (dragIndex !== null && dragIndex !== index && sameGroup(dragIndex, index)) {
                 onReorder(reorderArray(items, dragIndex, index));
               }
               setDragIndex(null);
@@ -917,36 +946,40 @@ function SortableOrderList<T>({
               setOverIndex(null);
             }}
           >
-            <span className="sm-sort-grip" title="上下拖动调整顺序" aria-hidden="true">
-              <GripVertical size={15} />
-            </span>
+            {!readOnly && (
+              <span className="sm-sort-grip" title={groupOf ? "同组内上下拖动调整顺序" : "上下拖动调整顺序"} aria-hidden="true">
+                <GripVertical size={15} />
+              </span>
+            )}
             <span className="sm-sort-index">{index + 1}</span>
             <div className="sm-sort-info">{renderMeta(item)}</div>
-            <div className="sm-sort-item-actions">
-              {allowPinTop && (
+            {!readOnly && (
+              <div className="sm-sort-item-actions">
+                {allowPinTop && (
+                  <IconButton
+                    label={`置顶 ${itemLabel}`}
+                    disabled={index === firstInGroup}
+                    onClick={() => onReorder(reorderArray(items, index, firstInGroup))}
+                  >
+                    <ChevronsUp size={14} />
+                  </IconButton>
+                )}
                 <IconButton
-                  label={`置顶 ${itemLabel}`}
-                  disabled={index === 0}
-                  onClick={() => onReorder(reorderArray(items, index, 0))}
+                  label={`上移 ${itemLabel}`}
+                  disabled={prevInGroup < 0}
+                  onClick={() => prevInGroup >= 0 && onReorder(reorderArray(items, index, prevInGroup))}
                 >
-                  <ChevronsUp size={14} />
+                  <ArrowUp size={14} />
                 </IconButton>
-              )}
-              <IconButton
-                label={`上移 ${itemLabel}`}
-                disabled={index === 0}
-                onClick={() => onReorder(reorderArray(items, index, index - 1))}
-              >
-                <ArrowUp size={14} />
-              </IconButton>
-              <IconButton
-                label={`下移 ${itemLabel}`}
-                disabled={index === items.length - 1}
-                onClick={() => onReorder(reorderArray(items, index, index + 1))}
-              >
-                <ArrowDown size={14} />
-              </IconButton>
-            </div>
+                <IconButton
+                  label={`下移 ${itemLabel}`}
+                  disabled={nextInGroup < 0}
+                  onClick={() => nextInGroup >= 0 && onReorder(reorderArray(items, index, nextInGroup))}
+                >
+                  <ArrowDown size={14} />
+                </IconButton>
+              </div>
+            )}
           </li>
         );
       })}
@@ -1005,10 +1038,12 @@ function HorizontalRegionOrderList({
   return (
     <ul className="sm-region-grid" aria-label="地区横向排序列表">
       {items.map((item, idx) => {
-        const label = getCountryRegionLabel(item.code);
+        const displayCode = item.code === "UN" ? "未知" : item.code;
         return (
           <li
             key={item.code}
+            title={`${getCountryRegionLabel(item.code)} · ${item.count} 个节点`}
+            aria-label={`地区 ${displayCode}`}
             className={`sm-region-chip ${dragIndex === idx ? "is-dragging" : ""} ${overIndex === idx && dragIndex !== idx ? "is-drag-over" : ""}`}
             draggable={items.length > 1}
             onDragStart={() => { setDragIndex(idx); setOverIndex(idx); }}
@@ -1021,22 +1056,8 @@ function HorizontalRegionOrderList({
             }}
             onDragEnd={() => { setDragIndex(null); setOverIndex(null); }}
           >
-            <span className="sm-sort-grip" aria-hidden="true"><GripVertical size={13} /></span>
-            <CountryFlag countryCode={item.code} className="sm-region-flag" fallbackSize={15} />
-            <span className="sm-region-chip-label">
-              <span>{label}</span>
-              <Badge tone="info">{item.count}</Badge>
-            </span>
-            {items.length > 1 && (
-              <span className="sm-region-chip-actions">
-                <IconButton label={`左移地区 ${item.code}`} disabled={idx === 0} onClick={() => move(idx, idx - 1)}>
-                  <ArrowLeft size={12} />
-                </IconButton>
-                <IconButton label={`右移地区 ${item.code}`} disabled={idx === items.length - 1} onClick={() => move(idx, idx + 1)}>
-                  <ArrowRight size={12} />
-                </IconButton>
-              </span>
-            )}
+            <CountryFlag countryCode={item.code} className="sm-region-flag" fallbackSize={16} />
+            <span className="sm-region-code">{displayCode}</span>
           </li>
         );
       })}
@@ -1126,8 +1147,15 @@ function NodeSortPanel({
   const handleReorderNodes = (nextList: PreviewNodeSummary[]) => {
     setSortedNodes(nextList);
     const nextOrder = direction === "desc" ? [...nextList].reverse().map(item => item.key) : nextList.map(item => item.key);
-    onChangeProcessing({ sort: "custom", custom_order: nextOrder });
+    onChangeProcessing({ sort: sortMode === "name" ? "custom" : sortMode, custom_order: nextOrder });
   };
+
+  const nodeGroupKey = useCallback((node: PreviewNodeSummary): string | number => {
+    if (sortMode === "type") return (node.type || "unknown").toLowerCase();
+    if (sortMode === "region") return inferClientRegionCode(node.name, node.country_code);
+    if (sortMode === "source") return node.source_index ?? 0;
+    return node.key;
+  }, [sortMode]);
 
   const typeGroups = useMemo(() => {
     const counts = new Map<string, number>();
@@ -1285,7 +1313,7 @@ function NodeSortPanel({
       {sortMode === "region" && regionGroups.length > 0 && (
         <div className="sm-sort-body">
           <div className="sm-sort-toolbar">
-            <span>地区国旗排序（共 <strong>{regionGroups.length}</strong> 个地区 · 支持上下左右拖拽或点击左右箭头调整）</span>
+            <span>地区国旗排序（共 <strong>{regionGroups.length}</strong> 个地区 · 直接拖拽国旗卡片即可上下左右调整顺序）</span>
           </div>
           <HorizontalRegionOrderList items={regionGroups} onReorder={handleReorderRegions} />
         </div>
@@ -1294,7 +1322,12 @@ function NodeSortPanel({
       <div className="sm-sort-body">
         <div className="sm-sort-toolbar">
           <span>
-            {loadingNodes ? "正在同步节点列表..." : <>当前输出顺序：共 <strong>{sortedNodes.length}</strong> 个节点 · 拖动或点击箭头可微调</>}
+            {loadingNodes ? "正在同步节点列表..." : (
+              <>
+                当前输出顺序：共 <strong>{sortedNodes.length}</strong> 个节点
+                {sortMode === "name" ? " · 按节点名称自动排序" : " · 可在同组内拖拽或点击箭头微调顺序（规则优先级高于组内微调）"}
+              </>
+            )}
           </span>
           <Button variant="ghost" disabled={loadingNodes} onClick={() => { loadedKeyRef.current = ""; void loadNodes(fetchKey); }}>
             <RefreshCw size={13} />
@@ -1311,7 +1344,9 @@ function NodeSortPanel({
             items={sortedNodes}
             keyOf={node => node.key}
             labelOf={node => node.name}
-            allowPinTop
+            allowPinTop={sortMode !== "name"}
+            readOnly={sortMode === "name"}
+            groupOf={sortMode === "source" || sortMode === "type" || sortMode === "region" ? nodeGroupKey : undefined}
             renderMeta={node => (
               <>
                 <CountryFlag countryCode={inferClientRegionCode(node.name, node.country_code)} className="sm-region-node-flag" fallbackSize={13} />

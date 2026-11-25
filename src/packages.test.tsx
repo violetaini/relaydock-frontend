@@ -246,6 +246,8 @@ describe("package management", () => {
       { id: 2, node_name: "东京 SS-2022", protocol: "ss", raw_url: "", clash_config: "", parsed_config: JSON.stringify({ cipher: "2022-blake3-aes-128-gcm" }), enabled: true, tag: "jp", original_server: "edge-jp", inbound_tag: "in-b", node_type: "physical", updated_at: "" },
       { id: 3, node_name: "香港 转发 01", protocol: "dokodemo-door", raw_url: "", clash_config: "", parsed_config: "", enabled: true, tag: "tunnel", original_server: "edge-hk", inbound_tag: "anydoor-2001", node_type: "physical", updated_at: "" },
       { id: 4, node_name: "韩国 SS-ChaCha20", protocol: "ss", raw_url: "", clash_config: "", parsed_config: JSON.stringify({ cipher: "chacha20-ietf-poly1305" }), enabled: true, tag: "kr", original_server: "edge-kr", inbound_tag: "in-c", node_type: "physical", updated_at: "" },
+      { id: 5, node_name: "台湾 路由转发 01", protocol: "shadowsocks", raw_url: "", clash_config: "", parsed_config: JSON.stringify({ cipher: "aes-128-gcm" }), enabled: true, tag: "tw", original_server: "edge-tw", inbound_tag: "in-d", node_type: "routed", updated_at: "" },
+      { id: 6, node_name: "friend | Tunnel", protocol: "shadowsocks", raw_url: "", clash_config: "", parsed_config: JSON.stringify({ cipher: "2022-blake3-aes-128-gcm" }), enabled: true, tag: "anydoor", original_server: "edge-hk", inbound_tag: "anydoor-node-41", node_type: "forwarded", updated_at: "" },
     ];
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
       if (path === "/api/admin/packages") return { packages: [packageItem] } as T;
@@ -259,13 +261,15 @@ describe("package management", () => {
     render(<PackagesPage notify={vi.fn()} />);
     fireEvent.click(await screen.findByRole("button", { name: "编辑 标准套餐" }));
 
-    // Eligible multi-user nodes must be displayed
+    // Eligible multi-user nodes (including routed forwarding nodes) must be displayed
     expect(screen.getByRole("checkbox", { name: /香港 VLESS 01/ })).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: /东京 SS-2022/ })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /台湾 路由转发 01/ })).toBeInTheDocument();
 
-    // Ineligible nodes that cannot multiplex ports must NOT be displayed
+    // Ineligible / AnyDoor nodes must NOT be displayed
     expect(screen.queryByText(/香港 转发 01/)).not.toBeInTheDocument();
     expect(screen.queryByText(/韩国 SS-ChaCha20/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/friend \| Tunnel/)).not.toBeInTheDocument();
   });
 
   it("groups bidirectional tunnels into a single item and toggles both directions in package grants", async () => {

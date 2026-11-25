@@ -684,7 +684,7 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
             <div key={node.id}>
               <label className="checkbox-row">
                 <input type="checkbox" checked={form.nodes.includes(node.id)} onChange={() => toggleNode(node.id)} />
-                <span>{node.node_name} <small>#{node.id} · {node.original_server || "外部节点"}</small></span>
+                <span>{node.node_name} <small>#{node.id} · {node.node_type === "routed" ? "路由转发 · " : ""}{node.original_server || "外部节点"}</small></span>
               </label>
               <Badge tone={node.enabled ? "good" : "neutral"}>{node.enabled ? node.protocol || "启用" : "停用"}</Badge>
             </div>
@@ -847,7 +847,7 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
               const node = nodes.find((itemNode) => itemNode.id === nodeID);
               const key = String(nodeID);
               return <div key={nodeID}>
-                <span><strong>{node?.node_name ?? `节点 #${nodeID}`}</strong><small>{node?.protocol || "节点已失联"}</small></span>
+                <span><strong>{node?.node_name ?? `节点 #${nodeID}`}</strong><small>{node?.node_type === "routed" ? "路由转发 · " : ""}{node?.protocol || "节点已失联"}</small></span>
                 <Field label="流量倍率"><input aria-label={`${node?.node_name ?? nodeID} 流量倍率`} type="number" min="0" step="0.01" value={form.nodeMultipliers[key] ?? ""} placeholder="1" onChange={(event) => setForm({ ...form, nodeMultipliers: { ...form.nodeMultipliers, [key]: event.target.value } })} /></Field>
                 <Field label="流量 GB"><input aria-label={`${node?.node_name ?? nodeID} 流量额度`} type="number" min="0" step="0.01" value={form.nodeTrafficLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeTrafficLimits: { ...form.nodeTrafficLimits, [key]: event.target.value } })} /></Field>
                 <Field label="限速 Mbps"><input aria-label={`${node?.node_name ?? nodeID} 限速`} type="number" min="0" step="0.1" value={form.nodeSpeedLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeSpeedLimits: { ...form.nodeSpeedLimits, [key]: event.target.value } })} /></Field>

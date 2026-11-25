@@ -24,6 +24,7 @@ import {
   Users,
 } from "lucide-react";
 import { api } from "./api";
+import { isAnyDoorNode } from "./managed-node-presets";
 import { BatchServiceAuthorizationDialog, ServiceAuthorizationPanel } from "./service-authorization";
 import { TGBotInvitesPanel } from "./tg-bot-invites";
 import type { NodeItem, NodeListResponse, UserItem } from "./types";
@@ -528,11 +529,15 @@ function LimitsSettingsPanel({ user, onBack, onComplete }: { user: ManagedUser; 
       setError(`${messageOf(reason, "限额保存失败")}${suffix}`);
     } finally { setWorking(false); }
   };
+  const visibleNodes = useMemo(
+    () => nodes.filter((node) => !isAnyDoorNode(node) || nodeTraffic[String(node.id)] !== undefined || nodeSpeed[String(node.id)] !== undefined || nodeDevices[String(node.id)] !== undefined),
+    [nodeDevices, nodeSpeed, nodeTraffic, nodes],
+  );
   return <form className="form-stack" onSubmit={submit}>
     {error ? <ErrorState message={error} /> : null}
     <Field label="用户设备数覆盖" hint={`套餐值 ${user.device_limit || 0}，留空继承`}><input type="number" min="0" step="1" value={devices} onChange={(e) => setDevices(e.target.value)} placeholder="继承套餐" /></Field>
     <div className="surface-heading compact-heading"><div><h2>节点级覆盖</h2><small>0 表示该节点显式不限，留空表示继承</small></div></div>
-    <div className="node-limit-list">{nodes.length === 0 ? <span className="muted">当前没有可配置节点</span> : nodes.map((node) => <div key={node.id}><span><strong>{node.node_name}</strong><small>#{node.id} · {node.protocol}</small></span><Field label="流量 GB"><input aria-label={`${node.node_name} 流量额度`} type="number" min="0" step="0.01" value={nodeTraffic[String(node.id)] ?? ""} onChange={(e) => setNodeTraffic({ ...nodeTraffic, [node.id]: e.target.value })} /></Field><Field label="Mbps"><input aria-label={`${node.node_name} 限速`} type="number" min="0" step="0.1" value={nodeSpeed[String(node.id)] ?? ""} onChange={(e) => setNodeSpeed({ ...nodeSpeed, [node.id]: e.target.value })} /></Field><Field label="设备"><input aria-label={`${node.node_name} 设备数`} type="number" min="0" step="1" value={nodeDevices[String(node.id)] ?? ""} onChange={(e) => setNodeDevices({ ...nodeDevices, [node.id]: e.target.value })} /></Field></div>)}</div>
+    <div className="node-limit-list">{visibleNodes.length === 0 ? <span className="muted">当前没有可配置节点</span> : visibleNodes.map((node) => <div key={node.id}><span><strong>{node.node_name}</strong><small>#{node.id}{node.node_type === "routed" ? " · 路由转发" : ""} · {node.protocol}</small></span><Field label="流量 GB"><input aria-label={`${node.node_name} 流量额度`} type="number" min="0" step="0.01" value={nodeTraffic[String(node.id)] ?? ""} onChange={(e) => setNodeTraffic({ ...nodeTraffic, [node.id]: e.target.value })} /></Field><Field label="Mbps"><input aria-label={`${node.node_name} 限速`} type="number" min="0" step="0.1" value={nodeSpeed[String(node.id)] ?? ""} onChange={(e) => setNodeSpeed({ ...nodeSpeed, [node.id]: e.target.value })} /></Field><Field label="设备"><input aria-label={`${node.node_name} 设备数`} type="number" min="0" step="1" value={nodeDevices[String(node.id)] ?? ""} onChange={(e) => setNodeDevices({ ...nodeDevices, [node.id]: e.target.value })} /></Field></div>)}</div>
     <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onBack}>返回设置总览</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在下发" /> : <><SlidersHorizontal size={16} />保存并下发</>}</Button></div>
   </form>;
 }

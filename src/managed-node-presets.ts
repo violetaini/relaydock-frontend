@@ -161,6 +161,17 @@ export function managedInboundSupportsPublishing(draft: Pick<ManagedInboundDraft
     || isShadowsocksClassicMultiUserCipher(draft.ssCipher);
 }
 
+export function isAnyDoorNode(node: {
+  protocol?: string;
+  inbound_tag?: string;
+  node_type?: string;
+}): boolean {
+  const tag = (node.inbound_tag || "").trim().toLowerCase();
+  const proto = (node.protocol || "").trim().toLowerCase();
+  const nodeType = (node.node_type || "").trim().toLowerCase();
+  return nodeType === "forwarded" || tag.startsWith("anydoor-") || proto === "anydoor" || proto === "tunnel" || proto === "dokodemo-door";
+}
+
 export function isPackageNodeEligible(node: {
   protocol?: string;
   inbound_tag?: string;
@@ -173,11 +184,9 @@ export function isPackageNodeEligible(node: {
   if (typeof node.package_eligible === "boolean") {
     return node.package_eligible;
   }
-  const tag = (node.inbound_tag || "").trim().toLowerCase();
-  if (tag.startsWith("anydoor-")) return false;
+  if (isAnyDoorNode(node)) return false;
 
   const proto = (node.protocol || "").trim().toLowerCase();
-  if (proto === "anydoor" || proto === "tunnel" || proto === "dokodemo-door") return false;
 
   if (proto === "ss" || proto === "shadowsocks") {
     let cipher = "";
@@ -199,7 +208,7 @@ export function isPackageNodeEligible(node: {
       }
     }
     if (cipher.startsWith("2022-")) return true;
-    if ((cipher === "aes-128-gcm" || cipher === "aes-256-gcm") && Boolean(node.managed_multi_user)) return true;
+    if ((cipher === "aes-128-gcm" || cipher === "aes-256-gcm") && (Boolean(node.managed_multi_user) || node.node_type === "routed")) return true;
     return false;
   }
 

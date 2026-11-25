@@ -45,6 +45,7 @@ import {
 } from "lucide-react";
 import QRCode from "qrcode";
 import { api, request } from "./api";
+import { isAnyDoorNode } from "./managed-node-presets";
 import {
   Badge,
   Button,
@@ -90,6 +91,8 @@ export interface NodeItem {
   node_name: string;
   protocol: string;
   clash_config: string;
+  node_type?: string;
+  inbound_tag?: string;
   subscription_eligible?: boolean;
   subscription_ineligible_reason?: string;
   enabled: boolean;
@@ -844,7 +847,8 @@ function CreateCustomSubscriptionDialog({
   const [description, setDescription] = useState("");
   const [templateFilename, setTemplateFilename] = useState(templates[0] || "");
   const [trafficLimit, setTrafficLimit] = useState("");
-  const [selectedNodeIDs, setSelectedNodeIDs] = useState<Set<number>>(() => new Set(nodes.filter((n) => n.enabled).map((n) => n.id)));
+  const assignableNodes = useMemo(() => nodes.filter((n) => !isAnyDoorNode(n)), [nodes]);
+  const [selectedNodeIDs, setSelectedNodeIDs] = useState<Set<number>>(() => new Set(nodes.filter((n) => n.enabled && !isAnyDoorNode(n)).map((n) => n.id)));
   const [nodeFilter, setNodeFilter] = useState("");
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
@@ -858,15 +862,15 @@ function CreateCustomSubscriptionDialog({
     });
 
   const visibleNodes = useMemo(() => {
-    if (!nodeFilter.trim()) return nodes;
+    if (!nodeFilter.trim()) return assignableNodes;
     const q = nodeFilter.trim().toLowerCase();
-    return nodes.filter(
+    return assignableNodes.filter(
       (n) =>
         n.node_name.toLowerCase().includes(q) ||
         (n.protocol && n.protocol.toLowerCase().includes(q)) ||
         (n.tags && n.tags.some((t) => t.toLowerCase().includes(q)))
     );
-  }, [nodes, nodeFilter]);
+  }, [assignableNodes, nodeFilter]);
 
   const isAllVisibleSelected =
     visibleNodes.length > 0 && visibleNodes.every((n) => selectedNodeIDs.has(n.id));
@@ -988,7 +992,7 @@ function CreateCustomSubscriptionDialog({
             <div className="cw-node-picker-title-group">
               <strong className="cw-node-picker-title">选择自选节点</strong>
               <span className="badge badge-info cw-node-picker-counter">
-                已选 {selectedNodeIDs.size} / {nodes.length} 个节点
+                已选 {selectedNodeIDs.size} / {assignableNodes.length} 个节点
               </span>
             </div>
             <div className="cw-node-picker-actions">
@@ -1019,7 +1023,7 @@ function CreateCustomSubscriptionDialog({
             ) : null}
           </div>
 
-          {nodes.length === 0 ? (
+          {assignableNodes.length === 0 ? (
             <p className="cw-section-hint">当前系统暂无可用节点，可在「节点管理」中先添加节点。</p>
           ) : visibleNodes.length === 0 ? (
             <div className="cw-node-picker-empty">
@@ -1045,6 +1049,9 @@ function CreateCustomSubscriptionDialog({
                       </div>
                       <div className="cw-node-card-meta">
                         <span className="cw-node-proto-tag">{node.protocol || "未知协议"}</span>
+                        {node.node_type === "routed" ? (
+                          <span className="cw-node-status-tag">路由转发</span>
+                        ) : null}
                         {!node.enabled ? (
                           <span className="cw-node-status-tag">已停用</span>
                         ) : null}
@@ -1141,7 +1148,7 @@ function EditSubscribeFileDialog({ item, nodes, templates, rules, scripts, serve
     {item.type === "import" || Boolean(item.url) ? <Field label="自动更新时间" hint={item.last_sync_at ? `上次同步时间：${formatDate(item.last_sync_at)}` : "定期自动重新拉取外部订阅链接并更新配置文件"}><select value={autoUpdateInterval} onChange={(event) => setAutoUpdateInterval(Number(event.target.value))}><option value={0}>不自动更新（仅手动同步）</option><option value={3600}>每 1 小时</option><option value={7200}>每 2 小时</option><option value={21600}>每 6 小时</option><option value={43200}>每 12 小时</option><option value={86400}>每 24 小时（1 天）</option><option value={172800}>每 48 小时（2 天）</option><option value={604800}>每周（7 天）</option></select></Field> : null}
     <div className="cw-checkboxes"><Toggle checked={autoSync} onChange={setAutoSync} label="自动同步自定义规则" /><Toggle checked={rawOutput} onChange={setRawOutput} label="输出原始配置" /></div>
     {!isExternal ? (
-      <div className="cw-form-section"><strong>节点范围</strong><p className="cw-section-hint">选择节点 ID 时优先使用该范围；不选节点时才按下方标签过滤，两者都为空表示全部可用节点。</p><div className="cw-option-grid">{nodes.map((node) => <label className="cw-option-check" key={node.id}><input type="checkbox" checked={selectedNodeIDs.has(node.id)} onChange={() => toggleID(setSelectedNodeIDs, node.id)} /><span><strong>{node.node_name}</strong><small>{node.protocol || "未知协议"}{node.enabled ? "" : " · 已停用"}</small></span></label>)}</div><Field label="旧版标签范围" hint="逗号分隔；仅在未选择节点 ID 时生效"><input value={selectedTags} onChange={(event) => setSelectedTags(event.target.value)} placeholder="hk, premium" /></Field></div>
+      <div className="cw-form-section"><strong>节点范围</strong><p className="cw-section-hint">选择节点 ID 时优先使用该范围；不选节点时才按下方标签过滤，两者都为空表示全部可用节点。</p><div className="cw-option-grid">{nodes.filter((node) => !isAnyDoorNode(node) || selectedNodeIDs.has(node.id)).map((node) => <label className="cw-option-check" key={node.id}><input type="checkbox" checked={selectedNodeIDs.has(node.id)} onChange={() => toggleID(setSelectedNodeIDs, node.id)} /><span><strong>{node.node_name}</strong><small>{node.node_type === "routed" ? "路由转发 · " : ""}{node.protocol || "未知协议"}{node.enabled ? "" : " · 已停用"}</small></span></label>)}</div><Field label="旧版标签范围" hint="逗号分隔；仅在未选择节点 ID 时生效"><input value={selectedTags} onChange={(event) => setSelectedTags(event.target.value)} placeholder="hk, premium" /></Field></div>
     ) : null}
     <div className="cw-form-grid">
       <div className="cw-form-section"><strong>覆写规则</strong><Field label="应用范围"><select value={ruleScope} onChange={(event) => setRuleScope(event.target.value as "all" | "selected")}><option value="all">全部已启用规则（空 ID 数组）</option><option value="selected">仅选择的规则</option></select></Field>{ruleScope === "selected" ? <div className="cw-option-stack">{rules.map((rule) => <label className="cw-option-check" key={rule.id}><input type="checkbox" checked={selectedRuleIDs.has(rule.id)} onChange={() => toggleID(setSelectedRuleIDs, rule.id)} /><span><strong>{rule.name}</strong><small>{rule.type}{rule.enabled ? "" : " · 已停用"}</small></span></label>)}</div> : null}</div>

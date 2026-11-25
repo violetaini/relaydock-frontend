@@ -716,4 +716,29 @@ describe("users workbench", () => {
     expect(screen.getByRole("button", { name: "应用到 2 位用户" })).toBeDisabled();
     expect(post).not.toHaveBeenCalled();
   });
+
+  it("hides AnyDoor nodes and keeps routed forwarding nodes in user node limits panel", async () => {
+    vi.spyOn(api, "get").mockImplementation(async (path) => {
+      if (path === "/api/admin/users") return { users: [alice] };
+      if (path === "/api/admin/nodes") {
+        return {
+          nodes: [
+            { id: 10, node_name: "HK 路由转发 01", protocol: "shadowsocks", node_type: "routed", inbound_tag: "inbound-568", enabled: true },
+            { id: 11, node_name: "阿里云 任意门 01", protocol: "dokodemo-door", node_type: "physical", inbound_tag: "inbound-2133", enabled: true },
+            { id: 12, node_name: "friend | Tunnel", protocol: "shadowsocks", node_type: "forwarded", inbound_tag: "anydoor-node-41", enabled: true },
+          ],
+        };
+      }
+      throw new Error(`unexpected GET ${path}`);
+    });
+    render(<UsersWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "用户设置 alice" }));
+    fireEvent.click(screen.getByRole("tab", { name: "节点与设备" }));
+
+    expect(await screen.findByText("HK 路由转发 01")).toBeInTheDocument();
+    expect(screen.getByText(/路由转发 · shadowsocks/)).toBeInTheDocument();
+    expect(screen.queryByText("阿里云 任意门 01")).not.toBeInTheDocument();
+    expect(screen.queryByText("friend | Tunnel")).not.toBeInTheDocument();
+  });
 });

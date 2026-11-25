@@ -23,6 +23,7 @@ export interface SubscriptionGeneration {
     exclude_types?: string[];
     sort?: SortMode | string;
     sort_direction?: SortDirection;
+    type_order?: string[];
     custom_order?: string[];
   };
   outputs: SubscriptionOutput[];
@@ -1041,6 +1042,37 @@ function NodeSortPanel({
     onChangeProcessing({ sort: "custom", custom_order: nextOrder });
   };
 
+  const typeGroups = useMemo(() => {
+    const counts = new Map<string, number>();
+    const order: string[] = [];
+    for (const n of sortedNodes) {
+      const typ = (n.type || "unknown").toLowerCase();
+      if (!counts.has(typ)) order.push(typ);
+      counts.set(typ, (counts.get(typ) || 0) + 1);
+    }
+    return order.map(type => ({ type, count: counts.get(type) || 0 }));
+  }, [sortedNodes]);
+
+  const protocolNameMap = useMemo(() => {
+    const map = new Map<string, string>(knownProtocols.map(p => [p.value, p.label]));
+    map.set("chitanda", "Chitanda (chitanda)");
+    map.set("dokodemo-door", "任意门转发 (dokodemo-door)");
+    return map;
+  }, []);
+
+  const handleReorderTypes = (nextGroups: Array<{ type: string; count: number }>) => {
+    const nextTypes = nextGroups.map(g => g.type);
+    const rank = new Map(nextTypes.map((t, idx) => [t, idx]));
+    const reorderedNodes = [...sortedNodes].sort((a, b) => {
+      const ra = rank.get((a.type || "unknown").toLowerCase()) ?? nextTypes.length;
+      const rb = rank.get((b.type || "unknown").toLowerCase()) ?? nextTypes.length;
+      return ra - rb;
+    });
+    setSortedNodes(reorderedNodes);
+    const persisted = direction === "desc" ? [...nextTypes].reverse() : nextTypes;
+    onChangeProcessing({ sort: "type", type_order: persisted });
+  };
+
   return (
     <section className="sm-sort-card" aria-label="节点与来源排序">
       <div className="sm-sort-head">
@@ -1104,6 +1136,27 @@ function NodeSortPanel({
               const nextIDs = nextFiles.map(f => f.id);
               if (nextIDs.length === selectedSources.length) onReorderSources(nextIDs);
             }}
+          />
+        </div>
+      )}
+
+      {sortMode === "type" && typeGroups.length > 0 && (
+        <div className="sm-sort-body">
+          <div className="sm-sort-toolbar">
+            <span>协议大类顺序（共 <strong>{typeGroups.length}</strong> 类 · 拖动或点击箭头按大类排序）</span>
+          </div>
+          <SortableOrderList
+            items={typeGroups}
+            keyOf={grp => grp.type}
+            labelOf={grp => `协议大类 ${grp.type}`}
+            allowPinTop
+            renderMeta={grp => (
+              <>
+                <strong>{protocolNameMap.get(grp.type) || grp.type.toUpperCase()}</strong>
+                <Badge tone="info">{grp.count} 个节点</Badge>
+              </>
+            )}
+            onReorder={handleReorderTypes}
           />
         </div>
       )}

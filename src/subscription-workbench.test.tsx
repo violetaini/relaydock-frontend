@@ -285,16 +285,18 @@ describe("unified subscription wizard", () => {
     fireEvent.click(descBtn);
     expect(descBtn).toHaveAttribute("aria-pressed", "true");
 
-    // 3. Switch to 按节点类型 -> auto-loads sorted nodes without requiring manual click
+    // 3. Switch to 按节点类型 -> auto-loads sorted nodes AND displays draggable/clickable protocol category groups
     fireEvent.click(screen.getByRole("tab", { name: "按节点类型" }));
     await screen.findByText("HK SS");
     expect(screen.getByText("JP VLess")).toBeInTheDocument();
+    expect(screen.getByText(/协议大类顺序/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "上移 协议大类 vless" }));
 
-    // 4. Moving a node directly promotes to 自定义节点 order
-    fireEvent.click(screen.getByRole("button", { name: "上移 JP VLess" }));
+    // 4. Moving an individual node directly promotes to 自定义节点 order
+    fireEvent.click(screen.getByRole("button", { name: "上移 HK SS" }));
     expect(screen.getByRole("tab", { name: "自定义节点" })).toHaveAttribute("aria-selected", "true");
 
-    // Advance and preview -> sends reordered source_ids [2, 1], sort: "custom", sort_direction: "desc"
+    // Advance and preview -> sends reordered source_ids [2, 1], sort: "custom", sort_direction: "desc", type_order preserved
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     fireEvent.click(screen.getByRole("button", { name: "生成预览" }));
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/subscribe-files/generation/preview", expect.objectContaining({
@@ -303,7 +305,8 @@ describe("unified subscription wizard", () => {
         processing: expect.objectContaining({
           sort: "custom",
           sort_direction: "desc",
-          custom_order: ["k1", "k2"],
+          type_order: ["ss", "vless"],
+          custom_order: ["k2", "k1"],
         }),
       }),
     })));

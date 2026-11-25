@@ -15,10 +15,8 @@ import {
   Save,
   Search,
   ShieldCheck,
-  SlidersHorizontal,
   Sparkles,
   Trash2,
-  X,
 } from "lucide-react";
 import { api } from "./api";
 import {
@@ -177,93 +175,6 @@ function createEditor(nextSortOrder: number): CustomEditorState {
   };
 }
 
-type ClashMatchType =
-  | "DOMAIN-SUFFIX"
-  | "DOMAIN"
-  | "DOMAIN-KEYWORD"
-  | "IP-CIDR"
-  | "SRC-IP-CIDR"
-  | "DST-PORT"
-  | "GEOIP"
-  | "PROCESS-NAME"
-  | "MATCH";
-
-type ClashRuleAction = "DIRECT" | "PROXY" | "REJECT" | "CUSTOM";
-
-interface ClashRuleRow {
-  id: string;
-  matchType: ClashMatchType;
-  value: string;
-  action: ClashRuleAction;
-  customTarget: string;
-}
-
-const clashMatchOptions: Array<{ value: ClashMatchType; label: string; placeholder: string }> = [
-  { value: "DOMAIN-SUFFIX", label: "域名后缀 (DOMAIN-SUFFIX)", placeholder: "例如：example.com" },
-  { value: "DOMAIN", label: "完整域名 (DOMAIN)", placeholder: "例如：api.example.com" },
-  { value: "DOMAIN-KEYWORD", label: "域名关键字 (DOMAIN-KEYWORD)", placeholder: "例如：google" },
-  { value: "IP-CIDR", label: "目标 IP 段 (IP-CIDR)", placeholder: "例如：192.168.0.0/16" },
-  { value: "SRC-IP-CIDR", label: "来源 IP 段 (SRC-IP-CIDR)", placeholder: "例如：10.0.0.0/8" },
-  { value: "DST-PORT", label: "目标端口 (DST-PORT)", placeholder: "例如：443" },
-  { value: "GEOIP", label: "GeoIP 国家 (GEOIP)", placeholder: "例如：CN" },
-  { value: "PROCESS-NAME", label: "进程名称 (PROCESS-NAME)", placeholder: "例如：curl" },
-  { value: "MATCH", label: "全部兜底 (MATCH)", placeholder: "无需填写" },
-];
-
-const supportedMatchTypes = new Set<string>(clashMatchOptions.map((item) => item.value));
-
-function makeRuleRow(partial?: Partial<ClashRuleRow>): ClashRuleRow {
-  return {
-    id: `row_${Math.random().toString(36).slice(2, 9)}`,
-    matchType: "DOMAIN-SUFFIX",
-    value: "",
-    action: "DIRECT",
-    customTarget: "",
-    ...partial,
-  };
-}
-
-function parseClashRuleLines(content: string): { ok: boolean; rows: ClashRuleRow[] } {
-  const lines = content
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith("#") && line !== "rules:");
-  if (!lines.length) return { ok: false, rows: [] };
-  const rows: ClashRuleRow[] = [];
-  for (const raw of lines) {
-    const cleaned = raw.replace(/^-\s*/, "").replace(/^['"]|['"]$/g, "").trim();
-    const parts = cleaned.split(",").map((part) => part.trim());
-    const matchType = parts[0]?.toUpperCase();
-    if (!supportedMatchTypes.has(matchType)) return { ok: false, rows: [] };
-    if (matchType === "MATCH") {
-      if (parts.length < 2) return { ok: false, rows: [] };
-      const target = parts[1];
-      const action: ClashRuleAction = target === "DIRECT" || target === "PROXY" || target === "REJECT" ? target : "CUSTOM";
-      rows.push(makeRuleRow({ matchType: "MATCH", value: "", action, customTarget: action === "CUSTOM" ? target : "" }));
-      continue;
-    }
-    if (parts.length < 3 || parts.length > 4) return { ok: false, rows: [] };
-    if (parts.length === 4 && parts[3] !== "no-resolve") return { ok: false, rows: [] };
-    const value = parts[1];
-    const target = parts[2];
-    const action: ClashRuleAction = target === "DIRECT" || target === "PROXY" || target === "REJECT" ? target : "CUSTOM";
-    rows.push(makeRuleRow({ matchType: matchType as ClashMatchType, value, action, customTarget: action === "CUSTOM" ? target : "" }));
-  }
-  return { ok: true, rows };
-}
-
-function compileClashRuleRows(rows: ClashRuleRow[]): string {
-  const lines = rows
-    .filter((row) => row.matchType === "MATCH" || row.value.trim() !== "")
-    .map((row) => {
-      const target = row.action === "CUSTOM" ? (row.customTarget.trim() || "PROXY") : row.action;
-      if (row.matchType === "MATCH") return `- MATCH,${target}`;
-      const suffix = row.matchType === "IP-CIDR" || row.matchType === "SRC-IP-CIDR" ? ",no-resolve" : "";
-      return `- ${row.matchType},${row.value.trim()},${target}${suffix}`;
-    });
-  return lines.length ? `${lines.join("\n")}\n` : "";
-}
-
 function mergeModeGuide(type: RuleType, mode: RuleMode): {
   title: string;
   beforeLabel: string;
@@ -320,7 +231,7 @@ function mergeModeGuide(type: RuleType, mode: RuleMode): {
     title: "插入到原有规则最前面（最高优先级）",
     beforeLabel: "原有内容：[原有分流规则...]",
     afterLabel: "合并结果：[你的覆写规则] → [原有分流规则...]",
-    description: "类似 Cloudflare WAF 优先规则：流量会最先匹配这里定义的条件，命中后立即执行对应动作。",
+    description: "流量会最先匹配这里定义的规则，命中后立即执行对应动作；若需按关键字精准替换原有某条规则，请使用上方的「JavaScript 处理脚本」。",
     tone: "good",
   };
 }
@@ -364,8 +275,6 @@ export function CustomRulesWorkbenchPage({ notify = noop }: { notify?: Notify })
   const [error, setError] = useState("");
   const [editor, setEditor] = useState<CustomEditorState | null>(null);
   const [editorError, setEditorError] = useState("");
-  const [ruleBuilderMode, setRuleBuilderMode] = useState<"visual" | "raw">("visual");
-  const [ruleRows, setRuleRows] = useState<ClashRuleRow[]>([makeRuleRow({ value: "example.com", action: "DIRECT" })]);
   const [saving, setSaving] = useState(false);
   const [updating, setUpdating] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
@@ -416,33 +325,9 @@ export function CustomRulesWorkbenchPage({ notify = noop }: { notify?: Notify })
 
   const nextSortOrder = useMemo(() => Math.max(0, ...scripts.map((item) => item.sort_order)) + 10, [scripts]);
 
-  const syncVisualFromContent = (type: RuleType, content: string) => {
-    if (type !== "rules") {
-      setRuleBuilderMode("raw");
-      return;
-    }
-    const parsed = parseClashRuleLines(content);
-    if (parsed.ok) {
-      setRuleRows(parsed.rows);
-      setRuleBuilderMode("visual");
-    } else {
-      setRuleBuilderMode("raw");
-    }
-  };
-
   const openNewEditor = () => {
     setEditorError("");
-    const next = createEditor(nextSortOrder);
-    setEditor(next);
-    syncVisualFromContent(next.type, next.content);
-  };
-
-  const updateRuleRows = (updater: (rows: ClashRuleRow[]) => ClashRuleRow[]) => {
-    setRuleRows((current) => {
-      const nextRows = updater(current);
-      setEditor((ed) => (ed ? { ...ed, content: compileClashRuleRows(nextRows) } : ed));
-      return nextRows;
-    });
+    setEditor(createEditor(nextSortOrder));
   };
 
   const openRuleEditor = (item: CustomRule) => {
@@ -458,7 +343,6 @@ export function CustomRulesWorkbenchPage({ notify = noop }: { notify?: Notify })
       enabled: item.enabled,
       sortOrder: nextSortOrder,
     });
-    syncVisualFromContent(item.type, item.content);
   };
 
   const openScriptEditor = (item: OverrideScript) => {
@@ -652,24 +536,17 @@ export function CustomRulesWorkbenchPage({ notify = noop }: { notify?: Notify })
       </Surface>
 
       {editor ? (
-        <Dialog title={editor.id ? `编辑 ${editor.name}` : "新建覆写"} description="参考 Cloudflare 规则方式可视化编排，保存前由服务端自动校验语法" onClose={() => !saving && setEditor(null)} wide dismissible={!saving}>
+        <Dialog title={editor.id ? `编辑 ${editor.name}` : "新建覆写"} description="保存前会由服务端校验 YAML 或 JavaScript 语法" onClose={() => !saving && setEditor(null)} wide dismissible={!saving}>
           <form className="rw-editor-form" onSubmit={saveEditor}>
             {editorError ? <ErrorState message={editorError} /> : null}
             {!editor.id ? (
               <div className="rw-kind-picker" role="group" aria-label="覆写类型">
-                <button type="button" className={editor.kind === "rule" ? "is-active" : ""} onClick={() => {
-                  const content = defaultRuleContent(editor.type);
-                  setEditor({ ...editor, kind: "rule", content });
-                  syncVisualFromContent(editor.type, content);
-                }}><FileText size={18} />YAML 覆写规则</button>
-                <button type="button" className={editor.kind === "script" ? "is-active" : ""} onClick={() => {
-                  setEditor({ ...editor, kind: "script", content: "function main(value) {\n  return value;\n}\n" });
-                  setRuleBuilderMode("raw");
-                }}><Code2 size={18} />JavaScript 处理脚本</button>
+                <button type="button" className={editor.kind === "rule" ? "is-active" : ""} onClick={() => setEditor({ ...editor, kind: "rule", content: defaultRuleContent(editor.type) })}><FileText size={18} />YAML 覆写规则</button>
+                <button type="button" className={editor.kind === "script" ? "is-active" : ""} onClick={() => setEditor({ ...editor, kind: "script", content: "function main(value) {\n  return value;\n}\n" })}><Code2 size={18} />JavaScript 处理脚本</button>
               </div>
             ) : null}
             <div className="rw-form-grid">
-              <Field label="名称"><input autoFocus required placeholder={editor.kind === "rule" ? "例如：公司内网直连 / 屏蔽广告域名" : "例如：节点名称清洗"} value={editor.name} onChange={(event) => setEditor({ ...editor, name: event.target.value })} /></Field>
+              <Field label="名称"><input autoFocus required placeholder={editor.kind === "rule" ? "例如：公司内网直连 / 屏蔽广告域名" : "例如：按关键字替换单条规则"} value={editor.name} onChange={(event) => setEditor({ ...editor, name: event.target.value })} /></Field>
               {editor.kind === "rule" ? (
                 <Field label="规则类型">
                   <select value={editor.type} onChange={(event) => {
@@ -677,7 +554,6 @@ export function CustomRulesWorkbenchPage({ notify = noop }: { notify?: Notify })
                     const validMode = type === "dns" ? "replace" : type === "rule-providers" && editor.mode === "append" ? "prepend" : editor.mode;
                     const nextContent = editor.id ? editor.content : defaultRuleContent(type);
                     setEditor({ ...editor, type, mode: validMode, content: nextContent });
-                    syncVisualFromContent(type, nextContent);
                   }}>
                     <option value="rules">分流规则 (rules)</option>
                     <option value="dns">DNS 解析 (dns)</option>
@@ -743,149 +619,23 @@ export function CustomRulesWorkbenchPage({ notify = noop }: { notify?: Notify })
               </div>
             )}
 
-            {editor.kind === "rule" && editor.type === "rules" ? (
-              <div className="rw-cf-builder">
-                <div className="rw-cf-toolbar">
-                  <div className="rw-cf-tabs" role="tablist" aria-label="规则编辑模式">
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={ruleBuilderMode === "visual"}
-                      className={ruleBuilderMode === "visual" ? "is-active" : ""}
-                      onClick={() => {
-                        const parsed = parseClashRuleLines(editor.content);
-                        if (parsed.ok) {
-                          setRuleRows(parsed.rows);
-                          setRuleBuilderMode("visual");
-                        } else {
-                          setEditorError("当前 YAML 包含复杂或非标准语法，无法转为可视化条件，请继续使用 YAML 源码编辑");
-                        }
-                      }}
-                    >
-                      <SlidersHorizontal size={14} />可视化规则（Cloudflare 风格）
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={ruleBuilderMode === "raw"}
-                      className={ruleBuilderMode === "raw" ? "is-active" : ""}
-                      onClick={() => setRuleBuilderMode("raw")}
-                    >
-                      <Code2 size={14} />YAML 源码
-                    </button>
-                  </div>
-                  {ruleBuilderMode === "visual" ? (
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      onClick={() => updateRuleRows((rows) => [...rows, makeRuleRow()])}
-                    >
-                      <Plus size={14} />添加匹配条件
-                    </Button>
-                  ) : null}
-                </div>
-
-                {ruleBuilderMode === "visual" ? (
-                  <div className="rw-cf-panel">
-                    <div className="rw-cf-caption">当传入请求匹配以下条件时，执行对应动作：</div>
-                    <div className="rw-cf-rows">
-                      {ruleRows.map((row, idx) => {
-                        const meta = clashMatchOptions.find((item) => item.value === row.matchType) || clashMatchOptions[0];
-                        return (
-                          <div className="rw-cf-row" key={row.id}>
-                            <span className="rw-cf-row-idx">{idx === 0 ? "如果" : "或者"}</span>
-                            <select
-                              aria-label={`匹配维度 ${idx + 1}`}
-                              value={row.matchType}
-                              onChange={(event) => {
-                                const matchType = event.target.value as ClashMatchType;
-                                updateRuleRows((rows) => rows.map((r) => (r.id === row.id ? { ...r, matchType } : r)));
-                              }}
-                            >
-                              {clashMatchOptions.map((opt) => (
-                                <option key={opt.value} value={opt.value}>{opt.label}</option>
-                              ))}
-                            </select>
-                            {row.matchType !== "MATCH" ? (
-                              <input
-                                aria-label={`匹配值 ${idx + 1}`}
-                                placeholder={meta.placeholder}
-                                value={row.value}
-                                onChange={(event) => {
-                                  const value = event.target.value;
-                                  updateRuleRows((rows) => rows.map((r) => (r.id === row.id ? { ...r, value } : r)));
-                                }}
-                              />
-                            ) : (
-                              <div className="rw-cf-match-all">匹配所有剩余流量（兜底）</div>
-                            )}
-                            <span className="rw-cf-then">→ 执行</span>
-                            <select
-                              aria-label={`执行动作 ${idx + 1}`}
-                              value={row.action}
-                              onChange={(event) => {
-                                const action = event.target.value as ClashRuleAction;
-                                updateRuleRows((rows) => rows.map((r) => (r.id === row.id ? { ...r, action } : r)));
-                              }}
-                            >
-                              <option value="DIRECT">DIRECT（直连）</option>
-                              <option value="PROXY">PROXY（走代理）</option>
-                              <option value="REJECT">REJECT（拦截拒绝）</option>
-                              <option value="CUSTOM">自定义策略组...</option>
-                            </select>
-                            {row.action === "CUSTOM" ? (
-                              <input
-                                aria-label={`自定义策略组 ${idx + 1}`}
-                                placeholder="策略组名"
-                                value={row.customTarget}
-                                onChange={(event) => {
-                                  const customTarget = event.target.value;
-                                  updateRuleRows((rows) => rows.map((r) => (r.id === row.id ? { ...r, customTarget } : r)));
-                                }}
-                              />
-                            ) : null}
-                            <IconButton
-                              label={`移除条件 ${idx + 1}`}
-                              disabled={ruleRows.length <= 1}
-                              onClick={() => updateRuleRows((rows) => rows.filter((r) => r.id !== row.id))}
-                            >
-                              <X size={15} />
-                            </IconButton>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <div className="rw-cf-preview">
-                      <small>实时生成的 Clash YAML 规则预览</small>
-                      <pre>{editor.content.trim() || "# 请填写上方匹配值以生成规则"}</pre>
-                    </div>
-                  </div>
-                ) : (
-                  <Field label="YAML 内容">
-                    <textarea className="rw-code-editor" required spellCheck={false} value={editor.content} onChange={(event) => setEditor({ ...editor, content: event.target.value })} />
-                  </Field>
-                )}
+            {editor.kind === "rule" && editor.type === "dns" ? (
+              <div className="rw-preset-bar">
+                <span><Sparkles size={14} />快速模板：</span>
+                <button type="button" onClick={() => setEditor({ ...editor, content: "dns:\n  enable: true\n  enhanced-mode: fake-ip\n  fake-ip-range: 198.18.0.1/16\n  nameserver:\n    - https://doh.pub/dns-query\n    - https://dns.alidns.com/dns-query\n  fallback:\n    - https://dns.google/dns-query\n" })}>Fake-IP 防泄漏模板</button>
+                <button type="button" onClick={() => setEditor({ ...editor, content: "dns:\n  enable: true\n  enhanced-mode: redir-host\n  nameserver:\n    - 223.5.5.5\n    - 119.29.29.29\n" })}>Redir-Host 纯净模板</button>
               </div>
-            ) : (
-              <>
-                {editor.kind === "rule" && editor.type === "dns" ? (
-                  <div className="rw-preset-bar">
-                    <span><Sparkles size={14} />快速模板：</span>
-                    <button type="button" onClick={() => setEditor({ ...editor, content: "dns:\n  enable: true\n  enhanced-mode: fake-ip\n  fake-ip-range: 198.18.0.1/16\n  nameserver:\n    - https://doh.pub/dns-query\n    - https://dns.alidns.com/dns-query\n  fallback:\n    - https://dns.google/dns-query\n" })}>Fake-IP 防泄漏模板</button>
-                    <button type="button" onClick={() => setEditor({ ...editor, content: "dns:\n  enable: true\n  enhanced-mode: redir-host\n  nameserver:\n    - 223.5.5.5\n    - 119.29.29.29\n" })}>Redir-Host 纯净模板</button>
-                  </div>
-                ) : editor.kind === "script" ? (
-                  <div className="rw-preset-bar">
-                    <span><Sparkles size={14} />常用脚本示例：</span>
-                    <button type="button" onClick={() => setEditor({ ...editor, content: "function main(config) {\n  if (Array.isArray(config.proxies)) {\n    config.proxies = config.proxies.map(function (p) {\n      p.name = String(p.name || '').replace(/\\s*\\|\\s*官网.*$/i, '');\n      return p;\n    });\n  }\n  return config;\n}\n" })}>清理节点广告后缀</button>
-                    <button type="button" onClick={() => setEditor({ ...editor, content: "function main(config) {\n  if (Array.isArray(config.proxies)) {\n    config.proxies = config.proxies.filter(function (p) {\n      return !/过期|剩余流量|官网/i.test(String(p.name || ''));\n    });\n  }\n  return config;\n}\n" })}>过滤提示信息节点</button>
-                  </div>
-                ) : null}
-                <Field label={editor.kind === "rule" ? "YAML 内容" : "JavaScript 内容"} hint={editor.kind === "script" ? "脚本必须声明 main(value) 并返回处理结果" : undefined}>
-                  <textarea className="rw-code-editor" required spellCheck={false} value={editor.content} onChange={(event) => setEditor({ ...editor, content: event.target.value })} />
-                </Field>
-              </>
-            )}
+            ) : editor.kind === "script" ? (
+              <div className="rw-preset-bar">
+                <span><Sparkles size={14} />常用脚本示例：</span>
+                <button type="button" onClick={() => setEditor({ ...editor, content: "function main(config) {\n  if (Array.isArray(config.rules)) {\n    config.rules = config.rules.map(function (rule) {\n      if (String(rule).indexOf('example.com') !== -1) {\n        return 'DOMAIN-SUFFIX,example.com,DIRECT';\n      }\n      return rule;\n    });\n  }\n  return config;\n}\n" })}>按关键字替换单条规则</button>
+                <button type="button" onClick={() => setEditor({ ...editor, content: "function main(config) {\n  if (Array.isArray(config.proxies)) {\n    config.proxies = config.proxies.map(function (p) {\n      p.name = String(p.name || '').replace(/\\s*\\|\\s*官网.*$/i, '');\n      return p;\n    });\n  }\n  return config;\n}\n" })}>清理节点广告后缀</button>
+                <button type="button" onClick={() => setEditor({ ...editor, content: "function main(config) {\n  if (Array.isArray(config.proxies)) {\n    config.proxies = config.proxies.filter(function (p) {\n      return !/过期|剩余流量|官网/i.test(String(p.name || ''));\n    });\n  }\n  return config;\n}\n" })}>过滤提示信息节点</button>
+              </div>
+            ) : null}
+            <Field label={editor.kind === "rule" ? "YAML 内容" : "JavaScript 内容"} hint={editor.kind === "script" ? "脚本必须声明 main(value) 并返回处理结果" : undefined}>
+              <textarea className="rw-code-editor" required spellCheck={false} value={editor.content} onChange={(event) => setEditor({ ...editor, content: event.target.value })} />
+            </Field>
 
             <div className="dialog-actions">
               <Button type="button" variant="secondary" onClick={() => setEditor(null)} disabled={saving}>取消</Button>

@@ -120,14 +120,14 @@ describe("custom rules workbench", () => {
     }));
   });
 
-  it("builds Cloudflare-style route rules visually and shows merge before/after guide", async () => {
+  it("shows merge before/after guide and saves YAML route rules directly", async () => {
     mockCustomRuleLoads();
     const post = vi.spyOn(api, "post").mockResolvedValue({
       id: 22,
       name: "公司域名直连",
       type: "rules",
       mode: "prepend",
-      content: "- DOMAIN-SUFFIX,corp.example,DIRECT\n- IP-CIDR,10.0.0.0/8,DIRECT,no-resolve\n",
+      content: "- DOMAIN-SUFFIX,corp.example,DIRECT\n",
       enabled: true,
     });
     render(<CustomRulesWorkbenchPage notify={vi.fn()} />);
@@ -139,17 +139,14 @@ describe("custom rules workbench", () => {
     expect(within(dialog).getByText(/生效结果/)).toBeInTheDocument();
 
     fireEvent.change(within(dialog).getByRole("textbox", { name: "名称" }), { target: { value: "公司域名直连" } });
-    fireEvent.change(within(dialog).getByRole("textbox", { name: "匹配值 1" }), { target: { value: "corp.example" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "添加匹配条件" }));
-    fireEvent.change(within(dialog).getByRole("combobox", { name: "匹配维度 2" }), { target: { value: "IP-CIDR" } });
-    fireEvent.change(within(dialog).getByRole("textbox", { name: "匹配值 2" }), { target: { value: "10.0.0.0/8" } });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "YAML 内容" }), { target: { value: "- DOMAIN-SUFFIX,corp.example,DIRECT\n" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/custom-rules", {
       name: "公司域名直连",
       type: "rules",
       mode: "prepend",
-      content: "- DOMAIN-SUFFIX,corp.example,DIRECT\n- IP-CIDR,10.0.0.0/8,DIRECT,no-resolve\n",
+      content: "- DOMAIN-SUFFIX,corp.example,DIRECT\n",
       enabled: true,
     }));
   });

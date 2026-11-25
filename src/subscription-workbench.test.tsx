@@ -260,4 +260,54 @@ describe("unified subscription wizard", () => {
     expect(exprBox).toHaveValue(`(node.name =~ "香港|HK") and (node.name !~ "备用") and (node.protocol not in {"ss" "vmess"})`);
   });
 
+  it("supports source & custom node reordering (click move + drag), type sort, and one-click asc/desc direction", async () => {
+    const post = vi.spyOn(api, "post").mockImplementation(async (path: string) => {
+      if (path.endsWith("preview")) {
+        return {
+          ...preview,
+          nodes: [
+            { key: "k1", name: "HK SS", type: "ss" },
+            { key: "k2", name: "JP VLess", type: "vless" },
+          ],
+        };
+      }
+      return {};
+    });
+
+    render(<SubscriptionWizard {...props} kind="strategy" sourceIDs={[1, 2]} />);
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+
+    // 1. Reorder sources via click move button (move 自建专线 up above 外部机场)
+    fireEvent.click(screen.getByRole("button", { name: "上移 自建专线" }));
+
+    // 2. Toggle one-click direction (逆向 / 顺向)
+    const descBtn = screen.getByRole("button", { name: "逆向" });
+    fireEvent.click(descBtn);
+    expect(descBtn).toHaveAttribute("aria-pressed", "true");
+
+    // 3. Switch to 按节点类型
+    fireEvent.click(screen.getByRole("tab", { name: "按节点类型" }));
+    expect(screen.getByText(/按节点协议类型归类排序/)).toBeInTheDocument();
+
+    // 4. Switch to 自定义节点 -> loads preview nodes, allows pin-to-top / move up
+    fireEvent.click(screen.getByRole("tab", { name: "自定义节点" }));
+    await screen.findByText("HK SS");
+    expect(screen.getByText("JP VLess")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "上移 JP VLess" }));
+
+    // Advance and preview -> sends reordered source_ids [2, 1], sort: "custom", sort_direction: "desc", custom_order: ["k2", "k1"]
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    fireEvent.click(screen.getByRole("button", { name: "生成预览" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/subscribe-files/generation/preview", expect.objectContaining({
+      generation: expect.objectContaining({
+        source_ids: [2, 1],
+        processing: expect.objectContaining({
+          sort: "custom",
+          sort_direction: "desc",
+          custom_order: ["k2", "k1"],
+        }),
+      }),
+    })));
+  });
+
 });

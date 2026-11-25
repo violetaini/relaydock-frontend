@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
-import { ArrowLeft, ArrowRight, Check, ChevronDown, Code2, Copy, Eye, FileInput, Layers, Link2, MoreHorizontal, Pencil, Plus, RefreshCw, Search, Settings2, ShieldCheck, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Check, ChevronDown, ChevronsUp, Code2, Copy, Eye, FileInput, GripVertical, Layers, Link2, MoreHorizontal, Pencil, Plus, RefreshCw, Search, Settings2, ShieldCheck, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import { api } from "./api";
 import { Badge, Button, ConfirmDialog, Dialog, EmptyState, ErrorState, Field, IconButton, PageHeader, Spinner, Surface, Toggle } from "./ui";
@@ -8,14 +8,26 @@ import ruleCategories from "./subscription-rule-categories.json";
 import "./subscription-workbench.css";
 
 type Kind = "external" | "custom" | "strategy";
+export type SortMode = "source" | "name" | "type" | "custom";
+export type SortDirection = "asc" | "desc";
+export interface PreviewNodeSummary { key: string; name: string; type: string }
 export interface SubscriptionOutput { client: string; mode: "full" | "source" | "nodes"; template_filename?: string; rule_mode?: "template" | "custom"; rule_categories?: string[] }
 export interface SubscriptionGeneration {
   kind: Kind;
   source_ids: number[];
-  processing: { deduplicate: boolean; remove_dead: boolean; include?: string; exclude?: string; exclude_types?: string[]; sort?: string };
+  processing: {
+    deduplicate: boolean;
+    remove_dead: boolean;
+    include?: string;
+    exclude?: string;
+    exclude_types?: string[];
+    sort?: SortMode | string;
+    sort_direction?: SortDirection;
+    custom_order?: string[];
+  };
   outputs: SubscriptionOutput[];
 }
-interface Preview { input: number; duplicate: number; filtered: number; dead: number; unknown: number; output: number; warnings: string[]; content: string; client: string; outputs?: Preview[] }
+interface Preview { input: number; duplicate: number; filtered: number; dead: number; unknown: number; output: number; warnings: string[]; content: string; client: string; nodes?: PreviewNodeSummary[]; outputs?: Preview[] }
 type ImportProps = { templates: string[]; rules: CustomRuleOption[]; scripts: OverrideScriptOption[]; onClose: (created: boolean) => void; onComplete: () => void };
 type ManagerProps = ContentPageProps & {
   ImportDialog: ComponentType<ImportProps>;
@@ -840,6 +852,295 @@ function NodeFilterRuleBuilder({
   );
 }
 
+function reorderArray<T>(items: T[], from: number, to: number): T[] {
+  if (from === to || from < 0 || to < 0 || from >= items.length || to >= items.length) return items;
+  const next = [...items];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
+}
+
+function SortableOrderList<T>({
+  items,
+  keyOf,
+  labelOf,
+  renderMeta,
+  onReorder,
+  allowPinTop = false,
+}: {
+  items: T[];
+  keyOf: (item: T) => string | number;
+  labelOf: (item: T) => string;
+  renderMeta: (item: T) => ReactNode;
+  onReorder: (next: T[]) => void;
+  allowPinTop?: boolean;
+}) {
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [overIndex, setOverIndex] = useState<number | null>(null);
+
+  return (
+    <ul className="sm-sort-list">
+      {items.map((item, index) => {
+        const isDragging = dragIndex === index;
+        const isOver = overIndex === index && dragIndex !== null && dragIndex !== index;
+        const itemLabel = labelOf(item);
+        return (
+          <li
+            key={keyOf(item)}
+            draggable
+            className={`sm-sort-item ${isDragging ? "is-dragging" : ""} ${isOver ? "is-drag-over" : ""}`}
+            onDragStart={e => {
+              setDragIndex(index);
+              e.dataTransfer.effectAllowed = "move";
+              e.dataTransfer.setData("text/plain", String(index));
+            }}
+            onDragOver={e => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              if (overIndex !== index) setOverIndex(index);
+            }}
+            onDrop={e => {
+              e.preventDefault();
+              if (dragIndex !== null && dragIndex !== index) {
+                onReorder(reorderArray(items, dragIndex, index));
+              }
+              setDragIndex(null);
+              setOverIndex(null);
+            }}
+            onDragEnd={() => {
+              setDragIndex(null);
+              setOverIndex(null);
+            }}
+          >
+            <span className="sm-sort-grip" title="上下拖动调整顺序" aria-hidden="true">
+              <GripVertical size={15} />
+            </span>
+            <span className="sm-sort-index">{index + 1}</span>
+            <div className="sm-sort-info">{renderMeta(item)}</div>
+            <div className="sm-sort-item-actions">
+              {allowPinTop && (
+                <IconButton
+                  label={`置顶 ${itemLabel}`}
+                  disabled={index === 0}
+                  onClick={() => onReorder(reorderArray(items, index, 0))}
+                >
+                  <ChevronsUp size={14} />
+                </IconButton>
+              )}
+              <IconButton
+                label={`上移 ${itemLabel}`}
+                disabled={index === 0}
+                onClick={() => onReorder(reorderArray(items, index, index - 1))}
+              >
+                <ArrowUp size={14} />
+              </IconButton>
+              <IconButton
+                label={`下移 ${itemLabel}`}
+                disabled={index === items.length - 1}
+                onClick={() => onReorder(reorderArray(items, index, index + 1))}
+              >
+                <ArrowDown size={14} />
+              </IconButton>
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+const sortModeOptions: Array<{ id: SortMode; label: string }> = [
+  { id: "source", label: "按来源顺序" },
+  { id: "name", label: "按节点名称" },
+  { id: "type", label: "按节点类型" },
+  { id: "custom", label: "自定义节点" },
+];
+
+function NodeSortPanel({
+  processing,
+  selectedSources,
+  sourceFiles,
+  onChangeProcessing,
+  onReorderSources,
+  fetchSortedNodes,
+}: {
+  processing: SubscriptionGeneration["processing"];
+  selectedSources: number[];
+  sourceFiles: SubscribeFile[];
+  onChangeProcessing: (patch: Partial<SubscriptionGeneration["processing"]>) => void;
+  onReorderSources: (nextIDs: number[]) => void;
+  fetchSortedNodes: (overrideProcessing?: Partial<SubscriptionGeneration["processing"]>) => Promise<PreviewNodeSummary[]>;
+}) {
+  const sortMode = (processing.sort || "source") as SortMode;
+  const direction: SortDirection = processing.sort_direction === "desc" ? "desc" : "asc";
+  const [customNodes, setCustomNodes] = useState<PreviewNodeSummary[]>([]);
+  const [loadingNodes, setLoadingNodes] = useState(false);
+  const [nodesError, setNodesError] = useState("");
+  const loadedOnceRef = useRef(false);
+
+  const loadNodes = useCallback(async (seedFrom?: SortMode) => {
+    setLoadingNodes(true);
+    setNodesError("");
+    try {
+      const override = seedFrom ? { sort: seedFrom, custom_order: undefined } : undefined;
+      const list = await fetchSortedNodes(override);
+      setCustomNodes(list);
+      loadedOnceRef.current = true;
+      if (seedFrom) {
+        onChangeProcessing({ sort: "custom", custom_order: list.map(item => item.key) });
+      }
+    } catch (reason) {
+      setNodesError(message(reason));
+    } finally {
+      setLoadingNodes(false);
+    }
+  }, [fetchSortedNodes, onChangeProcessing]);
+
+  useEffect(() => {
+    if (sortMode === "custom" && !loadedOnceRef.current && !loadingNodes) {
+      void loadNodes();
+    }
+  }, [sortMode, loadingNodes, loadNodes]);
+
+  const handleModeChange = (nextMode: SortMode) => {
+    onChangeProcessing({ sort: nextMode });
+  };
+
+  const handleReorderCustomNodes = (nextList: PreviewNodeSummary[]) => {
+    setCustomNodes(nextList);
+    onChangeProcessing({ sort: "custom", custom_order: nextList.map(item => item.key) });
+  };
+
+  return (
+    <section className="sm-sort-card" aria-label="节点与来源排序">
+      <div className="sm-sort-head">
+        <div>
+          <strong>节点与来源排序</strong>
+          <small>支持拖拽与点击上下调整来源或节点顺序、按类型分组，并一键切换顺逆向输出。</small>
+        </div>
+        <div className="sm-sort-dir" role="group" aria-label="排序方向">
+          <button
+            type="button"
+            className={direction === "asc" ? "is-active" : ""}
+            aria-pressed={direction === "asc"}
+            onClick={() => onChangeProcessing({ sort_direction: "asc" })}
+          >
+            <ArrowUp size={13} aria-hidden="true" />
+            顺向
+          </button>
+          <button
+            type="button"
+            className={direction === "desc" ? "is-active" : ""}
+            aria-pressed={direction === "desc"}
+            onClick={() => onChangeProcessing({ sort_direction: "desc" })}
+          >
+            <ArrowDown size={13} aria-hidden="true" />
+            逆向
+          </button>
+        </div>
+      </div>
+
+      <div className="sm-sort-modes" role="tablist" aria-label="节点排序方式">
+        {sortModeOptions.map(opt => (
+          <button
+            key={opt.id}
+            type="button"
+            role="tab"
+            aria-selected={sortMode === opt.id}
+            className={sortMode === opt.id ? "is-active" : ""}
+            onClick={() => handleModeChange(opt.id)}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+
+      {sortMode === "source" && (
+        <div className="sm-sort-body">
+          {sourceFiles.length > 0 ? (
+            <>
+              <SortableOrderList
+                items={sourceFiles}
+                keyOf={src => src.id}
+                labelOf={src => src.name}
+                renderMeta={src => (
+                  <>
+                    <strong>{src.name}</strong>
+                    <Badge tone={subscriptionKind(src) === "external" ? "info" : "good"}>{kindLabel[subscriptionKind(src)]}</Badge>
+                  </>
+                )}
+                onReorder={nextFiles => {
+                  const nextIDs = nextFiles.map(f => f.id);
+                  if (nextIDs.length === selectedSources.length) onReorderSources(nextIDs);
+                }}
+              />
+              <small className="sm-sort-note">
+                {direction === "desc"
+                  ? "已开启逆向：将按上方来源合并后的列表整体倒序输出。"
+                  : sourceFiles.length > 1
+                  ? "可上下拖动或点击箭头调整来源先后顺序，节点将按此来源顺序输出。"
+                  : "单来源订阅将保留原节点顺序。"}
+              </small>
+            </>
+          ) : (
+            <small className="sm-sort-note">请先选择来源订阅。</small>
+          )}
+        </div>
+      )}
+
+      {(sortMode === "name" || sortMode === "type") && (
+        <div className="sm-sort-body sm-sort-summary">
+          <small className="sm-sort-note">
+            {sortMode === "name"
+              ? `按节点名称字母顺序排序（当前：${direction === "desc" ? "逆向 Z → A" : "顺向 A → Z"}）。`
+              : `按节点协议类型归类排序（如 hysteria2、ss、trojan、vless、vmess，当前：${direction === "desc" ? "逆向降序" : "顺向升序"}）。`}
+          </small>
+          <Button variant="ghost" disabled={loadingNodes} onClick={() => void loadNodes(sortMode)}>
+            {loadingNodes ? <Spinner label="正在加载节点" /> : "按此顺序载入并微调"}
+          </Button>
+        </div>
+      )}
+
+      {sortMode === "custom" && (
+        <div className="sm-sort-body">
+          <div className="sm-sort-toolbar">
+            <span>共 <strong>{customNodes.length}</strong> 个节点 · 可上下拖动或点击箭头调整顺序</span>
+            <Button variant="ghost" disabled={loadingNodes} onClick={() => void loadNodes()}>
+              <RefreshCw size={13} />
+              {loadingNodes ? "加载中..." : "刷新节点列表"}
+            </Button>
+          </div>
+          {nodesError && <ErrorState message={nodesError} />}
+          {loadingNodes && !customNodes.length ? (
+            <div className="sm-sort-loading"><Spinner label="正在读取处理后的节点列表" /></div>
+          ) : customNodes.length > 0 ? (
+            <>
+              <SortableOrderList
+                items={customNodes}
+                keyOf={node => node.key}
+                labelOf={node => node.name}
+                allowPinTop
+                renderMeta={node => (
+                  <>
+                    <strong>{node.name}</strong>
+                    <Badge tone="info">{node.type || "unknown"}</Badge>
+                  </>
+                )}
+                onReorder={handleReorderCustomNodes}
+              />
+              {direction === "desc" && (
+                <small className="sm-sort-note">已开启逆向：生成订阅时将按上方自定义列表倒序输出。</small>
+              )}
+            </>
+          ) : !nodesError ? (
+            <small className="sm-sort-note">暂无可排序节点，请点击「刷新节点列表」加载或检查过滤条件。</small>
+          ) : null}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function RuleCategoryPicker({ selected, onChange }: { selected: string[]; onChange: (keys: string[]) => void }) {
   return <div className="sm-category-picker"><div className="sm-category-heading"><div><strong>规则分类</strong><small>已选 {selected.length} 个分类</small></div><div><Button variant="ghost" onClick={() => onChange([...defaultRuleKeys])}>恢复均衡规则</Button><Button variant="ghost" onClick={() => onChange([])}>清空分类</Button></div></div><div className="sm-rule-grid">{ruleCategories.map(category => <button type="button" key={category.key} className={`sm-rule-category ${selected.includes(category.key) ? "is-selected" : ""}`} aria-pressed={selected.includes(category.key)} onClick={() => onChange(selected.includes(category.key) ? selected.filter(key => key !== category.key) : [...selected, category.key])}><span aria-hidden="true">{category.emoji}</span><span>{category.label}</span>{selected.includes(category.key) && <Check size={13} aria-hidden="true" />}</button>)}</div><p className="sm-hint">按分类顺序匹配，未命中的流量走代理；分类随订阅保存，来源节点更新后自动重新生成。</p></div>;
 }
@@ -1012,7 +1313,27 @@ export function SubscriptionWizard({ kind, file, sourceIDs = [], files, nodes, t
   const titles = kind === "strategy" ? ["选择来源", "节点处理", "客户端与规则", "预览保存"] : kind === "custom" ? ["选择节点", "客户端与规则", "预览保存"] : ["客户端与规则", "预览保存"];
   const outputStep = titles.length - 2; const lastStep = titles.length - 1;
   const candidates = files.filter(source => source.id !== file?.id && subscriptionKind(source) !== "strategy");
-  const selectedSourceFiles = candidates.filter(source => selectedSources.includes(source.id));
+  const selectedSourceFiles = selectedSources
+    .map(id => candidates.find(source => source.id === id))
+    .filter((source): source is SubscribeFile => Boolean(source));
+  const fetchSortedNodes = async (overrideProcessing?: Partial<SubscriptionGeneration["processing"]>): Promise<PreviewNodeSummary[]> => {
+    const nextProcessing = overrideProcessing ? { ...processing, ...overrideProcessing } : processing;
+    const reqPayload = {
+      ...(file ? { id: file.id } : {}),
+      name: name.trim(),
+      description: file?.description || "",
+      filename: safeFilename(filename || name || "subscription"),
+      selected_node_ids: kind === "custom" ? selectedNodes : [],
+      generation: {
+        kind,
+        source_ids: kind === "strategy" ? selectedSources : [],
+        processing: nextProcessing,
+        outputs: [{ client: "clashmeta", mode: "nodes" as const }],
+      },
+    };
+    const result = await api.post<Preview>("/api/admin/subscribe-files/generation/preview", reqPayload);
+    return result.nodes || [];
+  };
   const canInherit = kind === "external" || kind === "strategy" && selectedSources.length === 1 && selectedSourceFiles.length === 1 && subscriptionKind(selectedSourceFiles[0]) === "external";
   const generation = (): SubscriptionGeneration => ({ kind, source_ids: kind === "strategy" ? selectedSources : [], processing, outputs: outputs.map(out => ({ ...out, mode: out.mode === "source" && !canInherit ? "nodes" : out.mode })) });
   const payload = () => ({ ...(file ? { id: file.id } : {}), name: name.trim(), description: file?.description || "", filename: safeFilename(filename || name || "subscription"), selected_node_ids: kind === "custom" ? selectedNodes : [], generation: generation() });
@@ -1051,7 +1372,7 @@ export function SubscriptionWizard({ kind, file, sourceIDs = [], files, nodes, t
     {error && <ErrorState message={error} />}
     {kind === "strategy" && step === 0 && <><div className="sm-picker-header"><span>已选 <strong>{selectedSources.length}</strong> 个来源</span><div className="sm-search"><Search size={15} /><input type="search" aria-label="搜索订阅来源" placeholder="搜索外部、自选订阅" value={query} onChange={e => setQuery(e.target.value)} /></div></div><div className="sm-source-grid">{candidates.filter(source => source.name.toLowerCase().includes(query.toLowerCase())).map(source => <label key={source.id} className={`sm-source ${selectedSources.includes(source.id) ? "is-selected" : ""}`}><input type="checkbox" aria-label={`绑定来源 ${source.name}`} checked={selectedSources.includes(source.id)} onChange={() => { invalidate(); toggleID(source.id, selectedSources, setSelectedSources); }} /><span><strong>{source.name}</strong><small>{kindLabel[subscriptionKind(source)]} · {source.url ? intervalLabel(source.auto_update_interval) : source.filename}</small></span></label>)}</div>{!candidates.length && <EmptyState icon={<FileInput size={24} />} title="暂无可用来源" description="请先添加外部订阅或创建自选订阅。" />}<p className="sm-hint">单个来源也可以创建策略。来源更新后，处理结果自动跟随。</p></>}
     {kind === "custom" && step === 0 && <><div className="sm-picker-header"><span>已选 <strong>{selectedNodes.length}</strong> 个节点</span><div className="sm-search"><Search size={15} /><input type="search" aria-label="搜索面板节点" placeholder="搜索名称或协议" value={query} onChange={e => setQuery(e.target.value)} /></div></div><div className="sm-picker-shortcuts"><Button variant="ghost" onClick={() => { invalidate(); setSelectedNodes([...new Set([...selectedNodes, ...filteredNodes.filter(node => node.enabled && node.subscription_eligible !== false).map(node => node.id)])]); }}>选择可用节点</Button><Button variant="ghost" onClick={() => { invalidate(); setSelectedNodes([]); }}>清空选择</Button>{selectedNodes.some(id => nodes.some(node => node.id === id && node.subscription_eligible === false)) && <Button variant="ghost" onClick={() => { invalidate(); setSelectedNodes(selectedNodes.filter(id => nodes.some(node => node.id === id && node.enabled && node.subscription_eligible !== false))); }}>移除不可统计节点</Button>}</div><div className="sm-source-grid">{filteredNodes.map(node => <label className={`sm-source ${selectedNodes.includes(node.id) ? "is-selected" : ""}`} key={node.id}><input type="checkbox" aria-label={`选择节点 ${node.node_name}`} disabled={(!node.enabled || node.subscription_eligible === false) && !selectedNodes.includes(node.id) && !retainedNodeIDs.has(node.id)} checked={selectedNodes.includes(node.id)} onChange={() => { invalidate(); toggleID(node.id, selectedNodes, setSelectedNodes); }} /><span><strong>{node.node_name}</strong><small>{node.protocol} · {!node.enabled ? "已停用" : node.subscription_eligible === false ? node.subscription_ineligible_reason || "无法按用户统计" : "支持按用户统计"}</small></span></label>)}</div></>}
-    {kind === "strategy" && step === 1 && <div className="sm-processing"><div className="sm-process-toggle"><div><strong>自动去重</strong><p>按完整连接配置去重，名称不同也能识别。</p></div><Toggle checked={processing.deduplicate} onChange={value => { invalidate(); setProcessing(current => ({ ...current, deduplicate: value })); }} label="自动去重" /></div><div className="sm-process-toggle"><div><strong>自动剔除失效节点</strong><p>面板经真实代理协议检测，连续失败 3 次后暂时移出；恢复后重新加入。</p></div><Toggle checked={processing.remove_dead} onChange={value => { invalidate(); setProcessing(current => ({ ...current, remove_dead: value })); }} label="自动剔除失效节点" /></div><div className="sm-notice"><ShieldCheck size={17} /><span>未检测、过期结果及无法检测的节点保留。全部失败时不清空订阅。检测位置：面板服务器；需要已有 Mihomo 核心。</span></div><Field label="节点排序"><select value={processing.sort || "source"} onChange={e => { invalidate(); setProcessing(current => ({ ...current, sort: e.target.value })); }}><option value="source">按来源顺序</option><option value="name">按节点名称</option></select></Field><NodeFilterRuleBuilder processing={processing} nodes={nodes} onChange={patch => { invalidate(); setProcessing(current => ({ ...current, ...patch })); }} onExprError={setFilterExprError} /></div>}
+    {kind === "strategy" && step === 1 && <div className="sm-processing"><div className="sm-process-toggle"><div><strong>自动去重</strong><p>按完整连接配置去重，名称不同也能识别。</p></div><Toggle checked={processing.deduplicate} onChange={value => { invalidate(); setProcessing(current => ({ ...current, deduplicate: value })); }} label="自动去重" /></div><div className="sm-process-toggle"><div><strong>自动剔除失效节点</strong><p>面板经真实代理协议检测，连续失败 3 次后暂时移出；恢复后重新加入。</p></div><Toggle checked={processing.remove_dead} onChange={value => { invalidate(); setProcessing(current => ({ ...current, remove_dead: value })); }} label="自动剔除失效节点" /></div><div className="sm-notice"><ShieldCheck size={17} /><span>未检测、过期结果及无法检测的节点保留。全部失败时不清空订阅。检测位置：面板服务器；需要已有 Mihomo 核心。</span></div><NodeSortPanel processing={processing} selectedSources={selectedSources} sourceFiles={selectedSourceFiles} onChangeProcessing={patch => { invalidate(); setProcessing(current => ({ ...current, ...patch })); }} onReorderSources={nextIDs => { invalidate(); setSelectedSources(nextIDs); }} fetchSortedNodes={fetchSortedNodes} /><NodeFilterRuleBuilder processing={processing} nodes={nodes} onChange={patch => { invalidate(); setProcessing(current => ({ ...current, ...patch })); }} onExprError={setFilterExprError} /></div>}
     {step === outputStep && <div className="sm-output-list">{outputs.map((out, index) => <section className="sm-output" key={index} aria-label={`客户端输出 ${index + 1}`}><div className="sm-output-heading"><strong>{index === 0 ? "默认客户端" : "附加客户端"}</strong>{index > 0 && <IconButton label={`移除客户端 ${index + 1}`} onClick={() => { invalidate(); setOutputs(current => current.filter((_, i) => i !== index)); }}><X size={15} /></IconButton>}</div><div className="sm-form-grid"><Field label={`输出客户端${index ? ` ${index + 1}` : ""}`}><select value={out.client} onChange={e => { const id = e.target.value; setOutput(index, { client: id, mode: id === "v2ray" ? "nodes" : canInherit && id === "clashmeta" ? "source" : templates.length ? "full" : "nodes", template_filename: out.template_filename || templates[0] || "" }); }}>
       {clients.map(client => <option key={client.id} value={client.id} disabled={outputs.some((other, i) => i !== index && other.client === client.id)}>{client.name}</option>)}{["shadowrocket", "uri"].includes(out.client) && <option value={out.client}>{clientName(out.client)}</option>}
     </select></Field><Field label={`规则配置${index ? ` ${index + 1}` : ""}`}><select value={out.mode} onChange={e => setOutput(index, { mode: e.target.value as SubscriptionOutput["mode"] })}>{out.client !== "v2ray" && out.client !== "shadowrocket" && out.client !== "uri" && <option value="full">完整配置（分流规则）</option>}{canInherit && out.client === "clashmeta" && <option value="source">保留上游规则</option>}<option value="nodes">仅输出节点</option></select></Field></div><SubscriptionOutputRules out={out} index={index} templates={templates} onChange={next => setOutput(index, next)} onManageTemplates={onManageTemplates} />{out.client === "clash-to-shadowrocket" && <p className="sm-client-hint">完整配置生成小火箭 .conf；仅节点模式提供独立节点订阅。</p>}{out.mode === "source" && <p className="sm-client-hint">保留该外部来源的分组、分流和 DNS，导入原文保持不变。</p>}</section>)}{outputs.length < clients.length && <Button variant="ghost" onClick={() => { const client = clients.find(c => !outputs.some(out => out.client === c.id)); if (client) { invalidate(); setOutputs(current => [...current, { client: client.id, mode: client.full && templates.length ? "full" : "nodes", template_filename: templates[0] || "" }]); } }}><Plus size={15} />添加其他客户端输出</Button>}</div>}

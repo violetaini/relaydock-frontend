@@ -324,7 +324,7 @@ describe("content workbench subscriptions", () => {
     render(<SubscribeFilesPage onOpenCustomRules={onOpenCustomRules} onOpenRulesConfig={onOpenRulesConfig} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "覆写规则" }));
-    fireEvent.click(screen.getByRole("button", { name: "管理规则模板" }));
+    fireEvent.click(screen.getByRole("button", { name: /模板管理|管理规则模板/ }));
 
     expect(onOpenCustomRules).toHaveBeenCalledOnce();
     expect(onOpenRulesConfig).toHaveBeenCalledOnce();

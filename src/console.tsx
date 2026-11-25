@@ -483,7 +483,7 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange, onWallpaperCha
                 {page === "packages" && profile.is_admin ? <PackagesPage notify={notify} /> : null}
                 {page === "certificates" && pageAllowed(page, profile.is_admin, userPages) ? <CertificatesWorkbenchPage notify={notify} isAdmin={profile.is_admin} /> : null}
                 {page === "templates" && pageAllowed(page, profile.is_admin, userPages) ? <TemplatesWorkbenchPage notify={notify} /> : null}
-                {page === "subscribeFiles" && pageAllowed(page, profile.is_admin, userPages) ? <SubscribeFilesPage isAdmin={profile.is_admin} notify={notify} onOpenCustomRules={pageAllowed("customRules", profile.is_admin, userPages) ? () => navigate("customRules") : undefined} onOpenRulesConfig={profile.is_admin ? () => navigate("rulesConfig") : undefined} /> : null}
+                {page === "subscribeFiles" && pageAllowed(page, profile.is_admin, userPages) ? <SubscribeFilesPage isAdmin={profile.is_admin} notify={notify} onOpenCustomRules={pageAllowed("customRules", profile.is_admin, userPages) ? () => navigate("customRules") : undefined} onOpenRulesConfig={pageAllowed("templates", profile.is_admin, userPages) ? () => navigate("templates") : undefined} /> : null}
                 {page === "customRules" && pageAllowed(page, profile.is_admin, userPages) ? <CustomRulesWorkbenchPage notify={notify} /> : null}
                 {page === "rulesConfig" && profile.is_admin ? <RulesConfigWorkbenchPage notify={notify} /> : null}
                 {page === "settings" && profile.is_admin ? <SettingsWorkbenchPage notify={notify} onBrandingChange={onBrandingChange} onWallpaperChange={onWallpaperChange} /> : null}

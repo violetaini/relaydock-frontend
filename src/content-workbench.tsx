@@ -800,7 +800,6 @@ export function SubscriptionLinksPage({ notify = noNotify }: ContentPageProps) {
   const [qrItem, setQRItem] = useState<{ name: string; url: string } | null>(null);
   const [deleteItem, setDeleteItem] = useState<SubscriptionItem | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [typeFilter, setTypeFilter] = useState<"all" | "package" | "subscribe">("all");
   const [search, setSearch] = useState("");
   const [platformKey, setPlatformKey] = useState<SubscriptionPlatformKey>("clash");
 
@@ -828,17 +827,9 @@ export function SubscriptionLinksPage({ notify = noNotify }: ContentPageProps) {
     [platformKey],
   );
 
-  const counts = useMemo(() => ({
-    all: items.length,
-    package: items.filter((item) => item.type === "package").length,
-    subscribe: items.filter((item) => item.type !== "package").length,
-  }), [items]);
-
   const filteredItems = useMemo(() => {
     const query = search.trim().toLowerCase();
     return items.filter((item) => {
-      if (typeFilter === "package" && item.type !== "package") return false;
-      if (typeFilter === "subscribe" && item.type === "package") return false;
       if (!query) return true;
       const url = resolveSubscriptionURL(item, token, platform.queryValue).toLowerCase();
       return (
@@ -848,7 +839,7 @@ export function SubscriptionLinksPage({ notify = noNotify }: ContentPageProps) {
         url.includes(query)
       );
     });
-  }, [items, platform.queryValue, search, token, typeFilter]);
+  }, [items, platform.queryValue, search, token]);
 
   const remove = async () => {
     if (!deleteItem?.can_delete || deleteItem.id <= 0) return;
@@ -872,36 +863,20 @@ export function SubscriptionLinksPage({ notify = noNotify }: ContentPageProps) {
       {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
       {!loading && items.length > 0 ? (
         <Surface className="cw-sublinks-toolbar">
-          <div className="cw-sublinks-tabs" role="tablist" aria-label="订阅类型筛选">
-            {([
-              { key: "all", label: "全部", count: counts.all },
-              { key: "package", label: "套餐", count: counts.package },
-              { key: "subscribe", label: "订阅", count: counts.subscribe },
-            ] as const).map((tab) => (
-              <button
-                key={tab.key}
-                type="button"
-                role="tab"
-                aria-selected={typeFilter === tab.key}
-                className={`cw-sublinks-tab ${typeFilter === tab.key ? "is-active" : ""}`}
-                onClick={() => setTypeFilter(tab.key)}
-              >
-                {tab.label}
-                <span>{tab.count}</span>
-              </button>
-            ))}
-          </div>
+          <label className="cw-sublinks-search">
+            <Search size={16} />
+            <input
+              type="search"
+              aria-label="搜索订阅链接"
+              placeholder="搜索名称、文件名或链接..."
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </label>
           <div className="cw-sublinks-controls">
-            <label className="cw-sublinks-search">
-              <Search size={16} />
-              <input
-                type="search"
-                aria-label="搜索订阅链接"
-                placeholder="搜索名称、文件名或链接..."
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
-            </label>
+            <span className="cw-sublinks-count">
+              {search.trim() ? `匹配 ${filteredItems.length} / ${items.length} 个` : `共 ${items.length} 个订阅`}
+            </span>
             <label className="cw-sublinks-platform">
               <span>导入平台</span>
               <select
@@ -924,8 +899,8 @@ export function SubscriptionLinksPage({ notify = noNotify }: ContentPageProps) {
           <EmptyState
             icon={<Search size={24} />}
             title="未找到匹配的订阅"
-            description="尝试更换搜索关键词或重置筛选条件。"
-            action={<Button variant="secondary" onClick={() => { setSearch(""); setTypeFilter("all"); }}>清空筛选</Button>}
+            description="尝试更换搜索关键词。"
+            action={<Button variant="secondary" onClick={() => setSearch("")}>清空搜索</Button>}
           />
         </Surface>
       ) : (

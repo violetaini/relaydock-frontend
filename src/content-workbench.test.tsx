@@ -399,7 +399,7 @@ describe("content workbench subscriptions", () => {
     expect(notify).toHaveBeenCalledWith("订阅“自建订阅”已删除");
   });
 
-  it("supports filtering, searching, and switching client platform on subscription links", async () => {
+  it("supports searching and switching client platform on subscription links", async () => {
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
       if (path === "/api/subscriptions") {
         return {
@@ -418,14 +418,7 @@ describe("content workbench subscriptions", () => {
     expect(await screen.findByText("香港专线")).toBeInTheDocument();
     expect(screen.getByText("基础套餐")).toBeInTheDocument();
 
-    // Filter by type: 套餐
-    fireEvent.click(screen.getByRole("tab", { name: /套餐/ }));
-    expect(screen.queryByText("香港专线")).not.toBeInTheDocument();
-    expect(screen.getByText("基础套餐")).toBeInTheDocument();
-
-    // Switch back to 全部 and search
-    fireEvent.click(screen.getByRole("tab", { name: /全部/ }));
-    expect(screen.getByText("香港专线")).toBeInTheDocument();
+    // Search by filename
     fireEvent.change(screen.getByRole("searchbox", { name: "搜索订阅链接" }), { target: { value: "hk.yaml" } });
     expect(screen.getByText("香港专线")).toBeInTheDocument();
     expect(screen.queryByText("基础套餐")).not.toBeInTheDocument();

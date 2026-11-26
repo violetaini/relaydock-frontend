@@ -709,22 +709,24 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
           <Field label="固定节点流量重置日" hint="月：每月；季度：季度首月；年：1 月"><input required aria-label="固定节点流量重置日" type="number" min="1" max="31" step="1" value={form.resetDay} onChange={(event) => setForm({ ...form, resetDay: event.target.value })} /></Field>
         </div>
 
-        <div className="form-grid">
-          <Field label="订阅规则模板" hint="留空继承系统默认模板">
-            <select value={form.templateFilename} onChange={(event) => setForm({ ...form, templateFilename: event.target.value })}>
-              <option value="">继承系统默认</option>
-              {form.templateFilename && !templates.includes(form.templateFilename) ? <option value={form.templateFilename}>{form.templateFilename}（当前）</option> : null}
-              {templates.map((template) => <option key={template} value={template}>{template}</option>)}
-            </select>
-          </Field>
-          <div className="package-advanced-toggle"><Button type="button" variant="secondary" onClick={() => setShowAdvanced((value) => !value)}><Gauge size={16} />{showAdvanced ? "收起固定节点明细" : "配置固定节点明细"}</Button></div>
-        </div>
+        <Field label="订阅规则模板" hint="留空继承系统默认模板">
+          <select value={form.templateFilename} onChange={(event) => setForm({ ...form, templateFilename: event.target.value })}>
+            <option value="">继承系统默认</option>
+            {form.templateFilename && !templates.includes(form.templateFilename) ? <option value={form.templateFilename}>{form.templateFilename}（当前）</option> : null}
+            {templates.map((template) => <option key={template} value={template}>{template}</option>)}
+          </select>
+        </Field>
 
         <div className="surface-heading">
           <div><h2>关联节点（{form.nodes.length}）</h2></div>
-          <Button type="button" variant="ghost" onClick={toggleVisible} disabled={visibleNodes.length === 0}>
-            {allVisibleSelected ? "取消当前结果" : "选择当前结果"}
-          </Button>
+          <div className="page-actions">
+            <Button type="button" variant="secondary" onClick={() => setShowAdvanced((value) => !value)}>
+              <Gauge size={16} />{showAdvanced ? "收起固定节点明细" : "配置固定节点明细"}
+            </Button>
+            <Button type="button" variant="ghost" onClick={toggleVisible} disabled={visibleNodes.length === 0}>
+              {allVisibleSelected ? "取消当前结果" : "选择当前结果"}
+            </Button>
+          </div>
         </div>
         <Field label="筛选节点">
           <input value={nodeSearch} onChange={(event) => setNodeSearch(event.target.value)} placeholder="名称、协议、服务器或标签" />

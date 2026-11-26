@@ -1705,6 +1705,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
                           const tooltipLines = [
                             `节点：${node.node_name}`,
                             `Xray 节点跑量：${formatBytes(nodeTraffic)}${hasNodeTraffic ? ` (上行 ${formatBytes(node.traffic_uplink || 0)} / 下行 ${formatBytes(node.traffic_downlink || 0)})` : ""}`,
+                            "统计周期：月度（次月 1 号重置）",
                           ];
                           if (srv) {
                             tooltipLines.push(`所属服务器：${srv.name} (总跑量 ${formatBytes(srv.traffic_used || 0)}${srv.traffic_limit > 0 ? ` / 限额 ${formatBytes(srv.traffic_limit)}` : " / 不限额"})`);

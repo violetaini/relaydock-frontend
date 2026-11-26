@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { api } from "./api";
-import { SubscriptionWizard } from "./subscription-workbench";
+import { SubscriptionManager, SubscriptionWizard } from "./subscription-workbench";
 import type { SubscribeFile } from "./content-workbench";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -407,6 +407,51 @@ describe("unified subscription wizard", () => {
     expect(screen.queryByRole("checkbox", { name: "选择节点 阿里云 任意门 01" })).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: "选择节点 friend | Tunnel" })).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: "选择节点 HK DMIT 01 [SS-2022]" })).not.toBeInTheDocument();
+  });
+
+  it("renders one-click Clash import link with proper deep link protocol and notifies on click", async () => {
+    const notify = vi.fn();
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/subscribe-files") return { files } as T;
+      if (path === "/api/admin/nodes") return { nodes: props.nodes } as T;
+      if (path === "/api/admin/rule-templates") return { templates: [] } as T;
+      if (path === "/api/user/token") return { token: "secret-token-123" } as T;
+      if (path === "/api/admin/custom-rules") return [] as T;
+      if (path === "/api/admin/override-scripts") return [] as T;
+      return {} as T;
+    });
+
+    render(
+      <SubscriptionManager
+        notify={notify}
+        isAdmin={true}
+        ImportDialog={() => null}
+        ContentDialog={() => null}
+      />
+    );
+
+    const rowImport = await screen.findByRole("button", { name: "一键导入 Clash 外部机场" });
+    expect(rowImport).toBeInTheDocument();
+    const href = rowImport.getAttribute("href");
+    expect(href).toContain("clash://install-config?");
+    expect(href).toContain("url=");
+    expect(href).toContain(encodeURIComponent("filename=airport.yaml"));
+    expect(href).toContain(encodeURIComponent("token=secret-token-123"));
+    expect(href).toContain(encodeURIComponent("t=clashmeta"));
+    expect(href).toContain("name=%E5%A4%96%E9%83%A8%E6%9C%BA%E5%9C%BA");
+
+    fireEvent.click(rowImport);
+    expect(notify).toHaveBeenCalledWith("已呼起 Clash 导入「外部机场」");
+
+    const moreSummary = screen.getByLabelText("更多操作 外部机场");
+    fireEvent.click(moreSummary);
+    const menuImport = within(moreSummary.parentElement!).getByRole("menuitem", { name: "一键导入 Clash" });
+    expect(menuImport.getAttribute("href")).toBe(href);
+
+    fireEvent.click(within(moreSummary.parentElement!).getByRole("button", { name: "客户端订阅链接" }));
+    const dialog = await screen.findByRole("dialog", { name: "外部机场 · 订阅链接" });
+    const dialogClashLinks = within(dialog).getAllByText("一键导入 Clash");
+    expect(dialogClashLinks.length).toBeGreaterThanOrEqual(1);
   });
 
 });

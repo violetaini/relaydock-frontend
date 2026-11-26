@@ -18,16 +18,17 @@
 .sm-table .sm-select { width:42px;padding-right:0; }
 .sm-file-name { display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-weight:600; }
 .sm-file-name .badge { font-weight:400;font-size:11px; }
-.sm-action-cell { width:130px;text-align:right!important; }
+.sm-action-cell { width:160px;text-align:right!important; }
 .sm-row-actions { justify-content:flex-end;gap:4px; }
 .sm-more { position:relative; }
 .sm-more>summary { list-style:none;display:flex;align-items:center;justify-content:center;cursor:pointer;width:32px;height:34px;border-radius:6px;color:var(--text-soft); }
 .sm-more>summary::-webkit-details-marker { display:none; }
 .sm-more[open]>summary { background:var(--surface-hover); }
 .sm-menu { position:fixed;left:var(--sm-menu-left);top:var(--sm-menu-top);width:200px;z-index:55;background:var(--surface-raised);padding:6px;border:1px solid var(--border);border-radius:9px;box-shadow:var(--shadow-high); }
-.sm-menu button { display:flex;align-items:center;gap:9px;width:100%;padding:10px;border:0;background:transparent;text-align:left;color:var(--text);cursor:pointer;border-radius:5px;white-space:nowrap; }
-.sm-menu button:hover { background:var(--surface-hover); }
+.sm-menu button, .sm-menu a { display:flex;align-items:center;gap:9px;width:100%;padding:10px;border:0;background:transparent;text-align:left;color:var(--text);cursor:pointer;border-radius:5px;white-space:nowrap;text-decoration:none;font-size:inherit;box-sizing:border-box; }
+.sm-menu button:hover, .sm-menu a:hover { background:var(--surface-hover); }
 .sm-menu .sm-danger { color:var(--red); }
+.icon-button.is-disabled, .sm-menu a.is-disabled { opacity:.4;cursor:not-allowed;pointer-events:none; }
 .sm-list-footer { justify-content:space-between;flex-wrap:wrap;padding:12px 20px;border-top:1px solid var(--border); }
 .sm-list-footer small,.sm-hint { color:var(--text-soft);font-size:13px;line-height:1.6; }
 .sm-selection-bar { justify-content:space-between;flex-wrap:wrap;padding:12px 20px;background:var(--accent-soft);border-bottom:1px solid var(--border); }

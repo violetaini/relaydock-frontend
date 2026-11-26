@@ -1422,7 +1422,7 @@ function SubscriptionCopyButton({ file, disabled, onCopy }: { file: SubscribeFil
     return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", keyboard); window.removeEventListener("scroll", scroll, true); window.removeEventListener("resize", resize); };
   }, [open, updatePosition]);
   return <div className="sm-copy-action" ref={anchor}>
-    <IconButton label={`复制订阅链接 ${file.name}`} disabled={disabled} aria-haspopup={multiple ? "menu" : undefined} aria-expanded={multiple ? open : undefined} className={multiple ? "sm-copy-multiple" : ""} onClick={() => multiple ? setOpen(value => !value) : onCopy(outputs[0]?.client)}><Copy size={16} />{multiple && <ChevronDown size={11} />}</IconButton>
+    <IconButton label={`复制订阅链接 ${file.name}`} disabled={disabled} aria-haspopup={multiple ? "menu" : undefined} aria-expanded={multiple ? open : undefined} className={multiple ? "sm-copy-multiple" : ""} onClick={() => multiple ? setOpen(value => !value) : onCopy(outputs[0]?.client)}><Copy size={multiple ? 14 : 16} />{multiple && <ChevronDown size={10} strokeWidth={2.5} />}</IconButton>
     {open && createPortal(<div ref={menu} className="sm-menu sm-copy-menu" role="menu" aria-label={`选择要复制的客户端 ${file.name}`} style={position} onKeyDown={event => {
       if (event.key === "Tab") { setOpen(false); return; }
       if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;

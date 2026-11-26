@@ -79,22 +79,41 @@ describe("content workbench templates", () => {
     expect(screen.getByRole("button", { name: "默认模板" })).toBeDisabled();
   });
 
-  it("loads a template and previews it through the V3 preview endpoint", async () => {
+  it("loads an existing template into the visual editor and saves structured updates", async () => {
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
       if (path === "/api/admin/rule-templates") return { templates: ["edge_v3.yaml"], owners: {}, username: "admin", is_admin: true } as T;
-      if (path === "/api/admin/rule-templates/edge_v3.yaml") return { content: "proxies: []\nrules: []" } as T;
+      if (path === "/api/admin/rule-templates/edge_v3.yaml") {
+        return {
+          content: "mode: rule\ngeodata-mode: true\ndns:\n  enable: true\n  enhanced-mode: fake-ip\n  nameserver:\n    - tls://8.8.8.8\nproxy-groups:\n  - name: PROXY\n    type: select\n    proxies:\n      - __PROXY_NODES__\n      - DIRECT\nrules:\n  - MATCH,PROXY\n",
+        } as T;
+      }
+      if (path === "/api/admin/nodes") return { nodes: [] } as T;
+      if (path === "/api/admin/template-v3/region-filters") return { region_filters: {} } as T;
+      if (path === "/api/user/proxy-provider-configs") return [] as T;
       throw new Error(`unexpected GET ${path}`);
     });
-    const post = vi.spyOn(api, "post").mockResolvedValue({ content: "proxies: []\nrules:\n  - MATCH,PROXY" });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ content: "ok" });
+    const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
 
     render(<TemplatesWorkbenchPage notify={vi.fn()} />);
-    fireEvent.click(await screen.findByRole("button", { name: "预览" }));
+    fireEvent.click(await screen.findByRole("button", { name: "可视化修改 edge_v3.yaml" }));
 
-    expect(await screen.findByText(/MATCH,PROXY/)).toBeInTheDocument();
-    expect(post).toHaveBeenCalledWith("/api/admin/template-v3/preview", {
-      template_content: "proxies: []\nrules: []",
+    expect(await screen.findByRole("dialog", { name: "可视化修改 · edge_v3.yaml" })).toBeInTheDocument();
+    expect(await screen.findByRole("textbox", { name: "模板文件名" })).toHaveValue("edge_v3.yaml");
+    fireEvent.change(screen.getByRole("combobox", { name: "类型" }), { target: { value: "url-test" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/template-v3/preview", expect.objectContaining({
       proxies: [],
-    });
+      template_content: expect.stringContaining("geodata-mode: true"),
+    })));
+    await waitFor(() => expect(put).toHaveBeenCalledWith(
+      "/api/admin/rule-templates/edge_v3.yaml",
+      expect.objectContaining({
+        new_name: "edge_v3.yaml",
+        content: expect.stringContaining('type: "url-test"'),
+      }),
+    ));
   });
 
   it("fetches a URL through the backend and uploads the resulting YAML", async () => {

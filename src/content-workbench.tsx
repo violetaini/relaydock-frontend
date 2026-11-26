@@ -43,6 +43,7 @@ import {
   WandSparkles,
   X,
 } from "lucide-react";
+import { load as loadYAML } from "js-yaml";
 import QRCode from "qrcode";
 import { api, request } from "./api";
 import { isAnyDoorNode } from "./managed-node-presets";
@@ -483,7 +484,102 @@ function isVisualDraft(value: unknown): value is VisualTemplateDraft {
   return candidate.version === 1 && typeof candidate.filename === "string" && Array.isArray(candidate.groups) && Array.isArray(candidate.rules) && Array.isArray(candidate.nameservers);
 }
 
-function visualTemplateObject(draft: VisualTemplateDraft): Record<string, unknown> {
+function parseTemplateToVisualDraft(
+  filename: string,
+  content: string,
+): { draft: VisualTemplateDraft; baseDoc: Record<string, unknown> | null } {
+  const raw = loadYAML(content);
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("模板内容不是有效的 YAML 对象，请使用 YAML 文本编辑器修改");
+  }
+  const doc = raw as Record<string, unknown>;
+  const rawGroups = Array.isArray(doc["proxy-groups"]) ? doc["proxy-groups"] : [];
+  const groupNames = new Set(
+    rawGroups
+      .map((g) => (g && typeof g === "object" ? String((g as Record<string, unknown>).name || "").trim() : ""))
+      .filter(Boolean),
+  );
+  const validTypes = new Set<ProxyGroupType>(["select", "url-test", "fallback", "load-balance", "relay"]);
+
+  const groups: VisualProxyGroup[] = rawGroups
+    .filter((g): g is Record<string, unknown> => Boolean(g && typeof g === "object"))
+    .map((g) => {
+      const rawType = String(g.type || "select") as ProxyGroupType;
+      const type: ProxyGroupType = validTypes.has(rawType) ? rawType : "select";
+      const proxies = Array.isArray(g.proxies) ? g.proxies.map((v) => String(v)) : [];
+      const use = Array.isArray(g.use) ? g.use.map((v) => String(v)) : [];
+      const sources: VisualSource[] = [
+        ...proxies.map((value) => ({
+          id: localID("source"),
+          kind: (value === "DIRECT" || value === "REJECT"
+            ? "builtin"
+            : groupNames.has(value)
+              ? "group"
+              : "node") as VisualSource["kind"],
+          value,
+        })),
+        ...use.map((value) => ({
+          id: localID("source"),
+          kind: "provider" as const,
+          value,
+        })),
+      ];
+      return {
+        id: localID("group"),
+        name: String(g.name || ""),
+        type,
+        sources,
+        url: String(g.url || "https://cp.cloudflare.com/generate_204"),
+        interval: Number(g.interval) || 300,
+        tolerance: g.tolerance != null ? Number(g.tolerance) : 50,
+        lazy: g.lazy !== false,
+        filter: String(g.filter || ""),
+        excludeFilter: String(g["exclude-filter"] || ""),
+        excludeType: String(g["exclude-type"] || ""),
+        strategy: String(g.strategy || "consistent-hashing"),
+        dialerProxyGroup: String(g["dialer-proxy-group"] || ""),
+      };
+    });
+
+  const rawDns = doc.dns && typeof doc.dns === "object" && !Array.isArray(doc.dns) ? (doc.dns as Record<string, unknown>) : null;
+  let dnsMode: VisualTemplateDraft["dnsMode"] = "off";
+  let ipv6 = false;
+  let nameservers = ["tls://1.1.1.1", "tls://8.8.8.8"];
+  let fakeIPRange = "198.18.0.1/16";
+  let fakeIPFilters = ["+.lan", "+.local"];
+  if (rawDns && rawDns.enable !== false) {
+    dnsMode = rawDns["enhanced-mode"] === "redir-host" ? "redir-host" : "fake-ip";
+    ipv6 = Boolean(rawDns.ipv6);
+    if (Array.isArray(rawDns.nameserver)) {
+      nameservers = rawDns.nameserver.map((v) => String(v));
+    }
+    if (typeof rawDns["fake-ip-range"] === "string" && rawDns["fake-ip-range"].trim()) {
+      fakeIPRange = rawDns["fake-ip-range"];
+    }
+    if (Array.isArray(rawDns["fake-ip-filter"])) {
+      fakeIPFilters = rawDns["fake-ip-filter"].map((v) => String(v));
+    }
+  }
+
+  const rawRules = Array.isArray(doc.rules) ? doc.rules.map((r) => String(r)) : [];
+
+  return {
+    draft: {
+      version: 1,
+      filename,
+      dnsMode,
+      ipv6,
+      nameservers,
+      fakeIPRange,
+      fakeIPFilters,
+      groups: groups.length ? groups : [defaultVisualGroup()],
+      rules: rawRules.length ? rawRules : ["MATCH,PROXY"],
+    },
+    baseDoc: doc,
+  };
+}
+
+function visualTemplateObject(draft: VisualTemplateDraft, baseDoc?: Record<string, unknown> | null): Record<string, unknown> {
   const groups = draft.groups.map((group) => {
     const proxies = group.sources.filter((source) => source.kind !== "provider").map((source) => source.value);
     const use = group.sources.filter((source) => source.kind === "provider").map((source) => source.value);
@@ -503,14 +599,20 @@ function visualTemplateObject(draft: VisualTemplateDraft): Record<string, unknow
     if (group.dialerProxyGroup.trim()) output["dialer-proxy-group"] = group.dialerProxyGroup.trim();
     return output;
   });
-  const output: Record<string, unknown> = {
-    mode: "rule",
-    proxies: null,
-    "proxy-groups": groups,
-    rules: draft.rules.map((rule) => rule.trim()).filter(Boolean),
-  };
+  const output: Record<string, unknown> = baseDoc
+    ? { ...baseDoc, "proxy-groups": groups, rules: draft.rules.map((rule) => rule.trim()).filter(Boolean) }
+    : {
+        mode: "rule",
+        proxies: null,
+        "proxy-groups": groups,
+        rules: draft.rules.map((rule) => rule.trim()).filter(Boolean),
+      };
   if (draft.dnsMode !== "off") {
+    const prevDns = baseDoc?.dns && typeof baseDoc.dns === "object" && !Array.isArray(baseDoc.dns)
+      ? (baseDoc.dns as Record<string, unknown>)
+      : {};
     const dns: Record<string, unknown> = {
+      ...prevDns,
       enable: true,
       "enhanced-mode": draft.dnsMode,
       ipv6: draft.ipv6,
@@ -519,8 +621,13 @@ function visualTemplateObject(draft: VisualTemplateDraft): Record<string, unknow
     if (draft.dnsMode === "fake-ip") {
       dns["fake-ip-range"] = draft.fakeIPRange.trim() || "198.18.0.1/16";
       dns["fake-ip-filter"] = draft.fakeIPFilters.map((item) => item.trim()).filter(Boolean);
+    } else {
+      delete dns["fake-ip-range"];
+      delete dns["fake-ip-filter"];
     }
     output.dns = dns;
+  } else if (baseDoc) {
+    delete output.dns;
   }
   return output;
 }
@@ -1587,7 +1694,7 @@ export function TemplatesWorkbenchPage({ notify = noNotify }: ContentPageProps) 
   const [filter, setFilter] = useState<"all" | "default" | "mine" | "builtin">("all");
   const [showCreate, setShowCreate] = useState(false);
   const [showVisual, setShowVisual] = useState(false);
-  const [previewing, setPreviewing] = useState<string | null>(null);
+  const [visualEditing, setVisualEditing] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [defaultTemplate, setDefaultTemplate] = useState("");
@@ -1801,11 +1908,11 @@ export function TemplatesWorkbenchPage({ notify = noNotify }: ContentPageProps) 
                             </IconButton>
                           ) : null}
                           <IconButton
-                            label="预览"
-                            title={`预览 ${filename}`}
-                            onClick={() => setPreviewing(filename)}
+                            label={`可视化修改 ${filename}`}
+                            title={`可视化修改 ${filename}`}
+                            onClick={() => setVisualEditing(filename)}
                           >
-                            <Sparkles size={17} />
+                            <WandSparkles size={17} />
                           </IconButton>
                           {canModify(filename) ? (
                             <>
@@ -1836,17 +1943,18 @@ export function TemplatesWorkbenchPage({ notify = noNotify }: ContentPageProps) 
       )}
       {showCreate ? <CreateTemplateDialog onClose={() => setShowCreate(false)} onComplete={async () => { setShowCreate(false); notify("模板已创建"); await load(); }} /> : null}
       {showVisual ? <VisualTemplateDialog onClose={() => setShowVisual(false)} onComplete={async () => { setShowVisual(false); notify("可视化模板已保存"); await load(); }} /> : null}
-      {previewing ? <TemplatePreviewDialog filename={previewing} onClose={() => setPreviewing(null)} /> : null}
+      {visualEditing ? <VisualTemplateDialog editFilename={visualEditing} canEdit={canModify(visualEditing)} onClose={() => setVisualEditing(null)} onComplete={async () => { setVisualEditing(null); notify("模板已保存"); await load(); }} /> : null}
       {editing ? <EditTemplateDialog filename={editing} onClose={() => setEditing(null)} onComplete={async () => { setEditing(null); notify("模板已保存"); await load(); }} /> : null}
       {deleting ? <ConfirmDialog title="删除模板" description={`将永久删除“${deleting}”。引用该模板的套餐和订阅需要重新选择模板。`} confirmLabel="确认删除" working={working} onCancel={() => setDeleting(null)} onConfirm={() => void remove()} /> : null}
     </section>
   );
 }
 
-function VisualTemplateDialog({ onClose, onComplete }: { onClose: () => void; onComplete: () => void }) {
+function VisualTemplateDialog({ editFilename, canEdit = true, onClose, onComplete }: { editFilename?: string; canEdit?: boolean; onClose: () => void; onComplete: () => void }) {
   const storageKey = "arcway:visual-template-draft:v1";
   const restoredRef = useRef(false);
   const [draft, setDraft] = useState<VisualTemplateDraft>(() => {
+    if (editFilename) return { ...defaultVisualDraft(), filename: editFilename };
     try {
       const saved = window.localStorage.getItem(storageKey);
       if (saved) {
@@ -1856,6 +1964,8 @@ function VisualTemplateDialog({ onClose, onComplete }: { onClose: () => void; on
     } catch { /* localStorage may be unavailable in private contexts */ }
     return defaultVisualDraft();
   });
+  const [baseDoc, setBaseDoc] = useState<Record<string, unknown> | null>(null);
+  const [templateLoading, setTemplateLoading] = useState(Boolean(editFilename));
   const [nodes, setNodes] = useState<NodeItem[]>([]);
   const [providers, setProviders] = useState<ProxyProviderConfig[]>([]);
   const [providersLoaded, setProvidersLoaded] = useState(false);
@@ -1866,6 +1976,24 @@ function VisualTemplateDialog({ onClose, onComplete }: { onClose: () => void; on
   const [working, setWorking] = useState(false);
   const [loadWarning, setLoadWarning] = useState("");
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!editFilename) return;
+    let active = true;
+    setTemplateLoading(true);
+    setError("");
+    void api.get<{ content?: string }>(`/api/admin/rule-templates/${encodeURIComponent(editFilename)}`).then((payload) => {
+      if (!active) return;
+      const parsed = parseTemplateToVisualDraft(editFilename, payload.content ?? "");
+      setDraft(parsed.draft);
+      setBaseDoc(parsed.baseDoc);
+    }).catch((reason) => {
+      if (active) setError(fail(reason, "读取或解析模板失败"));
+    }).finally(() => {
+      if (active) setTemplateLoading(false);
+    });
+    return () => { active = false; };
+  }, [editFilename]);
 
   useEffect(() => {
     const loadOptions = async () => {
@@ -1904,10 +2032,11 @@ function VisualTemplateDialog({ onClose, onComplete }: { onClose: () => void; on
   }, []);
 
   useEffect(() => {
+    if (editFilename) return;
     try { window.localStorage.setItem(storageKey, JSON.stringify(draft)); } catch { /* best effort */ }
-  }, [draft]);
+  }, [draft, editFilename]);
 
-  const outputObject = useMemo(() => visualTemplateObject(draft), [draft]);
+  const outputObject = useMemo(() => visualTemplateObject(draft, baseDoc), [draft, baseDoc]);
   const yaml = useMemo(() => `${structuredYAML(outputObject)}\n`, [outputObject]);
   const json = useMemo(() => `${JSON.stringify(outputObject, null, 2)}\n`, [outputObject]);
   const availableProviders = useMemo(() => {
@@ -1974,8 +2103,15 @@ function VisualTemplateDialog({ onClose, onComplete }: { onClose: () => void; on
       }
       if (!draft.rules.some((rule) => rule.trim())) throw new Error("至少需要一条规则");
       await api.post<{ content?: string }>("/api/admin/template-v3/preview", { template_content: yaml, proxies: [] });
-      await uploadRuleTemplate(normalizedFilename(draft.filename, "visual_v3"), yaml);
-      try { window.localStorage.removeItem(storageKey); } catch { /* best effort */ }
+      if (editFilename && canEdit) {
+        const normalized = normalizedFilename(draft.filename, "template");
+        await api.put(`/api/admin/rule-templates/${encodeURIComponent(editFilename)}`, { content: yaml, new_name: normalized });
+      } else {
+        await uploadRuleTemplate(normalizedFilename(draft.filename, "visual_v3"), yaml);
+        if (!editFilename) {
+          try { window.localStorage.removeItem(storageKey); } catch { /* best effort */ }
+        }
+      }
       onComplete();
     } catch (reason) { setError(fail(reason, "保存可视化模板失败")); }
     finally { setWorking(false); }
@@ -1990,13 +2126,14 @@ function VisualTemplateDialog({ onClose, onComplete }: { onClose: () => void; on
     ...nodes.filter((item) => item.enabled).map((item) => ({ label: `节点 · ${item.node_name}`, kind: "node" as const, value: item.node_name })),
   ];
 
-  return <Dialog title="可视化模板设计" description="结构化维护代理组并生成完整 V3 YAML；不会解析或改写已有 YAML" onClose={onClose} dismissible={!working} wide>
+  return <Dialog title={editFilename ? `可视化修改 · ${editFilename}` : "可视化模板设计"} description={editFilename ? "可视化调整 DNS、代理组与规则；保留模板原有扩展字段" : "结构化维护代理组并生成完整 V3 YAML；不会解析或改写已有 YAML"} onClose={onClose} dismissible={!working} wide>
     <div className="cw-form cw-visual-dialog">
       {error ? <ErrorState message={error} /> : null}
+      {editFilename && !canEdit ? <div className="cw-help"><Info size={16} /><span>当前为内置或他人模板，不可直接覆盖；修改后可保存为新模板。</span></div> : null}
       {loadWarning ? <div className="cw-help"><Info size={16} /><span>{loadWarning}</span></div> : null}
       {missingProviderNames.length ? <div className="cw-help"><Info size={16} /><span>草稿引用的 Proxy Provider 已不存在或不可用：{missingProviderNames.join("、")}。请重新选择来源后再保存。</span></div> : null}
-      <fieldset className="cw-lock-fields" disabled={working}>
-      {restoredRef.current ? <div className="cw-draft-notice"><span><RefreshCw size={15} />已恢复上次未保存草稿</span><Button variant="ghost" disabled={working} onClick={clearDraft}>清除草稿</Button></div> : null}
+      {templateLoading ? <div className="cw-loading"><Spinner label="正在加载模板" /></div> : <fieldset className="cw-lock-fields" disabled={working}>
+      {!editFilename && restoredRef.current ? <div className="cw-draft-notice"><span><RefreshCw size={15} />已恢复上次未保存草稿</span><Button variant="ghost" disabled={working} onClick={clearDraft}>清除草稿</Button></div> : null}
       <div className="cw-tabs cw-tabs-three" role="tablist" aria-label="可视化模板视图"><button type="button" role="tab" aria-selected={tab === "design"} className={tab === "design" ? "is-active" : ""} onClick={() => setTab("design")}>结构设计</button><button type="button" role="tab" aria-selected={tab === "yaml"} className={tab === "yaml" ? "is-active" : ""} onClick={() => setTab("yaml")}>YAML 预览</button><button type="button" role="tab" aria-selected={tab === "json"} className={tab === "json" ? "is-active" : ""} onClick={() => setTab("json")}>JSON 预览</button></div>
       {tab === "design" ? <>
         <div className="cw-visual-card">
@@ -2059,35 +2196,10 @@ function VisualTemplateDialog({ onClose, onComplete }: { onClose: () => void; on
           <Field label="每行一条 Mihomo 规则"><textarea className="cw-dialog-code cw-dialog-code-short" value={draft.rules.join("\n")} onChange={(event) => setDraft((current) => ({ ...current, rules: event.target.value.split("\n") }))} spellCheck={false} /></Field>
         </div>
       </> : <pre className="cw-preview">{tab === "yaml" ? yaml : json}</pre>}
-      <div className="dialog-actions cw-visual-footer"><Button variant="ghost" disabled={working} onClick={clearDraft}>恢复默认</Button><div className="cw-visual-footer-right"><Button variant="secondary" disabled={working} onClick={onClose}>取消</Button><Button onClick={() => void save()} disabled={working}>{working ? <Spinner label="正在保存" /> : <><Save size={16} />保存新模板</>}</Button></div></div>
-      </fieldset>
+      <div className="dialog-actions cw-visual-footer">{!editFilename ? <Button variant="ghost" disabled={working} onClick={clearDraft}>恢复默认</Button> : <span />}<div className="cw-visual-footer-right"><Button variant="secondary" disabled={working} onClick={onClose}>取消</Button><Button onClick={() => void save()} disabled={working || templateLoading}>{working ? <Spinner label="正在保存" /> : <><Save size={16} />{editFilename ? (canEdit ? "保存修改" : "另存为新模板") : "保存新模板"}</>}</Button></div></div>
+      </fieldset>}
     </div>
   </Dialog>;
-}
-
-function TemplatePreviewDialog({ filename, onClose }: { filename: string; onClose: () => void }) {
-  const [raw, setRaw] = useState("");
-  const [rendered, setRendered] = useState("");
-  const [tab, setTab] = useState<"rendered" | "raw">("rendered");
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    let active = true;
-    void api.get<{ content?: string }>(`/api/admin/rule-templates/${encodeURIComponent(filename)}`).then(async (payload) => {
-      const content = payload.content ?? "";
-      if (!active) return;
-      setRaw(content);
-      try {
-        const result = await api.post<{ content?: string }>("/api/admin/template-v3/preview", { template_content: content, proxies: [] });
-        if (active) setRendered(result.content || content);
-      } catch {
-        if (active) setRendered(content);
-      }
-    }).catch((reason) => active && setError(fail(reason, "读取模板失败"))).finally(() => active && setLoading(false));
-    return () => { active = false; };
-  }, [filename]);
-  const content = tab === "rendered" ? rendered : raw;
-  return <Dialog title="模板预览" description={filename} onClose={onClose} wide>{error ? <ErrorState message={error} /> : null}<div className="cw-tabs" role="tablist" aria-label="模板预览模式"><button type="button" role="tab" aria-selected={tab === "rendered"} className={tab === "rendered" ? "is-active" : ""} onClick={() => setTab("rendered")}>处理结果</button><button type="button" role="tab" aria-selected={tab === "raw"} className={tab === "raw" ? "is-active" : ""} onClick={() => setTab("raw")}>源文件</button></div>{loading ? <div className="cw-loading"><Spinner /></div> : <pre className="cw-preview">{content}</pre>}<div className="dialog-actions"><Button variant="secondary" onClick={onClose}>关闭</Button><Button disabled={!content} onClick={async () => { await copyText(content); }}><Copy size={16} />复制内容</Button></div></Dialog>;
 }
 
 function EditTemplateDialog({ filename, onClose, onComplete }: { filename: string; onClose: () => void; onComplete: () => void }) {

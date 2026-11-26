@@ -225,9 +225,21 @@
   background: var(--surface-hover);
   border-color: var(--border-strong);
 }
-.cw-create-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.cw-create-mode { min-height: 72px; padding: 9px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--border-strong); color: var(--text-soft); background: var(--surface); font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; }
-.cw-create-mode.is-active { color: var(--text); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+.cw-create-dialog { gap: 16px; }
+.cw-create-dialog .field-label { font-size: 14px; font-weight: 600; }
+.cw-create-dialog .field small { font-size: 13px; }
+.cw-create-dialog input,
+.cw-create-dialog select { font-size: 14px; }
+.cw-create-dialog .cw-dialog-code { font-size: 13.5px; line-height: 1.6; border-radius: 7px; }
+.cw-create-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.cw-create-mode { min-height: 84px; padding: 12px 14px; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--border-strong); color: var(--text-soft); background: var(--surface); font: inherit; font-size: 14px; font-weight: 650; cursor: pointer; transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease; }
+.cw-create-mode:hover { color: var(--text); background: var(--surface-hover); }
+.cw-create-mode.is-active { color: var(--text); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); }
+.cw-create-mode.is-active svg { color: var(--accent); }
+.cw-create-panel { display: flex; flex-direction: column; gap: 14px; padding: 18px; border: 1px solid var(--border-strong); border-radius: 8px; background: color-mix(in srgb, var(--surface-muted) 65%, var(--surface)); }
+.cw-file-input { padding: 10px 12px !important; border-radius: 7px !important; font-size: 14px !important; cursor: pointer; }
+.cw-file-input::file-selector-button { margin-right: 12px; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border-strong); background: var(--surface-hover); color: var(--text); font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; transition: background-color 0.15s ease, border-color 0.15s ease; }
+.cw-file-input::file-selector-button:hover { background: var(--surface-muted); border-color: var(--accent); }
 .cw-form { display: flex; flex-direction: column; gap: 13px; }
 .cw-lock-fields { display: contents; min-width: 0; margin: 0; padding: 0; border: 0; }
 .cw-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }

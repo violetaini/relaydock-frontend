@@ -2920,11 +2920,10 @@ function ServerFormFields({ form, setForm, editing = false }: { form: CreateServ
         {!form.ddnsEnabled ? (
           <Field
             label="节点域名（现成域名）"
-            hint={form.stealMode === "default" ? "输入该节点已在外部解析好的域名（如 edge.example.com）" : "Tunnel/Fallback 接管模式必填"}
+            hint="输入该节点已在外部解析好的域名（如 edge.example.com）"
           >
             <input
               aria-label="节点域名"
-              required={form.stealMode !== "default"}
               value={form.domain}
               onChange={(event) => {
                 const val = event.target.value;
@@ -2937,7 +2936,7 @@ function ServerFormFields({ form, setForm, editing = false }: { form: CreateServ
           <div className="form-grid">
             <Field
               label="节点域名（DDNS 动态域名）"
-              hint={form.stealMode === "default" ? "公网 IP 变动时将自动更新此域名的 A/AAAA 解析" : "Tunnel/Fallback 接管模式必填"}
+              hint="公网 IP 变动时将自动更新此域名的 A/AAAA 解析"
             >
               <input
                 aria-label="节点域名"
@@ -3054,7 +3053,7 @@ function ServerFormFields({ form, setForm, editing = false }: { form: CreateServ
         <div className="form-grid"><Field label="每月重置日" hint="0 表示不自动重置"><input type="number" min="0" max="31" value={form.trafficResetDay} onChange={(event) => patch("trafficResetDay", event.target.value)} /></Field><Field label="服务器流量来源"><select value={form.trafficSource} onChange={(event) => patch("trafficSource", event.target.value)}><option value="system">系统网卡（VPS 计费口径）</option><option value="xray">Xray 节点聚合</option></select></Field></div>
         <Field label="流量统计方向"><select value={form.trafficStatsMode} onChange={(event) => patch("trafficStatsMode", event.target.value)}><option value="both">上行 + 下行</option><option value="max">上行 / 下行取较大值</option><option value="upload">仅上行</option><option value="download">仅下行</option></select></Field>
 
-        <details className="service-advanced-fields" open={editing && form.siteType === "proxy"}><summary>前置与伪装站高级选项（WSS / 443 伪装反代）</summary><div className="form-stack"><div className="form-grid"><Field label="接管模式"><select value={form.stealMode} onChange={(event) => patch("stealMode", event.target.value)} disabled={editing}><option value="default">不接管（纯 WSS / 标准）</option><option value="tunnel">Tunnel</option><option value="fallback">Fallback</option></select></Field><Field label="伪装站点类型"><select aria-label="伪装站点类型" value={form.siteType} onChange={(event) => patch("siteType", event.target.value)}><option value="static">静态目录 / 默认 404</option><option value="proxy">反向代理指定伪装网站</option></select></Field></div><Field label={form.siteType === "proxy" ? "反代伪装网站目标" : "静态目录"} hint={form.siteType === "proxy" ? "严禁反代套了 Cloudflare CDN 的网站，防止服务器被全网扫描当成免费 CF 优选节点" : "留空使用默认静态目录或 404"}><input aria-label="伪装站点目标" value={form.siteValue} onChange={(event) => patch("siteValue", event.target.value)} placeholder={form.siteType === "proxy" ? "https://origin.example.com" : "/var/www/html"} /></Field></div></details>
+        <details className="service-advanced-fields" open={editing && form.siteType === "proxy"}><summary>前置与伪装站高级选项（WSS 伪装反代）</summary><div className="form-stack"><Field label="伪装站点类型"><select aria-label="伪装站点类型" value={form.siteType} onChange={(event) => patch("siteType", event.target.value)}><option value="static">静态目录 / 默认 404</option><option value="proxy">反向代理指定伪装网站</option></select></Field><Field label={form.siteType === "proxy" ? "反代伪装网站目标" : "静态目录"} hint={form.siteType === "proxy" ? "严禁反代套了 Cloudflare CDN 的网站，防止服务器被全网扫描当成免费 CF 优选节点" : "留空使用默认静态目录或 404"}><input aria-label="伪装站点目标" value={form.siteValue} onChange={(event) => patch("siteValue", event.target.value)} placeholder={form.siteType === "proxy" ? "https://origin.example.com" : "/var/www/html"} /></Field></div></details>
       </div>
     </details>
   </>;
@@ -3093,10 +3092,10 @@ function CreateServerDialog({ onClose, onCreated }: { onClose: () => void; onCre
         ipv6_enabled: form.ipv6Enabled,
         ddns_enabled: form.ddnsEnabled,
         ddns_provider_id: Number(form.ddnsProviderID) || 0,
-        steal_self: form.stealMode === "tunnel" || form.stealMode === "fallback",
+        steal_self: false,
         front_service: "xray",
-        use_443: form.stealMode === "tunnel" || form.stealMode === "fallback",
-        steal_mode: form.stealMode,
+        use_443: false,
+        steal_mode: "default",
         site_type: form.siteType,
         site_value: form.siteValue.trim(),
       }), "创建服务器失败");

@@ -535,11 +535,11 @@ describe("service management workbench", () => {
     })));
   });
 
-  it("derives port 443 takeover authorization from the selected takeover mode", async () => {
+  it("always enforces standard takeover mode and no longer renders takeover mode picker", async () => {
     mockServerReads([onlineServer]);
     const post = vi.spyOn(api, "post").mockResolvedValue({
       success: true,
-      server: { ...onlineServer, id: 14, name: "Edge Fallback" },
+      server: { ...onlineServer, id: 14, name: "Edge Standard" },
       install_command: "safe installer",
     });
     render(<ServicesWorkbenchPage notify={vi.fn()} />);
@@ -547,17 +547,17 @@ describe("service management workbench", () => {
     await screen.findByText("Edge Hong Kong");
     fireEvent.click(screen.getByRole("button", { name: "添加服务器" }));
     const dialog = screen.getByRole("dialog", { name: "添加服务器" });
-    fireEvent.change(within(dialog).getByRole("textbox", { name: "服务器名称" }), { target: { value: "Edge Fallback" } });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "服务器名称" }), { target: { value: "Edge Standard" } });
     expect(within(dialog).queryByText("安装后接管本机 443")).not.toBeInTheDocument();
-    fireEvent.change(within(dialog).getByRole("combobox", { name: "接管模式" }), { target: { value: "fallback" } });
-    fireEvent.change(within(dialog).getByRole("textbox", { name: /节点域名/ }), { target: { value: "fallback.example.com" } });
+    expect(within(dialog).queryByRole("combobox", { name: "接管模式" })).not.toBeInTheDocument();
+    fireEvent.change(within(dialog).getByRole("textbox", { name: /节点域名/ }), { target: { value: "edge.example.com" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "创建并生成命令" }));
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/remote-servers/create", expect.objectContaining({
-      steal_mode: "fallback",
-      steal_self: true,
-      use_443: true,
-      domain: "fallback.example.com",
+      steal_mode: "default",
+      steal_self: false,
+      use_443: false,
+      domain: "edge.example.com",
     })));
   });
 

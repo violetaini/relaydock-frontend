@@ -399,6 +399,50 @@ describe("content workbench subscriptions", () => {
     expect(notify).toHaveBeenCalledWith("订阅“自建订阅”已删除");
   });
 
+  it("supports filtering, searching, and switching client platform on subscription links", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/subscriptions") {
+        return {
+          subscriptions: [
+            { id: 4, name: "香港专线", filename: "hk.yaml", type: "create", file_short_code: "hk1", can_delete: true },
+            { id: -1, name: "基础套餐", filename: "__package__", type: "package", file_short_code: "pkg", can_delete: false },
+          ],
+        } as T;
+      }
+      if (path === "/api/user/token") return { token: "secret", user_short_code: "usr" } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    qrMock.mockResolvedValue("data:image/png;base64,LOCAL_QR");
+    render(<SubscriptionLinksPage />);
+
+    expect(await screen.findByText("香港专线")).toBeInTheDocument();
+    expect(screen.getByText("基础套餐")).toBeInTheDocument();
+
+    // Filter by type: 套餐
+    fireEvent.click(screen.getByRole("tab", { name: /套餐/ }));
+    expect(screen.queryByText("香港专线")).not.toBeInTheDocument();
+    expect(screen.getByText("基础套餐")).toBeInTheDocument();
+
+    // Switch back to 全部 and search
+    fireEvent.click(screen.getByRole("tab", { name: /全部/ }));
+    expect(screen.getByText("香港专线")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索订阅链接" }), { target: { value: "hk.yaml" } });
+    expect(screen.getByText("香港专线")).toBeInTheDocument();
+    expect(screen.queryByText("基础套餐")).not.toBeInTheDocument();
+
+    // Switch platform to sing-box
+    fireEvent.change(screen.getByRole("combobox", { name: "导入平台" }), { target: { value: "sing-box" } });
+    expect(screen.getByText("http://localhost:3000/x/hk1usr?t=sing-box")).toBeInTheDocument();
+    const singboxLink = screen.getByRole("link", { name: "导入 sing-box" });
+    expect(singboxLink.getAttribute("href")).toContain("sing-box://import-remote-profile?url=");
+    expect(singboxLink.getAttribute("href")).toContain(encodeURIComponent("http://localhost:3000/x/hk1usr?t=sing-box"));
+
+    // Switch platform to v2ray (no deep link button, URL has ?t=v2ray)
+    fireEvent.change(screen.getByRole("combobox", { name: "导入平台" }), { target: { value: "v2ray" } });
+    expect(screen.getByText("http://localhost:3000/x/hk1usr?t=v2ray")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /导入 / })).not.toBeInTheDocument();
+  });
+
   it("preserves server scopes and traffic limits when toggling an unrelated setting", async () => {
     const file = {
       id: 4,

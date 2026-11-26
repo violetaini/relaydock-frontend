@@ -660,12 +660,116 @@ function structuredYAML(value: unknown, indent = 0): string {
   return `${pad}${yamlScalar(value)}`;
 }
 
-function resolveSubscriptionURL(item: SubscriptionItem, token: TokenBundle | null): string {
+type SubscriptionPlatformKey =
+  | "clash"
+  | "clash-to-shadowrocket"
+  | "sing-box"
+  | "clash-to-surge"
+  | "clash-to-loon"
+  | "qx"
+  | "stash"
+  | "v2ray"
+  | "uri";
+
+interface SubscriptionPlatformOption {
+  key: SubscriptionPlatformKey;
+  label: string;
+  description: string;
+  queryValue: string;
+  importLabel?: string;
+  deepLink?: (url: string, name: string) => string;
+}
+
+const SUBSCRIPTION_PLATFORMS: SubscriptionPlatformOption[] = [
+  {
+    key: "clash",
+    label: "Clash / Mihomo",
+    description: "Mihomo / Clash 兼容配置",
+    queryValue: "",
+    importLabel: "导入 Clash",
+    deepLink: (url, name) => clashDeepLink(url, name),
+  },
+  {
+    key: "clash-to-shadowrocket",
+    label: "Shadowrocket",
+    description: "Shadowrocket 小火箭完整配置",
+    queryValue: "clash-to-shadowrocket",
+    importLabel: "导入 Shadowrocket",
+    deepLink: (url, name) => {
+      try {
+        return `shadowrocket://add/sub://${btoa(url)}?title=${encodeURIComponent(name)}`;
+      } catch {
+        return "";
+      }
+    },
+  },
+  {
+    key: "sing-box",
+    label: "sing-box",
+    description: "sing-box 原生 JSON 配置",
+    queryValue: "sing-box",
+    importLabel: "导入 sing-box",
+    deepLink: (url, name) => `sing-box://import-remote-profile?url=${encodeURIComponent(url)}#${encodeURIComponent(name)}`,
+  },
+  {
+    key: "clash-to-surge",
+    label: "Surge",
+    description: "Surge 托管配置",
+    queryValue: "clash-to-surge",
+    importLabel: "导入 Surge",
+    deepLink: (url) => `surge:///install-config?url=${encodeURIComponent(url)}`,
+  },
+  {
+    key: "clash-to-loon",
+    label: "Loon",
+    description: "Loon 完整配置",
+    queryValue: "clash-to-loon",
+    importLabel: "导入 Loon",
+    deepLink: (url, name) => `loon://import?n=${encodeURIComponent(name)}&url=${encodeURIComponent(url)}`,
+  },
+  {
+    key: "qx",
+    label: "Quantumult X",
+    description: "Quantumult X 节点订阅",
+    queryValue: "qx",
+    importLabel: "导入 Quantumult X",
+    deepLink: (url, name) => `quantumult-x:///add-resource?remote-resource=${encodeURIComponent(JSON.stringify({ server_remote: [`${url}, tag=${name}`] }))}`,
+  },
+  {
+    key: "stash",
+    label: "Stash",
+    description: "Stash (iOS/macOS) 兼容配置",
+    queryValue: "stash",
+    importLabel: "导入 Stash",
+    deepLink: (url, name) => `stash://install-config?url=${encodeURIComponent(url)}&name=${encodeURIComponent(name)}`,
+  },
+  {
+    key: "v2ray",
+    label: "v2rayN / v2rayNG",
+    description: "Base64 通用节点订阅",
+    queryValue: "v2ray",
+  },
+  {
+    key: "uri",
+    label: "通用 URI",
+    description: "纯文本节点 URI 列表",
+    queryValue: "uri",
+  },
+];
+
+function resolveSubscriptionURL(item: SubscriptionItem, token: TokenBundle | null, clientQuery = ""): string {
   const fileCode = item.custom_short_code || item.file_short_code;
-  if (fileCode && token?.user_short_code) return absoluteURL(`/x/${fileCode}${token.user_short_code}`);
-  const params = new URLSearchParams({ filename: item.filename });
-  if (token?.token) params.set("token", token.token);
-  return absoluteURL(`/api/clash/subscribe?${params.toString()}`);
+  let base = "";
+  if (fileCode && token?.user_short_code) {
+    base = absoluteURL(`/x/${fileCode}${token.user_short_code}`);
+  } else {
+    const params = new URLSearchParams({ filename: item.filename });
+    if (token?.token) params.set("token", token.token);
+    base = absoluteURL(`/api/clash/subscribe?${params.toString()}`);
+  }
+  if (!clientQuery) return base;
+  const separator = base.includes("?") ? "&" : "?";
+  return `${base}${separator}t=${encodeURIComponent(clientQuery)}`;
 }
 
 function privateURL(value: string): string {
@@ -696,6 +800,9 @@ export function SubscriptionLinksPage({ notify = noNotify }: ContentPageProps) {
   const [qrItem, setQRItem] = useState<{ name: string; url: string } | null>(null);
   const [deleteItem, setDeleteItem] = useState<SubscriptionItem | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [typeFilter, setTypeFilter] = useState<"all" | "package" | "subscribe">("all");
+  const [search, setSearch] = useState("");
+  const [platformKey, setPlatformKey] = useState<SubscriptionPlatformKey>("clash");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -716,6 +823,33 @@ export function SubscriptionLinksPage({ notify = noNotify }: ContentPageProps) {
 
   useEffect(() => { void load(); }, [load]);
 
+  const platform = useMemo(
+    () => SUBSCRIPTION_PLATFORMS.find((entry) => entry.key === platformKey) ?? SUBSCRIPTION_PLATFORMS[0],
+    [platformKey],
+  );
+
+  const counts = useMemo(() => ({
+    all: items.length,
+    package: items.filter((item) => item.type === "package").length,
+    subscribe: items.filter((item) => item.type !== "package").length,
+  }), [items]);
+
+  const filteredItems = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return items.filter((item) => {
+      if (typeFilter === "package" && item.type !== "package") return false;
+      if (typeFilter === "subscribe" && item.type === "package") return false;
+      if (!query) return true;
+      const url = resolveSubscriptionURL(item, token, platform.queryValue).toLowerCase();
+      return (
+        item.name.toLowerCase().includes(query) ||
+        item.filename.toLowerCase().includes(query) ||
+        (item.description || "").toLowerCase().includes(query) ||
+        url.includes(query)
+      );
+    });
+  }, [items, platform.queryValue, search, token, typeFilter]);
+
   const remove = async () => {
     if (!deleteItem?.can_delete || deleteItem.id <= 0) return;
     setDeleting(true);
@@ -734,19 +868,79 @@ export function SubscriptionLinksPage({ notify = noNotify }: ContentPageProps) {
 
   return (
     <section className="cw-page">
-      <PageHeader title="订阅链接" description="查看已分配的配置并复制到 Clash、Mihomo 或兼容客户端。" actions={<IconButton label="刷新订阅" onClick={() => void load()}><RefreshCw size={18} /></IconButton>} />
+      <PageHeader title="订阅链接" description="查看已分配的配置并选择目标客户端平台，一键复制或导入。" actions={<IconButton label="刷新订阅" onClick={() => void load()}><RefreshCw size={18} /></IconButton>} />
       {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
+      {!loading && items.length > 0 ? (
+        <Surface className="cw-sublinks-toolbar">
+          <div className="cw-sublinks-tabs" role="tablist" aria-label="订阅类型筛选">
+            {([
+              { key: "all", label: "全部", count: counts.all },
+              { key: "package", label: "套餐", count: counts.package },
+              { key: "subscribe", label: "订阅", count: counts.subscribe },
+            ] as const).map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                role="tab"
+                aria-selected={typeFilter === tab.key}
+                className={`cw-sublinks-tab ${typeFilter === tab.key ? "is-active" : ""}`}
+                onClick={() => setTypeFilter(tab.key)}
+              >
+                {tab.label}
+                <span>{tab.count}</span>
+              </button>
+            ))}
+          </div>
+          <div className="cw-sublinks-controls">
+            <label className="cw-sublinks-search">
+              <Search size={16} />
+              <input
+                type="search"
+                aria-label="搜索订阅链接"
+                placeholder="搜索名称、文件名或链接..."
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </label>
+            <label className="cw-sublinks-platform">
+              <span>导入平台</span>
+              <select
+                aria-label="导入平台"
+                value={platformKey}
+                onChange={(event) => setPlatformKey(event.target.value as SubscriptionPlatformKey)}
+              >
+                {SUBSCRIPTION_PLATFORMS.map((opt) => (
+                  <option key={opt.key} value={opt.key}>{opt.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </Surface>
+      ) : null}
       {loading ? <Surface className="cw-loading"><Spinner /></Surface> : items.length === 0 ? (
         <Surface><EmptyState icon={<Link2 size={24} />} title="暂无可用订阅" description="尚未分配套餐或订阅文件。" /></Surface>
+      ) : filteredItems.length === 0 ? (
+        <Surface>
+          <EmptyState
+            icon={<Search size={24} />}
+            title="未找到匹配的订阅"
+            description="尝试更换搜索关键词或重置筛选条件。"
+            action={<Button variant="secondary" onClick={() => { setSearch(""); setTypeFilter("all"); }}>清空筛选</Button>}
+          />
+        </Surface>
       ) : (
         <div className="cw-grid cw-subscription-grid">
-          {items.map((item) => {
-            const url = resolveSubscriptionURL(item, token);
+          {filteredItems.map((item) => {
+            const url = resolveSubscriptionURL(item, token, platform.queryValue);
+            const importHref = platform.deepLink ? platform.deepLink(url, item.name) : "";
             return (
               <Surface className="cw-card" key={item.id}>
                 <div className="cw-card-head">
-                  <div><h2>{item.name}</h2><p>{item.description || "Mihomo / Clash 兼容配置"}</p></div>
-                  <Badge tone={item.type === "package" ? "info" : "neutral"}>{item.type === "package" ? "套餐" : "订阅"}</Badge>
+                  <div><h2>{item.name}</h2><p>{item.description || platform.description}</p></div>
+                  <div className="cw-sublinks-badges">
+                    {platform.key !== "clash" ? <Badge tone="good">{platform.label}</Badge> : null}
+                    <Badge tone={item.type === "package" ? "info" : "neutral"}>{item.type === "package" ? "套餐" : "订阅"}</Badge>
+                  </div>
                 </div>
                 <div className="cw-meta">
                   <span><FileText size={13} />{item.filename}</span>
@@ -755,12 +949,12 @@ export function SubscriptionLinksPage({ notify = noNotify }: ContentPageProps) {
                 </div>
                 <div className="cw-link-box">
                   <code title={privateURL(url)}>{privateURL(url)}</code>
-                  <IconButton label={`复制 ${item.name} 订阅链接`} onClick={async () => { await copyText(url); notify("订阅链接已复制"); }}><Copy size={17} /></IconButton>
+                  <IconButton label={`复制 ${item.name} 订阅链接`} onClick={async () => { await copyText(url); notify(`${platform.label} 订阅链接已复制`); }}><Copy size={17} /></IconButton>
                 </div>
                 <div className="cw-card-actions cw-subscription-actions">
-                  <Button variant="secondary" onClick={async () => { await copyText(url); notify("订阅链接已复制"); }}><Clipboard size={16} />复制链接</Button>
+                  <Button variant="secondary" onClick={async () => { await copyText(url); notify(`${platform.label} 订阅链接已复制`); }}><Clipboard size={16} />复制链接</Button>
                   <Button variant="secondary" onClick={() => setQRItem({ name: item.name, url })}><QrCode size={16} />二维码</Button>
-                  <a className="button button-secondary" href={clashDeepLink(url, item.name)}><Download size={16} />导入 Clash</a>
+                  {importHref && platform.importLabel ? <a className="button button-secondary" href={importHref}><Download size={16} />{platform.importLabel}</a> : null}
                   <Button variant="ghost" onClick={() => window.open(url, "_blank", "noopener,noreferrer")}><ExternalLink size={16} />浏览器打开</Button>
                   {item.can_delete ? <IconButton className="cw-subscription-delete" label={`删除订阅 ${item.name}`} disabled={deleting} onClick={() => setDeleteItem(item)}><Trash2 size={17} /></IconButton> : null}
                 </div>

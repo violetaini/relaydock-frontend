@@ -1097,6 +1097,49 @@ describe("node any-door forwarding", () => {
     expect(hkIndex).toBeLessThan(jpIndex);
   });
 
+  it("renders distinct node traffic for nodes on the same server when provided", async () => {
+    const nodeA = { ...node(51, "香港 01", "ss", "hk.example.com"), original_server: "HK Server", traffic_used: 1048576, traffic_uplink: 45281, traffic_downlink: 1003295 };
+    const nodeB = { ...node(52, "香港 02", "ss", "hk.example.com"), original_server: "HK Server", traffic_used: 107374182400, traffic_uplink: 53687091200, traffic_downlink: 53687091200 };
+    const servers: RemoteServer[] = [
+      {
+        id: 11,
+        name: "HK Server",
+        status: "online",
+        ipv6_enabled: false,
+        connection_mode: "agent",
+        current_upload_speed: 300,
+        current_download_speed: 400,
+        xray_running: true,
+        xray_mode: "managed",
+        traffic_limit: 0,
+        traffic_used: 536870912000,
+        traffic_stats_mode: "both",
+        traffic_source: "xray",
+        ws_connected: false,
+        encrypted: false,
+        inbounds: [],
+      },
+    ];
+
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/nodes") return { nodes: [nodeA, nodeB] } as T;
+      if (path === "/api/admin/speedtest/results?latest=1") return { results: [] } as T;
+      if (path === "/api/user/config") return userConfig([51, 52]) as T;
+      if (path === "/api/admin/managed-node-offers") return { offers: [] } as T;
+      if (path === "/api/admin/remote-servers") return { servers } as T;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    render(<NodesWorkbench isAdmin notify={vi.fn()} />);
+
+    const rowA = (await screen.findByText("香港 01")).closest("tr");
+    const rowB = (await screen.findByText("香港 02")).closest("tr");
+    expect(rowA).not.toBeNull();
+    expect(rowB).not.toBeNull();
+
+    expect(within(rowA as HTMLTableRowElement).getByText("1.0 MB")).toBeInTheDocument();
+    expect(within(rowB as HTMLTableRowElement).getByText("100 GB")).toBeInTheDocument();
+  });
+
   it("exposes any-door forwarding from an administrator node row", async () => {
     const source = node(7, "美国 Reality", "vless", "target.example.com");
     vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {

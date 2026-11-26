@@ -174,6 +174,9 @@ export interface WorkbenchNode {
   created_by?: string;
   relay_orig_server?: string;
   relay_orig_port?: number;
+  traffic_used?: number;
+  traffic_uplink?: number;
+  traffic_downlink?: number;
   created_at?: string;
   updated_at?: string;
 }
@@ -1342,8 +1345,8 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       if (sort === "protocol") return displayedNodeProtocol(a).localeCompare(displayedNodeProtocol(b)) || a.node_name.localeCompare(b.node_name, "zh-CN");
       if (sort === "server") return nodeAddress(a).host.localeCompare(nodeAddress(b).host) || a.node_name.localeCompare(b.node_name, "zh-CN");
       if (sort === "traffic") {
-        const trafficA = getServerForNode(a)?.traffic_used || 0;
-        const trafficB = getServerForNode(b)?.traffic_used || 0;
+        const trafficA = a.traffic_used ?? (getServerForNode(a)?.traffic_used || 0);
+        const trafficB = b.traffic_used ?? (getServerForNode(b)?.traffic_used || 0);
         if (trafficB !== trafficA) return trafficB - trafficA;
         return a.node_name.localeCompare(b.node_name, "zh-CN");
       }
@@ -1696,15 +1699,24 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
                     <td className="nw-cell-traffic nw-cell-speed" data-label="流量">
                       {(() => {
                         const srv = getServerForNode(node);
-                        if (srv) {
+                        const hasNodeTraffic = typeof node.traffic_used === "number";
+                        const nodeTraffic = hasNodeTraffic ? (node.traffic_used || 0) : (srv?.traffic_used || 0);
+                        if (srv || hasNodeTraffic) {
+                          const tooltipLines = [
+                            `节点：${node.node_name}`,
+                            `Xray 节点跑量：${formatBytes(nodeTraffic)}${hasNodeTraffic ? ` (上行 ${formatBytes(node.traffic_uplink || 0)} / 下行 ${formatBytes(node.traffic_downlink || 0)})` : ""}`,
+                          ];
+                          if (srv) {
+                            tooltipLines.push(`所属服务器：${srv.name} (总跑量 ${formatBytes(srv.traffic_used || 0)}${srv.traffic_limit > 0 ? ` / 限额 ${formatBytes(srv.traffic_limit)}` : " / 不限额"})`);
+                          }
                           return (
                             <div
                               className="nw-traffic-cell"
-                              title={`服务器：${srv.name}\nXray 累计跑量：${formatBytes(srv.traffic_used || 0)}${srv.traffic_limit > 0 ? `\n限额：${formatBytes(srv.traffic_limit)}` : "\n限额：不限额"}`}
+                              title={tooltipLines.join("\n")}
                             >
-                              <strong>{formatBytes(srv.traffic_used || 0)}</strong>
+                              <strong>{formatBytes(nodeTraffic)}</strong>
                               <small className="cell-note">
-                                {srv.traffic_limit > 0 ? `限额 ${formatBytes(srv.traffic_limit)}` : "不限额"}
+                                {srv?.traffic_limit && srv.traffic_limit > 0 ? `限额 ${formatBytes(srv.traffic_limit)}` : "不限额"}
                               </small>
                             </div>
                           );

@@ -57,7 +57,6 @@ import {
 import { CountryFlag, GLOBAL_COUNTRY_REGIONS, getCountryRegionLabel } from "./country-flag";
 import { NAVIGATION_REQUEST_EVENT, type NavigationRequestDetail } from "./navigation-guard";
 import type { NginxMode, RealtimeMessage, RemoteServer, ServerListResponse, SharedServerToken } from "./types";
-import { validateWSSCamouflageProxyTarget } from "./managed-node-presets";
 import {
   findBestMatchingCertificate,
   managedTLSHostnameForCertificate,
@@ -3052,8 +3051,6 @@ function ServerFormFields({ form, setForm, editing = false }: { form: CreateServ
         <div className="form-grid"><Field label="流量限额（GB）" hint="0 或留空表示不限"><input type="number" min="0" step="0.01" value={form.trafficLimitGB} onChange={(event) => patch("trafficLimitGB", event.target.value)} /></Field><Field label={editing ? "已用流量校准（GB，可选）" : "初始已用流量（GB）"}><input type="number" min="0" step="0.01" value={form.trafficUsedGB} onChange={(event) => patch("trafficUsedGB", event.target.value)} placeholder={editing ? "留空保持不变" : "0"} /></Field></div>
         <div className="form-grid"><Field label="每月重置日" hint="0 表示不自动重置"><input type="number" min="0" max="31" value={form.trafficResetDay} onChange={(event) => patch("trafficResetDay", event.target.value)} /></Field><Field label="服务器流量来源"><select value={form.trafficSource} onChange={(event) => patch("trafficSource", event.target.value)}><option value="system">系统网卡（VPS 计费口径）</option><option value="xray">Xray 节点聚合</option></select></Field></div>
         <Field label="流量统计方向"><select value={form.trafficStatsMode} onChange={(event) => patch("trafficStatsMode", event.target.value)}><option value="both">上行 + 下行</option><option value="max">上行 / 下行取较大值</option><option value="upload">仅上行</option><option value="download">仅下行</option></select></Field>
-
-        <details className="service-advanced-fields" open={editing && form.siteType === "proxy"}><summary>前置与伪装站高级选项（WSS 伪装反代）</summary><div className="form-stack"><Field label="伪装站点类型"><select aria-label="伪装站点类型" value={form.siteType} onChange={(event) => patch("siteType", event.target.value)}><option value="static">静态目录 / 默认 404</option><option value="proxy">反向代理指定伪装网站</option></select></Field><Field label={form.siteType === "proxy" ? "反代伪装网站目标" : "静态目录"} hint={form.siteType === "proxy" ? "严禁反代套了 Cloudflare CDN 的网站，防止服务器被全网扫描当成免费 CF 优选节点" : "留空使用默认静态目录或 404"}><input aria-label="伪装站点目标" value={form.siteValue} onChange={(event) => patch("siteValue", event.target.value)} placeholder={form.siteType === "proxy" ? "https://origin.example.com" : "/var/www/html"} /></Field></div></details>
       </div>
     </details>
   </>;
@@ -3068,9 +3065,6 @@ function CreateServerDialog({ onClose, onCreated }: { onClose: () => void; onCre
     setWorking(true);
     setError("");
     try {
-      if (form.siteType === "proxy" && form.siteValue.trim()) {
-        validateWSSCamouflageProxyTarget(form.siteValue);
-      }
       const effectiveDomain = form.domain.trim();
       const effectivePull = form.pullAddress.trim() || effectiveDomain;
       const response = assertSuccess(await api.post<ActionResponse & { server?: ManagedServer; install_command?: string }>("/api/admin/remote-servers/create", {
@@ -3096,8 +3090,8 @@ function CreateServerDialog({ onClose, onCreated }: { onClose: () => void; onCre
         front_service: "xray",
         use_443: false,
         steal_mode: "default",
-        site_type: form.siteType,
-        site_value: form.siteValue.trim(),
+        site_type: "static",
+        site_value: "",
       }), "创建服务器失败");
       if (!response.server || !response.install_command) throw new Error("创建成功，但响应缺少服务器信息或权威安装命令");
       onCreated(response);
@@ -3146,9 +3140,6 @@ function EditServerDialog({ server, onClose, onSaved }: { server: ManagedServer;
     setWorking(true);
     setError("");
     try {
-      if (form.siteType === "proxy") {
-        validateWSSCamouflageProxyTarget(form.siteValue);
-      }
       const effectiveDomain = form.domain.trim();
       const effectivePull = form.pullAddress.trim() || effectiveDomain;
       const updatesPullConfig = Boolean(effectivePull) || form.connectionMode === "pull";

@@ -432,6 +432,8 @@ describe("unified subscription wizard", () => {
 
     const rowImport = await screen.findByRole("button", { name: "一键导入 Clash 外部机场" });
     expect(rowImport).toBeInTheDocument();
+    expect(screen.queryByLabelText("修改配置内容 外部机场")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("编辑 外部机场")).toBeInTheDocument();
     const href = rowImport.getAttribute("href");
     expect(href).toContain("clash://install-config?");
     expect(href).toContain("url=");

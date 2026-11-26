@@ -6,6 +6,7 @@ import {
   AnyDoorForwardDialog,
   BatchRenameDialog,
   ChainProxyDialog,
+  ConfigDialog,
   ExternalSubscriptionsDialog,
   NodeEditor,
   NodeShareQRCodeDialog,
@@ -1942,6 +1943,103 @@ describe("single node QR import", () => {
     expect(await screen.findByRole("img", { name: "办公室 WireGuard 节点二维码" })).toHaveAttribute("src", "data:image/png;base64,node-qr");
     expect(api.get).toHaveBeenCalledWith("/api/admin/nodes/12/uri", { skipCache: true });
     expect(QRCode.toDataURL).toHaveBeenCalledWith(uri, expect.objectContaining({ width: 320, margin: 2 }));
+  });
+
+  it("switches between IPv4 and IPv6 in NodeShareQRCodeDialog and re-generates QR and URI", async () => {
+    const selected: WorkbenchNode = {
+      ...node(15, "香港 01", "vless", "103.1.2.3"),
+      original_server: "Hong Kong 01",
+      clash_config: JSON.stringify({ name: "香港 01", type: "vless", server: "103.1.2.3", port: 443 }),
+    };
+    const server = {
+      id: 1,
+      name: "Hong Kong 01",
+      ip_address: "103.1.2.3",
+      ip_address_v6: "2400:cb00:1::1",
+      ipv6_enabled: true,
+      connection_mode: "websocket",
+      traffic_limit: 0,
+      traffic_used: 0,
+      status: "online",
+      is_online: true,
+      last_heartbeat: new Date().toISOString(),
+      current_upload_speed: 0,
+      current_download_speed: 0,
+      xray_running: true,
+      xray_mode: "embedded",
+    } as unknown as RemoteServer;
+    vi.spyOn(api, "get").mockResolvedValue({
+      item: {
+        username: "alice",
+        node_id: 15,
+        node_name: "香港 01",
+        protocol: "vless",
+        node_type: "physical",
+        uri: "vless://uuid@103.1.2.3:443?security=tls#%E9%A6%99%E6%B8%AF%2001",
+      },
+    });
+    vi.mocked(QRCode.toDataURL).mockClear();
+
+    render(<NodeShareQRCodeDialog node={selected} server={server} notify={vi.fn()} onClose={vi.fn()} />);
+
+    expect(await screen.findByRole("img", { name: "香港 01 节点二维码" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /IPv4/ })).toHaveClass("is-active");
+    expect(screen.getByText("vless://uuid@103.1.2.3:443?security=tls#%E9%A6%99%E6%B8%AF%2001")).toBeInTheDocument();
+
+    // Switch to IPv6
+    const v6Btn = screen.getByRole("tab", { name: /IPv6/ });
+    fireEvent.click(v6Btn);
+
+    expect(v6Btn).toHaveClass("is-active");
+    expect(screen.getByText("vless://uuid@[2400:cb00:1::1]:443?security=tls#%E9%A6%99%E6%B8%AF%2001")).toBeInTheDocument();
+    expect(QRCode.toDataURL).toHaveBeenLastCalledWith(
+      "vless://uuid@[2400:cb00:1::1]:443?security=tls#%E9%A6%99%E6%B8%AF%2001",
+      expect.objectContaining({ width: 320, margin: 2 })
+    );
+  });
+
+  it("switches between IPv4 and IPv6 in ConfigDialog and updates Clash YAML server address", async () => {
+    const selected: WorkbenchNode = {
+      ...node(15, "香港 01", "vless", "103.1.2.3"),
+      original_server: "Hong Kong 01",
+      clash_config: JSON.stringify({ name: "香港 01", type: "vless", server: "103.1.2.3", port: 443 }),
+    };
+    const server = {
+      id: 1,
+      name: "Hong Kong 01",
+      ip_address: "103.1.2.3",
+      ip_address_v6: "2400:cb00:1::1",
+      ipv6_enabled: true,
+      connection_mode: "websocket",
+      traffic_limit: 0,
+      traffic_used: 0,
+      status: "online",
+      is_online: true,
+      last_heartbeat: new Date().toISOString(),
+      current_upload_speed: 0,
+      current_download_speed: 0,
+      xray_running: true,
+      xray_mode: "embedded",
+    } as unknown as RemoteServer;
+
+    render(<ConfigDialog node={selected} editable server={server} onClose={vi.fn()} onComplete={vi.fn()} />);
+
+    expect(screen.getByRole("tab", { name: /IPv4/ })).toHaveClass("is-active");
+    const textarea = screen.getByLabelText("Clash 节点配置") as HTMLTextAreaElement;
+    expect(textarea.value).toContain("server: 103.1.2.3");
+
+    // Click IPv6
+    fireEvent.click(screen.getByRole("tab", { name: /IPv6/ }));
+    expect(screen.getByRole("tab", { name: /IPv6/ })).toHaveClass("is-active");
+    expect(textarea.value).toContain("server: 2400:cb00:1::1");
+
+    // Switch to JSON format and verify IPv6 is maintained
+    fireEvent.click(screen.getByRole("tab", { name: "JSON" }));
+    expect(textarea.value).toContain('"server": "2400:cb00:1::1"');
+
+    // Switch back to IPv4
+    fireEvent.click(screen.getByRole("tab", { name: /IPv4/ }));
+    expect(textarea.value).toContain('"server": "103.1.2.3"');
   });
 
   it("renders the row menu in a portal and exposes QR import to regular users", async () => {

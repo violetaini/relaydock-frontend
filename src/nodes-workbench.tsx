@@ -499,6 +499,84 @@ function nodeAddress(node: WorkbenchNode): { host: string; port: number } {
   return { host: typeof config.server === "string" ? config.server : "", port: Number(config.port) || 0 };
 }
 
+function resolveNodeIPAddresses(
+  node: WorkbenchNode,
+  server?: RemoteServer,
+  servers: RemoteServer[] = [],
+): { ipv4: string; ipv6: string } {
+  const matched = server || (
+    node.original_server
+      ? servers.find(s => s.name === node.original_server || String(s.id) === node.original_server)
+      : undefined
+  ) || servers.find(s => {
+    const host = nodeAddress(node).host?.trim().toLowerCase();
+    return Boolean(host && (
+      s.ip_address?.trim().toLowerCase() === host ||
+      s.ip_address_v6?.trim().toLowerCase() === host ||
+      s.domain?.trim().toLowerCase() === host
+    ));
+  });
+
+  const configHost = nodeAddress(node).host;
+  let ipv4 = matched?.ip_address || "";
+  let ipv6 = matched?.ip_address_v6 || "";
+
+  if (!ipv4 && configHost && !configHost.includes(":")) {
+    ipv4 = configHost;
+  }
+  if (!ipv6 && configHost && configHost.includes(":")) {
+    ipv6 = configHost.replace(/^\[|\]$/g, "");
+  }
+
+  return { ipv4, ipv6 };
+}
+
+function IPVersionSlider({
+  value,
+  onChange,
+  ipv4,
+  ipv6,
+}: {
+  value: "v4" | "v6";
+  onChange: (v: "v4" | "v6") => void;
+  ipv4: string;
+  ipv6: string;
+}) {
+  const hasV6 = Boolean(ipv6 && ipv6.trim());
+  return (
+    <div className="nw-ip-slider-container">
+      <div className="nw-ip-slider" role="tablist" aria-label="IP 版本切换">
+        <div className={`nw-ip-slider-thumb ${value === "v6" ? "is-v6" : ""}`} />
+        <button
+          type="button"
+          role="tab"
+          aria-selected={value === "v4"}
+          className={`nw-ip-slider-btn ${value === "v4" ? "is-active" : ""}`}
+          onClick={() => onChange("v4")}
+        >
+          <span className="nw-ip-slider-title">IPv4 地址</span>
+          <span className="nw-ip-slider-sub">{ipv4 || "默认公网 IPv4"}</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={value === "v6"}
+          disabled={!hasV6}
+          title={!hasV6 ? "该节点服务器暂无 IPv6 地址" : undefined}
+          className={`nw-ip-slider-btn ${value === "v6" ? "is-active" : ""}`}
+          onClick={() => { if (hasV6) onChange("v6"); }}
+        >
+          <span className="nw-ip-slider-title">
+            IPv6 地址
+            {!hasV6 ? <span className="nw-ip-slider-badge">无 IPv6</span> : null}
+          </span>
+          <span className="nw-ip-slider-sub">{hasV6 ? ipv6 : "未配置或不支持"}</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function tcpingResultLabel(result: TCPingResult | undefined): string {
   if (result?.loading) return "测试中";
   if (result?.success && result.probe === "mihomo_url_test") return `${result.latency.toFixed(1)} ms · 代理实测`;
@@ -2123,7 +2201,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
 
       {dialog?.kind === "managed-create" ? <ManagedNodeWizard nodes={nodes} isAdmin={isAdmin} initialServerID={dialog.initialServerID} userContext={userCreationContext ?? undefined} onClose={closeDialog} onComplete={async (message, tone) => { closeDialog(); if (tone) notify(message, tone); else notify(message); await load(true); }} /> : null}
       {dialog?.kind === "edit" ? <NodeEditor node={dialog.node} forwardTarget={nodes.find(item => item.id === forwardingTargetID(dialog.node))} availableNodes={nodes} availableServers={remoteServers} offer={offers.find((item) => item.node_id === dialog.node.id)} availableTags={knownTags} onClose={closeDialog} onComplete={async (message) => { closeDialog(); notify(message); await load(true); }} /> : null}
-      {dialog?.kind === "config" ? <ConfigDialog node={dialog.node} editable={isAdmin && !dialog.readOnly} onClose={closeDialog} onComplete={async () => { closeDialog(); notify("节点配置已更新"); await load(true); }} /> : null}
+      {dialog?.kind === "config" ? <ConfigDialog node={dialog.node} editable={isAdmin && !dialog.readOnly} server={getServerForNode(dialog.node)} servers={remoteServers} onClose={closeDialog} onComplete={async () => { closeDialog(); notify("节点配置已更新"); await load(true); }} /> : null}
       {dialog?.kind === "import" ? <ImportDialog onClose={closeDialog} onComplete={async (count) => { closeDialog(); notify(`已导入 ${count} 个节点`); await load(true); }} /> : null}
       {dialog?.kind === "relay" ? <RelayDialog node={dialog.node} onClose={closeDialog} onComplete={async () => { closeDialog(); notify("节点中转已更新"); await load(true); }} /> : null}
       {dialog?.kind === "anydoor" ? <AnyDoorForwardDialog node={dialog.node} onClose={closeDialog} onComplete={async () => { closeDialog(); notify("任意门转发已创建"); await load(true); }} /> : null}
@@ -2141,6 +2219,8 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
       {dialog?.kind === "qr" ? (
         <NodeShareQRCodeDialog
           node={dialog.node}
+          server={getServerForNode(dialog.node)}
+          servers={remoteServers}
           overrideAddress={dialog.overrideAddress}
           displayName={dialog.displayName}
           protocolLabel={dialog.protocolLabel}
@@ -3551,8 +3631,33 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
   </Dialog>;
 }
 
-function ConfigDialog({ node, editable, onClose, onComplete }: { node: WorkbenchNode; editable: boolean; onClose: () => void; onComplete: () => void }) {
+export function ConfigDialog({
+  node,
+  editable,
+  server,
+  servers,
+  onClose,
+  onComplete,
+}: {
+  node: WorkbenchNode;
+  editable: boolean;
+  server?: RemoteServer;
+  servers?: RemoteServer[];
+  onClose: () => void;
+  onComplete: () => void;
+}) {
   const [format, setFormat] = useState<"yaml" | "json">("yaml");
+  const addresses = useMemo(() => resolveNodeIPAddresses(node, server, servers), [node, server, servers]);
+  const initialIsV6 = useMemo(() => {
+    try {
+      const parsed = parseClashProxyInput(node.clash_config || "{}");
+      const host = String(parsed?.server || "");
+      return Boolean(addresses.ipv6 && (host === addresses.ipv6 || host.includes(":")));
+    } catch {
+      return false;
+    }
+  }, [node.clash_config, addresses.ipv6]);
+  const [ipVersion, setIpVersion] = useState<"v4" | "v6">(initialIsV6 ? "v6" : "v4");
   const [config, setConfig] = useState(() => {
     try {
       const yamlText = formatProxyToClashYAML(node.clash_config || "{}");
@@ -3563,6 +3668,21 @@ function ConfigDialog({ node, editable, onClose, onComplete }: { node: Workbench
   });
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
+
+  const handleIPVersionChange = (nextVersion: "v4" | "v6") => {
+    if (nextVersion === ipVersion) return;
+    setIpVersion(nextVersion);
+    const targetAddr = nextVersion === "v6" ? addresses.ipv6 : addresses.ipv4;
+    if (!targetAddr) return;
+    try {
+      const parsed = parseClashProxyInput(config);
+      parsed.server = targetAddr;
+      setConfig(format === "yaml" ? formatProxyToClashYAML(parsed) : formatProxyToClashJSON(parsed));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "切换地址失败");
+    }
+  };
+
   const switchFormat = (nextFormat: "yaml" | "json") => {
     if (nextFormat === format) return;
     setError("");
@@ -3590,6 +3710,12 @@ function ConfigDialog({ node, editable, onClose, onComplete }: { node: Workbench
   return <Dialog title={`Clash 配置 · ${node.node_name}`} description={editable ? "修改后会同步节点名称和共享订阅" : "当前账户仅可查看配置"} onClose={onClose} wide>
     <div className="form-stack">
       {error ? <ErrorState message={error} /> : null}
+      <IPVersionSlider
+        value={ipVersion}
+        onChange={handleIPVersionChange}
+        ipv4={addresses.ipv4}
+        ipv6={addresses.ipv6}
+      />
       <div className="nw-tabs" role="tablist" aria-label="Clash 配置格式">
         <button type="button" role="tab" aria-selected={format === "yaml"} className={format === "yaml" ? "is-active" : ""} onClick={() => switchFormat("yaml")}>标准 Clash YAML</button>
         <button type="button" role="tab" aria-selected={format === "json"} className={format === "json" ? "is-active" : ""} onClick={() => switchFormat("json")}>JSON</button>
@@ -4673,9 +4799,17 @@ export function replaceUriAddress(
       const rest = mainPart.slice(atIdx + 1);
       const queryIdx = rest.search(/[\/\?]/);
       const querySuffix = queryIdx >= 0 ? rest.slice(queryIdx) : "";
-      const hostPart = targetHost || rest.split(":")[0];
-      const portPart = newPort !== undefined ? String(newPort) : rest.split(":")[1]?.split(/[\/\?]/)[0];
-      return `${prefix}${hostPart}:${portPart}${querySuffix}${hashSuffix}`;
+      const hostAndPort = queryIdx >= 0 ? rest.slice(0, queryIdx) : rest;
+      let oldHost = hostAndPort;
+      let oldPort = "";
+      const lastColon = hostAndPort.lastIndexOf(":");
+      if (lastColon >= 0) {
+        oldHost = hostAndPort.slice(0, lastColon);
+        oldPort = hostAndPort.slice(lastColon + 1);
+      }
+      const hostPart = targetHost || oldHost;
+      const portPart = newPort !== undefined ? String(newPort) : oldPort;
+      return `${prefix}${hostPart}${portPart ? `:${portPart}` : ""}${querySuffix}${hashSuffix}`;
     } else {
       try {
         const b64 = mainPart.slice(5);
@@ -4684,9 +4818,16 @@ export function replaceUriAddress(
         if (atIdx >= 0) {
           const auth = decoded.slice(0, atIdx + 1);
           const rest = decoded.slice(atIdx + 1);
-          const hostPart = targetHost || rest.split(":")[0];
-          const portPart = newPort !== undefined ? String(newPort) : rest.split(":")[1];
-          const replaced = `${auth}${hostPart}:${portPart}`;
+          let oldHost = rest;
+          let oldPort = "";
+          const lastColon = rest.lastIndexOf(":");
+          if (lastColon >= 0) {
+            oldHost = rest.slice(0, lastColon);
+            oldPort = rest.slice(lastColon + 1);
+          }
+          const hostPart = targetHost || oldHost;
+          const portPart = newPort !== undefined ? String(newPort) : oldPort;
+          const replaced = `${auth}${hostPart}${portPart ? `:${portPart}` : ""}`;
           return `ss://${btoa(unescape(encodeURIComponent(replaced)))}${hashSuffix}`;
         }
       } catch {
@@ -4716,6 +4857,8 @@ export function replaceUriAddress(
 
 export function NodeShareQRCodeDialog({
   node,
+  server,
+  servers,
   overrideAddress,
   displayName,
   protocolLabel,
@@ -4723,50 +4866,69 @@ export function NodeShareQRCodeDialog({
   onClose,
 }: {
   node: WorkbenchNode;
+  server?: RemoteServer;
+  servers?: RemoteServer[];
   overrideAddress?: { host?: string; port?: number };
   displayName?: string;
   protocolLabel?: string;
   notify: NodesWorkbenchNotify;
   onClose: () => void;
 }) {
-  const [item, setItem] = useState<NodeURI | null>(null);
+  const [rawUriItem, setRawUriItem] = useState<NodeURI | null>(null);
   const [dataURL, setDataURL] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  const addresses = useMemo(() => resolveNodeIPAddresses(node, server, servers), [node, server, servers]);
+  const initialIsV6 = useMemo(() => {
+    const host = overrideAddress?.host || nodeAddress(node).host;
+    return Boolean(addresses.ipv6 && (host === addresses.ipv6 || host.includes(":")));
+  }, [overrideAddress?.host, node, addresses.ipv6]);
+  const [ipVersion, setIpVersion] = useState<"v4" | "v6">(initialIsV6 ? "v6" : "v4");
+
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
-    setItem(null);
+    setRawUriItem(null);
     setDataURL("");
     try {
       const response = await api.get<{ item?: NodeURI }>(`/api/admin/nodes/${node.id}/uri`, { skipCache: true });
       if (!response.item?.uri) throw new Error("服务端没有返回可用的节点分享链接");
-
-      let finalUri = response.item.uri;
-      const nameToUse = displayName || response.item.node_name;
-      const targetHost = overrideAddress?.host || (isForwardingEntry(node) ? nodeAddress(node).host : undefined);
-      const targetPort = overrideAddress?.port || (isForwardingEntry(node) ? nodeAddress(node).port : undefined);
-
-      if (targetHost && targetPort) {
-        finalUri = replaceUriAddress(finalUri, targetHost, targetPort, nameToUse);
-      } else if (displayName) {
-        finalUri = replaceUriAddress(finalUri, undefined, undefined, displayName);
-      }
-
-      setItem({
-        ...response.item,
-        node_name: nameToUse,
-        uri: finalUri,
-        protocol: protocolLabel || response.item.protocol,
-      });
+      setRawUriItem(response.item);
     } catch (reason) {
       setError(reasonMessage(reason, "节点分享链接生成失败"));
     } finally {
       setLoading(false);
     }
-  }, [node, overrideAddress?.host, overrideAddress?.port, displayName, protocolLabel]);
+  }, [node.id]);
 
   useEffect(() => { void load(); }, [load]);
+
+  const item = useMemo<NodeURI | null>(() => {
+    if (!rawUriItem?.uri) return null;
+    let finalUri = rawUriItem.uri;
+    const nameToUse = displayName || rawUriItem.node_name;
+    const targetHost = overrideAddress?.host
+      || (ipVersion === "v6" ? addresses.ipv6 : addresses.ipv4)
+      || (isForwardingEntry(node) ? nodeAddress(node).host : undefined);
+    const targetPort = overrideAddress?.port || (isForwardingEntry(node) ? nodeAddress(node).port : undefined);
+
+    if (targetHost && targetPort) {
+      finalUri = replaceUriAddress(finalUri, targetHost, targetPort, displayName);
+    } else if (targetHost) {
+      finalUri = replaceUriAddress(finalUri, targetHost, undefined, displayName);
+    } else if (displayName) {
+      finalUri = replaceUriAddress(finalUri, undefined, undefined, displayName);
+    }
+
+    return {
+      ...rawUriItem,
+      node_name: nameToUse,
+      uri: finalUri,
+      protocol: protocolLabel || rawUriItem.protocol,
+    };
+  }, [rawUriItem, displayName, overrideAddress?.host, overrideAddress?.port, ipVersion, addresses.ipv4, addresses.ipv6, node, protocolLabel]);
+
   useEffect(() => {
     if (!item?.uri) return;
     let active = true;
@@ -4781,7 +4943,7 @@ export function NodeShareQRCodeDialog({
       if (active) setError(reasonMessage(reason, "二维码生成失败"));
     });
     return () => { active = false; };
-  }, [item]);
+  }, [item?.uri]);
 
   const copy = async () => {
     if (!item?.uri) return;
@@ -4799,6 +4961,12 @@ export function NodeShareQRCodeDialog({
 
   return <Dialog title={titleText} description={`${effectiveName} · ${effectiveProtocol}`} onClose={onClose} medium>
     <div className="form-stack nw-node-qr">
+      <IPVersionSlider
+        value={ipVersion}
+        onChange={setIpVersion}
+        ipv4={addresses.ipv4}
+        ipv6={addresses.ipv6}
+      />
       <div className="nw-inline-note nw-qr-warning"><KeyRound size={17} /><span>二维码包含节点凭据，请勿转发或公开截图。</span></div>
       {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
       {!error ? <div className="nw-qr-canvas">

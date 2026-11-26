@@ -2501,3 +2501,92 @@
 .nw-forward-config summary{cursor:pointer;color:var(--text);font-weight:500}
 .nw-forward-config p{color:var(--muted);line-height:1.6}
 .nw-forward-config pre{max-height:320px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--font-mono,monospace);font-size:12px}
+
+.nw-ip-slider-container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.nw-ip-slider {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  width: 100%;
+  padding: 4px;
+  background: var(--surface-sunken, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-sizing: border-box;
+  user-select: none;
+}
+.nw-ip-slider-thumb {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: calc(50% - 4px);
+  background: var(--accent);
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
+  z-index: 1;
+}
+.nw-ip-slider-thumb.is-v6 {
+  transform: translateX(100%);
+}
+.nw-ip-slider-btn {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 500;
+  transition: color 0.15s ease;
+  min-height: 48px;
+}
+.nw-ip-slider-btn:hover:not(:disabled) {
+  color: var(--text-main);
+}
+.nw-ip-slider-btn.is-active {
+  color: #fff;
+  font-weight: 600;
+}
+.nw-ip-slider-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.nw-ip-slider-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.2;
+}
+.nw-ip-slider-sub {
+  font-size: 11px;
+  font-weight: normal;
+  opacity: 0.85;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.nw-ip-slider-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.15);
+  font-weight: normal;
+}
+

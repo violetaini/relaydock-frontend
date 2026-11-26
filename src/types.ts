@@ -58,6 +58,7 @@ export interface RemoteServer {
   encrypted: boolean;
   agent_uninstall_v2?: boolean;
   warp_installed?: boolean;
+  auto_update_agent?: boolean;
   is_federated?: boolean;
   federation_prefix?: string;
   inbounds: Array<{

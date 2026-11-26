@@ -411,6 +411,7 @@ describe("service management workbench", () => {
       traffic_limit: 500 * 1024 ** 3,
       traffic_source: "system",
       traffic_stats_mode: "both",
+      auto_update_agent: true,
       ipv6_enabled: true,
       steal_mode: "default",
       steal_self: false,
@@ -1265,6 +1266,25 @@ describe("service management workbench", () => {
     await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/remote-servers/update", expect.objectContaining({
       id: 11,
       nginx_mode: "reuse_existing",
+    })));
+  });
+
+  it("allows toggling auto-update agent off when editing", async () => {
+    mockServerReads([{ ...onlineServer, auto_update_agent: true }]);
+    const put = vi.spyOn(api, "put").mockResolvedValue({ success: true, message: "saved" });
+    render(<ServicesWorkbenchPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 Edge Hong Kong" }));
+    const dialog = screen.getByRole("dialog", { name: "编辑 Edge Hong Kong" });
+    const toggle = within(dialog).getByRole("switch", { name: /Agent 自动更新/ });
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存更改" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/remote-servers/update", expect.objectContaining({
+      id: 11,
+      auto_update_agent: false,
     })));
   });
 

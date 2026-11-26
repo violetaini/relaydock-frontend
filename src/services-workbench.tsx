@@ -479,6 +479,7 @@ interface CreateServerForm {
   trafficResetDay: string;
   trafficStatsMode: string;
   trafficSource: string;
+  autoUpdateAgent: boolean;
   ipv6Enabled: boolean;
   ddnsEnabled: boolean;
   ddnsProviderID: string;
@@ -504,6 +505,7 @@ const emptyCreateForm: CreateServerForm = {
   trafficResetDay: "1",
   trafficStatsMode: "both",
   trafficSource: "system",
+  autoUpdateAgent: true,
   ipv6Enabled: true,
   ddnsEnabled: false,
   ddnsProviderID: "0",
@@ -3051,6 +3053,9 @@ function ServerFormFields({ form, setForm, editing = false }: { form: CreateServ
         <div className="form-grid"><Field label="流量限额（GB）" hint="0 或留空表示不限"><input type="number" min="0" step="0.01" value={form.trafficLimitGB} onChange={(event) => patch("trafficLimitGB", event.target.value)} /></Field><Field label={editing ? "已用流量校准（GB，可选）" : "初始已用流量（GB）"}><input type="number" min="0" step="0.01" value={form.trafficUsedGB} onChange={(event) => patch("trafficUsedGB", event.target.value)} placeholder={editing ? "留空保持不变" : "0"} /></Field></div>
         <div className="form-grid"><Field label="每月重置日" hint="0 表示不自动重置"><input type="number" min="0" max="31" value={form.trafficResetDay} onChange={(event) => patch("trafficResetDay", event.target.value)} /></Field><Field label="服务器流量来源"><select value={form.trafficSource} onChange={(event) => patch("trafficSource", event.target.value)}><option value="system">系统网卡（VPS 计费口径）</option><option value="xray">Xray 节点聚合</option></select></Field></div>
         <Field label="流量统计方向"><select value={form.trafficStatsMode} onChange={(event) => patch("trafficStatsMode", event.target.value)}><option value="both">上行 + 下行</option><option value="max">上行 / 下行取较大值</option><option value="upload">仅上行</option><option value="download">仅下行</option></select></Field>
+        <Field label="Agent 自动更新" hint="检测到新版本 Agent 时，由控制端在后台自动执行平滑升级（默认开启）">
+          <Toggle label={form.autoUpdateAgent ? "已启用 Agent 自动更新" : "已关闭 Agent 自动更新"} checked={form.autoUpdateAgent} onChange={(checked) => patch("autoUpdateAgent", checked)} />
+        </Field>
       </div>
     </details>
   </>;
@@ -3083,6 +3088,7 @@ function CreateServerDialog({ onClose, onCreated }: { onClose: () => void; onCre
         traffic_reset_day: Number(form.trafficResetDay) || 0,
         traffic_stats_mode: form.trafficStatsMode,
         traffic_source: form.trafficSource,
+        auto_update_agent: form.autoUpdateAgent,
         ipv6_enabled: form.ipv6Enabled,
         ddns_enabled: form.ddnsEnabled,
         ddns_provider_id: Number(form.ddnsProviderID) || 0,
@@ -3121,6 +3127,7 @@ function formFromServer(server: ManagedServer): CreateServerForm {
     trafficResetDay: String(server.traffic_reset_day ?? 0),
     trafficStatsMode: server.traffic_stats_mode || "both",
     trafficSource: server.traffic_source || "system",
+    autoUpdateAgent: server.auto_update_agent !== false,
     ipv6Enabled: server.ipv6_enabled,
     ddnsEnabled: Boolean(server.ddns_enabled),
     ddnsProviderID: String(server.ddns_provider_id ?? 0),
@@ -3164,6 +3171,7 @@ function EditServerDialog({ server, onClose, onSaved }: { server: ManagedServer;
         nginx_mode: form.nginxMode,
         traffic_stats_mode: form.trafficStatsMode,
         traffic_source: form.trafficSource,
+        auto_update_agent: form.autoUpdateAgent,
         ipv6_enabled: form.ipv6Enabled,
         ddns_enabled: form.ddnsEnabled,
         ddns_provider_id: Number(form.ddnsProviderID) || 0,

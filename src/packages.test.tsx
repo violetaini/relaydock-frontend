@@ -351,4 +351,39 @@ describe("package management", () => {
     expect(screen.getByText(/美日专线/)).toBeInTheDocument();
     expect(screen.queryByText(/港台专线/)).not.toBeInTheDocument();
   });
+
+  it("allows selecting and submitting subscribe_file_ids in the package dialog", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/packages") return { packages: [packageItem] } as T;
+      if (path === "/api/admin/nodes") return { nodes } as T;
+      if (path === "/api/admin/remote-servers") return { servers: [] } as T;
+      if (path === "/api/admin/tunnel-templates") return { tunnels: [] } as T;
+      if (path === "/api/admin/rule-templates") return { templates: ["default.yaml"] } as T;
+      if (path === "/api/admin/subscribe-files") {
+        return {
+          files: [
+            { id: 101, name: "香港专线订阅", filename: "hk_vip.yaml", type: "create", selected_node_ids: [10] },
+          ],
+        } as T;
+      }
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+
+    render(<PackagesPage notify={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 标准套餐" }));
+
+    const subCheckbox = await screen.findByRole("checkbox", { name: /香港专线订阅/ });
+    fireEvent.click(subCheckbox);
+    fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
+
+    await waitFor(() => {
+      expect(post).toHaveBeenCalledWith(
+        "/api/admin/packages/update",
+        expect.objectContaining({
+          subscribe_file_ids: [101],
+        }),
+      );
+    });
+  });
 });

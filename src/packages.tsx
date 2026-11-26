@@ -5,6 +5,7 @@ import {
   CircleUserRound,
   Gauge,
   Grid2X2,
+  Layers,
   List,
   Package as PackageIcon,
   Pencil,
@@ -83,6 +84,15 @@ interface MutationResponse extends ApiEnvelope {
   unbound_users?: number;
 }
 
+interface PackageSubscribeFileOption {
+  id: number;
+  name: string;
+  filename: string;
+  type: string;
+  description?: string;
+  selected_node_ids?: number[];
+}
+
 interface PackageFormState {
   name: string;
   description: string;
@@ -92,6 +102,7 @@ interface PackageFormState {
   nodeTrafficResetPeriod: NodeTrafficResetPeriod;
   resetDay: string;
   nodes: number[];
+  subscribeFileIds: number[];
   templateFilename: string;
   nodeMultipliers: Record<string, string>;
   nodeTrafficLimits: Record<string, string>;
@@ -124,6 +135,7 @@ function initialPackageForm(item: PackageItem | undefined, tunnels: TunnelTempla
     nodeTrafficResetPeriod: normalizeNodeTrafficResetPeriod(item?.node_traffic_reset_period),
     resetDay: String(item?.reset_day || 1),
     nodes: [...(item?.nodes ?? [])],
+    subscribeFileIds: [...(item?.subscribe_file_ids ?? [])],
     templateFilename: item?.template_filename ?? "",
     nodeMultipliers: Object.fromEntries(Object.entries(item?.node_multipliers ?? {}).map(([key, value]) => [key, String(value)])),
     nodeTrafficLimits: Object.fromEntries(Object.entries(item?.node_traffic_limits ?? {}).map(([key, value]) => [key, String(value)])),
@@ -156,6 +168,7 @@ function packagePayload(form: PackageFormState, original?: PackageItem): Record<
     node_traffic_reset_period: form.nodeTrafficResetPeriod,
     reset_day: Number(form.resetDay),
     nodes: form.nodes,
+    subscribe_file_ids: form.subscribeFileIds,
     node_multipliers: numericMap(form.nodeMultipliers),
     node_traffic_limits: numericMap(form.nodeTrafficLimits),
     node_speed_limits: numericMap(form.nodeSpeedLimits),
@@ -304,6 +317,12 @@ export function PackagesPage({ notify }: PackagesPageProps) {
                       <Route size={16} />
                       <strong className="package-meta-count">{itemNodes.length}</strong> 个节点
                     </span>
+                    {(item.subscribe_file_ids?.length ?? 0) > 0 ? (
+                      <span>
+                        <Layers size={16} />
+                        <strong className="package-meta-count">{item.subscribe_file_ids?.length ?? 0}</strong> 个订阅
+                      </span>
+                    ) : null}
                     <span>
                       <Server size={16} />
                       <strong className="package-meta-count">{item.server_grants?.length ?? 0}</strong> 台服务器
@@ -326,7 +345,7 @@ export function PackagesPage({ notify }: PackagesPageProps) {
                 <td><strong>{item.name}</strong><small className="cell-note">{item.description || "无套餐说明"}</small></td>
                 <td><Badge tone={item.traffic_mode === "twoway" ? "info" : "neutral"}>{item.traffic_mode === "twoway" ? "双向计费" : "单向计费"}</Badge></td>
                 <td><strong>{item.cycle_days} 天</strong><small className="cell-note">{packageNodeTrafficResetSummary(item)} · {item.device_limit ? `${item.device_limit} 台设备` : "设备不限"}</small></td>
-                <td><strong title={names.join("、")}>{itemNodes.length} 节点 · {item.server_grants?.length ?? 0} 服务器 · {item.forwarding_grants?.length ?? 0} 线路</strong><small className="cell-note">{names.slice(0, 2).join("、") || "未关联固定节点"}</small></td>
+                <td><strong title={names.join("、")}>{itemNodes.length} 节点 · {item.subscribe_file_ids?.length ?? 0} 订阅 · {item.server_grants?.length ?? 0} 服务器 · {item.forwarding_grants?.length ?? 0} 线路</strong><small className="cell-note">{names.slice(0, 2).join("、") || "未关联固定节点"}</small></td>
                 <td><div className="packages-list-actions"><IconButton label={`编辑 ${item.name}`} onClick={() => setEditor(item)}><Pencil size={16} /></IconButton><IconButton label={`删除 ${item.name}`} onClick={() => setPendingAction({ kind: "delete-package", item })}><Trash2 size={16} /></IconButton></div></td>
               </tr>;
             })}</tbody></table></div></Surface>}
@@ -376,9 +395,11 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
     };
   });
   const [nodeSearch, setNodeSearch] = useState("");
+  const [subSearch, setSubSearch] = useState("");
   const [serverSearch, setServerSearch] = useState("");
   const [tunnelSearch, setTunnelSearch] = useState("");
   const [templates, setTemplates] = useState<string[]>([]);
+  const [subscribeFiles, setSubscribeFiles] = useState<PackageSubscribeFileOption[]>([]);
   const [showAdvanced, setShowAdvanced] = useState(Boolean(
     Object.keys(item?.node_multipliers ?? {}).length ||
     Object.keys(item?.node_traffic_limits ?? {}).length ||
@@ -392,7 +413,39 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
     api.get<{ templates?: string[] }>("/api/admin/rule-templates")
       .then((response) => setTemplates(response.templates ?? []))
       .catch(() => setTemplates([]));
+    api.get<{ files?: PackageSubscribeFileOption[] }>("/api/admin/subscribe-files")
+      .then((response) => setSubscribeFiles(response.files ?? []))
+      .catch(() => setSubscribeFiles([]));
   }, []);
+
+  const visibleSubs = useMemo(() => {
+    const query = subSearch.trim().toLowerCase();
+    if (!query) return subscribeFiles;
+    return subscribeFiles.filter((file) =>
+      [file.name, file.filename, file.description].some((val) => val?.toLowerCase().includes(query)),
+    );
+  }, [subSearch, subscribeFiles]);
+
+  const allVisibleSubsSelected = visibleSubs.length > 0 && visibleSubs.every((file) => form.subscribeFileIds.includes(file.id));
+
+  const toggleSubscription = (subID: number) => {
+    setForm((current) => ({
+      ...current,
+      subscribeFileIds: current.subscribeFileIds.includes(subID)
+        ? current.subscribeFileIds.filter((id) => id !== subID)
+        : [...current.subscribeFileIds, subID],
+    }));
+  };
+
+  const toggleVisibleSubs = () => {
+    setForm((current) => {
+      const visibleIDs = visibleSubs.map((file) => file.id);
+      if (allVisibleSubsSelected) {
+        return { ...current, subscribeFileIds: current.subscribeFileIds.filter((id) => !visibleIDs.includes(id)) };
+      }
+      return { ...current, subscribeFileIds: Array.from(new Set([...current.subscribeFileIds, ...visibleIDs])) };
+    });
+  };
 
   const visibleNodes = useMemo(() => {
     const query = nodeSearch.trim().toLowerCase();
@@ -700,6 +753,37 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
           ))}
           {visibleNodes.length === 0 && unavailableIDs.length === 0 ? (
             <div><span className="muted">{eligibleNodes.length === 0 ? "当前没有可关联的多用户节点" : "没有匹配的节点"}</span></div>
+          ) : null}
+        </div>
+
+        <div className="surface-heading package-subheading">
+          <div>
+            <h2>关联订阅（{form.subscribeFileIds.length}）</h2>
+            <small>下发套餐时将同步下发所选订阅，并自动开通订阅内面板节点的多用户凭据以精细统计流量</small>
+          </div>
+          {visibleSubs.length > 0 ? (
+            <Button type="button" variant="ghost" onClick={toggleVisibleSubs}>
+              {allVisibleSubsSelected ? "取消当前结果" : "选择当前结果"}
+            </Button>
+          ) : null}
+        </div>
+        <Field label="筛选订阅">
+          <input value={subSearch} onChange={(event) => setSubSearch(event.target.value)} placeholder="订阅名称、文件名或备注" />
+        </Field>
+        <div className="preview-list">
+          {visibleSubs.map((sub) => (
+            <div key={sub.id}>
+              <label className="checkbox-row">
+                <input type="checkbox" checked={form.subscribeFileIds.includes(sub.id)} onChange={() => toggleSubscription(sub.id)} />
+                <span>
+                  {sub.name} <small>{sub.filename}{sub.selected_node_ids?.length ? ` · ${sub.selected_node_ids.length} 个面板节点` : ""}</small>
+                </span>
+              </label>
+              <Badge tone="info">{sub.type === "import" || sub.type === "upload" ? "外部订阅" : "自选/策略"}</Badge>
+            </div>
+          ))}
+          {visibleSubs.length === 0 ? (
+            <div><span className="muted">{subscribeFiles.length === 0 ? "暂无可用订阅文件，请先在订阅管理中创建" : "没有匹配的订阅"}</span></div>
           ) : null}
         </div>
 

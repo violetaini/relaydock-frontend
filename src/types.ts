@@ -128,6 +128,7 @@ export interface PackageItem {
   reset_day: number;
   node_traffic_reset_period?: NodeTrafficResetPeriod;
   nodes: number[];
+  subscribe_file_ids?: number[];
   server_grants?: PackageServerGrant[];
   forwarding_grants?: PackageForwardingGrant[];
   speed_limit_mbps: number;

@@ -1991,7 +1991,7 @@ function VisualTemplateDialog({ onClose, onComplete }: { onClose: () => void; on
   ];
 
   return <Dialog title="可视化模板设计" description="结构化维护代理组并生成完整 V3 YAML；不会解析或改写已有 YAML" onClose={onClose} dismissible={!working} wide>
-    <div className="cw-form">
+    <div className="cw-form cw-visual-dialog">
       {error ? <ErrorState message={error} /> : null}
       {loadWarning ? <div className="cw-help"><Info size={16} /><span>{loadWarning}</span></div> : null}
       {missingProviderNames.length ? <div className="cw-help"><Info size={16} /><span>草稿引用的 Proxy Provider 已不存在或不可用：{missingProviderNames.join("、")}。请重新选择来源后再保存。</span></div> : null}
@@ -1999,21 +1999,67 @@ function VisualTemplateDialog({ onClose, onComplete }: { onClose: () => void; on
       {restoredRef.current ? <div className="cw-draft-notice"><span><RefreshCw size={15} />已恢复上次未保存草稿</span><Button variant="ghost" disabled={working} onClick={clearDraft}>清除草稿</Button></div> : null}
       <div className="cw-tabs cw-tabs-three" role="tablist" aria-label="可视化模板视图"><button type="button" role="tab" aria-selected={tab === "design"} className={tab === "design" ? "is-active" : ""} onClick={() => setTab("design")}>结构设计</button><button type="button" role="tab" aria-selected={tab === "yaml"} className={tab === "yaml" ? "is-active" : ""} onClick={() => setTab("yaml")}>YAML 预览</button><button type="button" role="tab" aria-selected={tab === "json"} className={tab === "json" ? "is-active" : ""} onClick={() => setTab("json")}>JSON 预览</button></div>
       {tab === "design" ? <>
-        <div className="cw-form-grid"><Field label="模板文件名"><input required value={draft.filename} onChange={(event) => setDraft((current) => ({ ...current, filename: event.target.value }))} /></Field><Field label="DNS 模式"><select value={draft.dnsMode} onChange={(event) => setDraft((current) => ({ ...current, dnsMode: event.target.value as VisualTemplateDraft["dnsMode"] }))}><option value="fake-ip">Fake IP</option><option value="redir-host">Redir Host</option><option value="off">不写入 DNS</option></select></Field></div>
-        {draft.dnsMode !== "off" ? <div className="cw-form-section"><strong>DNS</strong><div className="cw-form-grid"><Field label="Nameserver（每行一个）"><textarea value={draft.nameservers.join("\n")} onChange={(event) => setDraft((current) => ({ ...current, nameservers: event.target.value.split("\n") }))} /></Field>{draft.dnsMode === "fake-ip" ? <><Field label="Fake IP 范围"><input value={draft.fakeIPRange} onChange={(event) => setDraft((current) => ({ ...current, fakeIPRange: event.target.value }))} /></Field><Field label="Fake IP 排除（每行一个）"><textarea value={draft.fakeIPFilters.join("\n")} onChange={(event) => setDraft((current) => ({ ...current, fakeIPFilters: event.target.value.split("\n") }))} /></Field></> : null}<div className="cw-toggle-field"><Toggle checked={draft.ipv6} onChange={(ipv6) => setDraft((current) => ({ ...current, ipv6 }))} label="DNS IPv6" /></div></div></div> : null}
-        <div className="cw-form-section"><div className="cw-section-title"><div><h2>代理组</h2><p>节点、内置项和代理组写入 proxies；Provider 写入 use。</p></div><div className="cw-toolbar"><select aria-label="地区分组预设" value={region} onChange={(event) => setRegion(event.target.value)}><option value="">地区预设</option>{regions.map((item) => <option value={item.name} key={item.name}>{item.name}</option>)}</select><Button variant="secondary" onClick={addRegionGroup} disabled={!region}>添加地区组</Button><Button onClick={() => setDraft((current) => ({ ...current, groups: [...current.groups, { ...defaultVisualGroup(), name: `PROXY ${current.groups.length + 1}` }] }))}><Plus size={16} />代理组</Button></div></div>
+        <div className="cw-visual-card">
+          <div className="cw-form-grid">
+            <Field label="模板文件名"><input required value={draft.filename} onChange={(event) => setDraft((current) => ({ ...current, filename: event.target.value }))} /></Field>
+            <Field label="DNS 模式"><select value={draft.dnsMode} onChange={(event) => setDraft((current) => ({ ...current, dnsMode: event.target.value as VisualTemplateDraft["dnsMode"] }))}><option value="fake-ip">Fake IP</option><option value="redir-host">Redir Host</option><option value="off">不写入 DNS</option></select></Field>
+          </div>
+        </div>
+        {draft.dnsMode !== "off" ? <div className="cw-visual-card">
+          <div className="cw-visual-card-head">
+            <div className="cw-visual-card-title"><Globe size={16} /><div><strong>DNS 配置</strong><small>配置上游解析服务器与 Fake-IP 过滤规则</small></div></div>
+            <div className="cw-visual-dns-ipv6"><Toggle checked={draft.ipv6} onChange={(ipv6) => setDraft((current) => ({ ...current, ipv6 }))} label="DNS IPv6" /></div>
+          </div>
+          {draft.dnsMode === "fake-ip" ? <>
+            <Field label="Fake IP 范围"><input value={draft.fakeIPRange} onChange={(event) => setDraft((current) => ({ ...current, fakeIPRange: event.target.value }))} /></Field>
+            <div className="cw-form-grid">
+              <Field label="Nameserver（每行一个）"><textarea className="cw-visual-textarea" value={draft.nameservers.join("\n")} onChange={(event) => setDraft((current) => ({ ...current, nameservers: event.target.value.split("\n") }))} spellCheck={false} /></Field>
+              <Field label="Fake IP 排除（每行一个）"><textarea className="cw-visual-textarea" value={draft.fakeIPFilters.join("\n")} onChange={(event) => setDraft((current) => ({ ...current, fakeIPFilters: event.target.value.split("\n") }))} spellCheck={false} /></Field>
+            </div>
+          </> : <Field label="Nameserver（每行一个）"><textarea className="cw-visual-textarea" value={draft.nameservers.join("\n")} onChange={(event) => setDraft((current) => ({ ...current, nameservers: event.target.value.split("\n") }))} spellCheck={false} /></Field>}
+        </div> : null}
+        <div className="cw-visual-card">
+          <div className="cw-section-title">
+            <div className="cw-visual-card-title"><Layers size={16} /><div><h2>代理组</h2><p>节点、内置项和代理组写入 proxies；Provider 写入 use。</p></div></div>
+            <div className="cw-toolbar cw-visual-group-toolbar">
+              <select aria-label="地区分组预设" value={region} onChange={(event) => setRegion(event.target.value)}><option value="">地区预设</option>{regions.map((item) => <option value={item.name} key={item.name}>{item.name}</option>)}</select>
+              <Button variant="secondary" onClick={addRegionGroup} disabled={!region}>添加地区组</Button>
+              <Button onClick={() => setDraft((current) => ({ ...current, groups: [...current.groups, { ...defaultVisualGroup(), name: `PROXY ${current.groups.length + 1}` }] }))}><Plus size={16} />代理组</Button>
+            </div>
+          </div>
           <div className="cw-visual-groups">{draft.groups.map((group, groupIndex) => <Surface className="cw-visual-group" key={group.id}>
-            <div className="cw-visual-group-head"><strong>{group.name || "未命名组"}</strong><div className="cw-table-actions"><IconButton label={`上移代理组 ${group.name}`} disabled={groupIndex === 0} onClick={() => moveGroup(groupIndex, -1)}><ArrowUp size={15} /></IconButton><IconButton label={`下移代理组 ${group.name}`} disabled={groupIndex === draft.groups.length - 1} onClick={() => moveGroup(groupIndex, 1)}><ArrowDown size={15} /></IconButton><IconButton label={`删除代理组 ${group.name}`} disabled={draft.groups.length === 1} onClick={() => setDraft((current) => ({ ...current, groups: current.groups.filter((item) => item.id !== group.id) }))}><Trash2 size={15} /></IconButton></div></div>
+            <div className="cw-visual-group-head">
+              <div className="cw-visual-group-title">
+                <strong>{group.name || "未命名组"}</strong>
+                <Badge tone="info">{group.type}</Badge>
+                <Badge tone="neutral">{group.sources.length} 项来源</Badge>
+              </div>
+              <div className="cw-table-actions">
+                <IconButton label={`上移代理组 ${group.name}`} disabled={groupIndex === 0} onClick={() => moveGroup(groupIndex, -1)}><ArrowUp size={15} /></IconButton>
+                <IconButton label={`下移代理组 ${group.name}`} disabled={groupIndex === draft.groups.length - 1} onClick={() => moveGroup(groupIndex, 1)}><ArrowDown size={15} /></IconButton>
+                <IconButton label={`删除代理组 ${group.name}`} disabled={draft.groups.length === 1} onClick={() => setDraft((current) => ({ ...current, groups: current.groups.filter((item) => item.id !== group.id) }))}><Trash2 size={15} /></IconButton>
+              </div>
+            </div>
             <div className="cw-form-grid"><Field label="组名"><input value={group.name} onChange={(event) => updateGroup(group.id, { name: event.target.value })} /></Field><Field label="类型"><select value={group.type} onChange={(event) => updateGroup(group.id, { type: event.target.value as ProxyGroupType })}><option value="select">Select</option><option value="url-test">URL Test</option><option value="fallback">Fallback</option><option value="load-balance">Load Balance</option><option value="relay">Relay</option></select></Field></div>
             <Field label="添加节点 / Provider / 代理组来源"><select aria-label={`添加 ${group.name} 来源`} value="" onChange={(event) => addSource(group, event.target.value)}><option value="">选择来源</option>{sourceOptions(group).map((option) => <option value={JSON.stringify({ kind: option.kind, value: option.value })} key={`${option.kind}:${option.value}`}>{option.label}</option>)}</select></Field>
             <div className="cw-source-list">{group.sources.map((source, sourceIndex) => <div className="cw-source-row" key={source.id}><Badge tone={source.kind === "provider" ? "info" : "neutral"}>{({ node: "节点", provider: "Provider", group: "代理组", builtin: "内置" } as const)[source.kind]}</Badge><code>{source.value}</code><div className="cw-table-actions"><IconButton label={`上移来源 ${source.value}`} disabled={sourceIndex === 0} onClick={() => moveSource(group, sourceIndex, -1)}><ArrowUp size={14} /></IconButton><IconButton label={`下移来源 ${source.value}`} disabled={sourceIndex === group.sources.length - 1} onClick={() => moveSource(group, sourceIndex, 1)}><ArrowDown size={14} /></IconButton><IconButton label={`移除来源 ${source.value}`} onClick={() => updateGroup(group.id, { sources: group.sources.filter((item) => item.id !== source.id) })}><Trash2 size={14} /></IconButton></div></div>)}</div>
-            {["url-test", "fallback", "load-balance"].includes(group.type) ? <div className="cw-form-grid"><Field label="节点测试 URL"><input type="url" value={group.url} onChange={(event) => updateGroup(group.id, { url: event.target.value })} /></Field><Field label="检查间隔（秒）"><input type="number" min="1" value={group.interval} onChange={(event) => updateGroup(group.id, { interval: Number(event.target.value) })} /></Field>{group.type === "url-test" ? <Field label="容差（毫秒）"><input type="number" min="0" value={group.tolerance} onChange={(event) => updateGroup(group.id, { tolerance: Number(event.target.value) })} /></Field> : null}{group.type === "load-balance" ? <Field label="负载策略"><select value={group.strategy} onChange={(event) => updateGroup(group.id, { strategy: event.target.value })}><option value="consistent-hashing">Consistent Hashing</option><option value="round-robin">Round Robin</option><option value="sticky-sessions">Sticky Sessions</option></select></Field> : null}<div className="cw-toggle-field"><Toggle checked={group.lazy} onChange={(lazy) => updateGroup(group.id, { lazy })} label="Lazy 检测" /></div></div> : null}
-            <div className="cw-form-grid"><Field label="包含过滤（filter）"><input value={group.filter} onChange={(event) => updateGroup(group.id, { filter: event.target.value })} /></Field><Field label="排除过滤（exclude-filter）"><input value={group.excludeFilter} onChange={(event) => updateGroup(group.id, { excludeFilter: event.target.value })} /></Field><Field label="排除类型（exclude-type）"><input value={group.excludeType} onChange={(event) => updateGroup(group.id, { excludeType: event.target.value })} /></Field><Field label="链式前置组" hint="生成 dialer-proxy-group，由现有订阅 handler 注入到节点"><select value={group.dialerProxyGroup} onChange={(event) => updateGroup(group.id, { dialerProxyGroup: event.target.value })}><option value="">不设置</option>{draft.groups.filter((item) => item.id !== group.id && item.name.trim()).map((item) => <option value={item.name} key={item.id}>{item.name}</option>)}</select></Field></div>
+            {["url-test", "fallback", "load-balance"].includes(group.type) ? <div className="cw-visual-subpanel"><div className="cw-form-grid"><Field label="节点测试 URL"><input type="url" value={group.url} onChange={(event) => updateGroup(group.id, { url: event.target.value })} /></Field><Field label="检查间隔（秒）"><input type="number" min="1" value={group.interval} onChange={(event) => updateGroup(group.id, { interval: Number(event.target.value) })} /></Field>{group.type === "url-test" ? <Field label="容差（毫秒）"><input type="number" min="0" value={group.tolerance} onChange={(event) => updateGroup(group.id, { tolerance: Number(event.target.value) })} /></Field> : null}{group.type === "load-balance" ? <Field label="负载策略"><select value={group.strategy} onChange={(event) => updateGroup(group.id, { strategy: event.target.value })}><option value="consistent-hashing">Consistent Hashing</option><option value="round-robin">Round Robin</option><option value="sticky-sessions">Sticky Sessions</option></select></Field> : null}<div className="cw-toggle-field"><Toggle checked={group.lazy} onChange={(lazy) => updateGroup(group.id, { lazy })} label="Lazy 检测" /></div></div></div> : null}
+            <details className="cw-visual-advanced" open={Boolean(group.filter || group.excludeFilter || group.excludeType || group.dialerProxyGroup)}>
+              <summary><SlidersHorizontal size={14} /><span>高级过滤与链式前置选项</span></summary>
+              <div className="cw-visual-advanced-body">
+                <div className="cw-form-grid"><Field label="包含过滤（filter）"><input value={group.filter} onChange={(event) => updateGroup(group.id, { filter: event.target.value })} placeholder="例如：香港|HK" /></Field><Field label="排除过滤（exclude-filter）"><input value={group.excludeFilter} onChange={(event) => updateGroup(group.id, { excludeFilter: event.target.value })} placeholder="例如：官网|到期" /></Field><Field label="排除类型（exclude-type）"><input value={group.excludeType} onChange={(event) => updateGroup(group.id, { excludeType: event.target.value })} placeholder="例如：ss|trojan" /></Field><Field label="链式前置组" hint="生成 dialer-proxy-group，由现有订阅 handler 注入到节点"><select value={group.dialerProxyGroup} onChange={(event) => updateGroup(group.id, { dialerProxyGroup: event.target.value })}><option value="">不设置</option>{draft.groups.filter((item) => item.id !== group.id && item.name.trim()).map((item) => <option value={item.name} key={item.id}>{item.name}</option>)}</select></Field></div>
+              </div>
+            </details>
           </Surface>)}</div>
         </div>
-        <div className="cw-form-section"><strong>规则</strong><Field label="每行一条 Mihomo 规则"><textarea className="cw-dialog-code cw-dialog-code-short" value={draft.rules.join("\n")} onChange={(event) => setDraft((current) => ({ ...current, rules: event.target.value.split("\n") }))} spellCheck={false} /></Field></div>
+        <div className="cw-visual-card">
+          <div className="cw-visual-card-head">
+            <div className="cw-visual-card-title"><FileCode2 size={16} /><div><strong>规则配置</strong><small>每行一条 Mihomo 规则，按顺序匹配</small></div></div>
+          </div>
+          <Field label="每行一条 Mihomo 规则"><textarea className="cw-dialog-code cw-dialog-code-short" value={draft.rules.join("\n")} onChange={(event) => setDraft((current) => ({ ...current, rules: event.target.value.split("\n") }))} spellCheck={false} /></Field>
+        </div>
       </> : <pre className="cw-preview">{tab === "yaml" ? yaml : json}</pre>}
-      <div className="dialog-actions"><Button variant="secondary" disabled={working} onClick={onClose}>取消</Button><Button variant="ghost" disabled={working} onClick={clearDraft}>恢复默认</Button><Button onClick={() => void save()} disabled={working}>{working ? <Spinner label="正在保存" /> : <><Save size={16} />保存新模板</>}</Button></div>
+      <div className="dialog-actions cw-visual-footer"><Button variant="ghost" disabled={working} onClick={clearDraft}>恢复默认</Button><div className="cw-visual-footer-right"><Button variant="secondary" disabled={working} onClick={onClose}>取消</Button><Button onClick={() => void save()} disabled={working}>{working ? <Spinner label="正在保存" /> : <><Save size={16} />保存新模板</>}</Button></div></div>
       </fieldset>
     </div>
   </Dialog>;

@@ -938,8 +938,9 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
-  border-radius: 6px;
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--surface-muted);
   color: var(--text-soft);
@@ -979,38 +980,52 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 0 10px;
-  min-width: 220px;
-  max-width: 320px;
-  flex: 1 1 220px;
-  height: 36px;
+  padding: 0 12px;
+  min-width: 240px;
+  max-width: 340px;
+  flex: 1 1 240px;
+  height: 40px;
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--surface-muted);
   color: var(--text-soft);
+  box-sizing: border-box;
+  transition: border-color 0.15s ease;
+}
+
+.cw-sublinks-search:focus-within,
+.cw-sublinks-platform:focus-within {
+  border-color: var(--accent);
 }
 
 .cw-sublinks-search input {
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  font-size: 13px;
-  outline: none;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  color: var(--text) !important;
+  font-size: 13px !important;
+  outline: none !important;
 }
 
 .cw-sublinks-platform {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  height: 36px;
-  padding: 0 10px;
+  height: 40px;
+  padding: 0 12px;
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--surface-muted);
   color: var(--text-soft);
   font-size: 13px;
+  box-sizing: border-box;
+  transition: border-color 0.15s ease;
 }
 
 .cw-sublinks-platform span {
@@ -1018,13 +1033,25 @@
 }
 
 .cw-sublinks-platform select {
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  font-size: 13px;
+  width: auto !important;
+  min-width: 120px !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 4px 0 2px !important;
+  margin: 0 !important;
+  color: var(--text) !important;
+  font-size: 13px !important;
   font-weight: 600;
-  outline: none;
+  outline: none !important;
   cursor: pointer;
+}
+
+.cw-sublinks-platform select option {
+  background: var(--surface);
+  color: var(--text);
 }
 
 .cw-sublinks-badges {

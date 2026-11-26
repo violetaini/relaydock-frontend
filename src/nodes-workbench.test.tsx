@@ -374,7 +374,7 @@ describe("managed offer protocol guard", () => {
     })));
   });
 
-  it("keeps unverified imported classic Shadowsocks unavailable even with a legacy config marker", async () => {
+  it("keeps unverified imported classic Shadowsocks unavailable without creating offer", async () => {
     const classic = node(7, "Classic SS", "ss");
     const config = { name: "Classic SS", type: "ss", server: "edge.example.com", port: 8388, cipher: "aes-128-gcm", password: "shared", "x-arcway-managed-users": true };
     classic.clash_config = JSON.stringify(config);
@@ -383,17 +383,14 @@ describe("managed offer protocol guard", () => {
     const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
     render(<NodeEditor node={classic} onClose={vi.fn()} onComplete={vi.fn()} />);
 
-    const selfService = screen.getByRole("switch", { name: "允许获授权用户自助开通" });
-    expect(selfService).toBeDisabled();
-    fireEvent.click(selfService);
-    expect(selfService).not.toBeChecked();
+    expect(screen.queryByRole("switch", { name: "允许获授权用户自助开通" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "保存节点" }));
 
     await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/nodes/7", expect.objectContaining({ protocol: "ss" })));
     expect(post).not.toHaveBeenCalledWith("/api/admin/managed-node-offers", expect.anything());
   });
 
-  it("allows unrelated edits to a verified managed classic AES node", async () => {
+  it("automatically forces self-service offer enabled for verified managed classic AES node", async () => {
     const classic = node(8, "Managed Classic SS", "ss");
     const config = { name: "Managed Classic SS", type: "ss", server: "edge.example.com", port: 8388, cipher: "aes-256-gcm", password: "admin-password" };
     classic.clash_config = JSON.stringify(config);
@@ -407,9 +404,7 @@ describe("managed offer protocol guard", () => {
       onComplete={vi.fn()}
     />);
 
-    const selfService = screen.getByRole("switch", { name: "允许获授权用户自助开通" });
-    expect(selfService).toBeChecked();
-    expect(selfService).not.toBeDisabled();
+    expect(screen.queryByRole("switch", { name: "允许获授权用户自助开通" })).not.toBeInTheDocument();
     fireEvent.change(screen.getByRole("textbox", { name: "节点名称" }), { target: { value: "Managed Classic SS 2" } });
     fireEvent.click(screen.getByRole("button", { name: "保存节点" }));
 

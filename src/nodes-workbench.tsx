@@ -2634,8 +2634,6 @@ export function NodeEditor({ node, forwardTarget, availableNodes = [], available
     port: String(initial.port || 443),
     rawURL: node?.raw_url || "",
     enabled: node?.enabled ?? true,
-    selfService: offer?.enabled ?? false,
-    offerOrder: String(offer?.sort_order ?? 0),
     config: formatProxyToClashYAML(initial),
   });
   const [tags, setTags] = useState(() => nodeTags(node ?? {} as WorkbenchNode));
@@ -2710,17 +2708,6 @@ export function NodeEditor({ node, forwardTarget, availableNodes = [], available
       config.port = portNum;
       if (!config.name || !config.type || !config.server || !portNum) throw new Error("名称、协议、服务器地址和端口均为必填项");
       if (portNum < 1 || portNum > 65535) throw new Error("端口必须在 1-65535 之间");
-      if (form.selfService && tunnelNode) throw new Error("Tunnel 转发节点不能发布到用户自助目录");
-      if (form.selfService && !managedSelfServiceConfigSupported(form.protocol, JSON.stringify(config), managedMultiUser)) {
-        const protoKey = nodeProtocolKey(form.protocol);
-        throw new Error(
-          protoKey === "wireguard"
-            ? "WireGuard 暂不支持按用户自助开通；管理员创建的普通节点仍可分配到套餐和订阅"
-            : protoKey === "chitanda"
-              ? "旧版共享 PSK 的 Chitanda 节点不支持按用户多凭据统计；请从服务器新建或升级为 users[] 多用户入站"
-              : "导入或旧版经典 Shadowsocks 无法确认多用户入站结构，不能直接发布；请从服务器创建经典 AES-GCM 节点，或改用 Shadowsocks 2022",
-        );
-      }
       const configJSON = JSON.stringify(config);
       const payload = {
         raw_url: form.rawURL.trim(),
@@ -2736,16 +2723,25 @@ export function NodeEditor({ node, forwardTarget, availableNodes = [], available
       };
       if (node) await api.put(`/api/admin/nodes/${node.id}`, payload);
       else await api.post("/api/admin/nodes", payload);
+
+      const shouldSelfService = Boolean(
+        node &&
+        node.original_server &&
+        node.inbound_tag &&
+        !tunnelNode &&
+        managedSelfServiceConfigSupported(form.protocol, configJSON, managedMultiUser)
+      );
+
       if (node && offer) {
         await api.put(`/api/admin/managed-node-offers/${offer.id}`, {
-          enabled: form.selfService,
-          sort_order: Math.max(0, Math.floor(Number(form.offerOrder) || 0)),
+          enabled: shouldSelfService,
+          sort_order: offer.sort_order ?? 0,
         });
-      } else if (node && form.selfService) {
+      } else if (node && shouldSelfService) {
         await api.post("/api/admin/managed-node-offers", {
           node_id: node.id,
           enabled: true,
-          sort_order: Math.max(0, Math.floor(Number(form.offerOrder) || 0)),
+          sort_order: 0,
         });
       }
       onComplete(node ? "节点已更新" : "节点已创建");
@@ -2774,7 +2770,6 @@ export function NodeEditor({ node, forwardTarget, availableNodes = [], available
       </div>
       <Field label={configFormat === "yaml" ? "标准 Clash 节点配置 (YAML)" : "Clash JSON 配置"} hint="支持标准 Clash YAML（proxies: - ...）或 JSON 格式，保存前自动以顶部基础字段覆盖 name/type/server/port"><textarea className="nw-code-editor" rows={14} spellCheck={false} value={form.config} onChange={(event) => setForm({ ...form, config: event.target.value })} /></Field></>}
       <div className="nw-managed-offer"><Toggle checked={form.enabled} onChange={(enabled) => setForm({ ...form, enabled })} label="启用节点" /></div>
-      {node ? <div className="nw-managed-offer"><Toggle checked={form.selfService} disabled={(!offer && (!node.original_server || !node.inbound_tag)) || (!selfServiceProtocolReady && !form.selfService)} onChange={(selfService) => setForm({ ...form, selfService })} label="允许获授权用户自助开通" />{form.selfService ? <Field label="目录排序" hint="数值越小越靠前"><input type="number" min="0" step="1" value={form.offerOrder} onChange={(event) => setForm({ ...form, offerOrder: event.target.value })} /></Field> : null}{!node.original_server || !node.inbound_tag ? <small>需要受管服务器和入站标识（Tag）后才能发布。</small> : tunnelNode ? <small>Tunnel 转发节点复用目标节点凭据，不能单独发布到用户目录。</small> : !selfServiceProtocolReady ? <small>{nodeProtocolKey(form.protocol) === "wireguard" ? "WireGuard 暂不支持按用户自助开通；管理员创建的普通节点仍可分配到套餐和订阅。" : "经典 Shadowsocks 只有共享密码，不能安全分配给独立用户；请改用 Shadowsocks 2022。"}</small> : <small>保存时会校验 Agent 的开通、到期和限速能力。</small>}</div> : null}
       <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onClose} disabled={working}>取消</Button><Button type="submit" disabled={working}>{working ? <Spinner label="正在保存" /> : <><Check size={16} />保存节点</>}</Button></div>
     </form>
   </Dialog>;

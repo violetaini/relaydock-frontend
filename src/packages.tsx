@@ -757,6 +757,22 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
             <div><span className="muted">{eligibleNodes.length === 0 ? "当前没有可关联的多用户节点" : "没有匹配的节点"}</span></div>
           ) : null}
         </div>
+        {showAdvanced ? <>
+          <div className="surface-heading package-subheading"><div><h2>固定节点明细限制</h2><small>各节点独立计算；流量和限速填 0 表示不限</small></div></div>
+          <div className="package-node-overrides">
+            {form.nodes.length === 0 ? <span className="muted">先选择关联节点后配置明细</span> : form.nodes.map((nodeID) => {
+              const node = nodes.find((itemNode) => itemNode.id === nodeID);
+              const key = String(nodeID);
+              return <div key={nodeID}>
+                <span><strong>{node?.node_name ?? `节点 #${nodeID}`}</strong><small>{node?.node_type === "routed" ? "路由转发 · " : ""}{node?.protocol || "节点已失联"}</small></span>
+                <Field label="流量倍率"><input aria-label={`${node?.node_name ?? nodeID} 流量倍率`} type="number" min="0" step="0.01" value={form.nodeMultipliers[key] ?? ""} placeholder="1" onChange={(event) => setForm({ ...form, nodeMultipliers: { ...form.nodeMultipliers, [key]: event.target.value } })} /></Field>
+                <Field label="流量 GB"><input aria-label={`${node?.node_name ?? nodeID} 流量额度`} type="number" min="0" step="0.01" value={form.nodeTrafficLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeTrafficLimits: { ...form.nodeTrafficLimits, [key]: event.target.value } })} /></Field>
+                <Field label="限速 Mbps"><input aria-label={`${node?.node_name ?? nodeID} 限速`} type="number" min="0" step="0.1" value={form.nodeSpeedLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeSpeedLimits: { ...form.nodeSpeedLimits, [key]: event.target.value } })} /></Field>
+                <Field label="设备数"><input aria-label={`${node?.node_name ?? nodeID} 设备数`} type="number" min="0" step="1" value={form.nodeDeviceLimits[key] ?? ""} placeholder="继承套餐设备数" onChange={(event) => setForm({ ...form, nodeDeviceLimits: { ...form.nodeDeviceLimits, [key]: event.target.value } })} /></Field>
+              </div>;
+            })}
+          </div>
+        </> : null}
 
         <div className="surface-heading package-subheading">
           <div>
@@ -926,22 +942,6 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
             </div>;
           })}
         </div>
-        {showAdvanced ? <>
-          <div className="surface-heading package-subheading"><div><h2>固定节点明细限制</h2><small>各节点独立计算；流量和限速填 0 表示不限</small></div></div>
-          <div className="package-node-overrides">
-            {form.nodes.length === 0 ? <span className="muted">先选择关联节点后配置明细</span> : form.nodes.map((nodeID) => {
-              const node = nodes.find((itemNode) => itemNode.id === nodeID);
-              const key = String(nodeID);
-              return <div key={nodeID}>
-                <span><strong>{node?.node_name ?? `节点 #${nodeID}`}</strong><small>{node?.node_type === "routed" ? "路由转发 · " : ""}{node?.protocol || "节点已失联"}</small></span>
-                <Field label="流量倍率"><input aria-label={`${node?.node_name ?? nodeID} 流量倍率`} type="number" min="0" step="0.01" value={form.nodeMultipliers[key] ?? ""} placeholder="1" onChange={(event) => setForm({ ...form, nodeMultipliers: { ...form.nodeMultipliers, [key]: event.target.value } })} /></Field>
-                <Field label="流量 GB"><input aria-label={`${node?.node_name ?? nodeID} 流量额度`} type="number" min="0" step="0.01" value={form.nodeTrafficLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeTrafficLimits: { ...form.nodeTrafficLimits, [key]: event.target.value } })} /></Field>
-                <Field label="限速 Mbps"><input aria-label={`${node?.node_name ?? nodeID} 限速`} type="number" min="0" step="0.1" value={form.nodeSpeedLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeSpeedLimits: { ...form.nodeSpeedLimits, [key]: event.target.value } })} /></Field>
-                <Field label="设备数"><input aria-label={`${node?.node_name ?? nodeID} 设备数`} type="number" min="0" step="1" value={form.nodeDeviceLimits[key] ?? ""} placeholder="继承套餐设备数" onChange={(event) => setForm({ ...form, nodeDeviceLimits: { ...form.nodeDeviceLimits, [key]: event.target.value } })} /></Field>
-              </div>;
-            })}
-          </div>
-        </> : null}
         <div className="dialog-actions">
           <Button type="button" variant="secondary" onClick={onClose} disabled={working}>取消</Button>
           <Button type="submit" disabled={working}>

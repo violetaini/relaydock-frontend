@@ -2037,15 +2037,15 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
               <Button aria-label="打开订阅同步工作台" variant="secondary" onClick={() => setDialog({ kind: "subscriptions" })}><Globe2 size={16} />同步外部订阅</Button>
             </div> : null}
             <div className="nw-filter-group nw-source-filter" aria-label="节点来源">
-              <button className={source === "all" ? "is-active" : ""} onClick={() => setSource("all")}><ListFilter size={13} />全部节点 <span>{nodes.length}</span></button>
-              <button className={source === "managed" ? "is-active" : ""} onClick={() => setSource("managed")}><Server size={13} />服务器创建 <span>{sourceCounts.managed}</span></button>
-              <button className={source === "imported" ? "is-active" : ""} onClick={() => setSource("imported")}><Upload size={13} />外部导入 <span>{sourceCounts.imported}</span></button>
-              <button className={source === "routed" ? "is-active" : ""} onClick={() => setSource("routed")}><Route size={13} />路由出站 <span>{sourceCounts.routed}</span></button>
+              <button className={source === "all" ? "is-active" : ""} onClick={() => setSource("all")}><ListFilter size={14} />全部节点 <span>{nodes.length}</span></button>
+              <button className={source === "managed" ? "is-active" : ""} onClick={() => setSource("managed")}><Server size={14} />服务器创建 <span>{sourceCounts.managed}</span></button>
+              <button className={source === "imported" ? "is-active" : ""} onClick={() => setSource("imported")}><Upload size={14} />外部导入 <span>{sourceCounts.imported}</span></button>
+              <button className={source === "routed" ? "is-active" : ""} onClick={() => setSource("routed")}><Route size={14} />路由出站 <span>{sourceCounts.routed}</span></button>
             </div>
             {serverFilterOptions.length > 0 ? (
               <div className="nw-filter-group nw-server-filters" aria-label="服务器筛选">
                 <button className={server === "all" ? "is-active" : ""} onClick={() => setServer("all")}>
-                  <Server size={13} />全部服务器 <span>{sourceScopedNodes.length}</span>
+                  <Server size={14} />全部服务器 <span>{sourceScopedNodes.length}</span>
                 </button>
                 {serverFilterOptions.length > 4 ? (
                   <select
@@ -2064,7 +2064,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
                 ) : null}
                 {serverFilterOptions.map((item) => (
                   <button key={item} className={server === item ? "is-active" : ""} onClick={() => setServer(item)}>
-                    {item === "外部导入" ? <Upload size={13} /> : item === "路由出站" ? <Route size={13} /> : <Server size={13} />}
+                    {item === "外部导入" ? <Upload size={14} /> : item === "路由出站" ? <Route size={14} /> : <Server size={14} />}
                     {item} <span>{serverCounts[item]}</span>
                   </button>
                 ))}
@@ -2074,7 +2074,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
               <button className={protocol === "all" ? "is-active" : ""} onClick={() => setProtocol("all")}>全部协议 <span>{serverScopedNodes.length}</span></button>
               {protocolFilterOptions.map((item) => <button key={item} className={protocol === item ? "is-active" : ""} onClick={() => setProtocol(item)} title={item.toUpperCase()}>{protocolBadgeText(item)} <span>{protocolCounts[item]}</span></button>)}
             </div>
-            {allTags.length ? <div className="nw-filter-group nw-tag-filters" aria-label="标签筛选"><button className={tag === "all" ? "is-active" : ""} onClick={() => setTag("all")}>全部标签</button>{allTags.map((item) => <button key={item} className={tag === item ? "is-active" : ""} onClick={() => setTag(item)}><Tag size={12} />{item}</button>)}</div> : null}
+            {allTags.length ? <div className="nw-filter-group nw-tag-filters" aria-label="标签筛选"><button className={tag === "all" ? "is-active" : ""} onClick={() => setTag("all")}>全部标签</button>{allTags.map((item) => <button key={item} className={tag === item ? "is-active" : ""} onClick={() => setTag(item)}><Tag size={13} />{item}</button>)}</div> : null}
             {sort === "custom" ? <div className="nw-order-toolbar"><span><ArrowUp size={15} />使用每行的上下箭头调整订阅节点顺序</span><Button variant={orderDirty ? "primary" : "secondary"} disabled={savingOrder || !orderDirty} onClick={() => void saveManualOrder()}>{savingOrder ? <Spinner label="正在保存" /> : <><Check size={15} />保存节点顺序</>}</Button></div> : null}
           </>
         ) : null}

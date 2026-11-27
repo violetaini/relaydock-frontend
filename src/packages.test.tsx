@@ -408,4 +408,23 @@ describe("package management", () => {
     expect(screen.getByRole("button", { name: "保存更改" })).toBeDisabled();
     expect(post).not.toHaveBeenCalled();
   });
+
+  it("supports '保留原订阅' option in template dropdown and renders collapsible modules", async () => {
+    mockLoads();
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<PackagesPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 标准套餐" }));
+    const templateSelect = screen.getByRole("combobox", { name: "订阅规则模板" });
+    const preserveOption = screen.getByRole("option", { name: "保留原订阅" });
+    expect(preserveOption).toHaveValue("__raw__");
+
+    fireEvent.change(templateSelect, { target: { value: "__raw__" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/packages/update", expect.objectContaining({
+      id: 9,
+      template_filename: "__raw__",
+    })));
+  });
 });

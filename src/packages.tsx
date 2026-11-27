@@ -768,256 +768,283 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
           <Field label="固定节点流量重置日" hint="月：每月；季度：季度首月；年：1 月"><input required aria-label="固定节点流量重置日" type="number" min="1" max="31" step="1" value={form.resetDay} onChange={(event) => setForm({ ...form, resetDay: event.target.value })} /></Field>
         </div>
 
-        <Field label="订阅规则模板" hint="留空继承系统默认模板">
-          <select value={form.templateFilename} onChange={(event) => setForm({ ...form, templateFilename: event.target.value })}>
+        <Field label="订阅规则模板" hint="留空继承系统默认模板；保留原订阅将输出原始配置不套用模板">
+          <select aria-label="订阅规则模板" value={form.templateFilename} onChange={(event) => setForm({ ...form, templateFilename: event.target.value })}>
             <option value="">继承系统默认</option>
-            {form.templateFilename && !templates.includes(form.templateFilename) ? <option value={form.templateFilename}>{form.templateFilename}（当前）</option> : null}
+            <option value="__raw__">保留原订阅</option>
+            {form.templateFilename && form.templateFilename !== "__raw__" && !templates.includes(form.templateFilename) ? <option value={form.templateFilename}>{form.templateFilename}（当前）</option> : null}
             {templates.map((template) => <option key={template} value={template}>{template}</option>)}
           </select>
         </Field>
 
-        <div className="surface-heading package-subheading">
-          <div>
-            <h2>关联节点（{form.nodes.length}）</h2>
-            <small>勾选节点后可直接配置倍率、独立流量（0 不限）、限速和设备数</small>
+        <details className="package-module-accordion">
+          <summary className="package-module-summary">
+            <div>
+              <h2>关联节点（{form.nodes.length}）</h2>
+              <small>勾选节点后可直接配置倍率、独立流量（0 不限）、限速和设备数</small>
+            </div>
+            <div className="page-actions" onClick={(event) => event.stopPropagation()}>
+              <Button type="button" variant="ghost" onClick={toggleVisible} disabled={visibleNodes.length === 0}>
+                {allVisibleSelected ? "取消当前结果" : "选择当前结果"}
+              </Button>
+              <ChevronDown size={18} className="package-accordion-chevron" />
+            </div>
+          </summary>
+          <div className="package-module-body">
+            <Field label="节点模块总流量 GB" hint="0 表示不限；耗尽后仅停用固定节点模块，须 ≤ 套餐总流量"><input aria-label="节点模块总流量 GB" type="number" min="0" max={totalGB > 0 ? totalGB : undefined} step="0.01" value={form.nodeModuleTrafficLimitGB} onChange={(event) => setForm({ ...form, nodeModuleTrafficLimitGB: event.target.value })} /></Field>
+            <Field label="筛选节点">
+              <input value={nodeSearch} onChange={(event) => setNodeSearch(event.target.value)} placeholder="名称、协议、服务器或标签" />
+            </Field>
+            {unavailableIDs.length > 0 ? (
+              <ErrorState message={`有 ${unavailableIDs.length} 个已关联节点不在当前列表中；保持选中可保留关联，也可在下方移除。`} />
+            ) : null}
+            <div className="package-entitlement-list">
+              {visibleNodes.map((node) => {
+                const isSelected = form.nodes.includes(node.id);
+                const key = String(node.id);
+                return (
+                  <div key={node.id} className={isSelected ? "is-selected" : ""}>
+                    <div className="package-node-row-head">
+                      <label className="checkbox-row">
+                        <input type="checkbox" checked={isSelected} onChange={() => toggleNode(node.id)} />
+                        <span>
+                          <strong>{node.node_name}</strong>
+                          <small>#{node.id} · {node.node_type === "routed" ? "路由转发 · " : ""}{node.original_server || "外部节点"}</small>
+                        </span>
+                      </label>
+                      <Badge tone={node.enabled ? "good" : "neutral"}>{node.enabled ? node.protocol || "启用" : "停用"}</Badge>
+                    </div>
+                    {isSelected ? (
+                      <div className="package-entitlement-fields">
+                        <Field label="流量倍率"><input aria-label={`${node.node_name} 流量倍率`} type="number" min="0" step="0.01" value={form.nodeMultipliers[key] ?? ""} placeholder="1" onChange={(event) => setForm({ ...form, nodeMultipliers: { ...form.nodeMultipliers, [key]: event.target.value } })} /></Field>
+                        <Field label="流量 GB"><input aria-label={`${node.node_name} 流量额度`} type="number" min="0" max={nodeMaxGB} step="0.01" value={form.nodeTrafficLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeTrafficLimits: { ...form.nodeTrafficLimits, [key]: event.target.value } })} /></Field>
+                        <Field label="限速 Mbps"><input aria-label={`${node.node_name} 限速`} type="number" min="0" step="0.1" value={form.nodeSpeedLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeSpeedLimits: { ...form.nodeSpeedLimits, [key]: event.target.value } })} /></Field>
+                        <Field label="设备数"><input aria-label={`${node.node_name} 设备数`} type="number" min="0" step="1" value={form.nodeDeviceLimits[key] ?? ""} placeholder="继承套餐设备数" onChange={(event) => setForm({ ...form, nodeDeviceLimits: { ...form.nodeDeviceLimits, [key]: event.target.value } })} /></Field>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+              {unavailableIDs.map((nodeID) => {
+                const key = String(nodeID);
+                return (
+                  <div key={`missing-${nodeID}`} className="is-selected">
+                    <div className="package-node-row-head">
+                      <label className="checkbox-row">
+                        <input type="checkbox" checked onChange={() => toggleNode(nodeID)} />
+                        <span><strong>不可用节点 #{nodeID}</strong><small>节点已失联</small></span>
+                      </label>
+                      <Badge tone="warn">已失联</Badge>
+                    </div>
+                    <div className="package-entitlement-fields">
+                      <Field label="流量倍率"><input aria-label={`${nodeID} 流量倍率`} type="number" min="0" step="0.01" value={form.nodeMultipliers[key] ?? ""} placeholder="1" onChange={(event) => setForm({ ...form, nodeMultipliers: { ...form.nodeMultipliers, [key]: event.target.value } })} /></Field>
+                      <Field label="流量 GB"><input aria-label={`${nodeID} 流量额度`} type="number" min="0" step="0.01" value={form.nodeTrafficLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeTrafficLimits: { ...form.nodeTrafficLimits, [key]: event.target.value } })} /></Field>
+                      <Field label="限速 Mbps"><input aria-label={`${nodeID} 限速`} type="number" min="0" step="0.1" value={form.nodeSpeedLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeSpeedLimits: { ...form.nodeSpeedLimits, [key]: event.target.value } })} /></Field>
+                      <Field label="设备数"><input aria-label={`${nodeID} 设备数`} type="number" min="0" step="1" value={form.nodeDeviceLimits[key] ?? ""} placeholder="继承套餐设备数" onChange={(event) => setForm({ ...form, nodeDeviceLimits: { ...form.nodeDeviceLimits, [key]: event.target.value } })} /></Field>
+                    </div>
+                  </div>
+                );
+              })}
+              {visibleNodes.length === 0 && unavailableIDs.length === 0 ? (
+                <div className="package-empty-entitlement">
+                  <span className="muted">{eligibleNodes.length === 0 ? "当前没有可关联的多用户节点" : "没有匹配的节点"}</span>
+                </div>
+              ) : null}
+            </div>
           </div>
-          <div className="page-actions">
-            <Button type="button" variant="ghost" onClick={toggleVisible} disabled={visibleNodes.length === 0}>
-              {allVisibleSelected ? "取消当前结果" : "选择当前结果"}
-            </Button>
-          </div>
-        </div>
-        <Field label="节点模块总流量 GB" hint="0 表示不限；耗尽后仅停用固定节点模块，须 ≤ 套餐总流量"><input aria-label="节点模块总流量 GB" type="number" min="0" max={totalGB > 0 ? totalGB : undefined} step="0.01" value={form.nodeModuleTrafficLimitGB} onChange={(event) => setForm({ ...form, nodeModuleTrafficLimitGB: event.target.value })} /></Field>
-        <Field label="筛选节点">
-          <input value={nodeSearch} onChange={(event) => setNodeSearch(event.target.value)} placeholder="名称、协议、服务器或标签" />
-        </Field>
-        {unavailableIDs.length > 0 ? (
-          <ErrorState message={`有 ${unavailableIDs.length} 个已关联节点不在当前列表中；保持选中可保留关联，也可在下方移除。`} />
-        ) : null}
-        <div className="package-entitlement-list">
-          {visibleNodes.map((node) => {
-            const isSelected = form.nodes.includes(node.id);
-            const key = String(node.id);
-            return (
-              <div key={node.id} className={isSelected ? "is-selected" : ""}>
-                <div className="package-node-row-head">
+        </details>
+
+        <details className="package-module-accordion">
+          <summary className="package-module-summary">
+            <div>
+              <h2>关联订阅（{form.subscribeFileIds.length}）</h2>
+              <small>下发套餐时将同步下发所选订阅，并自动开通订阅内面板节点的多用户凭据以精细统计流量</small>
+            </div>
+            <div className="page-actions" onClick={(event) => event.stopPropagation()}>
+              {visibleSubs.length > 0 ? (
+                <Button type="button" variant="ghost" onClick={toggleVisibleSubs}>
+                  {allVisibleSubsSelected ? "取消当前结果" : "选择当前结果"}
+                </Button>
+              ) : null}
+              <ChevronDown size={18} className="package-accordion-chevron" />
+            </div>
+          </summary>
+          <div className="package-module-body">
+            <Field label="筛选订阅">
+              <input value={subSearch} onChange={(event) => setSubSearch(event.target.value)} placeholder="订阅名称、文件名或备注" />
+            </Field>
+            <div className="preview-list">
+              {visibleSubs.map((sub) => (
+                <div key={sub.id}>
                   <label className="checkbox-row">
-                    <input type="checkbox" checked={isSelected} onChange={() => toggleNode(node.id)} />
+                    <input type="checkbox" checked={form.subscribeFileIds.includes(sub.id)} onChange={() => toggleSubscription(sub.id)} />
                     <span>
-                      <strong>{node.node_name}</strong>
-                      <small>#{node.id} · {node.node_type === "routed" ? "路由转发 · " : ""}{node.original_server || "外部节点"}</small>
+                      {sub.name} <small>{sub.filename}{sub.selected_node_ids?.length ? ` · ${sub.selected_node_ids.length} 个面板节点` : ""}</small>
                     </span>
                   </label>
-                  <Badge tone={node.enabled ? "good" : "neutral"}>{node.enabled ? node.protocol || "启用" : "停用"}</Badge>
+                  <Badge tone="info">{sub.type === "import" || sub.type === "upload" ? "外部订阅" : "自选/策略"}</Badge>
                 </div>
-                {isSelected ? (
-                  <div className="package-entitlement-fields">
-                    <Field label="流量倍率"><input aria-label={`${node.node_name} 流量倍率`} type="number" min="0" step="0.01" value={form.nodeMultipliers[key] ?? ""} placeholder="1" onChange={(event) => setForm({ ...form, nodeMultipliers: { ...form.nodeMultipliers, [key]: event.target.value } })} /></Field>
-                    <Field label="流量 GB"><input aria-label={`${node.node_name} 流量额度`} type="number" min="0" max={nodeMaxGB} step="0.01" value={form.nodeTrafficLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeTrafficLimits: { ...form.nodeTrafficLimits, [key]: event.target.value } })} /></Field>
-                    <Field label="限速 Mbps"><input aria-label={`${node.node_name} 限速`} type="number" min="0" step="0.1" value={form.nodeSpeedLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeSpeedLimits: { ...form.nodeSpeedLimits, [key]: event.target.value } })} /></Field>
-                    <Field label="设备数"><input aria-label={`${node.node_name} 设备数`} type="number" min="0" step="1" value={form.nodeDeviceLimits[key] ?? ""} placeholder="继承套餐设备数" onChange={(event) => setForm({ ...form, nodeDeviceLimits: { ...form.nodeDeviceLimits, [key]: event.target.value } })} /></Field>
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
-          {unavailableIDs.map((nodeID) => {
-            const key = String(nodeID);
-            return (
-              <div key={`missing-${nodeID}`} className="is-selected">
-                <div className="package-node-row-head">
-                  <label className="checkbox-row">
-                    <input type="checkbox" checked onChange={() => toggleNode(nodeID)} />
-                    <span><strong>不可用节点 #{nodeID}</strong><small>节点已失联</small></span>
-                  </label>
-                  <Badge tone="warn">已失联</Badge>
-                </div>
-                <div className="package-entitlement-fields">
-                  <Field label="流量倍率"><input aria-label={`${nodeID} 流量倍率`} type="number" min="0" step="0.01" value={form.nodeMultipliers[key] ?? ""} placeholder="1" onChange={(event) => setForm({ ...form, nodeMultipliers: { ...form.nodeMultipliers, [key]: event.target.value } })} /></Field>
-                  <Field label="流量 GB"><input aria-label={`${nodeID} 流量额度`} type="number" min="0" step="0.01" value={form.nodeTrafficLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeTrafficLimits: { ...form.nodeTrafficLimits, [key]: event.target.value } })} /></Field>
-                  <Field label="限速 Mbps"><input aria-label={`${nodeID} 限速`} type="number" min="0" step="0.1" value={form.nodeSpeedLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeSpeedLimits: { ...form.nodeSpeedLimits, [key]: event.target.value } })} /></Field>
-                  <Field label="设备数"><input aria-label={`${nodeID} 设备数`} type="number" min="0" step="1" value={form.nodeDeviceLimits[key] ?? ""} placeholder="继承套餐设备数" onChange={(event) => setForm({ ...form, nodeDeviceLimits: { ...form.nodeDeviceLimits, [key]: event.target.value } })} /></Field>
-                </div>
-              </div>
-            );
-          })}
-          {visibleNodes.length === 0 && unavailableIDs.length === 0 ? (
-            <div className="package-empty-entitlement">
-              <span className="muted">{eligibleNodes.length === 0 ? "当前没有可关联的多用户节点" : "没有匹配的节点"}</span>
+              ))}
+              {visibleSubs.length === 0 ? (
+                <div><span className="muted">{subscribeFiles.length === 0 ? "暂无可用订阅文件，请先在订阅管理中创建" : "没有匹配的订阅"}</span></div>
+              ) : null}
             </div>
-          ) : null}
-        </div>
-
-        <div className="surface-heading package-subheading">
-          <div>
-            <h2>关联订阅（{form.subscribeFileIds.length}）</h2>
-            <small>下发套餐时将同步下发所选订阅，并自动开通订阅内面板节点的多用户凭据以精细统计流量</small>
           </div>
-          {visibleSubs.length > 0 ? (
-            <Button type="button" variant="ghost" onClick={toggleVisibleSubs}>
-              {allVisibleSubsSelected ? "取消当前结果" : "选择当前结果"}
-            </Button>
-          ) : null}
-        </div>
-        <Field label="筛选订阅">
-          <input value={subSearch} onChange={(event) => setSubSearch(event.target.value)} placeholder="订阅名称、文件名或备注" />
-        </Field>
-        <div className="preview-list">
-          {visibleSubs.map((sub) => (
-            <div key={sub.id}>
-              <label className="checkbox-row">
-                <input type="checkbox" checked={form.subscribeFileIds.includes(sub.id)} onChange={() => toggleSubscription(sub.id)} />
-                <span>
-                  {sub.name} <small>{sub.filename}{sub.selected_node_ids?.length ? ` · ${sub.selected_node_ids.length} 个面板节点` : ""}</small>
-                </span>
-              </label>
-              <Badge tone="info">{sub.type === "import" || sub.type === "upload" ? "外部订阅" : "自选/策略"}</Badge>
-            </div>
-          ))}
-          {visibleSubs.length === 0 ? (
-            <div><span className="muted">{subscribeFiles.length === 0 ? "暂无可用订阅文件，请先在订阅管理中创建" : "没有匹配的订阅"}</span></div>
-          ) : null}
-        </div>
+        </details>
 
-        <div className="surface-heading package-subheading">
-          <div>
-            <h2>服务器节点授权（{form.serverGrants.length}）</h2>
-            <small>允许账号在指定服务器创建自己的节点，也可开通管理员发布的节点</small>
-          </div>
-          {visibleServers.length > 0 ? (
-            <Button type="button" variant="ghost" onClick={toggleVisibleServers}>
-              {allVisibleServersSelected ? "取消当前结果" : "选择当前结果"}
-            </Button>
-          ) : null}
-        </div>
-        <Field label="服务器模块总流量 GB" hint="0 表示不限；耗尽后仅停用服务器授权模块，须 ≤ 套餐总流量"><input aria-label="服务器模块总流量 GB" type="number" min="0" max={totalGB > 0 ? totalGB : undefined} step="0.01" value={form.serverModuleTrafficLimitGB} onChange={(event) => setForm({ ...form, serverModuleTrafficLimitGB: event.target.value })} /></Field>
-        <Field label="筛选服务器">
-          <input
-            value={serverSearch}
-            onChange={(event) => setServerSearch(event.target.value)}
-            placeholder="名称、IP 地址或状态"
-            aria-label="筛选服务器"
-          />
-        </Field>
-        <div className="package-entitlement-list">
-          {visibleServers.length === 0 ? (
-            <div className="package-empty-entitlement">
-              <span className="muted">{servers.length === 0 ? "暂无可授权服务器" : "没有匹配的服务器"}</span>
+        <details className="package-module-accordion">
+          <summary className="package-module-summary">
+            <div>
+              <h2>服务器节点授权（{form.serverGrants.length}）</h2>
+              <small>允许账号在指定服务器创建自己的节点，也可开通管理员发布的节点</small>
             </div>
-          ) : visibleServers.map((server) => {
-            const grant = form.serverGrants.find((itemGrant) => itemGrant.server_id === server.id);
-            const protocolProfiles = grant ? selectedServerProfiles(grant) : [];
-            const protocolUnrestricted = Boolean(grant && !grant.allowed_protocol_profiles?.length && !grant.allowed_protocols?.length);
-            const protocolExpanded = expandedServerProtocols.has(server.id);
-            const protocolSummary = protocolUnrestricted ? "全部协议组合" : `已选 ${protocolProfiles.length} 个组合`;
-            return <div key={server.id} className={grant ? "is-selected" : ""}>
-              <label className="checkbox-row"><input type="checkbox" checked={Boolean(grant)} onChange={() => toggleServer(server.id)} /><span><strong>{server.name}</strong><small>{server.status || "未知状态"}</small></span></label>
-              {grant ? <div className="package-entitlement-fields">
-                <Field label="节点名额" hint="0 表示不限"><input aria-label={`${server.name} 节点名额`} type="number" min="0" value={grant.max_active_nodes} onChange={(event) => updateServerGrant(server.id, { max_active_nodes: Number(event.target.value) })} /></Field>
-                <Field label="授权流量 GB" hint="0 表示不限"><input aria-label={`${server.name} 授权流量`} type="number" min="0" max={serverMaxGB} step="0.01" value={grant.traffic_limit_bytes / 1024 ** 3} onChange={(event) => updateServerGrant(server.id, { traffic_limit_bytes: Math.round(Number(event.target.value) * 1024 ** 3) })} /></Field>
-                <Field label="限速 Mbps" hint="0 表示不限"><input aria-label={`${server.name} 授权限速`} type="number" min="0" step="0.1" value={grant.speed_limit_mbps} onChange={(event) => updateServerGrant(server.id, { speed_limit_mbps: Number(event.target.value) })} /></Field>
-                <Field label="流量计算"><select aria-label={`${server.name} 流量计算`} value={grant.billing_mode} onChange={(event) => updateServerGrant(server.id, { billing_mode: event.target.value as PackageServerGrant["billing_mode"] })}><option value="download">仅下载</option><option value="both">双向</option></select></Field>
-                <div className="package-protocol-disclosure">
-                  <button
-                    type="button"
-                    className="package-protocol-summary"
-                    aria-label={`${server.name} 代理协议，${protocolSummary}`}
-                    aria-expanded={protocolExpanded}
-                    aria-controls={`package-server-protocols-${server.id}`}
-                    onClick={() => toggleServerProtocolDisclosure(server.id)}
-                  >
-                    <span><strong>代理协议</strong><small>{protocolSummary}</small></span>
-                    <ChevronDown size={17} aria-hidden="true" />
-                  </button>
-                  {protocolExpanded ? <div id={`package-server-protocols-${server.id}`} className="package-protocol-content" role="group" aria-label={`${server.name} 允许的协议组合`}>
-                    <label className={`package-protocol-all ${protocolUnrestricted ? "is-selected" : ""}`}>
-                      <input type="checkbox" aria-label={`${server.name} 全部协议组合`} checked={protocolUnrestricted} onChange={() => setServerProfiles(server.id, [])} />
-                      <span><strong>全部协议组合</strong><small>不限制协议、传输或加密方式</small></span>
-                    </label>
-                    <div className="package-protocol-groups">
-                      {managedGrantProtocolGroups.map((group) => {
-                        const selected = new Set(protocolProfiles);
-                        const allAllowed = group.profiles.every((profile) => selected.has(profile.value));
-                        return <section key={group.value} className={allAllowed ? "is-selected" : ""}>
-                          <label className="package-protocol-group-head">
-                            <input type="checkbox" aria-label={`${server.name} ${group.label} 全部组合`} checked={allAllowed} onChange={() => toggleServerProtocolFamily(server.id, group.value)} />
-                            <strong>{group.label}</strong><small>全部组合</small>
-                          </label>
-                          <div className="package-protocol-options">
-                            {group.profiles.map((profile) => {
-                              const profileSelected = selected.has(profile.value);
-                              return <label key={profile.value} className={profileSelected ? "is-selected" : ""}>
-                                <input type="checkbox" aria-label={`${server.name} ${group.label} ${profile.label}`} checked={profileSelected} onChange={() => toggleServerProtocolProfile(server.id, profile.value)} />
-                                <span><strong>{profile.label}</strong><small>{profile.detail}</small></span>
-                              </label>;
-                            })}
-                          </div>
-                        </section>;
-                      })}
+            <div className="page-actions" onClick={(event) => event.stopPropagation()}>
+              {visibleServers.length > 0 ? (
+                <Button type="button" variant="ghost" onClick={toggleVisibleServers}>
+                  {allVisibleServersSelected ? "取消当前结果" : "选择当前结果"}
+                </Button>
+              ) : null}
+              <ChevronDown size={18} className="package-accordion-chevron" />
+            </div>
+          </summary>
+          <div className="package-module-body">
+            <Field label="服务器模块总流量 GB" hint="0 表示不限；耗尽后仅停用服务器授权模块，须 ≤ 套餐总流量"><input aria-label="服务器模块总流量 GB" type="number" min="0" max={totalGB > 0 ? totalGB : undefined} step="0.01" value={form.serverModuleTrafficLimitGB} onChange={(event) => setForm({ ...form, serverModuleTrafficLimitGB: event.target.value })} /></Field>
+            <Field label="筛选服务器">
+              <input
+                value={serverSearch}
+                onChange={(event) => setServerSearch(event.target.value)}
+                placeholder="名称、IP 地址或状态"
+                aria-label="筛选服务器"
+              />
+            </Field>
+            <div className="package-entitlement-list">
+              {visibleServers.length === 0 ? (
+                <div className="package-empty-entitlement">
+                  <span className="muted">{servers.length === 0 ? "暂无可授权服务器" : "没有匹配的服务器"}</span>
+                </div>
+              ) : visibleServers.map((server) => {
+                const grant = form.serverGrants.find((itemGrant) => itemGrant.server_id === server.id);
+                const protocolProfiles = grant ? selectedServerProfiles(grant) : [];
+                const protocolUnrestricted = Boolean(grant && !grant.allowed_protocol_profiles?.length && !grant.allowed_protocols?.length);
+                const protocolExpanded = expandedServerProtocols.has(server.id);
+                const protocolSummary = protocolUnrestricted ? "全部协议组合" : `已选 ${protocolProfiles.length} 个组合`;
+                return <div key={server.id} className={grant ? "is-selected" : ""}>
+                  <label className="checkbox-row"><input type="checkbox" checked={Boolean(grant)} onChange={() => toggleServer(server.id)} /><span><strong>{server.name}</strong><small>{server.status || "未知状态"}</small></span></label>
+                  {grant ? <div className="package-entitlement-fields">
+                    <Field label="节点名额" hint="0 表示不限"><input aria-label={`${server.name} 节点名额`} type="number" min="0" value={grant.max_active_nodes} onChange={(event) => updateServerGrant(server.id, { max_active_nodes: Number(event.target.value) })} /></Field>
+                    <Field label="授权流量 GB" hint="0 表示不限"><input aria-label={`${server.name} 授权流量`} type="number" min="0" max={serverMaxGB} step="0.01" value={grant.traffic_limit_bytes / 1024 ** 3} onChange={(event) => updateServerGrant(server.id, { traffic_limit_bytes: Math.round(Number(event.target.value) * 1024 ** 3) })} /></Field>
+                    <Field label="限速 Mbps" hint="0 表示不限"><input aria-label={`${server.name} 授权限速`} type="number" min="0" step="0.1" value={grant.speed_limit_mbps} onChange={(event) => updateServerGrant(server.id, { speed_limit_mbps: Number(event.target.value) })} /></Field>
+                    <Field label="流量计算"><select aria-label={`${server.name} 流量计算`} value={grant.billing_mode} onChange={(event) => updateServerGrant(server.id, { billing_mode: event.target.value as PackageServerGrant["billing_mode"] })}><option value="download">仅下载</option><option value="both">双向</option></select></Field>
+                    <div className="package-protocol-disclosure">
+                      <button
+                        type="button"
+                        className="package-protocol-summary"
+                        aria-label={`${server.name} 代理协议，${protocolSummary}`}
+                        aria-expanded={protocolExpanded}
+                        aria-controls={`package-server-protocols-${server.id}`}
+                        onClick={() => toggleServerProtocolDisclosure(server.id)}
+                      >
+                        <span><strong>代理协议</strong><small>{protocolSummary}</small></span>
+                        <ChevronDown size={17} aria-hidden="true" />
+                      </button>
+                      {protocolExpanded ? <div id={`package-server-protocols-${server.id}`} className="package-protocol-content" role="group" aria-label={`${server.name} 允许的协议组合`}>
+                        <label className={`package-protocol-all ${protocolUnrestricted ? "is-selected" : ""}`}>
+                          <input type="checkbox" aria-label={`${server.name} 全部协议组合`} checked={protocolUnrestricted} onChange={() => setServerProfiles(server.id, [])} />
+                          <span><strong>全部协议组合</strong><small>不限制协议、传输或加密方式</small></span>
+                        </label>
+                        <div className="package-protocol-groups">
+                          {managedGrantProtocolGroups.map((group) => {
+                            const selected = new Set(protocolProfiles);
+                            const allAllowed = group.profiles.every((profile) => selected.has(profile.value));
+                            return <section key={group.value} className={allAllowed ? "is-selected" : ""}>
+                              <label className="package-protocol-group-head">
+                                <input type="checkbox" aria-label={`${server.name} ${group.label} 全部组合`} checked={allAllowed} onChange={() => toggleServerProtocolFamily(server.id, group.value)} />
+                                <strong>{group.label}</strong><small>全部组合</small>
+                              </label>
+                              <div className="package-protocol-options">
+                                {group.profiles.map((profile) => {
+                                  const profileSelected = selected.has(profile.value);
+                                  return <label key={profile.value} className={profileSelected ? "is-selected" : ""}>
+                                    <input type="checkbox" aria-label={`${server.name} ${group.label} ${profile.label}`} checked={profileSelected} onChange={() => toggleServerProtocolProfile(server.id, profile.value)} />
+                                    <span><strong>{profile.label}</strong><small>{profile.detail}</small></span>
+                                  </label>;
+                                })}
+                              </div>
+                            </section>;
+                          })}
+                        </div>
+                      </div> : null}
                     </div>
                   </div> : null}
-                </div>
-              </div> : null}
-            </div>;
-          })}
-        </div>
-
-        <div className="surface-heading package-subheading">
-          <div>
-            <h2>转发线路授权（{tunnelGroups.filter((g) => {
-              const pid = Number(g.primary.id);
-              const fid = g.partner ? Number(g.partner.id) : null;
-              return form.forwardingGrants.some((grant) => grant.tunnel_id === pid || (fid !== null && grant.tunnel_id === fid));
-            }).length}）</h2>
-            <small>允许账号在选定线路模板上创建转发规则</small>
-          </div>
-        </div>
-        <Field label="转发模块总流量 GB" hint="0 表示不限；耗尽后仅停用转发线路模块，须 ≤ 套餐总流量"><input aria-label="转发模块总流量 GB" type="number" min="0" max={totalGB > 0 ? totalGB : undefined} step="0.01" value={form.forwardingModuleTrafficLimitGB} onChange={(event) => setForm({ ...form, forwardingModuleTrafficLimitGB: event.target.value })} /></Field>
-        <Field label="筛选转发线路">
-          <input
-            value={tunnelSearch}
-            onChange={(event) => setTunnelSearch(event.target.value)}
-            placeholder="线路名称、跳点或描述"
-            aria-label="筛选转发线路"
-          />
-        </Field>
-        <div className="package-entitlement-list">
-          {visibleTunnelGroups.length === 0 ? (
-            <div className="package-empty-entitlement">
-              <span className="muted">{tunnelGroups.length === 0 ? "暂无可授权转发线路" : "没有匹配的转发线路"}</span>
+                </div>;
+              })}
             </div>
-          ) : visibleTunnelGroups.map((group) => {
-            const primaryID = Number(group.primary.id);
-            const partnerID = group.partner ? Number(group.partner.id) : null;
-            const grant = form.forwardingGrants.find((itemGrant) => itemGrant.tunnel_id === primaryID) ||
-                          (partnerID !== null ? form.forwardingGrants.find((itemGrant) => itemGrant.tunnel_id === partnerID) : undefined);
-            const isSelected = Boolean(grant);
-            const hops = group.hops || [];
-            const routeText = hops.length > 0 ? (group.isBidirectional ? ` (${hops.map((h) => h.name).join(" ⇄ ")})` : ` (${hops.map((h) => h.name).join(" → ")})`) : "";
-            return <div key={group.key} className={isSelected ? "is-selected" : ""}>
-              <label className="checkbox-row">
-                <input
-                  type="checkbox"
-                  checked={isSelected}
-                  onChange={() => toggleTunnelGroup(group)}
-                />
-                <span>
-                  <strong className="package-tunnel-title">
-                    <span>{group.name}{routeText}</span>
-                    {group.isBidirectional ? <Badge tone="info" className="package-bidirectional-badge">双向对称</Badge> : null}
-                  </strong>
-                  <small>{group.description || `${group.isBidirectional ? "双向" : ""}${hops.length ? `${hops.length} 跳线路` : "直连线路"}`}</small>
-                </span>
-              </label>
-              {isSelected && grant ? <div className="package-entitlement-fields package-entitlement-fields-forward">
-                <Field label="转发名额"><input aria-label={`${group.name} 转发名额`} type="number" min="1" value={grant.max_active_forwards} onChange={(event) => updateTunnelGroupGrant(group, { max_active_forwards: Number(event.target.value) })} /></Field>
-                <Field label="单条限速 Mbps" hint="0 表示不限"><input aria-label={`${group.name} 单条转发限速`} type="number" min="0" step="0.1" value={grant.per_forward_speed_mbps} onChange={(event) => updateTunnelGroupGrant(group, { per_forward_speed_mbps: Number(event.target.value) })} /></Field>
-                <Field label="授权流量 GB" hint="0 表示不限"><input aria-label={`${group.name} 授权流量`} type="number" min="0" max={forwardMaxGB} step="0.01" value={grant.traffic_limit_bytes / 1024 ** 3} onChange={(event) => updateTunnelGroupGrant(group, { traffic_limit_bytes: Math.round(Number(event.target.value) * 1024 ** 3) })} /></Field>
-                <Field label="流量计算"><select aria-label={`${group.name} 流量计算`} value={normalizeForwardingBillingMode(grant.billing_mode_override, group.primary.billing_mode)} onChange={(event) => updateTunnelGroupGrant(group, { billing_mode_override: event.target.value as ForwardingBillingMode })}><option value="both">双向</option><option value="upload">仅算上行</option><option value="download">仅算下行</option></select></Field>
-              </div> : null}
-            </div>;
-          })}
-        </div>
+          </div>
+        </details>
+
+        <details className="package-module-accordion">
+          <summary className="package-module-summary">
+            <div>
+              <h2>转发线路授权（{tunnelGroups.filter((g) => {
+                const pid = Number(g.primary.id);
+                const fid = g.partner ? Number(g.partner.id) : null;
+                return form.forwardingGrants.some((grant) => grant.tunnel_id === pid || (fid !== null && grant.tunnel_id === fid));
+              }).length}）</h2>
+              <small>允许账号在选定线路模板上创建转发规则</small>
+            </div>
+            <div className="page-actions" onClick={(event) => event.stopPropagation()}>
+              <ChevronDown size={18} className="package-accordion-chevron" />
+            </div>
+          </summary>
+          <div className="package-module-body">
+            <Field label="转发模块总流量 GB" hint="0 表示不限；耗尽后仅停用转发线路模块，须 ≤ 套餐总流量"><input aria-label="转发模块总流量 GB" type="number" min="0" max={totalGB > 0 ? totalGB : undefined} step="0.01" value={form.forwardingModuleTrafficLimitGB} onChange={(event) => setForm({ ...form, forwardingModuleTrafficLimitGB: event.target.value })} /></Field>
+            <Field label="筛选转发线路">
+              <input
+                value={tunnelSearch}
+                onChange={(event) => setTunnelSearch(event.target.value)}
+                placeholder="线路名称、跳点或描述"
+                aria-label="筛选转发线路"
+              />
+            </Field>
+            <div className="package-entitlement-list">
+              {visibleTunnelGroups.length === 0 ? (
+                <div className="package-empty-entitlement">
+                  <span className="muted">{tunnelGroups.length === 0 ? "暂无可授权转发线路" : "没有匹配的转发线路"}</span>
+                </div>
+              ) : visibleTunnelGroups.map((group) => {
+                const primaryID = Number(group.primary.id);
+                const partnerID = group.partner ? Number(group.partner.id) : null;
+                const grant = form.forwardingGrants.find((itemGrant) => itemGrant.tunnel_id === primaryID) ||
+                              (partnerID !== null ? form.forwardingGrants.find((itemGrant) => itemGrant.tunnel_id === partnerID) : undefined);
+                const isSelected = Boolean(grant);
+                const hops = group.hops || [];
+                const routeText = hops.length > 0 ? (group.isBidirectional ? ` (${hops.map((h) => h.name).join(" ⇄ ")})` : ` (${hops.map((h) => h.name).join(" → ")})`) : "";
+                return <div key={group.key} className={isSelected ? "is-selected" : ""}>
+                  <label className="checkbox-row">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleTunnelGroup(group)}
+                    />
+                    <span>
+                      <strong className="package-tunnel-title">
+                        <span>{group.name}{routeText}</span>
+                        {group.isBidirectional ? <Badge tone="info" className="package-bidirectional-badge">双向对称</Badge> : null}
+                      </strong>
+                      <small>{group.description || `${group.isBidirectional ? "双向" : ""}${hops.length ? `${hops.length} 跳线路` : "直连线路"}`}</small>
+                    </span>
+                  </label>
+                  {isSelected && grant ? <div className="package-entitlement-fields package-entitlement-fields-forward">
+                    <Field label="转发名额"><input aria-label={`${group.name} 转发名额`} type="number" min="1" value={grant.max_active_forwards} onChange={(event) => updateTunnelGroupGrant(group, { max_active_forwards: Number(event.target.value) })} /></Field>
+                    <Field label="单条限速 Mbps" hint="0 表示不限"><input aria-label={`${group.name} 单条转发限速`} type="number" min="0" step="0.1" value={grant.per_forward_speed_mbps} onChange={(event) => updateTunnelGroupGrant(group, { per_forward_speed_mbps: Number(event.target.value) })} /></Field>
+                    <Field label="授权流量 GB" hint="0 表示不限"><input aria-label={`${group.name} 授权流量`} type="number" min="0" max={forwardMaxGB} step="0.01" value={grant.traffic_limit_bytes / 1024 ** 3} onChange={(event) => updateTunnelGroupGrant(group, { traffic_limit_bytes: Math.round(Number(event.target.value) * 1024 ** 3) })} /></Field>
+                    <Field label="流量计算"><select aria-label={`${group.name} 流量计算`} value={normalizeForwardingBillingMode(grant.billing_mode_override, group.primary.billing_mode)} onChange={(event) => updateTunnelGroupGrant(group, { billing_mode_override: event.target.value as ForwardingBillingMode })}><option value="both">双向</option><option value="upload">仅算上行</option><option value="download">仅算下行</option></select></Field>
+                  </div> : null}
+                </div>;
+              })}
+            </div>
+          </div>
+        </details>
         {hierarchyError ? <ErrorState message={hierarchyError} /> : null}
         <div className="dialog-actions">
           <Button type="button" variant="secondary" onClick={onClose} disabled={working}>取消</Button>

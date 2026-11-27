@@ -141,6 +141,80 @@
   .package-node-overrides > div > span { grid-column: 1 / -1; }
 }
 
+.package-module-accordion {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow: hidden;
+  margin-top: 14px;
+  transition: border-color 0.15s ease;
+}
+
+.package-module-accordion:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.package-module-summary {
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 16px;
+  background: var(--surface-muted);
+  list-style: none;
+}
+
+.package-module-summary::-webkit-details-marker {
+  display: none;
+}
+
+.package-module-summary > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.package-module-summary h2 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.package-module-summary small {
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.package-module-summary .page-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.package-accordion-chevron {
+  color: var(--text-soft);
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+}
+
+.package-module-accordion[open] > .package-module-summary .package-accordion-chevron {
+  transform: rotate(180deg);
+}
+
+.package-module-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  border-top: 1px solid var(--border);
+}
+
 @media (max-width: 560px) {
   .packages-view-switch {
     order: -1;

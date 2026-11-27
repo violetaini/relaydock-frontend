@@ -484,7 +484,7 @@ describe("settings workbench", () => {
     render(<SettingsWorkbenchPage notify={vi.fn()} />);
 
     await openSettingsGroup("安全");
-    await screen.findByRole("heading", { name: "安全设置" });
+    await screen.findByRole("button", { name: "保存安全设置" });
     fireEvent.click(screen.getByRole("button", { name: "保存安全设置" }));
 
     await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/security-settings", expect.objectContaining({
@@ -777,7 +777,7 @@ describe("settings workbench", () => {
     render(<SettingsWorkbenchPage notify={notify} />);
 
     await openSettingsGroup("快捷登录");
-    expect(await screen.findByRole("heading", { name: "第三方快捷登录" })).toBeInTheDocument();
+    expect(await screen.findByText("启用 GitHub 快捷登录")).toBeInTheDocument();
 
     fireEvent.click(screen.getByText("启用 GitHub 快捷登录"));
 
@@ -801,7 +801,7 @@ describe("settings workbench", () => {
     render(<SettingsWorkbenchPage notify={notify} />);
 
     await openSettingsGroup("权限");
-    expect(await screen.findByRole("heading", { name: "权限与账户" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "普通用户页面" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "普通用户页面" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "管理 API Token" })).toBeInTheDocument();
     expect(screen.getByText("token-sample-123")).toBeInTheDocument();

@@ -1433,7 +1433,6 @@ export function SettingsWorkbenchPage({ notify, onBrandingChange, onWallpaperCha
       </form>
 
       <section id="settings-maintenance" className="settings-settings-group settings-update-group" role="tabpanel" aria-labelledby={settingsTabID("settings-maintenance")} hidden={activeGroup !== "settings-maintenance"} tabIndex={0}>
-        <SettingsGroupHeading icon={<Download size={18} />} title="系统维护" description="检查正式版本并安全更新后端" />
         <SystemUpdatePanel
           info={updateInfo}
           checking={updateChecking}

@@ -24,8 +24,9 @@ describe("ordinary user management", () => {
   fireEvent.change(screen.getByLabelText("账号状态"), { target: { value: "active" } });
   fireEvent.click(screen.getByLabelText("香港服务器")); fireEvent.click(screen.getByLabelText("日本服务器"));
   fireEvent.change(screen.getByLabelText("用户排序"), { target: { value: "name" } });
+  fireEvent.click(screen.getByRole("button", { name: "当前正序，点击切换为倒序" }));
   fireEvent.change(screen.getByLabelText("搜索用户"), { target: { value: "Alice" } });
-  await waitFor(() => expect(get).toHaveBeenCalledWith(expect.stringMatching(/sort=name.*q=Alice.*status=active.*from=2026-11-01.*server=1%2C2/)));
+  await waitFor(() => expect(get).toHaveBeenCalledWith(expect.stringMatching(/sort=name&order=desc.*q=Alice.*status=active.*from=2026-11-01.*server=1%2C2/)));
  });
  it("distinguishes selection of this page from all matching results", async () => {
   vi.spyOn(api, "get").mockResolvedValue({ ...listing, total: 2, pages: 2, matching_usernames: ["alice", "bob"] });

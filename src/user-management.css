@@ -33,7 +33,11 @@
 .um-selection-bar>span>svg { color:var(--accent); }
 :root .um-list { border-radius:12px;box-shadow:none;overflow:visible; }
 .um-list-heading { min-height:58px;padding:10px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid var(--border);font-size:14px; }
-.um-list-heading>select { max-width:170px;min-height:34px;height:34px;padding:4px 28px 4px 10px;font-size:12px;background:transparent; }
+.um-sort-controls { display:flex;align-items:center;gap:8px; }
+.um-sort-controls>select { max-width:140px;min-height:34px;height:34px;padding:4px 28px 4px 10px;font-size:12px;background:transparent; }
+.um-sort-order-btn { display:inline-flex;align-items:center;gap:4px;min-height:34px;height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:6px;background:transparent;color:var(--text-soft);font-size:12px;cursor:pointer;white-space:nowrap;transition:border-color 0.15s ease,color 0.15s ease,background-color 0.15s ease; }
+.um-sort-order-btn:hover:not(:disabled) { border-color:color-mix(in srgb,var(--accent) 45%,var(--border-strong));color:var(--text);background:var(--surface-hover); }
+.um-sort-order-btn:disabled { opacity:0.5;cursor:not-allowed; }
 :root .um-list thead th { color:var(--text-soft);font-size:14px; }
 :root .um-list tbody td { padding-block:20px;vertical-align:middle; }
 .um-list .um-row-selected { background:color-mix(in srgb,var(--accent) 7%,var(--surface)); }

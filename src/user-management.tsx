@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeftRight, CalendarDays, ChevronLeft, ChevronRight, Check, CheckCircle2, CircleAlert, Layers3, Link2, Package, Pencil, Plus, RefreshCw, Search, Server, ShieldCheck, SlidersHorizontal, Trash2, Users, X } from "lucide-react";
+import { ArrowDown, ArrowLeftRight, ArrowUp, CalendarDays, ChevronLeft, ChevronRight, Check, CheckCircle2, CircleAlert, Layers3, Link2, Package, Pencil, Plus, RefreshCw, Search, Server, ShieldCheck, SlidersHorizontal, Trash2, Users, X } from "lucide-react";
 import { api } from "./api";
 import { CreateUserDialog, UserSettingsDialog, type ManagedUser, type UsersScope } from "./users-workbench";
 import { TGBotInvitesPanel } from "./tg-bot-invites";
@@ -15,13 +15,14 @@ type Option = { id: number; name: string; eligible?: boolean };
 type Resource = Option & { kind: ResourceKind; source: string; expires_at?: string; state: string };
 type User = ManagedUser & { created_at?: string; nearest_expiry?: string; resources?: Resource[] };
 type Listing = { users: User[]; total: number; page: number; pages: number; matching_usernames: string[]; counts: { total: number; active: number }; filter_options: Partial<Record<Kind, Option[]>> };
-type Filters = { status: string; sort: string; from: string; to: string; node: number[]; server: number[]; subscription: number[]; package: number[] };
+type Filters = { status: string; sort: string; order: "asc" | "desc"; from: string; to: string; node: number[]; server: number[]; subscription: number[]; package: number[] };
 type ResourceUsage = Resource & { used: number; limit: number; reset: string; limit_note?: string; updated_at?: string; related: boolean; note?: string };
 type Detail = { received_at?: number; overview?: OverviewData; user: User; resources: ResourceUsage[]; records: UserActivityRecord[]; as_of: string; usage_note: string };
 type BatchResult = { username: string; status: string; error?: string; warnings?: string[] };
 const labels: Record<ResourceKind, string> = { node: "节点", server: "服务器", subscription: "订阅", package: "套餐", forwarding: "转发" };
 const icons = { node: ShieldCheck, server: Server, subscription: Link2, package: Package, forwarding: ArrowLeftRight };
-const initialFilters: Filters = { status: "all", sort: "newest", from: "", to: "", node: [], server: [], subscription: [], package: [] };
+const initialFilters: Filters = { status: "all", sort: "created", order: "desc", from: "", to: "", node: [], server: [], subscription: [], package: [] };
+const defaultSortOrder = (sort: string): "asc" | "desc" => (sort === "name" || sort === "expiry" ? "asc" : "desc");
 const emptyListing: Listing = { users: [], total: 0, page: 1, pages: 1, matching_usernames: [], counts: { total: 0, active: 0 }, filter_options: {} };
 const kinds: Kind[] = ["package", "server", "subscription", "node"];
 function message(reason: unknown) { return reason instanceof Error ? reason.message : "操作失败，请重试"; }
@@ -42,7 +43,9 @@ export function UserManagementPage({ notify, initialScope = "all" }: { notify: N
  useEffect(() => { setScope(initialScope); }, [initialScope]);
  const load = useCallback(async () => {
   const serial = ++requestSerial.current; setLoading(true); setError("");
-  const params = new URLSearchParams({ page: String(page), size: "25", sort: scope === "renewal" ? "expiry" : filters.sort });
+  const effectiveSort = scope === "renewal" ? "expiry" : filters.sort;
+  const effectiveOrder = scope === "renewal" ? "asc" : filters.order;
+  const params = new URLSearchParams({ page: String(page), size: "25", sort: effectiveSort, order: effectiveOrder });
   if (search.trim()) params.set("q", search.trim()); if (scope === "renewal") params.set("view", "renewal");
   for (const name of ["status", "from", "to"] as const) if (filters[name] && filters[name] !== "all") params.set(name, filters[name]);
   for (const kind of kinds) if (filters[kind].length) params.set(kind, filters[kind].join(","));
@@ -79,7 +82,7 @@ export function UserManagementPage({ notify, initialScope = "all" }: { notify: N
   {scope === "invites" ? <TGBotInvitesPanel notify={notify}/> : <>
    {advanced && <Surface className="um-filters"><div className="um-filters-top"><strong>筛选用户</strong><button className="um-text-button" onClick={() => { setFilters(initialFilters); setQuery(""); setPage(1); }}>清空条件</button></div><div className="um-filter-grid"><Field label="账号状态"><select value={filters.status} onChange={e => updateFilters({ status: e.target.value })}><option value="all">全部状态</option><option value="active">已启用</option><option value="disabled">已停用</option></select></Field><Field label="注册开始日期"><input type="date" value={filters.from} onChange={e => updateFilters({ from: e.target.value })}/></Field><Field label="注册结束日期"><input type="date" value={filters.to} min={filters.from || undefined} onChange={e => updateFilters({ to: e.target.value })}/></Field></div><div className="um-filter-grid um-resource-filters">{kinds.map(kind => <MultiFilter key={kind} label={labels[kind]} options={listing.filter_options[kind] || []} values={filters[kind]} onChange={values => updateFilters({ [kind]: values })}/>)}</div><small className="um-muted">同类条件满足任意一项，不同类型需同时满足；包含套餐内授权。</small></Surface>}
    {selected.length > 0 && <div className="um-selection-bar"><span><CheckCircle2 size={17}/>已选 <strong>{selected.length}</strong> 位用户</span><div>{listing.total > listing.users.length && listing.matching_usernames.length <= 200 && <button className="um-text-button" onClick={() => setSelected(listing.matching_usernames)}>选择全部 {listing.total} 个结果</button>}<button className="um-text-button" onClick={() => setSelected([])}>取消选择</button><Button onClick={() => setBatch(true)}><ShieldCheck size={16}/>批量授权</Button></div></div>}
-   {error ? <ErrorState message={error} onRetry={() => void load()}/> : <Surface className="table-surface users-table-surface um-list"><div className="um-list-heading"><span>{search || activeFilters || filters.status !== "all" ? `${listing.total} 位匹配用户` : "用户列表"}</span><select aria-label="用户排序" value={scope === "renewal" ? "expiry" : filters.sort} onChange={e => updateFilters({ sort: e.target.value })} disabled={scope === "renewal"}><option value="newest">最新注册</option><option value="oldest">最早注册</option><option value="name">按姓名</option><option value="traffic">用量从高到低</option><option value="expiry">即将到期</option></select></div>
+   {error ? <ErrorState message={error} onRetry={() => void load()}/> : <Surface className="table-surface users-table-surface um-list"><div className="um-list-heading"><span>{search || activeFilters || filters.status !== "all" ? `${listing.total} 位匹配用户` : "用户列表"}</span><div className="um-sort-controls"><select aria-label="用户排序" value={scope === "renewal" ? "expiry" : filters.sort} onChange={e => updateFilters({ sort: e.target.value, order: defaultSortOrder(e.target.value) })} disabled={scope === "renewal"}><option value="created">注册顺序</option><option value="name">姓名顺序</option><option value="traffic">用量顺序</option><option value="expiry">到期顺序</option></select><button type="button" className="um-sort-order-btn" aria-label={scope === "renewal" || filters.order === "asc" ? "当前正序，点击切换为倒序" : "当前倒序，点击切换为正序"} disabled={scope === "renewal"} onClick={() => updateFilters({ order: filters.order === "asc" ? "desc" : "asc" })}>{(scope === "renewal" ? "asc" : filters.order) === "asc" ? <><ArrowUp size={13}/>正序</> : <><ArrowDown size={13}/>倒序</>}</button></div></div>
    {loading ? <div className="center-state"><Spinner label="正在加载用户"/></div> : listing.users.length === 0 ? <EmptyState icon={<Users size={24}/>} title={listing.counts.total ? "没有匹配的用户" : "暂无普通用户"} description={listing.counts.total ? "调整筛选条件或搜索关键词。" : "添加用户后，在此管理授权与用量。"} action={listing.counts.total ? <Button variant="secondary" onClick={() => { setQuery(""); setFilters(initialFilters); setScope("all"); setPage(1); }}>清空筛选</Button> : <Button onClick={() => setCreate(true)}>新建用户</Button>}/> : <div className="table-wrap"><table aria-label="普通用户"><thead><tr><th className="user-select-cell"><input type="checkbox" aria-label="选择本页用户" checked={allPage} onChange={togglePage}/></th><th>用户</th><th>服务授权</th><th>计费用量</th><th>最近到期</th><th>启用</th><th>操作</th></tr></thead><tbody>{listing.users.map(user => {
     const expiry = deadline(user); const expired = expiry && new Date(expiry).getTime() < Date.now();
     const resourceChips = (["server", "node", "subscription", "forwarding"] as ResourceKind[]).map(kind => {

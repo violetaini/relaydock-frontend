@@ -15,13 +15,20 @@
 .uo-metric.is-warning .uo-metric-icon { background:color-mix(in srgb,#dcad62 12%,transparent); }
 .uo-metric.is-danger .uo-metric-value,.uo-metric.is-danger .uo-metric-icon { color:var(--danger,#ef8a8f); }
 .uo-metric.is-danger .uo-metric-icon { background:color-mix(in srgb,#ef8a8f 12%,transparent); }
-.uo-service-strip { min-width:0;display:flex;align-items:center;gap:18px;padding:0 2px;color:var(--text-soft);font-size:14px; }
+.uo-service-strip { min-width:0;display:flex;align-items:center;flex-wrap:wrap;gap:14px 18px;padding:0 2px;color:var(--text-soft);font-size:14px; }
 .uo-service-plan { display:flex;align-items:center;gap:8px;min-width:0; }
 .uo-service-plan>svg { color:var(--accent);flex-shrink:0; }
 .uo-service-plan>span { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:var(--text);font-size:15px; }
 .uo-service-counts { display:flex;flex-wrap:wrap;gap:8px;flex-shrink:0;font-size:13px;color:var(--text-faint); }
 .uo-service-counts>span { opacity:.6; }
 .uo-service-strip>.um-text-button { margin-left:auto;flex-shrink:0;font-size:14px; }
+.uo-inline-quota { display:flex;flex-wrap:wrap;gap:10px;flex-basis:100%;min-width:0; }
+:root .uo-root .uo-inline-quota>button { display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:10px 12px;min-width:0;max-width:100%;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text-soft);text-align:left;font-size:13px; }
+.uo-inline-quota>button>span { overflow-wrap:anywhere; }
+:root .uo-root .uo-inline-quota strong { font-size:14px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums; }
+.uo-inline-quota em { font-style:normal;font-size:13px;font-weight:400;color:var(--text-faint); }
+.uo-inline-quota svg { color:var(--text-faint);flex-shrink:0; }
+@media(max-width:780px){.uo-inline-quota{order:3}.uo-inline-quota>button{width:100%}:root .uo-root .uo-inline-quota strong{margin-left:auto}}
 .uo-quota-summary { min-width:0; }
 .uo-quota-heading { display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px 16px;margin:2px 0 14px; }
 :root .uo-quota-heading h3 { display:flex;align-items:center;gap:10px;margin:0;font-size:17px;font-weight:600; }

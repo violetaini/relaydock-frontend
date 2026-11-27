@@ -5,6 +5,7 @@ for (const viewport of [{ name: "desktop", width: 1440, height: 1050 }, { name: 
  await page.setViewportSize(viewport);
  await page.addInitScript(() => { localStorage.setItem("arcway-session-token", "user-design-test"); localStorage.setItem("arcway-theme", "dark"); });
  const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+ let moduleOnly=false;
  const resource = (kind: string, id: number, name: string, used: number, limit: number, source = "manual") => ({ kind, id, name, used, limit, source, expires_at: "2026-12-02T12:00:00Z", reset: "每月 1 日重置", state: "active", related: kind === "subscription" || kind === "package", note: kind === "subscription" ? "订阅关联用量；共享凭据无法区分具体通过哪份订阅使用" : "" });
  const users = [
   { username: "xiaofan", nickname: "小凡", email: "xiaofan@example.com", role: "user", is_active: true, created_at: "2026-11-20T10:00:00Z", package_id: 1, package_name: "全球优质加速套餐", traffic_used: 86.4 * 1024 ** 3, user_short_code: "member", nearest_expiry: "2026-12-02T12:00:00Z", resources: [resource("server", 1, "香港 HKT", 72 * 1024 ** 3, 100 * 1024 ** 3, "package"), resource("node", 2, "日本专线", 14.4 * 1024 ** 3, 50 * 1024 ** 3, "package"), resource("subscription", 3, "全球优选", 86.4 * 1024 ** 3, 0, "package")] },
@@ -33,6 +34,14 @@ for (const viewport of [{ name: "desktop", width: 1440, height: 1050 }, { name: 
    "/api/admin/packages": { packages: [{ id: 1, name: "全球优质加速套餐" }] },
   };
   if (path === "/api/admin/users/management/batch") { await route.fulfill({ json: { success: true, results: users.slice(0, 1).map(v => ({ username: v.username, status: "ready" })) } }); return; }
+  if(moduleOnly && path==="/api/admin/users/xiaofan/management"){
+   const detail=data[path] as {overview:{quota_layers:unknown[]}};
+   detail.overview.quota_layers=[
+    {key:"package",title:"套餐总量",total:1,items:[{kind:"package",id:1,name:"全球优质加速套餐",used:80271,limit:0}]},
+    {key:"module",title:"模块额度",total:2,items:[{kind:"node",id:0,name:"节点模块",used:80271,limit:300*1024**3},{kind:"server",id:0,name:"服务器模块",used:0,limit:200*1024**3}]},
+    {key:"resource",title:"单独资源",total:2,items:[{kind:"node",id:1,name:"香港 HKT",used:80271,limit:0,limit_note:"受节点模块额度约束"},{kind:"server",id:2,name:"日本服务器",used:0,limit:0,limit_note:"受服务器模块额度约束"}]},
+   ];
+  }
   await route.fulfill({ json: data[path] || {} });
  });
  await page.goto("/#/users");
@@ -50,6 +59,8 @@ for (const viewport of [{ name: "desktop", width: 1440, height: 1050 }, { name: 
  await expect(dialog.locator(".um-resource-card")).toHaveCount(0);
  await expect(dialog.getByText("授权概览",{exact:true})).toHaveCount(0);
  await expect(dialog.getByLabel("当前连接情况")).toContainText("12");
+ await expect(dialog.getByRole("button",{name:"查看流量预警"})).toContainText("流量预警");
+ await expect(dialog.getByRole("button",{name:"查看流量预警"})).toHaveAttribute("title",/80%.*全部下级资源/);
  await page.evaluate(()=>document.fonts.ready.then(()=>undefined));
  await dialog.evaluate(element=>element.getAnimations().forEach(animation=>animation.finish()));
  const header=dialog.locator(".dialog-header");
@@ -107,6 +118,20 @@ for (const viewport of [{ name: "desktop", width: 1440, height: 1050 }, { name: 
  await expect(dialog.getByRole("progressbar")).toHaveCount(2);
  await page.screenshot({ path: info.outputPath("users-traffic.png"), fullPage: true });
  expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
+ moduleOnly=true;
+ await dialog.getByRole("tab",{name:"概览",exact:true}).click();
+ await dialog.getByRole("button",{name:"刷新用户详情"}).click();
+ const actualQuota=dialog.getByRole("region",{name:/分层用量/});
+ await expect(actualQuota).toContainText("78.4 KB/ 300 GB");
+ await expect(actualQuota).toContainText("0 B/ 200 GB");
+ await expect(actualQuota.locator(".uo-quota-layer")).toHaveCount(3);
+ await expect(actualQuota.getByRole("progressbar")).toHaveCount(2);
+ await expect(actualQuota).toContainText("总量不限");
+ await expect(actualQuota).toContainText("受节点模块额度约束");
+ await expect(actualQuota).not.toContainText("剩余 0 B");
+ await actualQuota.scrollIntoViewIfNeeded();
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBeLessThanOrEqual(1);
+ await page.screenshot({path:info.outputPath("users-module-only.png"),fullPage:false,animations:"disabled"});
  await dialog.getByRole("button", { name: "管理授权" }).click();
  const wizard = page.getByRole("dialog");
  await expect(wizard.getByLabel("日本专线", { exact: true })).toBeVisible();

@@ -96,6 +96,10 @@ interface PackageSubscribeFileOption {
 interface PackageFormState {
   name: string;
   description: string;
+  trafficLimitGB: string;
+  nodeModuleTrafficLimitGB: string;
+  serverModuleTrafficLimitGB: string;
+  forwardingModuleTrafficLimitGB: string;
   cycleDays: string;
   deviceLimit: string;
   trafficMode: "oneway" | "twoway";
@@ -125,10 +129,19 @@ function errorMessage(reason: unknown, fallback: string): string {
   return reason instanceof Error && reason.message ? reason.message : fallback;
 }
 
+function formatLimitGBValue(value?: number): string {
+  if (!value || value <= 0) return "0";
+  return String(Number(value.toFixed(2)));
+}
+
 function initialPackageForm(item: PackageItem | undefined, tunnels: TunnelTemplate[]): PackageFormState {
   return {
     name: item?.name ?? "",
     description: item?.description ?? "",
+    trafficLimitGB: formatLimitGBValue(item?.traffic_limit_gb),
+    nodeModuleTrafficLimitGB: formatLimitGBValue(item?.node_module_traffic_limit_gb),
+    serverModuleTrafficLimitGB: formatLimitGBValue(item?.server_module_traffic_limit_gb),
+    forwardingModuleTrafficLimitGB: formatLimitGBValue(item?.forwarding_module_traffic_limit_gb),
     cycleDays: String(item?.cycle_days ?? 30),
     deviceLimit: String(item?.device_limit ?? 0),
     trafficMode: item?.traffic_mode === "twoway" ? "twoway" : "oneway",
@@ -162,7 +175,10 @@ function packagePayload(form: PackageFormState, original?: PackageItem): Record<
   const payload: Record<string, unknown> = {
     name: form.name.trim(),
     description: form.description.trim(),
-    traffic_limit_gb: 0,
+    traffic_limit_gb: Number(form.trafficLimitGB || 0),
+    node_module_traffic_limit_gb: Number(form.nodeModuleTrafficLimitGB || 0),
+    server_module_traffic_limit_gb: Number(form.serverModuleTrafficLimitGB || 0),
+    forwarding_module_traffic_limit_gb: Number(form.forwardingModuleTrafficLimitGB || 0),
     cycle_days: Number(form.cycleDays),
     is_reset: true,
     node_traffic_reset_period: form.nodeTrafficResetPeriod,
@@ -299,8 +315,8 @@ export function PackagesPage({ notify }: PackagesPageProps) {
                   <h2>{item.name}</h2>
                   <p>{item.description || "无套餐说明"}</p>
                   <div className="package-quota">
-                    <strong>{item.cycle_days}</strong>
-                    <span>天授权周期</span>
+                    <strong>{item.traffic_limit_gb > 0 ? `${formatLimitGBValue(item.traffic_limit_gb)} GB` : `${item.cycle_days} 天`}</strong>
+                    <span>{item.traffic_limit_gb > 0 ? `总流量上限 · ${item.cycle_days} 天周期` : "天授权周期（总流量不限）"}</span>
                   </div>
                   <div className="package-meta">
                     <span>
@@ -655,6 +671,63 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
       setError("固定节点流量重置日必须在 1 到 31 之间");
       return;
     }
+    const totalGB = Number(form.trafficLimitGB || 0);
+    const nodeModGB = Number(form.nodeModuleTrafficLimitGB || 0);
+    const serverModGB = Number(form.serverModuleTrafficLimitGB || 0);
+    const forwardModGB = Number(form.forwardingModuleTrafficLimitGB || 0);
+    if (totalGB > 0) {
+      if (nodeModGB > totalGB) {
+        setError("固定节点模块总流量不能高于套餐总流量");
+        return;
+      }
+      if (serverModGB > totalGB) {
+        setError("服务器授权模块总流量不能高于套餐总流量");
+        return;
+      }
+      if (forwardModGB > totalGB) {
+        setError("转发线路模块总流量不能高于套餐总流量");
+        return;
+      }
+    }
+    for (const nodeID of form.nodes) {
+      const nodeGB = Number(form.nodeTrafficLimits[String(nodeID)] || 0);
+      if (nodeGB > 0) {
+        if (nodeModGB > 0 && nodeGB > nodeModGB) {
+          setError("单个固定节点流量不能高于节点模块总流量");
+          return;
+        }
+        if (totalGB > 0 && nodeGB > totalGB) {
+          setError("单个固定节点流量不能高于套餐总流量");
+          return;
+        }
+      }
+    }
+    for (const grant of form.serverGrants) {
+      const serverGB = (grant.traffic_limit_bytes || 0) / 1024 ** 3;
+      if (serverGB > 0) {
+        if (serverModGB > 0 && serverGB > serverModGB) {
+          setError("单台服务器授权流量不能高于服务器模块总流量");
+          return;
+        }
+        if (totalGB > 0 && serverGB > totalGB) {
+          setError("单台服务器授权流量不能高于套餐总流量");
+          return;
+        }
+      }
+    }
+    for (const grant of form.forwardingGrants) {
+      const forwardGB = (grant.traffic_limit_bytes || 0) / 1024 ** 3;
+      if (forwardGB > 0) {
+        if (forwardModGB > 0 && forwardGB > forwardModGB) {
+          setError("单条转发线路流量不能高于转发模块总流量");
+          return;
+        }
+        if (totalGB > 0 && forwardGB > totalGB) {
+          setError("单条转发线路流量不能高于套餐总流量");
+          return;
+        }
+      }
+    }
     setWorking(true);
     setError("");
     try {
@@ -684,6 +757,7 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
           <Field label="套餐名称"><input required autoFocus value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field>
           <Field label="套餐周期（天）" hint="用于计算用户授权到期时间"><input required type="number" min="1" step="1" value={form.cycleDays} onChange={(event) => setForm({ ...form, cycleDays: event.target.value })} /></Field>
         </div>
+        <Field label="套餐总流量 GB" hint="最高限制（0 表示不限）；耗尽后全部模块停用，可仅配置任意一层或两层"><input aria-label="套餐总流量 GB" type="number" min="0" step="0.01" value={form.trafficLimitGB} onChange={(event) => setForm({ ...form, trafficLimitGB: event.target.value })} /></Field>
         <Field label="套餐说明"><textarea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></Field>
         <div className="form-grid">
           <Field label="固定节点流量计算">
@@ -728,6 +802,7 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
             </Button>
           </div>
         </div>
+        <Field label="节点模块总流量 GB" hint="0 表示不限；耗尽后仅停用固定节点模块，须 ≤ 套餐总流量"><input aria-label="节点模块总流量 GB" type="number" min="0" step="0.01" value={form.nodeModuleTrafficLimitGB} onChange={(event) => setForm({ ...form, nodeModuleTrafficLimitGB: event.target.value })} /></Field>
         <Field label="筛选节点">
           <input value={nodeSearch} onChange={(event) => setNodeSearch(event.target.value)} placeholder="名称、协议、服务器或标签" />
         </Field>
@@ -816,6 +891,7 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
             </Button>
           ) : null}
         </div>
+        <Field label="服务器模块总流量 GB" hint="0 表示不限；耗尽后仅停用服务器授权模块，须 ≤ 套餐总流量"><input aria-label="服务器模块总流量 GB" type="number" min="0" step="0.01" value={form.serverModuleTrafficLimitGB} onChange={(event) => setForm({ ...form, serverModuleTrafficLimitGB: event.target.value })} /></Field>
         <Field label="筛选服务器">
           <input
             value={serverSearch}
@@ -897,6 +973,7 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
             <small>允许账号在选定线路模板上创建转发规则</small>
           </div>
         </div>
+        <Field label="转发模块总流量 GB" hint="0 表示不限；耗尽后仅停用转发线路模块，须 ≤ 套餐总流量"><input aria-label="转发模块总流量 GB" type="number" min="0" step="0.01" value={form.forwardingModuleTrafficLimitGB} onChange={(event) => setForm({ ...form, forwardingModuleTrafficLimitGB: event.target.value })} /></Field>
         <Field label="筛选转发线路">
           <input
             value={tunnelSearch}

@@ -82,7 +82,10 @@ describe("package management", () => {
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/packages/update", expect.objectContaining({
       id: 9,
       name: "标准套餐",
-      traffic_limit_gb: 0,
+      traffic_limit_gb: 200,
+      node_module_traffic_limit_gb: 0,
+      server_module_traffic_limit_gb: 0,
+      forwarding_module_traffic_limit_gb: 0,
       speed_limit_mbps: 0,
       is_reset: true,
       node_traffic_reset_period: "quarterly",
@@ -207,7 +210,10 @@ describe("package management", () => {
     render(<PackagesPage notify={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "编辑 标准套餐" }));
-    expect(screen.queryByRole("spinbutton", { name: "流量限额（GB）" })).not.toBeInTheDocument();
+    expect(screen.getByRole("spinbutton", { name: "套餐总流量 GB" })).toHaveValue(200);
+    expect(screen.getByRole("spinbutton", { name: "节点模块总流量 GB" })).toHaveValue(0);
+    expect(screen.getByRole("spinbutton", { name: "服务器模块总流量 GB" })).toHaveValue(0);
+    expect(screen.getByRole("spinbutton", { name: "转发模块总流量 GB" })).toHaveValue(0);
     expect(screen.queryByRole("spinbutton", { name: "全局限速（Mbps）" })).not.toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: "按自然月重置流量" })).not.toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "固定节点流量重置周期" })).toHaveValue("quarterly");
@@ -218,7 +224,7 @@ describe("package management", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/packages/update", expect.objectContaining({
-      traffic_limit_gb: 0,
+      traffic_limit_gb: 200,
       speed_limit_mbps: 0,
       is_reset: true,
       node_traffic_reset_period: "yearly",

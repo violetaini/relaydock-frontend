@@ -123,6 +123,9 @@ export interface PackageItem {
   name: string;
   description: string;
   traffic_limit_gb: number;
+  node_module_traffic_limit_gb?: number;
+  server_module_traffic_limit_gb?: number;
+  forwarding_module_traffic_limit_gb?: number;
   cycle_days: number;
   is_reset: boolean;
   reset_day: number;

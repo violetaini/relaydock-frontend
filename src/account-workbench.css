@@ -442,7 +442,7 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) 170px;
   gap: 18px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .avatar-crop-main {
@@ -594,17 +594,20 @@
 .avatar-crop-sidebar {
   display: flex;
   flex-direction: column;
+  height: 100%;
 }
 
 .avatar-crop-preview-card {
-  padding: 16px 14px;
+  flex: 1;
+  padding: 20px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md, 8px);
   background: var(--surface-muted);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 14px;
+  justify-content: center;
+  gap: 20px;
   text-align: center;
 }
 

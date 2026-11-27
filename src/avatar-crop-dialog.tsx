@@ -208,16 +208,6 @@ export function AvatarCropDialog({ file, uploading, onCancel, onConfirm }: Avata
     }));
   };
 
-  const adjustCropRadius = (nextRadius: number) => {
-    const r = clamp(nextRadius, MIN_CROP_RADIUS, Math.min(STAGE_WIDTH, STAGE_HEIGHT) / 2 - 6);
-    setCrop((prev) => ({
-      ...prev,
-      cropR: r,
-      cropX: clamp(prev.cropX, r, STAGE_WIDTH - r),
-      cropY: clamp(prev.cropY, r, STAGE_HEIGHT - r),
-    }));
-  };
-
   const handleConfirm = async () => {
     if (!imageMeta) {
       onConfirm(file);
@@ -362,38 +352,6 @@ export function AvatarCropDialog({ file, uploading, onCancel, onConfirm }: Avata
                 <Plus size={14} />
               </button>
               <span className="avatar-crop-value">{Math.round(crop.zoom * 100)}%</span>
-            </div>
-
-            <div className="avatar-crop-control-row">
-              <span className="avatar-crop-control-label">裁剪框大小</span>
-              <button
-                type="button"
-                className="avatar-crop-step-btn"
-                aria-label="缩小裁剪框"
-                disabled={uploading || !imageMeta}
-                onClick={() => adjustCropRadius(crop.cropR - 8)}
-              >
-                <Minus size={14} />
-              </button>
-              <input
-                type="range"
-                aria-label="裁剪框直径"
-                min={MIN_CROP_RADIUS}
-                max={Math.floor(Math.min(STAGE_WIDTH, STAGE_HEIGHT) / 2) - 6}
-                step="1"
-                value={crop.cropR}
-                disabled={uploading || !imageMeta}
-                onChange={(e) => adjustCropRadius(Number(e.target.value))}
-              />
-              <button
-                type="button"
-                className="avatar-crop-step-btn"
-                aria-label="放大裁剪框"
-                disabled={uploading || !imageMeta}
-                onClick={() => adjustCropRadius(crop.cropR + 8)}
-              >
-                <Plus size={14} />
-              </button>
               <button
                 type="button"
                 className="avatar-crop-reset-btn"
@@ -421,9 +379,6 @@ export function AvatarCropDialog({ file, uploading, onCancel, onConfirm }: Avata
                 <small>顶栏</small>
               </div>
             </div>
-            <p className="avatar-crop-tip">
-              支持滚轮缩放背景图、拖拽背景图位置，以及拖动圆框或右下角控制点来调整取景范围。
-            </p>
           </div>
         </aside>
       </div>

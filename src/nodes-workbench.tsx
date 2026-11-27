@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import QRCode from "qrcode";
 import {
@@ -745,6 +745,61 @@ function ChitandaFallbackControl({
         </div>
       )}
     </Field>
+  );
+}
+
+function MarqueeLine({
+  children,
+  title,
+  className = "",
+}: {
+  children: ReactNode;
+  title?: string;
+  className?: string;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const trackRef = useRef<HTMLSpanElement | null>(null);
+  const [overflowPx, setOverflowPx] = useState(0);
+
+  useEffect(() => {
+    const measure = () => {
+      const container = containerRef.current;
+      const track = trackRef.current;
+      if (!container || !track) return;
+      const diff = Math.ceil(track.scrollWidth - container.clientWidth);
+      setOverflowPx(diff > 2 ? diff : 0);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    if (containerRef.current) observer.observe(containerRef.current);
+    if (trackRef.current) observer.observe(trackRef.current);
+    return () => observer.disconnect();
+  }, [children]);
+
+  const durationSeconds = Math.max(5, Math.min(18, 4 + overflowPx / 18));
+
+  return (
+    <div
+      ref={containerRef}
+      title={title}
+      className={`nw-marquee-box ${overflowPx > 0 ? "is-overflowing" : ""} ${className}`.trim()}
+    >
+      <span
+        ref={trackRef}
+        className="nw-marquee-track"
+        style={
+          overflowPx > 0
+            ? ({
+                "--marquee-offset": `-${overflowPx}px`,
+                "--marquee-duration": `${durationSeconds.toFixed(1)}s`,
+              } as CSSProperties)
+            : undefined
+        }
+      >
+        {children}
+      </span>
+    </div>
   );
 }
 
@@ -1795,7 +1850,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
                             <Badge tone="info" className="nw-protocol-badge" title="TUNNEL">TU</Badge>
                             <span>
                               <strong>{fwd.name}</strong>
-                              <small title={routeHopsText || routeDetail}>
+                              <MarqueeLine title={routeHopsText || routeDetail} className="nw-forward-subtitle">
                                 <a
                                   href={`#/forwarding?tab=${isAdmin ? "templates" : "grants"}${tunnelQuery}`}
                                   className="nw-tunnel-link"
@@ -1809,7 +1864,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
                                 {" → "}
                                 {rootNode.node_name}
                                 {routeDetail ? ` · ${routeDetail}` : ""}
-                              </small>
+                              </MarqueeLine>
                             </span>
                             {!fwdActive ? <Badge tone={stateTone(fwdState)}>{stateLabel(fwdState)}</Badge> : null}
                           </div>

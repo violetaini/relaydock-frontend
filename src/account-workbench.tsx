@@ -21,6 +21,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { api } from "./api";
+import { AvatarCropDialog } from "./avatar-crop-dialog";
 import { TwoFactorSettings } from "./two-factor";
 import type { Profile } from "./types";
 import { GitHubIcon, GoogleIcon, OIDCIcon } from "./oauth-icons";
@@ -137,6 +138,7 @@ function ProfilePanel({ notify, refreshKey }: { notify: Notify; refreshKey: numb
   const [saving, setSaving] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [pendingAvatarFile, setPendingAvatarFile] = useState<File | null>(null);
   const [error, setError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -169,12 +171,7 @@ function ProfilePanel({ notify, refreshKey }: { notify: Notify; refreshKey: numb
     || draft.avatar_url.trim() !== (profile?.avatar_url ?? "")
   ), [draft, profile]);
 
-  const handleAvatarFile = async (file: File) => {
-    if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      notify("仅支持上传图片文件 (JPG, PNG, GIF, WEBP, SVG)", "error");
-      return;
-    }
+  const uploadAvatarFile = async (file: File) => {
     if (file.size > 5 * 1024 * 1024) {
       notify("头像图片大小不能超过 5MB", "error");
       return;
@@ -193,6 +190,7 @@ function ProfilePanel({ notify, refreshKey }: { notify: Notify; refreshKey: numb
         } else {
           window.dispatchEvent(new CustomEvent("arcway:profile-updated", { detail: { avatar_url: res.avatar_url } }));
         }
+        setPendingAvatarFile(null);
         notify("自定义头像已上传");
       }
     } catch (reason) {
@@ -201,6 +199,27 @@ function ProfilePanel({ notify, refreshKey }: { notify: Notify; refreshKey: numb
       setUploadingAvatar(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
+  };
+
+  const handleAvatarFile = (file: File) => {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      notify("仅支持上传图片文件 (JPG, PNG, GIF, WEBP, SVG)", "error");
+      return;
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      notify("原始图片大小不能超过 15MB", "error");
+      return;
+    }
+    if (fileInputRef.current) fileInputRef.current.value = "";
+
+    // SVG 矢量图无需位图裁剪，直接上传
+    if (file.type === "image/svg+xml") {
+      void uploadAvatarFile(file);
+      return;
+    }
+
+    setPendingAvatarFile(file);
   };
 
   const handleAvatarRemove = async () => {
@@ -279,28 +298,27 @@ function ProfilePanel({ notify, refreshKey }: { notify: Notify; refreshKey: numb
               }}
             />
             <div
-              className={`account-avatar-wrapper ${isDragging ? "is-dragging" : ""}`}
-              onClick={() => fileInputRef.current?.click()}
+              className={`account-avatar-wrapper ${isDragging ? "is-dragging" : ""} ${uploadingAvatar ? "is-uploading" : ""}`}
+              onClick={() => !uploadingAvatar && fileInputRef.current?.click()}
               onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
               onDragLeave={(e) => { e.preventDefault(); setIsDragging(false); }}
               onDrop={(e) => {
                 e.preventDefault();
                 setIsDragging(false);
                 const file = e.dataTransfer.files?.[0];
-                if (file) void handleAvatarFile(file);
+                if (file) handleAvatarFile(file);
               }}
               title="点击或拖拽图片更换自定义头像"
               role="button"
               tabIndex={0}
-              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInputRef.current?.click(); } }}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); if (!uploadingAvatar) fileInputRef.current?.click(); } }}
             >
               <span className="account-avatar-preview" aria-hidden="true">
                 <span>{(draft.nickname || draft.username || "U").slice(0, 1).toUpperCase()}</span>
                 {draft.avatar_url ? <img src={draft.avatar_url} alt="" onLoad={(event) => { event.currentTarget.hidden = false; }} onError={(event) => { event.currentTarget.hidden = true; }} /> : null}
               </span>
               <div className="account-avatar-overlay">
-                {uploadingAvatar ? <Spinner /> : <Camera size={16} />}
-                <span>{uploadingAvatar ? "上传中" : "更换"}</span>
+                {uploadingAvatar ? <Spinner label="" size={20} /> : <><Camera size={16} /><span>更换</span></>}
               </div>
             </div>
             <div className="account-identity-info">
@@ -363,6 +381,14 @@ function ProfilePanel({ notify, refreshKey }: { notify: Notify; refreshKey: numb
           </div>
           <div className="account-panel-actions"><Button type="submit" disabled={saving || !changed || !draft.username.trim()}>{saving ? <Spinner label="正在保存" /> : <><Save size={16} />保存资料</>}</Button></div>
         </form>
+      ) : null}
+      {pendingAvatarFile ? (
+        <AvatarCropDialog
+          file={pendingAvatarFile}
+          uploading={uploadingAvatar}
+          onCancel={() => { if (!uploadingAvatar) setPendingAvatarFile(null); }}
+          onConfirm={(croppedFile) => void uploadAvatarFile(croppedFile)}
+        />
       ) : null}
     </Surface>
   );

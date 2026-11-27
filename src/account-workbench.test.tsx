@@ -265,25 +265,39 @@ describe("account workbench", () => {
       throw new Error(`unexpected DELETE ${path}`);
     });
 
-    const notify = vi.fn();
-    render(<AccountWorkbenchPage notify={notify} />);
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => "blob:mock-avatar");
+    URL.revokeObjectURL = vi.fn();
 
-    expect(await screen.findByRole("button", { name: "上传头像" })).toBeInTheDocument();
+    try {
+      const notify = vi.fn();
+      render(<AccountWorkbenchPage notify={notify} />);
 
-    const file = new File(["fake-image"], "avatar.png", { type: "image/png" });
-    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
-    expect(fileInput).not.toBeNull();
+      expect(await screen.findByRole("button", { name: "上传头像" })).toBeInTheDocument();
 
-    fireEvent.change(fileInput, { target: { files: [file] } });
+      const file = new File(["fake-image"], "avatar.png", { type: "image/png" });
+      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      expect(fileInput).not.toBeNull();
 
-    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/user/avatar", expect.any(FormData)));
-    expect(notify).toHaveBeenCalledWith("自定义头像已上传");
+      fireEvent.change(fileInput, { target: { files: [file] } });
 
-    // 上传后应出现恢复默认按钮
-    const removeBtn = await screen.findByRole("button", { name: "恢复默认" });
-    fireEvent.click(removeBtn);
+      // 选定图片后弹出裁剪预览弹窗
+      expect(await screen.findByRole("dialog", { name: "调整并预览头像" })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "确认并上传" }));
 
-    await waitFor(() => expect(remove).toHaveBeenCalledWith("/api/user/avatar"));
-    expect(notify).toHaveBeenCalledWith("已恢复默认头像");
+      await waitFor(() => expect(post).toHaveBeenCalledWith("/api/user/avatar", expect.any(FormData)));
+      expect(notify).toHaveBeenCalledWith("自定义头像已上传");
+
+      // 上传后应出现恢复默认按钮
+      const removeBtn = await screen.findByRole("button", { name: "恢复默认" });
+      fireEvent.click(removeBtn);
+
+      await waitFor(() => expect(remove).toHaveBeenCalledWith("/api/user/avatar"));
+      expect(notify).toHaveBeenCalledWith("已恢复默认头像");
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    }
   });
 });

@@ -748,12 +748,64 @@ function grantDraftFrom(grant: TunnelGrant, templates: TunnelTemplate[]): GrantD
   };
 }
 
+function parseAdminForwardingHash(): { tab?: AdminTab; tunnelID?: string; tunnelName?: string } {
+  try {
+    const hash = window.location.hash || "";
+    const query = hash.split("?")[1] || "";
+    const params = new URLSearchParams(query);
+    const tabParam = params.get("tab") as AdminTab | null;
+    const tab = tabParam && ["templates", "grants", "my-forwards", "forwards"].includes(tabParam)
+      ? tabParam
+      : undefined;
+    return {
+      tab,
+      tunnelID: params.get("tunnel_id") || undefined,
+      tunnelName: params.get("tunnel_name") || undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function parseUserForwardingHash(): { tab?: UserTab; tunnelID?: string; tunnelName?: string } {
+  try {
+    const hash = window.location.hash || "";
+    const query = hash.split("?")[1] || "";
+    const params = new URLSearchParams(query);
+    const tabParam = params.get("tab") as UserTab | null;
+    const tab = tabParam && ["forwards", "grants"].includes(tabParam) ? tabParam : undefined;
+    return {
+      tab,
+      tunnelID: params.get("tunnel_id") || undefined,
+      tunnelName: params.get("tunnel_name") || undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
 export function ForwardingManagement({ isAdmin, notify, currentUsername = "admin" }: ForwardingManagementProps) {
   return isAdmin ? <AdminForwarding notify={notify} currentUsername={currentUsername} /> : <UserForwarding notify={notify} />;
 }
 
 function AdminForwarding({ notify, currentUsername = "admin" }: { notify: Notify; currentUsername?: string }) {
-  const [tab, setTab] = useState<AdminTab>("templates");
+  const initialHash = parseAdminForwardingHash();
+  const [tab, setTab] = useState<AdminTab>(initialHash.tab || "templates");
+  const [highlightedTunnelID, setHighlightedTunnelID] = useState<string | undefined>(initialHash.tunnelID);
+  const [highlightedTunnelName, setHighlightedTunnelName] = useState<string | undefined>(initialHash.tunnelName);
+
+  useEffect(() => {
+    const onHashChange = () => {
+      const parsed = parseAdminForwardingHash();
+      if (parsed.tab) setTab(parsed.tab);
+      if (parsed.tunnelID !== undefined || parsed.tunnelName !== undefined) {
+        setHighlightedTunnelID(parsed.tunnelID);
+        setHighlightedTunnelName(parsed.tunnelName);
+      }
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
   const [templates, setTemplates] = useState<TunnelTemplate[]>([]);
   const [grants, setGrants] = useState<TunnelGrant[]>([]);
   const [forwards, setForwards] = useState<ForwardRule[]>([]);
@@ -1016,7 +1068,7 @@ function AdminForwarding({ notify, currentUsername = "admin" }: { notify: Notify
 
     {visibleLoadErrors.length ? <ErrorState message={`部分数据未能刷新：${visibleLoadErrors.join("；")}。已保留其余成功数据，可继续操作。`} onRetry={() => void load(true)} /> : null}
     {loading ? <div className="center-state"><Spinner label="正在加载转发管理" /></div> : null}
-    {!loading && tab === "templates" ? <TemplatePanel groups={templateGroups} servers={servers} onCreate={() => { setEditingTemplate(undefined); setDialog("template"); }} onEdit={(group) => { setEditingTemplate(group); setDialog("template"); }} onCreateForward={(group) => { void openCreateForward(resourceID(group.primary)); }} onState={changeTemplateGroupState} onDelete={deleteTemplateGroup} /> : null}
+    {!loading && tab === "templates" ? <TemplatePanel groups={templateGroups} servers={servers} highlightedTunnelID={highlightedTunnelID} highlightedTunnelName={highlightedTunnelName} onCreate={() => { setEditingTemplate(undefined); setDialog("template"); }} onEdit={(group) => { setEditingTemplate(group); setDialog("template"); }} onCreateForward={(group) => { void openCreateForward(resourceID(group.primary)); }} onState={changeTemplateGroupState} onDelete={deleteTemplateGroup} /> : null}
     {!loading && tab === "grants" ? <GrantPanel grants={grants} templates={templates} onCreate={() => { setEditingGrant(undefined); setDialog("grant"); }} onEdit={(grant) => { setEditingGrant(grant); setDialog("grant"); }} onAction={async (grant, action) => {
       await api.post(`/api/admin/users/${encodeURIComponent(grant.username)}/tunnel-grants/${encodeURIComponent(resourceID(grant))}/${action}`, {}, { idempotencyKey: idempotencyKey() });
       notify(action === "suspend" ? "隧道授权已暂停" : "隧道授权已恢复");
@@ -1119,9 +1171,11 @@ function Metric({ icon, label, value, note }: { icon: ReactNode; label: string; 
   return <div className="fm-metric"><span className="fm-metric-icon">{icon}</span><div><small>{label}</small><strong>{value}</strong><span>{note}</span></div></div>;
 }
 
-function TemplatePanel({ groups, servers, onCreate, onEdit, onCreateForward, onState, onDelete }: {
+function TemplatePanel({ groups, servers, highlightedTunnelID, highlightedTunnelName, onCreate, onEdit, onCreateForward, onState, onDelete }: {
   groups: TunnelTemplateGroup[];
   servers: RemoteServer[];
+  highlightedTunnelID?: string;
+  highlightedTunnelName?: string;
   onCreate: () => void;
   onEdit: (group: TunnelTemplateGroup) => void;
   onCreateForward?: (group: TunnelTemplateGroup) => void;
@@ -1129,6 +1183,16 @@ function TemplatePanel({ groups, servers, onCreate, onEdit, onCreateForward, onS
   onDelete: (group: TunnelTemplateGroup) => void;
 }) {
   const [workingKey, setWorkingKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (highlightedTunnelID || highlightedTunnelName) {
+      const el = document.querySelector(".fm-table tbody tr.is-highlighted");
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }
+  }, [highlightedTunnelID, highlightedTunnelName, groups]);
+
   const changeState = async (group: TunnelTemplateGroup, state: string) => {
     setWorkingKey(group.key);
     try { await onState(group, state); } finally { setWorkingKey(null); }
@@ -1139,7 +1203,14 @@ function TemplatePanel({ groups, servers, onCreate, onEdit, onCreateForward, onS
       const hops = group.hops;
       const id = group.id;
       const isWorking = workingKey === group.key;
-      return <tr key={group.key}><td className="fm-primary-cell"><div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><strong>{group.name}</strong>{group.isBidirectional ? <Badge tone="info">双向</Badge> : null}</div>{group.description ? <small>{group.description}</small> : null}</td><td><RouteLine hops={hops.map((hop) => ({ name: hop.name, tone: hop.status && ["online", "connected"].includes(hop.status) ? "good" : undefined }))} bidirectional={group.isBidirectional} /><small className="fm-cell-note">{hops.length} 跳 · {group.isBidirectional ? "双向 · " : ""}TCP + UDP</small></td><td><span>{forwardingBillingModeLabel(group.billing_mode)}</span><small className="fm-cell-note">{((group.traffic_multiplier_milli ?? 1000) / 1000).toFixed(2)} 倍 · {group.port_range_start || "-"}–{group.port_range_end || "-"}</small></td><td><span>{group.max_total_forwards ? `${group.active_forwards}/${group.max_total_forwards} 条转发` : "不限制"}</span><small className="fm-cell-note">{group.grant_count} 份授权</small></td><td><Badge tone={stateTone(group.state)}>{stateLabel(group.state)}</Badge></td><td><div className="fm-row-actions">{onCreateForward ? <IconButton label={`使用 ${group.name} 创建转发`} disabled={isWorking || group.state !== "active"} onClick={() => onCreateForward(group)}><Plus size={18} /></IconButton> : null}<IconButton label={`编辑 ${group.name}`} disabled={isWorking} onClick={() => onEdit(group)}><Pencil size={18} /></IconButton>{group.state !== "active" ? <IconButton label={`恢复 ${group.name}`} disabled={isWorking} onClick={() => void changeState(group, "active")}><CirclePlay size={18} /></IconButton> : <IconButton label={`停止 ${group.name} 新建`} disabled={isWorking} onClick={() => void changeState(group, "draining")}><CirclePause size={18} /></IconButton>}<IconButton label={`删除 ${group.name}`} disabled={isWorking} onClick={() => onDelete(group)}><Trash2 size={18} /></IconButton></div></td></tr>;
+      const isTarget = Boolean(
+        (highlightedTunnelID && (
+          sameID(group.id, highlightedTunnelID) ||
+          group.templates.some((t) => sameID(t.id, highlightedTunnelID) || (t.public_id && sameID(t.public_id, highlightedTunnelID)))
+        )) ||
+        (highlightedTunnelName && group.name.toLowerCase() === highlightedTunnelName.toLowerCase())
+      );
+      return <tr key={group.key} data-tunnel-id={String(group.id)} className={isTarget ? "is-highlighted" : ""}><td className="fm-primary-cell"><div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><strong>{group.name}</strong>{group.isBidirectional ? <Badge tone="info">双向</Badge> : null}</div>{group.description ? <small>{group.description}</small> : null}</td><td><RouteLine hops={hops.map((hop) => ({ name: hop.name, tone: hop.status && ["online", "connected"].includes(hop.status) ? "good" : undefined }))} bidirectional={group.isBidirectional} /><small className="fm-cell-note">{hops.length} 跳 · {group.isBidirectional ? "双向 · " : ""}TCP + UDP</small></td><td><span>{forwardingBillingModeLabel(group.billing_mode)}</span><small className="fm-cell-note">{((group.traffic_multiplier_milli ?? 1000) / 1000).toFixed(2)} 倍 · {group.port_range_start || "-"}–{group.port_range_end || "-"}</small></td><td><span>{group.max_total_forwards ? `${group.active_forwards}/${group.max_total_forwards} 条转发` : "不限制"}</span><small className="fm-cell-note">{group.grant_count} 份授权</small></td><td><Badge tone={stateTone(group.state)}>{stateLabel(group.state)}</Badge></td><td><div className="fm-row-actions">{onCreateForward ? <IconButton label={`使用 ${group.name} 创建转发`} disabled={isWorking || group.state !== "active"} onClick={() => onCreateForward(group)}><Plus size={18} /></IconButton> : null}<IconButton label={`编辑 ${group.name}`} disabled={isWorking} onClick={() => onEdit(group)}><Pencil size={18} /></IconButton>{group.state !== "active" ? <IconButton label={`恢复 ${group.name}`} disabled={isWorking} onClick={() => void changeState(group, "active")}><CirclePlay size={18} /></IconButton> : <IconButton label={`停止 ${group.name} 新建`} disabled={isWorking} onClick={() => void changeState(group, "draining")}><CirclePause size={18} /></IconButton>}<IconButton label={`删除 ${group.name}`} disabled={isWorking} onClick={() => onDelete(group)}><Trash2 size={18} /></IconButton></div></td></tr>;
     })}</tbody></table></div></Surface>}
   </div>;
 }
@@ -2565,7 +2636,23 @@ function ForwardTable({ forwards, templates, servers = [], admin = false, onActi
 }
 
 function UserForwarding({ notify }: { notify: Notify }) {
-  const [tab, setTab] = useState<UserTab>("forwards");
+  const initialHash = parseUserForwardingHash();
+  const [tab, setTab] = useState<UserTab>(initialHash.tab || "forwards");
+  const [highlightedTunnelID, setHighlightedTunnelID] = useState<string | undefined>(initialHash.tunnelID);
+  const [highlightedTunnelName, setHighlightedTunnelName] = useState<string | undefined>(initialHash.tunnelName);
+
+  useEffect(() => {
+    const onHashChange = () => {
+      const parsed = parseUserForwardingHash();
+      if (parsed.tab) setTab(parsed.tab);
+      if (parsed.tunnelID !== undefined || parsed.tunnelName !== undefined) {
+        setHighlightedTunnelID(parsed.tunnelID);
+        setHighlightedTunnelName(parsed.tunnelName);
+      }
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
   const [grants, setGrants] = useState<TunnelGrant[]>([]);
   const [forwards, setForwards] = useState<ForwardRule[]>([]);
   const [nodes, setNodes] = useState<NodeItem[]>([]);
@@ -2643,7 +2730,7 @@ function UserForwarding({ notify }: { notify: Notify }) {
     <div className="fm-tabs" role="tablist" aria-label="用户转发视图"><button role="tab" aria-selected={tab === "forwards"} className={tab === "forwards" ? "is-active" : ""} onClick={() => setTab("forwards")}><Network size={16} />我的转发 <span>{forwards.length}</span></button><button role="tab" aria-selected={tab === "grants"} className={tab === "grants" ? "is-active" : ""} onClick={() => setTab("grants")}><Route size={16} />可用隧道 <span>{activeGrants.length}</span></button></div>
     {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}{loading ? <div className="center-state"><Spinner label="正在加载转发" /></div> : null}
     {!loading && tab === "forwards" ? <><ForwardTable forwards={forwards} templates={templates} onAction={runForwardAction} onCopy={copyEntry} onEdit={setEditingForward} onDelete={(forward) => setConfirm({ title: "删除转发", description: `将停止“${forward.name}”入口并清理每一跳端口。此操作无法撤销。`, confirmLabel: "确认删除", run: async () => { await api.delete(`/api/user/forwards/${encodeURIComponent(resourceID(forward))}`, undefined, { idempotencyKey: idempotencyKey() }); notify("转发删除任务已提交"); } })} />{!forwards.length && activeGrants.length ? <div className="fm-empty-action"><Button onClick={() => { setWizardGrantID(undefined); setWizard(true); }}><Plus size={17} />创建第一条转发</Button></div> : null}</> : null}
-    {!loading && tab === "grants" ? <UserGrantCards grants={grants} onCreate={(grant) => { if ((grant.effective_state || grant.state || "active") !== "active") return; setWizardGrantID(String(resourceID(grant))); setWizard(true); }} /> : null}
+    {!loading && tab === "grants" ? <UserGrantCards grants={grants} highlightedTunnelID={highlightedTunnelID} highlightedTunnelName={highlightedTunnelName} onCreate={(grant) => { if ((grant.effective_state || grant.state || "active") !== "active") return; setWizardGrantID(String(resourceID(grant))); setWizard(true); }} /> : null}
     {wizard ? <ForwardWizard grants={activeGrants} initialGrantID={wizardGrantID} nodes={nodes.filter((node) => node.enabled)} templates={templates} onClose={() => { setWizard(false); setWizardGrantID(undefined); }} onComplete={async () => { setWizard(false); setWizardGrantID(undefined); notify("转发创建任务已提交"); setTab("forwards"); await load(true); }} /> : null}
     {editingForward ? (
       <ForwardEditDialog
@@ -2662,13 +2749,26 @@ function UserForwarding({ notify }: { notify: Notify }) {
   </section>;
 }
 
-function UserGrantCards({ grants, onCreate }: { grants: TunnelGrant[]; onCreate: (grant: TunnelGrant) => void }) {
+function UserGrantCards({ grants, highlightedTunnelID, highlightedTunnelName, onCreate }: { grants: TunnelGrant[]; highlightedTunnelID?: string; highlightedTunnelName?: string; onCreate: (grant: TunnelGrant) => void }) {
+  useEffect(() => {
+    if (highlightedTunnelID || highlightedTunnelName) {
+      const el = document.querySelector(".fm-grant-card.is-highlighted");
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }
+  }, [highlightedTunnelID, highlightedTunnelName, grants]);
+
   if (!grants.length) return <EmptyState icon={<Route size={25} />} title="暂无隧道授权" description="管理员授权后，可用路线会显示在这里" />;
   return <div className="fm-grant-grid">{grants.map((grant) => {
     const state = grant.effective_state || grant.state || (grant.enabled === false ? "suspended" : "active");
     const template = tunnelForGrant(grant, []);
     const usedPercent = grant.traffic_limit_bytes ? Math.min(100, (grantUsedBytes(grant) / grant.traffic_limit_bytes) * 100) : 0;
-    return <article className="fm-grant-card" key={String(resourceID(grant))}><header><span><Route size={18} /><strong>{tunnelName(grant, [])}</strong></span><Badge tone={stateTone(state)}>{stateLabel(state)}</Badge></header>{template ? <RouteLine hops={routeHops(template).map((hop) => ({ name: hop.name }))} /> : null}<dl><div><dt>转发数量</dt><dd>{grantActiveForwards(grant)} / {grant.max_active_forwards}</dd></div><div><dt>每转发限速</dt><dd>{grant.per_forward_speed_mbps ? `${grant.per_forward_speed_mbps} Mbps` : "不限"}</dd></div><div><dt>连接数</dt><dd>{grant.per_forward_connection_limit || "不限"}</dd></div><div><dt>有效期</dt><dd>{displayDate(grant.expires_at)}</dd></div></dl><div className="fm-usage"><span><small>授权流量</small><strong>{formatBytes(grantUsedBytes(grant))} / {grant.traffic_limit_bytes ? formatBytes(grant.traffic_limit_bytes) : "不限"}</strong></span>{grant.traffic_limit_bytes ? <progress value={usedPercent} max="100" /> : null}</div><Button variant="secondary" disabled={state !== "active" || grantActiveForwards(grant) >= grant.max_active_forwards} onClick={() => onCreate(grant)}><Plus size={17} />使用此隧道创建</Button></article>;
+    const isTarget = Boolean(
+      (highlightedTunnelID && (sameID(grant.tunnel_id, highlightedTunnelID) || sameID(resourceID(grant), highlightedTunnelID))) ||
+      (highlightedTunnelName && tunnelName(grant, []).toLowerCase() === highlightedTunnelName.toLowerCase())
+    );
+    return <article className={`fm-grant-card ${isTarget ? "is-highlighted" : ""}`} key={String(resourceID(grant))}><header><span><Route size={18} /><strong>{tunnelName(grant, [])}</strong></span><Badge tone={stateTone(state)}>{stateLabel(state)}</Badge></header>{template ? <RouteLine hops={routeHops(template).map((hop) => ({ name: hop.name }))} /> : null}<dl><div><dt>转发数量</dt><dd>{grantActiveForwards(grant)} / {grant.max_active_forwards}</dd></div><div><dt>每转发限速</dt><dd>{grant.per_forward_speed_mbps ? `${grant.per_forward_speed_mbps} Mbps` : "不限"}</dd></div><div><dt>连接数</dt><dd>{grant.per_forward_connection_limit || "不限"}</dd></div><div><dt>有效期</dt><dd>{displayDate(grant.expires_at)}</dd></div></dl><div className="fm-usage"><span><small>授权流量</small><strong>{formatBytes(grantUsedBytes(grant))} / {grant.traffic_limit_bytes ? formatBytes(grant.traffic_limit_bytes) : "不限"}</strong></span>{grant.traffic_limit_bytes ? <progress value={usedPercent} max="100" /> : null}</div><Button variant="secondary" disabled={state !== "active" || grantActiveForwards(grant) >= grant.max_active_forwards} onClick={() => onCreate(grant)}><Plus size={17} />使用此隧道创建</Button></article>;
   })}</div>;
 }
 

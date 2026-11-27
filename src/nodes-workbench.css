@@ -2495,6 +2495,22 @@
   white-space: nowrap;
   background: transparent !important;
 }
+.nw-tunnel-link {
+  color: var(--accent-readable, var(--accent));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 1px 2px;
+  transition: all 0.15s ease;
+}
+
+.nw-tunnel-link:hover {
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
 .nw-forward-branch{color:var(--muted);flex:0 0 auto;font-size:20px;line-height:1}
 .nw-forward-child .nw-cell-primary{border-inline-start:2px solid var(--border)}
 .nw-forward-config{border:1px solid var(--border);border-radius:10px;padding:14px}

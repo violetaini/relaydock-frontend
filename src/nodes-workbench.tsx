@@ -1778,6 +1778,9 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
                       : fwd.tunnel_name || routeHopsText;
                     const fwdPingKey = `fwd-${fwd.id}`;
                     const fwdPing = tcping[fwdPingKey];
+                    const targetTunnel = fwd.tunnel || templates.find((item) => sameID(resourceID(item), fwd.tunnel_id)) || templates.find((item) => item.name === fwd.tunnel_name);
+                    const targetTunnelID = targetTunnel ? resourceID(targetTunnel) : fwd.tunnel_id;
+                    const tunnelQuery = `${targetTunnelID ? `&tunnel_id=${encodeURIComponent(String(targetTunnelID))}` : ""}${fwd.tunnel_name ? `&tunnel_name=${encodeURIComponent(fwd.tunnel_name)}` : ""}`;
                     return (
                       <tr key={`fwd-${fwd.id}`} data-forward-target={rootNode.id} className="nw-forward-child">
                         <td className="nw-cell-check" />
@@ -1793,7 +1796,19 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
                             <span>
                               <strong>{fwd.name}</strong>
                               <small title={routeHopsText || routeDetail}>
-                                #{fwd.id} · 隧道转发 → {rootNode.node_name}{routeDetail ? ` · ${routeDetail}` : ""}
+                                <a
+                                  href={`#/forwarding?tab=${isAdmin ? "templates" : "grants"}${tunnelQuery}`}
+                                  className="nw-tunnel-link"
+                                  title="点击跳转到对应的隧道"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                  }}
+                                >
+                                  隧道转发
+                                </a>
+                                {" → "}
+                                {rootNode.node_name}
+                                {routeDetail ? ` · ${routeDetail}` : ""}
                               </small>
                             </span>
                             {!fwdActive ? <Badge tone={stateTone(fwdState)}>{stateLabel(fwdState)}</Badge> : null}

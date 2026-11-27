@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
+  Camera,
   Check,
   Clock3,
   Code2,
@@ -16,6 +17,7 @@ import {
   Save,
   ShieldCheck,
   Trash2,
+  Upload,
   UserRound,
 } from "lucide-react";
 import { api } from "./api";
@@ -133,7 +135,10 @@ function ProfilePanel({ notify, refreshKey }: { notify: Notify; refreshKey: numb
   const [draft, setDraft] = useState({ username: "", email: "", nickname: "", avatar_url: "" });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -163,6 +168,59 @@ function ProfilePanel({ notify, refreshKey }: { notify: Notify; refreshKey: numb
     || draft.nickname.trim() !== (profile?.nickname ?? "")
     || draft.avatar_url.trim() !== (profile?.avatar_url ?? "")
   ), [draft, profile]);
+
+  const handleAvatarFile = async (file: File) => {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      notify("仅支持上传图片文件 (JPG, PNG, GIF, WEBP, SVG)", "error");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      notify("头像图片大小不能超过 5MB", "error");
+      return;
+    }
+
+    setUploadingAvatar(true);
+    try {
+      const formData = new FormData();
+      formData.append("avatar", file);
+      const res = await api.post<{ success: boolean; avatar_url: string; profile?: Profile }>("/api/user/avatar", formData);
+      if (res?.avatar_url) {
+        setDraft((prev) => ({ ...prev, avatar_url: res.avatar_url }));
+        if (res.profile) {
+          setProfile(res.profile);
+          window.dispatchEvent(new CustomEvent("arcway:profile-updated", { detail: res.profile }));
+        } else {
+          window.dispatchEvent(new CustomEvent("arcway:profile-updated", { detail: { avatar_url: res.avatar_url } }));
+        }
+        notify("自定义头像已上传");
+      }
+    } catch (reason) {
+      notify(messageOf(reason, "头像上传失败"), "error");
+    } finally {
+      setUploadingAvatar(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const handleAvatarRemove = async () => {
+    setUploadingAvatar(true);
+    try {
+      const res = await api.delete<{ success: boolean; avatar_url: string; profile?: Profile }>("/api/user/avatar");
+      setDraft((prev) => ({ ...prev, avatar_url: "" }));
+      if (res?.profile) {
+        setProfile(res.profile);
+        window.dispatchEvent(new CustomEvent("arcway:profile-updated", { detail: res.profile }));
+      } else {
+        window.dispatchEvent(new CustomEvent("arcway:profile-updated", { detail: { avatar_url: "" } }));
+      }
+      notify("已恢复默认头像");
+    } catch (reason) {
+      notify(messageOf(reason, "恢复默认头像失败"), "error");
+    } finally {
+      setUploadingAvatar(false);
+    }
+  };
 
   const save = async (event: FormEvent) => {
     event.preventDefault();
@@ -210,11 +268,71 @@ function ProfilePanel({ notify, refreshKey }: { notify: Notify; refreshKey: numb
         <form className="account-form" onSubmit={save}>
           {error ? <ErrorState message={error} /> : null}
           <div className="account-identity">
-            <span className="account-avatar-preview" aria-hidden="true">
-              <span>{(draft.nickname || draft.username || "U").slice(0, 1).toUpperCase()}</span>
-              {draft.avatar_url ? <img src={draft.avatar_url} alt="" onLoad={(event) => { event.currentTarget.hidden = false; }} onError={(event) => { event.currentTarget.hidden = true; }} /> : null}
-            </span>
-            <span><strong>{draft.nickname || draft.username}</strong><small>{profile.role || "user"}</small></span>
+            <input
+              type="file"
+              ref={fileInputRef}
+              accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void handleAvatarFile(file);
+              }}
+            />
+            <div
+              className={`account-avatar-wrapper ${isDragging ? "is-dragging" : ""}`}
+              onClick={() => fileInputRef.current?.click()}
+              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={(e) => { e.preventDefault(); setIsDragging(false); }}
+              onDrop={(e) => {
+                e.preventDefault();
+                setIsDragging(false);
+                const file = e.dataTransfer.files?.[0];
+                if (file) void handleAvatarFile(file);
+              }}
+              title="点击或拖拽图片更换自定义头像"
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInputRef.current?.click(); } }}
+            >
+              <span className="account-avatar-preview" aria-hidden="true">
+                <span>{(draft.nickname || draft.username || "U").slice(0, 1).toUpperCase()}</span>
+                {draft.avatar_url ? <img src={draft.avatar_url} alt="" onLoad={(event) => { event.currentTarget.hidden = false; }} onError={(event) => { event.currentTarget.hidden = true; }} /> : null}
+              </span>
+              <div className="account-avatar-overlay">
+                {uploadingAvatar ? <Spinner /> : <Camera size={16} />}
+                <span>{uploadingAvatar ? "上传中" : "更换"}</span>
+              </div>
+            </div>
+            <div className="account-identity-info">
+              <div className="account-identity-name">
+                <strong>{draft.nickname || draft.username}</strong>
+                <small>{profile.role || "user"}</small>
+              </div>
+              <div className="account-avatar-actions">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={uploadingAvatar}
+                  onClick={() => fileInputRef.current?.click()}
+                  title="选择本地图片上传为头像"
+                >
+                  <Upload size={13} />
+                  {uploadingAvatar ? "上传中..." : "上传头像"}
+                </Button>
+                {draft.avatar_url ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    disabled={uploadingAvatar}
+                    onClick={() => void handleAvatarRemove()}
+                    title="恢复为默认字母头像"
+                  >
+                    <Trash2 size={13} />
+                    恢复默认
+                  </Button>
+                ) : null}
+              </div>
+            </div>
           </div>
           <div className="account-field-grid">
             <Field label="用户名" hint={profile.is_admin ? "管理员用户名不可修改" : "修改后当前登录会话保持有效"}>
@@ -227,7 +345,20 @@ function ProfilePanel({ notify, refreshKey }: { notify: Notify; refreshKey: numb
               <div className="input-with-icon"><Mail size={16} /><input type="email" autoComplete="email" value={draft.email} onChange={(event) => setDraft({ ...draft, email: event.target.value })} /></div>
             </Field>
             <Field label="头像 URL">
-              <div className="input-with-icon"><Image size={16} /><input type="url" inputMode="url" placeholder="https://example.com/avatar.png" value={draft.avatar_url} onChange={(event) => setDraft({ ...draft, avatar_url: event.target.value })} /></div>
+              <div className="input-with-icon">
+                <Image size={16} />
+                <input aria-label="头像 URL" type="url" inputMode="url" placeholder="https://example.com/avatar.png" value={draft.avatar_url} onChange={(event) => setDraft({ ...draft, avatar_url: event.target.value })} />
+                <button
+                  type="button"
+                  className="input-inline-action"
+                  title="上传本地图片作为头像"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploadingAvatar}
+                >
+                  <Upload size={13} />
+                  <span>上传</span>
+                </button>
+              </div>
             </Field>
           </div>
           <div className="account-panel-actions"><Button type="submit" disabled={saving || !changed || !draft.username.trim()}>{saving ? <Spinner label="正在保存" /> : <><Save size={16} />保存资料</>}</Button></div>

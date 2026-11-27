@@ -212,22 +212,22 @@ export const api = {
   post: <T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> =>
     request<T>(path, {
       method: "POST",
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : (body instanceof FormData ? body : JSON.stringify(body)),
     }, options).then((res) => { clearApiCache(); return res; }),
   put: <T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> =>
     request<T>(path, {
       method: "PUT",
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : (body instanceof FormData ? body : JSON.stringify(body)),
     }, options).then((res) => { clearApiCache(); return res; }),
   patch: <T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> =>
     request<T>(path, {
       method: "PATCH",
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : (body instanceof FormData ? body : JSON.stringify(body)),
     }, options).then((res) => { clearApiCache(); return res; }),
   delete: <T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> =>
     request<T>(path, {
       method: "DELETE",
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : (body instanceof FormData ? body : JSON.stringify(body)),
     }, options).then((res) => { clearApiCache(); return res; }),
   clearCache: (prefix?: string) => clearApiCache(prefix),
 };

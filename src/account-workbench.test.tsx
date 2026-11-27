@@ -241,4 +241,49 @@ describe("account workbench", () => {
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/user/oauth/unbind", { provider: "github" }));
     expect(notify).toHaveBeenCalledWith("已解除绑定", "success");
   });
+
+  it("supports uploading custom avatar image and removing avatar", async () => {
+    mockAccountGets();
+    const post = vi.spyOn(api, "post").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/user/avatar") {
+        return {
+          success: true,
+          avatar_url: "/api/user/avatar/alice_123.png",
+          profile: { ...normalProfile, avatar_url: "/api/user/avatar/alice_123.png" },
+        } as T;
+      }
+      throw new Error(`unexpected POST ${path}`);
+    });
+    const remove = vi.spyOn(api, "delete").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/user/avatar") {
+        return {
+          success: true,
+          avatar_url: "",
+          profile: { ...normalProfile, avatar_url: "" },
+        } as T;
+      }
+      throw new Error(`unexpected DELETE ${path}`);
+    });
+
+    const notify = vi.fn();
+    render(<AccountWorkbenchPage notify={notify} />);
+
+    expect(await screen.findByRole("button", { name: "上传头像" })).toBeInTheDocument();
+
+    const file = new File(["fake-image"], "avatar.png", { type: "image/png" });
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(fileInput).not.toBeNull();
+
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/user/avatar", expect.any(FormData)));
+    expect(notify).toHaveBeenCalledWith("自定义头像已上传");
+
+    // 上传后应出现恢复默认按钮
+    const removeBtn = await screen.findByRole("button", { name: "恢复默认" });
+    fireEvent.click(removeBtn);
+
+    await waitFor(() => expect(remove).toHaveBeenCalledWith("/api/user/avatar"));
+    expect(notify).toHaveBeenCalledWith("已恢复默认头像");
+  });
 });

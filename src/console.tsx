@@ -78,7 +78,7 @@ import {
   statusTone,
 } from "./ui";
 
-type PageKey = "dashboard" | "subscriptions" | "servers" | "nodes" | "forwarding" | "traffic" | "users" | "packages" | "certificates" | "templates" | "subscribeFiles" | "customRules" | "rulesConfig" | "settings" | "account";
+type PageKey = "dashboard" | "servers" | "nodes" | "forwarding" | "traffic" | "users" | "packages" | "certificates" | "templates" | "subscribeFiles" | "customRules" | "rulesConfig" | "settings" | "account";
 type UsersScope = "all" | "renewal" | "invites";
 
 interface ToastState { message: string; tone: "success" | "error" }
@@ -89,7 +89,6 @@ const AccountWorkbenchPage = lazy(() => import("./account-workbench").then((modu
 const contentWorkbench = () => import("./content-workbench");
 const CertificatesWorkbenchPage = lazy(() => contentWorkbench().then((module) => ({ default: module.CertificatesWorkbenchPage })));
 const SubscribeFilesPage = lazy(() => contentWorkbench().then((module) => ({ default: module.SubscribeFilesPage })));
-const SubscriptionLinksPage = lazy(() => contentWorkbench().then((module) => ({ default: module.SubscriptionLinksPage })));
 const TemplatesWorkbenchPage = lazy(() => contentWorkbench().then((module) => ({ default: module.TemplatesWorkbenchPage })));
 const NodesWorkbench = lazy(() => import("./nodes-workbench").then((module) => ({ default: module.NodesWorkbench })));
 const PackagesPage = lazy(() => import("./packages").then((module) => ({ default: module.PackagesPage })));
@@ -106,7 +105,6 @@ const pageLoaders: Partial<Record<PageKey, () => Promise<unknown>>> = {
   account: () => import("./account-workbench"),
   certificates: contentWorkbench,
   subscribeFiles: contentWorkbench,
-  subscriptions: contentWorkbench,
   templates: contentWorkbench,
   nodes: () => import("./nodes-workbench"),
   packages: () => import("./packages"),
@@ -138,7 +136,6 @@ export function preloadAllModules(): void {
 
 const pageTitles: Record<PageKey, string> = {
   dashboard: "流量信息",
-  subscriptions: "订阅链接",
   servers: "服务管理",
   nodes: "节点管理",
   forwarding: "转发管理",
@@ -156,8 +153,8 @@ const pageTitles: Record<PageKey, string> = {
 
 function resolvePage(isAdmin: boolean): PageKey {
   const candidate = location.hash.replace(/^#\/?/, "").split("?")[0] as PageKey;
-  const known: PageKey[] = ["dashboard", "subscriptions", "servers", "nodes", "forwarding", "traffic", "users", "packages", "certificates", "templates", "subscribeFiles", "customRules", "rulesConfig", "settings", "account"];
-  if ((candidate as string) === "generator") return "subscribeFiles";
+  const known: PageKey[] = ["dashboard", "servers", "nodes", "forwarding", "traffic", "users", "packages", "certificates", "templates", "subscribeFiles", "customRules", "rulesConfig", "settings", "account"];
+  if (["generator", "subscriptions"].includes(candidate as string)) return "subscribeFiles";
   if (!known.includes(candidate)) return "dashboard";
   if (!isAdmin && ["servers", "users", "packages", "rulesConfig", "settings"].includes(candidate)) return "dashboard";
   return candidate;
@@ -170,7 +167,6 @@ function resolveUsersScope(): UsersScope {
 }
 
 const permissionKey: Partial<Record<PageKey, string>> = {
-  subscriptions: "subscription",
   nodes: "nodes",
   forwarding: "forwarding",
   certificates: "certificates",
@@ -181,6 +177,7 @@ const permissionKey: Partial<Record<PageKey, string>> = {
 
 function pageAllowed(page: PageKey, isAdmin: boolean, permissions: string[] | null): boolean {
   if (isAdmin || page === "dashboard" || page === "traffic" || page === "account") return true;
+  if (page === "subscribeFiles") return Boolean(permissions?.some(key => key === "subscription" || key === "subscribe-files"));
   const key = permissionKey[page];
   return Boolean(key && permissions?.includes(key));
 }
@@ -224,7 +221,7 @@ function ModuleLoadingFallback({ label }: { label: string }) {
 export function ConsoleApp({ profile, onLogout, onBrandingChange, onWallpaperChange }: { profile: Profile; onLogout: () => void; onBrandingChange?: (branding: Branding) => void; onWallpaperChange?: (wallpaper: string) => void }) {
   const branding = useBranding();
   const [page, setPage] = useState<PageKey>(() => resolvePage(profile.is_admin));
-  useEffect(() => { if (/^#\/?generator(?:\?|$)/.test(location.hash)) history.replaceState(null, "", `${location.pathname}${location.search}#/subscribeFiles`); }, []);
+  useEffect(() => { if (/^#\/?(?:generator|subscriptions)(?:\?|$)/.test(location.hash)) history.replaceState(null, "", `${location.pathname}${location.search}#/subscribeFiles`); }, []);
   const [usersScope, setUsersScope] = useState<UsersScope>(resolveUsersScope);
   const [isPending, startTransition] = useTransition();
   const [switchingTarget, setSwitchingTarget] = useState<PageKey | null>(null);
@@ -413,7 +410,6 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange, onWallpaperCha
         <nav className="sidebar-nav" aria-label="主导航">
           <NavGroup label="主导航" className="nav-primary">
             <NavItem active={page === "dashboard"} loading={switchingTarget === "dashboard"} icon={<Activity size={18} />} label="流量信息" onClick={() => navigate("dashboard")} onMouseEnter={() => preloadPageModule("dashboard")} />
-            {pageAllowed("subscriptions", profile.is_admin, userPages) ? <NavItem active={page === "subscriptions"} loading={switchingTarget === "subscriptions"} icon={<Link2 size={18} />} label="订阅链接" onClick={() => navigate("subscriptions")} onMouseEnter={() => preloadPageModule("subscriptions")} /> : null}
             {pageAllowed("nodes", profile.is_admin, userPages) ? <NavItem active={page === "nodes"} loading={switchingTarget === "nodes"} icon={<Route size={18} />} label="节点管理" onClick={() => navigate("nodes")} onMouseEnter={() => preloadPageModule("nodes")} /> : null}
             {pageAllowed("forwarding", profile.is_admin, userPages) ? <NavItem active={page === "forwarding"} loading={switchingTarget === "forwarding"} icon={<Network size={18} />} label="转发管理" onClick={() => navigate("forwarding")} onMouseEnter={() => preloadPageModule("forwarding")} /> : null}
             <NavItem active={page === "traffic"} loading={switchingTarget === "traffic"} icon={<Gauge size={18} />} label="流量明细" onClick={() => navigate("traffic")} onMouseEnter={() => preloadPageModule("traffic")} />
@@ -436,7 +432,10 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange, onWallpaperCha
           <IconButton className="top-layout-switch" label="切换到侧边栏" onClick={toggleLayout}><PanelLeft size={18} /></IconButton>
           <IconButton label={themeLabel} onClick={toggleTheme}>{themeIcon}</IconButton>
           <button type="button" className={`account-block ${page === "account" ? "is-active" : ""}`} aria-label="账户中心" title="账户中心" onClick={() => navigate("account")} onMouseEnter={() => preloadPageModule("account")}>
-            <span className="account-avatar">{(identity.nickname || identity.username).slice(0, 1).toUpperCase()}</span>
+            <span className="account-avatar">
+              {identity.avatar_url ? <img src={identity.avatar_url} alt="" onError={(e) => { e.currentTarget.style.display = "none"; }} /> : null}
+              <span>{(identity.nickname || identity.username).slice(0, 1).toUpperCase()}</span>
+            </span>
             <span><strong>{identity.nickname || identity.username}</strong><small>{profile.is_admin ? "管理员" : "用户"}</small></span>
           </button>
           <IconButton label="退出登录" onClick={onLogout}><LogOut size={18} /></IconButton>
@@ -462,7 +461,13 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange, onWallpaperCha
             <IconButton className="topbar-layout-switch" label="切换到顶部栏" onClick={toggleLayout}><PanelTop size={19} /></IconButton>
             <IconButton className="mobile-page-shortcut" label="返回流量信息" onClick={() => navigate("dashboard")}><Activity size={18} /></IconButton>
             <IconButton label={themeLabel} onClick={toggleTheme}>{themeIcon}</IconButton>
-            <button type="button" className="topbar-account" aria-label="账户中心" title="账户中心" onClick={() => navigate("account")} onMouseEnter={() => preloadPageModule("account")}><span className="topbar-avatar">{(identity.nickname || identity.username).slice(0, 1).toUpperCase()}</span><span className="topbar-account-copy"><strong>{identity.nickname || identity.username}</strong><small>{profile.is_admin ? "管理员" : "用户"}</small></span></button>
+            <button type="button" className="topbar-account" aria-label="账户中心" title="账户中心" onClick={() => navigate("account")} onMouseEnter={() => preloadPageModule("account")}>
+              <span className="topbar-avatar">
+                {identity.avatar_url ? <img src={identity.avatar_url} alt="" onError={(e) => { e.currentTarget.style.display = "none"; }} /> : null}
+                <span>{(identity.nickname || identity.username).slice(0, 1).toUpperCase()}</span>
+              </span>
+              <span className="topbar-account-copy"><strong>{identity.nickname || identity.username}</strong><small>{profile.is_admin ? "管理员" : "用户"}</small></span>
+            </button>
           </div>
         </header>
         <main className={`page-content page-${page}`}>
@@ -474,7 +479,6 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange, onWallpaperCha
             <LazyPageBoundary pageKey={page}>
               <Suspense fallback={<ModuleLoadingFallback label={`正在载入${pageTitles[page] || "模块"}...`} />}>
                 {page === "dashboard" ? <DashboardPage profile={profile} navigate={navigate} canNavigateNodes={pageAllowed("nodes", profile.is_admin, userPages)} userPages={userPages} /> : null}
-                {page === "subscriptions" && pageAllowed(page, profile.is_admin, userPages) ? <SubscriptionLinksPage notify={notify} /> : null}
                 {page === "servers" && profile.is_admin ? <ServicesWorkbenchPage notify={notify} /> : null}
                 {page === "nodes" && pageAllowed(page, profile.is_admin, userPages) ? <NodesWorkbench isAdmin={profile.is_admin} notify={notify} /> : null}
                 {page === "forwarding" && pageAllowed(page, profile.is_admin, userPages) ? <ForwardingManagement isAdmin={profile.is_admin} currentUsername={profile.username} notify={notify} /> : null}
@@ -483,7 +487,7 @@ export function ConsoleApp({ profile, onLogout, onBrandingChange, onWallpaperCha
                 {page === "packages" && profile.is_admin ? <PackagesPage notify={notify} /> : null}
                 {page === "certificates" && pageAllowed(page, profile.is_admin, userPages) ? <CertificatesWorkbenchPage notify={notify} isAdmin={profile.is_admin} /> : null}
                 {page === "templates" && pageAllowed(page, profile.is_admin, userPages) ? <TemplatesWorkbenchPage notify={notify} /> : null}
-                {page === "subscribeFiles" && pageAllowed(page, profile.is_admin, userPages) ? <SubscribeFilesPage isAdmin={profile.is_admin} notify={notify} onOpenCustomRules={pageAllowed("customRules", profile.is_admin, userPages) ? () => navigate("customRules") : undefined} onOpenRulesConfig={pageAllowed("templates", profile.is_admin, userPages) ? () => navigate("templates") : undefined} /> : null}
+                {page === "subscribeFiles" && pageAllowed(page, profile.is_admin, userPages) ? <SubscribeFilesPage canManage={profile.is_admin || Boolean(userPages?.includes("subscribe-files"))} isAdmin={profile.is_admin} notify={notify} onOpenCustomRules={pageAllowed("customRules", profile.is_admin, userPages) ? () => navigate("customRules") : undefined} onOpenRulesConfig={pageAllowed("templates", profile.is_admin, userPages) ? () => navigate("templates") : undefined} /> : null}
                 {page === "customRules" && pageAllowed(page, profile.is_admin, userPages) ? <CustomRulesWorkbenchPage notify={notify} /> : null}
                 {page === "rulesConfig" && profile.is_admin ? <RulesConfigWorkbenchPage notify={notify} /> : null}
                 {page === "settings" && profile.is_admin ? <SettingsWorkbenchPage notify={notify} onBrandingChange={onBrandingChange} onWallpaperChange={onWallpaperChange} /> : null}
@@ -827,7 +831,6 @@ function UserDashboardPage({ profile, navigate, userPages }: { profile: Profile;
 
   const canNodes = pageAllowed("nodes", profile.is_admin, userPages);
   const canForwarding = pageAllowed("forwarding", profile.is_admin, userPages);
-  const canSubscriptions = pageAllowed("subscriptions", profile.is_admin, userPages);
   const canManageSubscriptions = pageAllowed("subscribeFiles", profile.is_admin, userPages);
 
   const load = useCallback(async () => {
@@ -977,7 +980,7 @@ function UserDashboardPage({ profile, navigate, userPages }: { profile: Profile;
         </Surface>
       ) : null}
 
-      {canSubscriptions && subUrl ? (
+      {canManageSubscriptions && subUrl ? (
         <Surface className="dashboard-sub-surface" style={{ padding: "1.25rem", marginBottom: "1rem" }}>
           <div className="surface-heading" style={{ marginBottom: "1rem" }}>
             <div>
@@ -1078,17 +1081,7 @@ function UserDashboardPage({ profile, navigate, userPages }: { profile: Profile;
           </Surface>
         ) : null}
 
-        {canSubscriptions ? (
-          <Surface style={{ padding: "1.1rem", cursor: "pointer" }} onClick={() => navigate("subscriptions")}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.5rem" }}>
-              <span style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 600, fontSize: "1rem" }}><Link2 size={20} color="var(--color-primary, #6366f1)" />订阅链接</span>
-              <ChevronRight size={18} className="muted" />
-            </div>
-            <p className="muted" style={{ fontSize: "0.86rem", margin: 0, lineHeight: 1.5 }}>
-              管理已开通的订阅 Token，查看客户端格式 URL 及历史导出记录。
-            </p>
-          </Surface>
-        ) : null}
+
       </div>
 
       {qrOpen ? (

@@ -491,7 +491,10 @@ export function UserPortal({
 
             <div className="mmw-user-badge">
               <div className="mmw-user-avatar">
-                {(profile.nickname || profile.username || "U").slice(0, 1).toUpperCase()}
+                {profile.avatar_url ? (
+                  <img src={profile.avatar_url} alt="" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+                ) : null}
+                <span>{(profile.nickname || profile.username || "U").slice(0, 1).toUpperCase()}</span>
               </div>
               <div className="mmw-user-info">
                 <span className="mmw-user-name">{profile.nickname || profile.username}</span>

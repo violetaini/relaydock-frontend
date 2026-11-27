@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { UserOverview, type OverviewData, type OverviewResource } from "./user-overview";
 
@@ -17,6 +17,25 @@ function show(overview: OverviewData | undefined = base, resources: OverviewReso
  return {onNavigate,onSettings,onAuthorize};
 }
 describe("single user key overview",()=>{
+ it.each([1,2,3])("shows a separate quota breakdown only for multiple configured layers (%s)",count=>{
+  const layers:NonNullable<OverviewData["quota_layers"]>=[
+   {key:"package",title:"套餐总量",total:1,items:[{kind:"package",id:2,name:"全球套餐",used:90,limit:500}]},
+   {key:"module",title:"模块额度",total:1,items:[{kind:"node",id:0,name:"节点模块",used:90,limit:100}]},
+   {key:"resource",title:"单独资源",total:1,items:[{kind:"node",id:4,name:"日本节点",used:90,limit:100}]},
+  ];
+  show({...base,quota_layers:layers.slice(0,count)});
+  if(count===1)expect(screen.queryByRole("region",{name:"分层用量"})).not.toBeInTheDocument();
+  else{
+   const region=screen.getByRole("region",{name:new RegExp("分层用量")});
+   expect(within(region).getAllByRole("progressbar")).toHaveLength(count);
+   expect(within(region).getByText("剩余 410 B")).toBeInTheDocument();
+  }
+ });
+ it("does not label a child unlimited when an ancestor quota applies",()=>{
+  show({...base,near_limit:0,limited_resources:1,top_usage:[{...resource,limit:0,limit_note:"受套餐总量额度约束"}]});
+  expect(screen.getByText("受套餐总量额度约束")).toBeInTheDocument();
+  expect(screen.getByLabelText("查看资源额度风险")).not.toHaveTextContent("不限额");
+ });
  it("shows key metrics and ranked consumption without repeating resource cards",()=>{
   show();
   for(const label of ["计费用量","最近到期","当前连接","额度风险","主要用量来源","需要关注"])expect(screen.getByText(label,{exact:true})).toBeInTheDocument();

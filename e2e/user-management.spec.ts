@@ -18,6 +18,11 @@ for (const viewport of [{ name: "desktop", width: 1440, height: 1050 }, { name: 
    "/api/user/profile": { username: "admin", nickname: "管理员", role: "admin", is_admin: true }, "/api/user/permissions": { pages: ["users"] },
    "/api/admin/users/management": { users, total: users.length, counts: { total: 3, active: 2 }, page: 1, pages: 1, matching_usernames: users.map(v => v.username), filter_options: { server: [{ id: 1, name: "香港 HKT" }], node: [{ id: 2, name: "日本专线" }], subscription: [{ id: 3, name: "全球优选" }], package: [{ id: 1, name: "全球优质加速套餐" }] } },
    "/api/admin/users/xiaofan/management": { overview: {
+    quota_layers:[
+     {key:"package",title:"套餐总量",total:1,items:[{kind:"package",id:1,name:"全球优质加速套餐",used:86.4*1024**3,limit:200*1024**3}]},
+     {key:"module",title:"模块额度",total:2,items:[{kind:"server",id:0,name:"服务器模块",used:72*1024**3,limit:100*1024**3},{kind:"node",id:0,name:"节点模块",used:14.4*1024**3,limit:50*1024**3}]},
+     {key:"resource",title:"单独资源",total:2,items:[{kind:"server",id:1,name:"香港 HKT",used:72*1024**3,limit:100*1024**3},{kind:"node",id:2,name:"日本专线",used:14.4*1024**3,limit:50*1024**3}]},
+    ],
     billed_bytes:users[0].traffic_used,activity:{connections:12,active_nodes:2,reported_at:"2026-11-27T04:00:00Z",reporting_servers:1,expected_servers:1,complete:true,max_age_seconds:90},
     expiry:{kind:"package",id:1,name:"全球优质加速套餐",at:"2026-12-02T12:00:00Z",days:5,expired:false},limited_resources:2,unlimited_resources:0,near_limit:0,over_limit:0,unconfirmed:0,billing_resources:2,
     alerts:[{code:"expiring",severity:"warn",kind:"package",id:1,name:"全球优质加速套餐",message:"将在 5 天内到期，请及时安排续期。",tab:"resources"}],top_usage:users[0].resources.filter(v=>v.kind!=="subscription")
@@ -75,6 +80,11 @@ for (const viewport of [{ name: "desktop", width: 1440, height: 1050 }, { name: 
  expect(await alertsPanel.locator(".uo-alert small").first().evaluate(el=>parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(13);
  expect(await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBeLessThanOrEqual(1);
  await page.screenshot({ path: info.outputPath("users-detail.png"), fullPage: false, animations: "disabled" });
+ const quotaSummary=dialog.getByRole("region",{name:/分层用量/});
+ await expect(quotaSummary).toBeVisible();
+ await expect(quotaSummary.getByRole("progressbar")).toHaveCount(5);
+ await quotaSummary.scrollIntoViewIfNeeded();
+ await page.screenshot({path:info.outputPath("users-tiered-quota.png"),fullPage:false,animations:"disabled"});
  await expect(dialog.getByRole("heading", {name:"小凡",exact:true})).toBeVisible();
  await expect(dialog.locator(".dialog-header")).toContainText("@xiaofan · xiaofan@example.com");
  await dialog.getByRole("tab",{name:"操作记录",exact:true}).click();

@@ -3,12 +3,17 @@ import { Activity, ArrowDownUp, ArrowUpRight, CalendarClock, CheckCircle2, Chevr
 import { Button, formatBytes } from "./ui";
 import "./user-overview.css";
 
-type Kind = "node" | "server" | "subscription" | "package";
+type Kind = "node" | "server" | "subscription" | "package" | "forwarding";
 export interface OverviewResource {
  kind: Kind; id: number; name: string; source: string; used: number; limit: number;
- reset: string; state: string; related: boolean; expires_at?: string; next_reset_at?: string;
+ limit_note?: string; reset: string; state: string; related: boolean; expires_at?: string; next_reset_at?: string;
+}
+export interface QuotaLayer {
+ key: "package" | "module" | "resource"; title: string; total: number;
+ items: {kind: Kind; id: number; name: string; used: number; limit: number; reset?: string}[];
 }
 export interface OverviewData {
+ quota_layers?: QuotaLayer[];
  billed_bytes: number;
  activity: { connections: number | null; active_nodes: number | null; reported_at?: string; reporting_servers: number; expected_servers: number; complete: boolean; max_age_seconds: number };
  expiry: { kind: Kind; id: number; name: string; at: string; days: number; expired: boolean } | null;
@@ -52,6 +57,7 @@ export function UserOverview({ user, resources, overview, asOf, receivedAt, onNa
  const alerts = overview?.alerts || [];
  const visibleAlerts = expandedAlerts ? alerts : alerts.slice(0, 4);
  const topUsage = overview?.top_usage || [];
+ const quotaLayers = overview?.quota_layers || [];
  const riskCount = (overview?.near_limit || 0) + (overview?.over_limit || 0);
  const hasServices = resources.length > 0;
  const serverCount = new Set(resources.filter(v => v.kind === "server").map(v => v.id)).size;
@@ -93,6 +99,8 @@ export function UserOverview({ user, resources, overview, asOf, receivedAt, onNa
    <button className="um-text-button" onClick={() => onNavigate("resources")}>查看授权 <ChevronRight size={14}/></button>
   </div>
 
+  {quotaLayers.length > 1 && <section className="uo-quota-summary" aria-labelledby="uo-quota-title"><div className="uo-quota-heading"><h3 id="uo-quota-title">分层用量 <span>{quotaLayers.length} 层额度</span></h3><p>各层限额分别生效，用量不跨层累加</p></div><div className="uo-quota-layers">{quotaLayers.map(layer=><QuotaLayerCard key={layer.key} layer={layer} onNavigate={onNavigate}/>)}</div></section>}
+
   <div className={`uo-panels ${alerts.length ? "has-alerts" : ""}`}>
    <section className="uo-panel uo-usage-panel" aria-labelledby="uo-usage-title">
     <div className="uo-panel-heading"><div><h3 id="uo-usage-title">主要用量来源</h3><p>按各资源当前周期用量排序</p></div><button className="um-text-button" onClick={() => onNavigate("traffic")}>流量明细 <ArrowUpRight size={14}/></button></div>
@@ -101,7 +109,7 @@ export function UserOverview({ user, resources, overview, asOf, receivedAt, onNa
      return <li key={`${resource.kind}-${resource.id}`}>
       <button className="uo-rank-item" onClick={() => onNavigate("traffic", resource.kind)} aria-label={`查看 ${resource.name} 的用量`}>
        <span className="uo-rank-number">{String(index + 1).padStart(2, "0")}</span><span className="uo-rank-icon"><Icon size={17}/></span>
-       <span className="uo-rank-content"><span className="uo-rank-line"><strong title={resource.name}>{resource.name}</strong><span>{formatBytes(resource.used)}</span></span>{resource.limit > 0 && <span className="uo-rank-bar" aria-hidden="true"><i style={{ width: `${Math.min(100, Math.max(0, resource.used / resource.limit * 100))}%` }}/></span>}<span className="uo-rank-detail"><span>{resource.kind === "server" ? "服务器授权" : "固定节点"} · {resource.reset}</span><span>{resource.limit > 0 ? `额度 ${formatBytes(resource.limit)}` : "不限额"}</span></span></span><ChevronRight size={14}/>
+       <span className="uo-rank-content"><span className="uo-rank-line"><strong title={resource.name}>{resource.name}</strong><span>{formatBytes(resource.used)}</span></span>{resource.limit > 0 && <span className="uo-rank-bar" aria-hidden="true"><i style={{ width: `${Math.min(100, Math.max(0, resource.used / resource.limit * 100))}%` }}/></span>}<span className="uo-rank-detail"><span>{resource.kind === "server" ? "服务器授权" : resource.kind === "forwarding" ? "转发授权" : "固定节点"} · {resource.reset}</span><span>{resource.limit > 0 ? `额度 ${formatBytes(resource.limit)}` : resource.limit_note || "不限额"}</span></span></span><ChevronRight size={14}/>
       </button>
      </li>;
     })}</ol> : <div className="uo-panel-empty"><span><Layers3 size={25}/></span><strong>{hasServices ? "暂无可展示的用量来源" : "还没有分配服务"}</strong><p>{hasServices ? "产生可归属到当前授权的流量后，会展示主要消耗来源。" : "为这个用户添加节点、服务器、订阅或套餐。"}</p>{!hasServices && <Button onClick={onAuthorize}>添加授权</Button>}</div>}
@@ -119,4 +127,24 @@ export function UserOverview({ user, resources, overview, asOf, receivedAt, onNa
   <div className="uo-context"><div><span>额度重置</span><strong title={resetLabels.join("；")}>{resetLabels.length === 0 ? "跟随资源设置" : resetLabels.length === 1 ? resetLabels[0] : "各资源分别重置"}</strong></div><div><span>数据更新</span><strong>{clockTime(asOf)}</strong></div><div><span>连接上报</span><strong>{activity?.reported_at ? clockTime(activity.reported_at) : "暂无近期上报"}</strong></div></div>
   <details className="uo-accounting-note"><summary><Info size={14}/>统计口径<ChevronDown size={13}/></summary><p>计费用量按用户计费记录汇总；排行按各资源自身周期统计，周期可能不同。服务器内所选节点、订阅及套餐的关联用量不重复累加。连接仅采用最近 {activity?.max_age_seconds || 90} 秒的上报，连接数不等于设备数；部分服务器未上报时，仅显示已知连接。{expiry && ` 最近到期：${fullDate(expiry.at)}。`}</p></details>
  </div>;
+}
+
+function QuotaLayerCard({layer,onNavigate}:{layer:QuotaLayer;onNavigate:Props["onNavigate"]}) {
+ const [expanded,setExpanded]=useState(false);
+ const visible=expanded?layer.items:layer.items.slice(0,3);
+ const Icon=layer.key==="package"?Package:layer.key==="module"?Layers3:ShieldCheck;
+ return <article className={`uo-quota-layer is-${layer.key}`}>
+  <div className="uo-quota-layer-title"><span><Icon size={17}/>{layer.title}</span><small>{layer.items.length} 项限额</small></div>
+  <div className="uo-quota-items">{visible.map(item=>{
+   const ratio=item.limit>0?item.used/item.limit:0;
+   return <button className={`uo-quota-item ${ratio>=1?"is-full":ratio>=.8?"is-near":""}`} key={`${item.kind}-${item.id}`} onClick={()=>onNavigate("traffic",item.kind)} aria-label={`查看${item.name}额度`}>
+    <span className="uo-quota-item-name"><strong title={item.name}>{item.name}</strong><ChevronRight size={13}/></span>
+    <span className="uo-quota-amount"><strong>{formatBytes(item.used)}</strong><span>/ {formatBytes(item.limit)}</span></span>
+    <span className="uo-quota-progress" role="progressbar" aria-label={`${item.name}额度使用率`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(100,Math.round(ratio*100))}><i style={{width:`${Math.min(100,Math.max(0,ratio*100))}%`}}/></span>
+    <span className="uo-quota-remaining">{ratio>=1?`已超出 ${formatBytes(Math.max(0,item.used-item.limit))}`:`剩余 ${formatBytes(Math.max(0,item.limit-item.used))}`}<span>{(ratio*100).toFixed(1)}%</span></span>
+   </button>;
+  })}</div>
+  {layer.items.length>3&&<button className="uo-quota-expand" onClick={()=>setExpanded(!expanded)}>{expanded?"收起明细":`展开其余 ${layer.items.length-3} 项`}<ChevronDown size={13}/></button>}
+  <p className="uo-quota-layer-note">{layer.key==="package"?"汇总节点、服务器和转发模块用量":layer.key==="module"?"模块额度耗尽时，该模块内资源受限":`${layer.total} 项资源中，${layer.items.length} 项设有单独限额`}</p>
+ </article>;
 }

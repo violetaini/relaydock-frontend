@@ -363,7 +363,7 @@ function ProfilePanel({ notify, refreshKey }: { notify: Notify; refreshKey: numb
               <div className="input-with-icon"><Mail size={16} /><input type="email" autoComplete="email" value={draft.email} onChange={(event) => setDraft({ ...draft, email: event.target.value })} /></div>
             </Field>
             <Field label="头像 URL">
-              <div className="input-with-icon">
+              <div className="input-with-icon input-with-action">
                 <Image size={16} />
                 <input aria-label="头像 URL" type="url" inputMode="url" placeholder="https://example.com/avatar.png" value={draft.avatar_url} onChange={(event) => setDraft({ ...draft, avatar_url: event.target.value })} />
                 <button

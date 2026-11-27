@@ -1,7 +1,7 @@
 .account-workbench {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: start;
+  align-items: stretch;
   gap: 20px;
 }
 
@@ -9,6 +9,8 @@
   min-width: 0;
   min-height: 220px;
   padding: 24px;
+  display: flex;
+  flex-direction: column;
 }
 
 .account-api-panel,
@@ -42,7 +44,12 @@
   color: var(--text-soft);
 }
 
-.account-form { display: flex; flex-direction: column; gap: 15px; }
+.account-form {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  flex: 1;
+}
 .account-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 
 .account-identity {
@@ -182,35 +189,66 @@
   flex-wrap: wrap;
 }
 
-.input-inline-action {
-  flex: none;
+.input-with-action {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.input-with-action input {
+  width: 100%;
+  padding-right: 74px !important;
+}
+
+.input-with-action .input-inline-action {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 5px 10px;
-  margin-right: 4px;
-  font-size: 12px;
+  height: 26px;
+  padding: 0 8px;
+  margin: 0;
+  font-size: 11px;
   color: var(--text-soft);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm, 4px);
   cursor: pointer;
+  white-space: nowrap;
   transition: all 0.15s ease;
 }
 
-.input-inline-action:hover:not(:disabled) {
+.input-with-action .input-inline-action:hover:not(:disabled) {
   color: var(--text);
   border-color: var(--accent);
   background: var(--surface-muted);
 }
 
-.input-inline-action:disabled {
+.input-with-action .input-inline-action:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
 
-.account-panel-actions { display: flex; justify-content: flex-end; gap: 9px; }
-.account-password-footer { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.account-panel-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: auto;
+  padding-top: 8px;
+}
+
+.account-password-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 8px;
+}
+
 .account-password-footer > .icon-button { border-color: var(--border); background: var(--surface-muted); }
 
 .account-copy-field {

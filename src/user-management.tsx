@@ -5,6 +5,7 @@ import { CreateUserDialog, UserSettingsDialog, type ManagedUser, type UsersScope
 import { TGBotInvitesPanel } from "./tg-bot-invites";
 import { Badge, Button, ConfirmDialog, Dialog, EmptyState, ErrorState, Field, IconButton, PageHeader, Spinner, Surface, Toggle, formatBytes } from "./ui";
 import "./user-management.css";
+import { UserOverview, type OverviewData } from "./user-overview";
 
 type Notify = (message: string, tone?: "success" | "error") => void;
 type Kind = "node" | "server" | "subscription" | "package";
@@ -14,7 +15,7 @@ type User = ManagedUser & { created_at?: string; nearest_expiry?: string; resour
 type Listing = { users: User[]; total: number; page: number; pages: number; matching_usernames: string[]; counts: { total: number; active: number }; filter_options: Partial<Record<Kind, Option[]>> };
 type Filters = { status: string; sort: string; from: string; to: string; node: number[]; server: number[]; subscription: number[]; package: number[] };
 type ResourceUsage = Resource & { used: number; limit: number; reset: string; updated_at?: string; related: boolean; note?: string };
-type Detail = { user: User; resources: ResourceUsage[]; records: { actor: string; action: string; kind: string; at: string }[]; as_of: string; usage_note: string };
+type Detail = { received_at?: number; overview?: OverviewData; user: User; resources: ResourceUsage[]; records: { actor: string; action: string; kind: string; at: string }[]; as_of: string; usage_note: string };
 type BatchResult = { username: string; status: string; error?: string; warnings?: string[] };
 const labels: Record<Kind, string> = { node: "节点", server: "服务器", subscription: "订阅", package: "套餐" };
 const icons = { node: ShieldCheck, server: Server, subscription: Link2, package: Package };
@@ -24,7 +25,7 @@ const kinds: Kind[] = ["package", "server", "subscription", "node"];
 function message(reason: unknown) { return reason instanceof Error ? reason.message : "操作失败，请重试"; }
 function date(value?: string) { if (!value) return "未设置"; const v = new Date(value); return Number.isFinite(v.getTime()) ? v.toLocaleDateString("zh-CN") : "未设置"; }
 function source(value: string) { return value === "package" ? "套餐授权" : value === "server" ? "服务器授权" : "直接授权"; }
-function state(value: string) { return ({ invalid: "来源失效", expired: "已到期", user_disabled: "账号停用", scheduled: "尚未生效", quota_exceeded: "额度已用尽", active: "已生效", authorized: "已授权", inactive: "已暂停", unknown: "等待下发", suspended: "已暂停" } as Record<string, string>)[value] || "待同步"; }
+function state(value: string) { return ({ invalid: "来源失效", expired: "已到期", user_disabled: "账号停用", scheduled: "尚未生效", quota_exceeded: "额度已用尽", active: "已生效", authorized: "已授权", inactive: "已暂停", unknown: "待确认", over_limit: "额度已用尽", suspended: "已暂停" } as Record<string, string>)[value] || "待同步"; }
 function deadline(user: User) { return user.nearest_expiry || user.package_end_date; }
 
 export function UserManagementPage({ notify, initialScope = "all" }: { notify: Notify; initialScope?: UsersScope }) {
@@ -85,7 +86,7 @@ export function UserManagementPage({ notify, initialScope = "all" }: { notify: N
   </>}
   {create && <CreateUserDialog notify={notify} onClose={() => setCreate(false)} onComplete={async text => { setCreate(false); await afterMutation(text); }}/ >}
   {settings && <UserSettingsDialog user={settings} notify={notify} working={working === settings.username} onClose={() => setSettings(null)} onComplete={async (text, tone) => { const refreshed = await afterMutation(text, tone); setSettings(current => refreshed?.users.find(user => user.username === current?.username) || current); }} onToggleStatus={() => toggleStatus(settings)} onDelete={() => { setPendingDelete(settings); setSettings(null); }}/ >}
-  {detail && <UserDetail user={detail} onClose={() => setDetail(null)} onSettings={() => { setSettings(detail); setDetail(null); }} onAuthorize={() => { setSelected([detail.username]); setDetail(null); setBatch(true); }}/ >}
+  {detail && <UserDetail user={detail} onClose={() => setDetail(null)} onSettings={(latestUser) => { setSettings(latestUser || detail); setDetail(null); }} onAuthorize={() => { setSelected([detail.username]); setDetail(null); setBatch(true); }}/ >}
   {batch && <UserBatchDialog usernames={selected} onClose={() => setBatch(false)} onComplete={async failed => { setBatch(false); await load(); setSelected(failed); }}/ >}
   {pendingDelete && <ConfirmDialog title="删除用户" description={`确认删除 ${pendingDelete.username}？节点凭据、授权和登录数据都会清理，无法撤销。`} confirmLabel="确认删除" working={working === pendingDelete.username} onCancel={() => setPendingDelete(null)} onConfirm={() => void remove()}/ >}
  </>;
@@ -96,13 +97,24 @@ function MultiFilter({ label, options, values, onChange }: { label: string; opti
  return <details className="um-multi"><summary>{label}<span>{values.length ? `已选 ${values.length}` : "全部"}</span><ChevronRight size={14}/></summary><div className="um-multi-menu"><input aria-label={`搜索${label}`} placeholder={`搜索${label}`} value={search} onChange={e => setSearch(e.target.value)}/><div>{options.filter(v => v.name.toLowerCase().includes(search.toLowerCase())).map(v => <label key={v.id}><input type="checkbox" checked={values.includes(v.id)} onChange={() => onChange(values.includes(v.id) ? values.filter(id => id !== v.id) : [...values, v.id])}/>{v.name}</label>)}{!options.length && <small>暂无可筛选的{label}</small>}</div>{values.length > 0 && <button className="um-text-button" onClick={() => onChange([])}>清空已选</button>}</div></details>;
 }
 
-function UserDetail({ user, onClose, onSettings, onAuthorize }: { user: User; onClose: () => void; onSettings: () => void; onAuthorize: () => void }) {
+function UserDetail({ user, onClose, onSettings, onAuthorize }: { user: User; onClose: () => void; onSettings: (latestUser?: User) => void; onAuthorize: () => void }) {
  const [tab, setTab] = useState("overview"), [data, setData] = useState<Detail | null>(null), [error, setError] = useState(""), [attempt, setAttempt] = useState(0), [kind, setKind] = useState("all");
- useEffect(() => { let canceled = false; setError(""); setData(null); api.get<Detail>(`/api/admin/users/${encodeURIComponent(user.username)}/management`).then(v => { if (!canceled) setData(v); }, reason => { if (!canceled) setError(message(reason)); }); return () => { canceled = true; }; }, [user.username, attempt]);
- const resources = data?.resources || [];
- return <Dialog title={user.nickname || user.username} description={user.email || user.username} onClose={onClose} extraWide><div className="um-detail"><div className="um-detail-actions"><Badge tone={user.is_active ? "good" : "neutral"}>{user.is_active ? "已启用" : "已停用"}</Badge><span>注册于 {date(user.created_at)}</span><Button variant="secondary" onClick={onSettings}><Pencil size={15}/>账户设置</Button><Button onClick={onAuthorize}><Plus size={16}/>管理授权</Button></div><div className="um-detail-tabs" role="tablist">{[["overview", "概览"], ["resources", "授权资源"], ["traffic", "流量明细"], ["records", "操作记录"]].map(([value, label]) => <button key={value} role="tab" aria-selected={tab === value} className={tab === value ? "is-active" : ""} onClick={() => setTab(value)}>{label}</button>)}</div>
- {error ? <ErrorState message={error} onRetry={() => setAttempt(v => v + 1)}/> : !data ? <div className="center-state"><Spinner label="正在加载用户详情"/></div> : <div role="tabpanel" className="um-detail-body">
- {tab === "overview" && <><div className="um-detail-stats"><div><small>用户计费用量</small><strong>{formatBytes(data.user.traffic_used || 0)}</strong><span>按用户计费记录汇总</span></div><div><small>当前服务</small><strong>{data.user.package_name || "独立授权"}</strong><span>{resources.filter(v => v.kind === "server").length} 服务器 · {resources.filter(v => v.kind === "node").length} 节点</span></div><div><small>订阅分配</small><strong>{resources.filter(v => v.kind === "subscription").length}<em> 份</em></strong><span>使用用户自己的节点凭据</span></div></div><p className="um-info"><CircleAlert size={16}/>{data.usage_note}</p><div className="um-section-heading"><strong>授权概览</strong><button className="um-text-button" onClick={() => setTab("resources")}>查看全部 <ChevronRight size={14}/></button></div>{resources.length ? <div className="um-overview-resources">{resources.slice(0, 6).map(v => <ResourceCard key={`${v.kind}-${v.id}`} resource={v}/>)}</div> : <EmptyState icon={<ShieldCheck size={24}/>} title="尚未分配服务" description="授权节点、服务器、订阅或分配套餐。" action={<Button onClick={onAuthorize}>添加授权</Button>}/>}</>}
+ useEffect(() => {
+  const controller = new AbortController(); let canceled = false, inFlight = false;
+  setError(""); setData(null);
+  const refresh = async () => {
+   if (inFlight) return; inFlight = true; setData(current => current ? {...current} : current);
+   try { const next = await api.get<Detail>(`/api/admin/users/${encodeURIComponent(user.username)}/management`, { signal: controller.signal, skipCache: true }); if (!canceled) { setData({...next,received_at:Date.now()}); setError(""); } }
+   catch (reason) { if (!canceled) setError(message(reason)); }
+   finally { inFlight = false; }
+  };
+  void refresh(); const whenVisible = () => {if(!document.hidden)void refresh();};const timer = window.setInterval(whenVisible,15_000);document.addEventListener("visibilitychange",whenVisible);
+  return () => { canceled = true; controller.abort(); window.clearInterval(timer);document.removeEventListener("visibilitychange",whenVisible); };
+ }, [user.username, attempt]);
+ const resources = data?.resources || [];const shownUser = data?.user || user;
+ return <Dialog title={shownUser.nickname || shownUser.username} description={shownUser.email || shownUser.username} onClose={onClose} extraWide><div className="um-detail"><div className="um-detail-actions"><Badge tone={shownUser.is_active ? "good" : "neutral"}>{shownUser.is_active ? "已启用" : "已停用"}</Badge><span>注册于 {date(user.created_at)}</span><IconButton label="刷新用户详情" onClick={() => setAttempt(v => v + 1)}><RefreshCw size={16}/></IconButton><Button variant="secondary" onClick={() => onSettings(shownUser)}><Pencil size={15}/>账户设置</Button><Button onClick={onAuthorize}><Plus size={16}/>管理授权</Button></div><div className="um-detail-tabs" role="tablist">{[["overview", "概览"], ["resources", "授权资源"], ["traffic", "流量明细"], ["records", "操作记录"]].map(([value, label]) => <button key={value} role="tab" aria-selected={tab === value} className={tab === value ? "is-active" : ""} onClick={() => {setTab(value);if(value === "resources" || value === "traffic")setKind("all");}}>{label}</button>)}</div>
+ {error && <ErrorState message={error} onRetry={() => setAttempt(v => v + 1)}/ >}{!data ? error ? null : <div className="center-state"><Spinner label="正在加载用户详情"/></div> : <div role="tabpanel" className="um-detail-body">
+ {tab === "overview" && <UserOverview user={data.user} resources={resources} overview={data.overview} asOf={data.as_of} receivedAt={data.received_at} onNavigate={(next,selectedKind) => {setTab(next);setKind(selectedKind || "all");}} onSettings={() => onSettings(shownUser)} onAuthorize={onAuthorize}/>}
  {(tab === "resources" || tab === "traffic") && <><div className="um-detail-filter"><div className="um-kind-tabs">{[["all", "全部"], ...kinds.map(v => [v, labels[v]])].map(([value, label]) => <button key={value} className={kind === value ? "is-active" : ""} onClick={() => setKind(value)}>{label}</button>)}</div><small className="um-muted">更新于 {new Date(data.as_of).toLocaleTimeString("zh-CN")}</small></div>{tab === "traffic" && <p className="um-info"><Layers3 size={16}/>服务器包含其下所选节点；订阅显示关联用量。套餐及关联项不再累加到用户总量。</p>}<div className="um-resource-table">{resources.filter(v => kind === "all" || kind === v.kind).map(v => <ResourceCard key={`${v.kind}-${v.id}`} resource={v} detailed/>)}{!resources.filter(v => kind === "all" || kind === v.kind).length && <EmptyState icon={<Layers3 size={24}/>} title="暂无此类授权"/>}</div></>}
  {tab === "records" && <><p className="um-muted">最近 100 条授权操作。历史版本未记录的操作不会补造记录。</p>{data.records.length ? <div className="um-records">{data.records.map((v, i) => <div key={i}><span className="um-record-dot"/><span><strong>{auditAction(v.action)}</strong><small>{v.actor} · {labels[v.kind as Kind] || v.kind}</small></span><time>{new Date(v.at).toLocaleString("zh-CN")}</time></div>)}</div> : <EmptyState icon={<CalendarDays size={24}/>} title="暂无操作记录"/>}</>}
  </div>}</div></Dialog>;

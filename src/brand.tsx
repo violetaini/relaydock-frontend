@@ -64,7 +64,11 @@ export function applyBrandingDocument(value: Partial<Branding> | null | undefine
   if (typeof document === "undefined") return;
   const branding = normalizeBranding(value);
   document.title = `${branding.name} Console`;
- document.documentElement.dataset.fontPreset=branding.font_preset||"default";
+  const fontPreset = branding.font_preset || "default";
+  document.documentElement.dataset.fontPreset = fontPreset;
+  try {
+    localStorage.setItem("arcway-font-preset", fontPreset);
+  } catch {}
 
   let favicon = document.querySelector<HTMLLinkElement>("#app-favicon");
   if (!favicon) {

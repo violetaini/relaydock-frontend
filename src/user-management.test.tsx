@@ -44,7 +44,7 @@ describe("ordinary user management", () => {
   render(<UserManagementPage notify={vi.fn()}/>);
   fireEvent.click(await screen.findByRole("button", { name: /Alice.*alice@example/ }));
   const dialog = screen.getByRole("dialog");
-  await within(dialog).findByText("1.0 KB");
+  expect(await within(dialog).findByRole("button", {name:"查看用户流量明细"})).toHaveTextContent(/1\.0\s*KB/);
   fireEvent.click(within(dialog).getByRole("tab", { name: "流量明细" }));
   expect(await within(dialog).findByText(/共享凭据无法区分/)).toBeInTheDocument();
   expect(within(dialog).getAllByRole("progressbar")).toHaveLength(1);

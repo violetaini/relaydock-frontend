@@ -17,6 +17,25 @@ const publicProbeRefreshIntervalMs = 1_000;
 const preloadRecoveryKey = "arcway-preload-recovery-at";
 const preloadRecoveryWindowMs = 60_000;
 const PROBE_CACHE_KEY = "arcway-public-probe-cache";
+const BRANDING_CACHE_KEY = "arcway-branding-cache";
+
+function loadCachedBranding(): Branding {
+  if (typeof window !== "undefined") {
+    try {
+      const saved = localStorage.getItem(BRANDING_CACHE_KEY);
+      if (saved) {
+        return normalizeBranding(JSON.parse(saved));
+      }
+      const savedFont = localStorage.getItem("arcway-font-preset");
+      if (savedFont) {
+        return { ...DEFAULT_BRANDING, font_preset: savedFont };
+      }
+    } catch {
+      // Ignore corrupted cache.
+    }
+  }
+  return { ...DEFAULT_BRANDING, font_preset: "classic-serif" };
+}
 
 function loadCachedProbe(): PublicProbeState {
   if (typeof window !== "undefined") {
@@ -147,7 +166,7 @@ export function App() {
   const [wallpaper, setWallpaper] = useState("");
   const [logoutNotice, setLogoutNotice] = useState("");
   const [probe, setProbe] = useState<PublicProbeState>(loadCachedProbe);
-  const [branding, setBranding] = useState<Branding>(DEFAULT_BRANDING);
+  const [branding, setBranding] = useState<Branding>(loadCachedBranding);
   const [brandingReady, setBrandingReady] = useState(false);
 
   const bootstrap = useCallback(async () => {
@@ -253,7 +272,12 @@ export function App() {
       api.get<{ login_wallpaper?: string }>("/api/public/login-wallpaper").catch(() => ({ login_wallpaper: "" })),
     ]).then(([response, wallpaperResponse]) => {
       if (cancelled) return;
-      setBranding(publicBrandingFrame(response));
+      const nextBranding = publicBrandingFrame(response);
+      setBranding(nextBranding);
+      try {
+        localStorage.setItem(BRANDING_CACHE_KEY, JSON.stringify(nextBranding));
+        localStorage.setItem("arcway-font-preset", nextBranding.font_preset || "default");
+      } catch {}
       setWallpaper(wallpaperResponse.login_wallpaper?.trim() ?? "");
       setBrandingReady(true);
     });

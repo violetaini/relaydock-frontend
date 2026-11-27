@@ -99,6 +99,7 @@ interface PackageFormState {
   nodeModuleTrafficLimitGB: string;
   serverModuleTrafficLimitGB: string;
   forwardingModuleTrafficLimitGB: string;
+  subscribeModuleTrafficLimitGB: string;
   cycleDays: string;
   deviceLimit: string;
   trafficMode: "oneway" | "twoway";
@@ -106,6 +107,10 @@ interface PackageFormState {
   resetDay: string;
   nodes: number[];
   subscribeFileIds: number[];
+  subscribeMultipliers: Record<string, string>;
+  subscribeTrafficLimits: Record<string, string>;
+  subscribeSpeedLimits: Record<string, string>;
+  subscribeDeviceLimits: Record<string, string>;
   templateFilename: string;
   nodeMultipliers: Record<string, string>;
   nodeTrafficLimits: Record<string, string>;
@@ -141,6 +146,7 @@ function initialPackageForm(item: PackageItem | undefined, tunnels: TunnelTempla
     nodeModuleTrafficLimitGB: formatLimitGBValue(item?.node_module_traffic_limit_gb),
     serverModuleTrafficLimitGB: formatLimitGBValue(item?.server_module_traffic_limit_gb),
     forwardingModuleTrafficLimitGB: formatLimitGBValue(item?.forwarding_module_traffic_limit_gb),
+    subscribeModuleTrafficLimitGB: formatLimitGBValue(item?.subscribe_module_traffic_limit_gb),
     cycleDays: String(item?.cycle_days ?? 30),
     deviceLimit: String(item?.device_limit ?? 0),
     trafficMode: item?.traffic_mode === "twoway" ? "twoway" : "oneway",
@@ -148,6 +154,10 @@ function initialPackageForm(item: PackageItem | undefined, tunnels: TunnelTempla
     resetDay: String(item?.reset_day || 1),
     nodes: [...(item?.nodes ?? [])],
     subscribeFileIds: [...(item?.subscribe_file_ids ?? [])],
+    subscribeMultipliers: Object.fromEntries(Object.entries(item?.subscribe_multipliers ?? {}).map(([key, value]) => [key, String(value)])),
+    subscribeTrafficLimits: Object.fromEntries(Object.entries(item?.subscribe_traffic_limits ?? {}).map(([key, value]) => [key, String(value)])),
+    subscribeSpeedLimits: Object.fromEntries(Object.entries(item?.subscribe_speed_limits ?? {}).map(([key, value]) => [key, String(value)])),
+    subscribeDeviceLimits: Object.fromEntries(Object.entries(item?.subscribe_device_limits ?? {}).map(([key, value]) => [key, String(value)])),
     templateFilename: item?.template_filename ?? "",
     nodeMultipliers: Object.fromEntries(Object.entries(item?.node_multipliers ?? {}).map(([key, value]) => [key, String(value)])),
     nodeTrafficLimits: Object.fromEntries(Object.entries(item?.node_traffic_limits ?? {}).map(([key, value]) => [key, String(value)])),
@@ -166,10 +176,11 @@ function initialPackageForm(item: PackageItem | undefined, tunnels: TunnelTempla
 
 function packagePayload(form: PackageFormState, original?: PackageItem): Record<string, unknown> {
   const selected = new Set(form.nodes.map(String));
-  const numericMap = (source: Record<string, string>) => Object.fromEntries(
+  const selectedSubs = new Set(form.subscribeFileIds.map(String));
+  const numericMap = (source: Record<string, string>, allowed: Set<string>) => Object.fromEntries(
     Object.entries(source)
-      .filter(([nodeID, value]) => selected.has(nodeID) && value !== "")
-      .map(([nodeID, value]) => [nodeID, Number(value)]),
+      .filter(([id, value]) => allowed.has(id) && value !== "")
+      .map(([id, value]) => [id, Number(value)]),
   );
   const payload: Record<string, unknown> = {
     name: form.name.trim(),
@@ -178,16 +189,21 @@ function packagePayload(form: PackageFormState, original?: PackageItem): Record<
     node_module_traffic_limit_gb: Number(form.nodeModuleTrafficLimitGB || 0),
     server_module_traffic_limit_gb: Number(form.serverModuleTrafficLimitGB || 0),
     forwarding_module_traffic_limit_gb: Number(form.forwardingModuleTrafficLimitGB || 0),
+    subscribe_module_traffic_limit_gb: Number(form.subscribeModuleTrafficLimitGB || 0),
     cycle_days: Number(form.cycleDays),
     is_reset: true,
     node_traffic_reset_period: form.nodeTrafficResetPeriod,
     reset_day: Number(form.resetDay),
     nodes: form.nodes,
     subscribe_file_ids: form.subscribeFileIds,
-    node_multipliers: numericMap(form.nodeMultipliers),
-    node_traffic_limits: numericMap(form.nodeTrafficLimits),
-    node_speed_limits: numericMap(form.nodeSpeedLimits),
-    node_device_limits: numericMap(form.nodeDeviceLimits),
+    subscribe_multipliers: numericMap(form.subscribeMultipliers, selectedSubs),
+    subscribe_traffic_limits: numericMap(form.subscribeTrafficLimits, selectedSubs),
+    subscribe_speed_limits: numericMap(form.subscribeSpeedLimits, selectedSubs),
+    subscribe_device_limits: numericMap(form.subscribeDeviceLimits, selectedSubs),
+    node_multipliers: numericMap(form.nodeMultipliers, selected),
+    node_traffic_limits: numericMap(form.nodeTrafficLimits, selected),
+    node_speed_limits: numericMap(form.nodeSpeedLimits, selected),
+    node_device_limits: numericMap(form.nodeDeviceLimits, selected),
     speed_limit_mbps: 0,
     device_limit: Number(form.deviceLimit),
     auto_speed_rules: [],
@@ -661,6 +677,7 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
 
   const totalGB = Number(form.trafficLimitGB || 0);
   const nodeModGB = Number(form.nodeModuleTrafficLimitGB || 0);
+  const subModGB = Number(form.subscribeModuleTrafficLimitGB || 0);
   const serverModGB = Number(form.serverModuleTrafficLimitGB || 0);
   const forwardModGB = Number(form.forwardingModuleTrafficLimitGB || 0);
 
@@ -670,12 +687,14 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
   };
 
   const nodeMaxGB = smallestPositive(totalGB, nodeModGB);
+  const subMaxGB = smallestPositive(totalGB, subModGB);
   const serverMaxGB = smallestPositive(totalGB, serverModGB);
   const forwardMaxGB = smallestPositive(totalGB, forwardModGB);
 
   const hierarchyError = useMemo(() => {
     if (totalGB > 0) {
       if (nodeModGB > totalGB) return `节点模块总流量（${nodeModGB} GB）不能高于套餐总流量（${totalGB} GB）`;
+      if (subModGB > totalGB) return `订阅模块总流量（${subModGB} GB）不能高于套餐总流量（${totalGB} GB）`;
       if (serverModGB > totalGB) return `服务器模块总流量（${serverModGB} GB）不能高于套餐总流量（${totalGB} GB）`;
       if (forwardModGB > totalGB) return `转发模块总流量（${forwardModGB} GB）不能高于套餐总流量（${totalGB} GB）`;
     }
@@ -684,6 +703,13 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
       if (nodeGB > 0) {
         if (nodeModGB > 0 && nodeGB > nodeModGB) return `单个固定节点流量（${nodeGB} GB）不能高于节点模块总流量（${nodeModGB} GB）`;
         if (totalGB > 0 && nodeGB > totalGB) return `单个固定节点流量（${nodeGB} GB）不能高于套餐总流量（${totalGB} GB）`;
+      }
+    }
+    for (const subID of form.subscribeFileIds) {
+      const subGB = Number(form.subscribeTrafficLimits[String(subID)] || 0);
+      if (subGB > 0) {
+        if (subModGB > 0 && subGB > subModGB) return `单个关联订阅流量（${subGB} GB）不能高于订阅模块总流量（${subModGB} GB）`;
+        if (totalGB > 0 && subGB > totalGB) return `单个关联订阅流量（${subGB} GB）不能高于套餐总流量（${totalGB} GB）`;
       }
     }
     for (const grant of form.serverGrants) {
@@ -701,7 +727,7 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
       }
     }
     return "";
-  }, [totalGB, nodeModGB, serverModGB, forwardModGB, form.nodes, form.nodeTrafficLimits, form.serverGrants, form.forwardingGrants]);
+  }, [totalGB, nodeModGB, subModGB, serverModGB, forwardModGB, form.nodes, form.nodeTrafficLimits, form.subscribeFileIds, form.subscribeTrafficLimits, form.serverGrants, form.forwardingGrants]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -870,23 +896,41 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
             </div>
           </summary>
           <div className="package-module-body">
+            <Field label="订阅模块总流量 GB" hint="0 表示不限；耗尽后仅停用关联订阅模块，须 ≤ 套餐总流量"><input aria-label="订阅模块总流量 GB" type="number" min="0" max={totalGB > 0 ? totalGB : undefined} step="0.01" value={form.subscribeModuleTrafficLimitGB} onChange={(event) => setForm({ ...form, subscribeModuleTrafficLimitGB: event.target.value })} /></Field>
             <Field label="筛选订阅">
               <input value={subSearch} onChange={(event) => setSubSearch(event.target.value)} placeholder="订阅名称、文件名或备注" />
             </Field>
-            <div className="preview-list">
-              {visibleSubs.map((sub) => (
-                <div key={sub.id}>
-                  <label className="checkbox-row">
-                    <input type="checkbox" checked={form.subscribeFileIds.includes(sub.id)} onChange={() => toggleSubscription(sub.id)} />
-                    <span>
-                      {sub.name} <small>{sub.filename}{sub.selected_node_ids?.length ? ` · ${sub.selected_node_ids.length} 个面板节点` : ""}</small>
-                    </span>
-                  </label>
-                  <Badge tone="info">{sub.type === "import" || sub.type === "upload" ? "外部订阅" : "自选/策略"}</Badge>
-                </div>
-              ))}
+            <div className="package-entitlement-list">
+              {visibleSubs.map((sub) => {
+                const isSelected = form.subscribeFileIds.includes(sub.id);
+                const key = String(sub.id);
+                return (
+                  <div key={sub.id} className={isSelected ? "is-selected" : ""}>
+                    <div className="package-node-row-head">
+                      <label className="checkbox-row">
+                        <input type="checkbox" checked={isSelected} onChange={() => toggleSubscription(sub.id)} />
+                        <span>
+                          <strong>{sub.name}</strong>
+                          <small>{sub.filename}{sub.selected_node_ids?.length ? ` · ${sub.selected_node_ids.length} 个面板节点` : ""}</small>
+                        </span>
+                      </label>
+                      <Badge tone="info">{sub.type === "import" || sub.type === "upload" ? "外部订阅" : "自选/策略"}</Badge>
+                    </div>
+                    {isSelected ? (
+                      <div className="package-entitlement-fields">
+                        <Field label="流量倍率"><input aria-label={`${sub.name} 流量倍率`} type="number" min="0" step="0.01" value={form.subscribeMultipliers[key] ?? ""} placeholder="1" onChange={(event) => setForm({ ...form, subscribeMultipliers: { ...form.subscribeMultipliers, [key]: event.target.value } })} /></Field>
+                        <Field label="流量 GB"><input aria-label={`${sub.name} 流量额度`} type="number" min="0" max={subMaxGB} step="0.01" value={form.subscribeTrafficLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, subscribeTrafficLimits: { ...form.subscribeTrafficLimits, [key]: event.target.value } })} /></Field>
+                        <Field label="限速 Mbps"><input aria-label={`${sub.name} 限速`} type="number" min="0" step="0.1" value={form.subscribeSpeedLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, subscribeSpeedLimits: { ...form.subscribeSpeedLimits, [key]: event.target.value } })} /></Field>
+                        <Field label="设备数"><input aria-label={`${sub.name} 设备数`} type="number" min="0" step="1" value={form.subscribeDeviceLimits[key] ?? ""} placeholder="继承套餐设备数" onChange={(event) => setForm({ ...form, subscribeDeviceLimits: { ...form.subscribeDeviceLimits, [key]: event.target.value } })} /></Field>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
               {visibleSubs.length === 0 ? (
-                <div><span className="muted">{subscribeFiles.length === 0 ? "暂无可用订阅文件，请先在订阅管理中创建" : "没有匹配的订阅"}</span></div>
+                <div className="package-empty-entitlement">
+                  <span className="muted">{subscribeFiles.length === 0 ? "暂无可用订阅文件，请先在订阅管理中创建" : "没有匹配的订阅"}</span>
+                </div>
               ) : null}
             </div>
           </div>

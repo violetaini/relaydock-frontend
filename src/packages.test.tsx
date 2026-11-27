@@ -427,4 +427,53 @@ describe("package management", () => {
       template_filename: "__raw__",
     })));
   });
+
+  it("configures subscribe_module_traffic_limit_gb and per-subscription traffic controls with hierarchy validation", async () => {
+    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
+      if (path === "/api/admin/packages") return { packages: [packageItem] } as T;
+      if (path === "/api/admin/nodes") return { nodes } as T;
+      if (path === "/api/admin/remote-servers") return { servers: [] } as T;
+      if (path === "/api/admin/tunnel-templates") return { tunnels: [] } as T;
+      if (path === "/api/admin/rule-templates") return { templates: ["default.yaml"] } as T;
+      if (path === "/api/admin/subscribe-files") {
+        return {
+          files: [
+            { id: 101, name: "香港专线订阅", filename: "hk_vip.yaml", type: "create", selected_node_ids: [1] },
+          ],
+        } as T;
+      }
+      throw new Error(`unexpected GET ${path}`);
+    });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<PackagesPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 标准套餐" }));
+    const subCheckbox = await screen.findByRole("checkbox", { name: /香港专线订阅/ });
+    fireEvent.click(subCheckbox);
+
+    const subModInput = screen.getByRole("spinbutton", { name: "订阅模块总流量 GB" });
+    expect(subModInput).toHaveAttribute("max", "200");
+    fireEvent.change(subModInput, { target: { value: "120" } });
+
+    const subTrafficInput = screen.getByRole("spinbutton", { name: "香港专线订阅 流量额度" });
+    expect(subTrafficInput).toHaveAttribute("max", "120");
+    fireEvent.change(subTrafficInput, { target: { value: "150" } });
+    expect(screen.getByText("单个关联订阅流量（150 GB）不能高于订阅模块总流量（120 GB）")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存更改" })).toBeDisabled();
+
+    fireEvent.change(subTrafficInput, { target: { value: "80" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "香港专线订阅 流量倍率" }), { target: { value: "1.5" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "香港专线订阅 限速" }), { target: { value: "50" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "香港专线订阅 设备数" }), { target: { value: "4" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/packages/update", expect.objectContaining({
+      subscribe_file_ids: [101],
+      subscribe_module_traffic_limit_gb: 120,
+      subscribe_multipliers: { "101": 1.5 },
+      subscribe_traffic_limits: { "101": 80 },
+      subscribe_speed_limits: { "101": 50 },
+      subscribe_device_limits: { "101": 4 },
+    })));
+  });
 });

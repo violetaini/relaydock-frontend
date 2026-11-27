@@ -126,12 +126,17 @@ export interface PackageItem {
   node_module_traffic_limit_gb?: number;
   server_module_traffic_limit_gb?: number;
   forwarding_module_traffic_limit_gb?: number;
+  subscribe_module_traffic_limit_gb?: number;
   cycle_days: number;
   is_reset: boolean;
   reset_day: number;
   node_traffic_reset_period?: NodeTrafficResetPeriod;
   nodes: number[];
   subscribe_file_ids?: number[];
+  subscribe_multipliers?: Record<string, number>;
+  subscribe_traffic_limits?: Record<string, number>;
+  subscribe_speed_limits?: Record<string, number>;
+  subscribe_device_limits?: Record<string, number>;
   server_grants?: PackageServerGrant[];
   forwarding_grants?: PackageForwardingGrant[];
   speed_limit_mbps: number;

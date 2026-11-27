@@ -785,7 +785,7 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
             </div>
             <div className="page-actions" onClick={(event) => event.stopPropagation()}>
               <Button type="button" variant="ghost" onClick={toggleVisible} disabled={visibleNodes.length === 0}>
-                {allVisibleSelected ? "取消当前结果" : "选择当前结果"}
+                {allVisibleSelected ? "取消全选" : "全选"}
               </Button>
               <ChevronDown size={18} className="package-accordion-chevron" />
             </div>
@@ -863,7 +863,7 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
             <div className="page-actions" onClick={(event) => event.stopPropagation()}>
               {visibleSubs.length > 0 ? (
                 <Button type="button" variant="ghost" onClick={toggleVisibleSubs}>
-                  {allVisibleSubsSelected ? "取消当前结果" : "选择当前结果"}
+                  {allVisibleSubsSelected ? "取消全选" : "全选"}
                 </Button>
               ) : null}
               <ChevronDown size={18} className="package-accordion-chevron" />
@@ -901,7 +901,7 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
             <div className="page-actions" onClick={(event) => event.stopPropagation()}>
               {visibleServers.length > 0 ? (
                 <Button type="button" variant="ghost" onClick={toggleVisibleServers}>
-                  {allVisibleServersSelected ? "取消当前结果" : "选择当前结果"}
+                  {allVisibleServersSelected ? "取消全选" : "全选"}
                 </Button>
               ) : null}
               <ChevronDown size={18} className="package-accordion-chevron" />

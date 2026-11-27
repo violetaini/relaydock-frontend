@@ -659,68 +659,59 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
     }));
   };
 
+  const totalGB = Number(form.trafficLimitGB || 0);
+  const nodeModGB = Number(form.nodeModuleTrafficLimitGB || 0);
+  const serverModGB = Number(form.serverModuleTrafficLimitGB || 0);
+  const forwardModGB = Number(form.forwardingModuleTrafficLimitGB || 0);
+
+  const smallestPositive = (...values: number[]): number | undefined => {
+    const positives = values.filter((value) => Number.isFinite(value) && value > 0);
+    return positives.length > 0 ? Math.min(...positives) : undefined;
+  };
+
+  const nodeMaxGB = smallestPositive(totalGB, nodeModGB);
+  const serverMaxGB = smallestPositive(totalGB, serverModGB);
+  const forwardMaxGB = smallestPositive(totalGB, forwardModGB);
+
+  const hierarchyError = useMemo(() => {
+    if (totalGB > 0) {
+      if (nodeModGB > totalGB) return `节点模块总流量（${nodeModGB} GB）不能高于套餐总流量（${totalGB} GB）`;
+      if (serverModGB > totalGB) return `服务器模块总流量（${serverModGB} GB）不能高于套餐总流量（${totalGB} GB）`;
+      if (forwardModGB > totalGB) return `转发模块总流量（${forwardModGB} GB）不能高于套餐总流量（${totalGB} GB）`;
+    }
+    for (const nodeID of form.nodes) {
+      const nodeGB = Number(form.nodeTrafficLimits[String(nodeID)] || 0);
+      if (nodeGB > 0) {
+        if (nodeModGB > 0 && nodeGB > nodeModGB) return `单个固定节点流量（${nodeGB} GB）不能高于节点模块总流量（${nodeModGB} GB）`;
+        if (totalGB > 0 && nodeGB > totalGB) return `单个固定节点流量（${nodeGB} GB）不能高于套餐总流量（${totalGB} GB）`;
+      }
+    }
+    for (const grant of form.serverGrants) {
+      const serverGB = (grant.traffic_limit_bytes || 0) / 1024 ** 3;
+      if (serverGB > 0) {
+        if (serverModGB > 0 && serverGB > serverModGB) return `单台服务器授权流量（${Number(serverGB.toFixed(2))} GB）不能高于服务器模块总流量（${serverModGB} GB）`;
+        if (totalGB > 0 && serverGB > totalGB) return `单台服务器授权流量（${Number(serverGB.toFixed(2))} GB）不能高于套餐总流量（${totalGB} GB）`;
+      }
+    }
+    for (const grant of form.forwardingGrants) {
+      const forwardGB = (grant.traffic_limit_bytes || 0) / 1024 ** 3;
+      if (forwardGB > 0) {
+        if (forwardModGB > 0 && forwardGB > forwardModGB) return `单条转发线路流量（${Number(forwardGB.toFixed(2))} GB）不能高于转发模块总流量（${forwardModGB} GB）`;
+        if (totalGB > 0 && forwardGB > totalGB) return `单条转发线路流量（${Number(forwardGB.toFixed(2))} GB）不能高于套餐总流量（${totalGB} GB）`;
+      }
+    }
+    return "";
+  }, [totalGB, nodeModGB, serverModGB, forwardModGB, form.nodes, form.nodeTrafficLimits, form.serverGrants, form.forwardingGrants]);
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (Number(form.resetDay) < 1 || Number(form.resetDay) > 31) {
       setError("固定节点流量重置日必须在 1 到 31 之间");
       return;
     }
-    const totalGB = Number(form.trafficLimitGB || 0);
-    const nodeModGB = Number(form.nodeModuleTrafficLimitGB || 0);
-    const serverModGB = Number(form.serverModuleTrafficLimitGB || 0);
-    const forwardModGB = Number(form.forwardingModuleTrafficLimitGB || 0);
-    if (totalGB > 0) {
-      if (nodeModGB > totalGB) {
-        setError("固定节点模块总流量不能高于套餐总流量");
-        return;
-      }
-      if (serverModGB > totalGB) {
-        setError("服务器授权模块总流量不能高于套餐总流量");
-        return;
-      }
-      if (forwardModGB > totalGB) {
-        setError("转发线路模块总流量不能高于套餐总流量");
-        return;
-      }
-    }
-    for (const nodeID of form.nodes) {
-      const nodeGB = Number(form.nodeTrafficLimits[String(nodeID)] || 0);
-      if (nodeGB > 0) {
-        if (nodeModGB > 0 && nodeGB > nodeModGB) {
-          setError("单个固定节点流量不能高于节点模块总流量");
-          return;
-        }
-        if (totalGB > 0 && nodeGB > totalGB) {
-          setError("单个固定节点流量不能高于套餐总流量");
-          return;
-        }
-      }
-    }
-    for (const grant of form.serverGrants) {
-      const serverGB = (grant.traffic_limit_bytes || 0) / 1024 ** 3;
-      if (serverGB > 0) {
-        if (serverModGB > 0 && serverGB > serverModGB) {
-          setError("单台服务器授权流量不能高于服务器模块总流量");
-          return;
-        }
-        if (totalGB > 0 && serverGB > totalGB) {
-          setError("单台服务器授权流量不能高于套餐总流量");
-          return;
-        }
-      }
-    }
-    for (const grant of form.forwardingGrants) {
-      const forwardGB = (grant.traffic_limit_bytes || 0) / 1024 ** 3;
-      if (forwardGB > 0) {
-        if (forwardModGB > 0 && forwardGB > forwardModGB) {
-          setError("单条转发线路流量不能高于转发模块总流量");
-          return;
-        }
-        if (totalGB > 0 && forwardGB > totalGB) {
-          setError("单条转发线路流量不能高于套餐总流量");
-          return;
-        }
-      }
+    if (hierarchyError) {
+      setError(hierarchyError);
+      return;
     }
     setWorking(true);
     setError("");
@@ -796,7 +787,7 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
             </Button>
           </div>
         </div>
-        <Field label="节点模块总流量 GB" hint="0 表示不限；耗尽后仅停用固定节点模块，须 ≤ 套餐总流量"><input aria-label="节点模块总流量 GB" type="number" min="0" step="0.01" value={form.nodeModuleTrafficLimitGB} onChange={(event) => setForm({ ...form, nodeModuleTrafficLimitGB: event.target.value })} /></Field>
+        <Field label="节点模块总流量 GB" hint="0 表示不限；耗尽后仅停用固定节点模块，须 ≤ 套餐总流量"><input aria-label="节点模块总流量 GB" type="number" min="0" max={totalGB > 0 ? totalGB : undefined} step="0.01" value={form.nodeModuleTrafficLimitGB} onChange={(event) => setForm({ ...form, nodeModuleTrafficLimitGB: event.target.value })} /></Field>
         <Field label="筛选节点">
           <input value={nodeSearch} onChange={(event) => setNodeSearch(event.target.value)} placeholder="名称、协议、服务器或标签" />
         </Field>
@@ -822,7 +813,7 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
                 {isSelected ? (
                   <div className="package-entitlement-fields">
                     <Field label="流量倍率"><input aria-label={`${node.node_name} 流量倍率`} type="number" min="0" step="0.01" value={form.nodeMultipliers[key] ?? ""} placeholder="1" onChange={(event) => setForm({ ...form, nodeMultipliers: { ...form.nodeMultipliers, [key]: event.target.value } })} /></Field>
-                    <Field label="流量 GB"><input aria-label={`${node.node_name} 流量额度`} type="number" min="0" step="0.01" value={form.nodeTrafficLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeTrafficLimits: { ...form.nodeTrafficLimits, [key]: event.target.value } })} /></Field>
+                    <Field label="流量 GB"><input aria-label={`${node.node_name} 流量额度`} type="number" min="0" max={nodeMaxGB} step="0.01" value={form.nodeTrafficLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeTrafficLimits: { ...form.nodeTrafficLimits, [key]: event.target.value } })} /></Field>
                     <Field label="限速 Mbps"><input aria-label={`${node.node_name} 限速`} type="number" min="0" step="0.1" value={form.nodeSpeedLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeSpeedLimits: { ...form.nodeSpeedLimits, [key]: event.target.value } })} /></Field>
                     <Field label="设备数"><input aria-label={`${node.node_name} 设备数`} type="number" min="0" step="1" value={form.nodeDeviceLimits[key] ?? ""} placeholder="继承套餐设备数" onChange={(event) => setForm({ ...form, nodeDeviceLimits: { ...form.nodeDeviceLimits, [key]: event.target.value } })} /></Field>
                   </div>
@@ -899,7 +890,7 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
             </Button>
           ) : null}
         </div>
-        <Field label="服务器模块总流量 GB" hint="0 表示不限；耗尽后仅停用服务器授权模块，须 ≤ 套餐总流量"><input aria-label="服务器模块总流量 GB" type="number" min="0" step="0.01" value={form.serverModuleTrafficLimitGB} onChange={(event) => setForm({ ...form, serverModuleTrafficLimitGB: event.target.value })} /></Field>
+        <Field label="服务器模块总流量 GB" hint="0 表示不限；耗尽后仅停用服务器授权模块，须 ≤ 套餐总流量"><input aria-label="服务器模块总流量 GB" type="number" min="0" max={totalGB > 0 ? totalGB : undefined} step="0.01" value={form.serverModuleTrafficLimitGB} onChange={(event) => setForm({ ...form, serverModuleTrafficLimitGB: event.target.value })} /></Field>
         <Field label="筛选服务器">
           <input
             value={serverSearch}
@@ -923,7 +914,7 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
               <label className="checkbox-row"><input type="checkbox" checked={Boolean(grant)} onChange={() => toggleServer(server.id)} /><span><strong>{server.name}</strong><small>{server.status || "未知状态"}</small></span></label>
               {grant ? <div className="package-entitlement-fields">
                 <Field label="节点名额" hint="0 表示不限"><input aria-label={`${server.name} 节点名额`} type="number" min="0" value={grant.max_active_nodes} onChange={(event) => updateServerGrant(server.id, { max_active_nodes: Number(event.target.value) })} /></Field>
-                <Field label="授权流量 GB" hint="0 表示不限"><input aria-label={`${server.name} 授权流量`} type="number" min="0" step="0.01" value={grant.traffic_limit_bytes / 1024 ** 3} onChange={(event) => updateServerGrant(server.id, { traffic_limit_bytes: Math.round(Number(event.target.value) * 1024 ** 3) })} /></Field>
+                <Field label="授权流量 GB" hint="0 表示不限"><input aria-label={`${server.name} 授权流量`} type="number" min="0" max={serverMaxGB} step="0.01" value={grant.traffic_limit_bytes / 1024 ** 3} onChange={(event) => updateServerGrant(server.id, { traffic_limit_bytes: Math.round(Number(event.target.value) * 1024 ** 3) })} /></Field>
                 <Field label="限速 Mbps" hint="0 表示不限"><input aria-label={`${server.name} 授权限速`} type="number" min="0" step="0.1" value={grant.speed_limit_mbps} onChange={(event) => updateServerGrant(server.id, { speed_limit_mbps: Number(event.target.value) })} /></Field>
                 <Field label="流量计算"><select aria-label={`${server.name} 流量计算`} value={grant.billing_mode} onChange={(event) => updateServerGrant(server.id, { billing_mode: event.target.value as PackageServerGrant["billing_mode"] })}><option value="download">仅下载</option><option value="both">双向</option></select></Field>
                 <div className="package-protocol-disclosure">
@@ -981,7 +972,7 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
             <small>允许账号在选定线路模板上创建转发规则</small>
           </div>
         </div>
-        <Field label="转发模块总流量 GB" hint="0 表示不限；耗尽后仅停用转发线路模块，须 ≤ 套餐总流量"><input aria-label="转发模块总流量 GB" type="number" min="0" step="0.01" value={form.forwardingModuleTrafficLimitGB} onChange={(event) => setForm({ ...form, forwardingModuleTrafficLimitGB: event.target.value })} /></Field>
+        <Field label="转发模块总流量 GB" hint="0 表示不限；耗尽后仅停用转发线路模块，须 ≤ 套餐总流量"><input aria-label="转发模块总流量 GB" type="number" min="0" max={totalGB > 0 ? totalGB : undefined} step="0.01" value={form.forwardingModuleTrafficLimitGB} onChange={(event) => setForm({ ...form, forwardingModuleTrafficLimitGB: event.target.value })} /></Field>
         <Field label="筛选转发线路">
           <input
             value={tunnelSearch}
@@ -1021,15 +1012,16 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
               {isSelected && grant ? <div className="package-entitlement-fields package-entitlement-fields-forward">
                 <Field label="转发名额"><input aria-label={`${group.name} 转发名额`} type="number" min="1" value={grant.max_active_forwards} onChange={(event) => updateTunnelGroupGrant(group, { max_active_forwards: Number(event.target.value) })} /></Field>
                 <Field label="单条限速 Mbps" hint="0 表示不限"><input aria-label={`${group.name} 单条转发限速`} type="number" min="0" step="0.1" value={grant.per_forward_speed_mbps} onChange={(event) => updateTunnelGroupGrant(group, { per_forward_speed_mbps: Number(event.target.value) })} /></Field>
-                <Field label="授权流量 GB" hint="0 表示不限"><input aria-label={`${group.name} 授权流量`} type="number" min="0" step="0.01" value={grant.traffic_limit_bytes / 1024 ** 3} onChange={(event) => updateTunnelGroupGrant(group, { traffic_limit_bytes: Math.round(Number(event.target.value) * 1024 ** 3) })} /></Field>
+                <Field label="授权流量 GB" hint="0 表示不限"><input aria-label={`${group.name} 授权流量`} type="number" min="0" max={forwardMaxGB} step="0.01" value={grant.traffic_limit_bytes / 1024 ** 3} onChange={(event) => updateTunnelGroupGrant(group, { traffic_limit_bytes: Math.round(Number(event.target.value) * 1024 ** 3) })} /></Field>
                 <Field label="流量计算"><select aria-label={`${group.name} 流量计算`} value={normalizeForwardingBillingMode(grant.billing_mode_override, group.primary.billing_mode)} onChange={(event) => updateTunnelGroupGrant(group, { billing_mode_override: event.target.value as ForwardingBillingMode })}><option value="both">双向</option><option value="upload">仅算上行</option><option value="download">仅算下行</option></select></Field>
               </div> : null}
             </div>;
           })}
         </div>
+        {hierarchyError ? <ErrorState message={hierarchyError} /> : null}
         <div className="dialog-actions">
           <Button type="button" variant="secondary" onClick={onClose} disabled={working}>取消</Button>
-          <Button type="submit" disabled={working}>
+          <Button type="submit" disabled={working || Boolean(hierarchyError)}>
             {working ? <Spinner label={item ? "正在更新" : "正在创建"} /> : item ? <><Pencil size={16} />保存更改</> : <><Plus size={16} />创建套餐</>}
           </Button>
         </div>

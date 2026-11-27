@@ -392,4 +392,20 @@ describe("package management", () => {
       );
     });
   });
+
+  it("blocks saving and sets max attribute when lower-tier quota exceeds package total", async () => {
+    mockLoads();
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    render(<PackagesPage notify={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 标准套餐" }));
+    fireEvent.change(screen.getByRole("spinbutton", { name: "套餐总流量 GB" }), { target: { value: "100" } });
+    const nodeModInput = screen.getByRole("spinbutton", { name: "节点模块总流量 GB" });
+    expect(nodeModInput).toHaveAttribute("max", "100");
+    fireEvent.change(nodeModInput, { target: { value: "200" } });
+
+    expect(screen.getByText("节点模块总流量（200 GB）不能高于套餐总流量（100 GB）")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存更改" })).toBeDisabled();
+    expect(post).not.toHaveBeenCalled();
+  });
 });

@@ -3,7 +3,6 @@ import {
   CalendarDays,
   ChevronDown,
   CircleUserRound,
-  Gauge,
   Grid2X2,
   Layers,
   List,
@@ -416,11 +415,6 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
   const [tunnelSearch, setTunnelSearch] = useState("");
   const [templates, setTemplates] = useState<string[]>([]);
   const [subscribeFiles, setSubscribeFiles] = useState<PackageSubscribeFileOption[]>([]);
-  const [showAdvanced, setShowAdvanced] = useState(Boolean(
-    Object.keys(item?.node_multipliers ?? {}).length ||
-    Object.keys(item?.node_traffic_limits ?? {}).length ||
-    Object.keys(item?.node_speed_limits ?? {}).length || Object.keys(item?.node_device_limits ?? {}).length,
-  ));
   const [expandedServerProtocols, setExpandedServerProtocols] = useState<Set<number>>(() => new Set());
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
@@ -791,12 +785,12 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
           </select>
         </Field>
 
-        <div className="surface-heading">
-          <div><h2>关联节点（{form.nodes.length}）</h2></div>
+        <div className="surface-heading package-subheading">
+          <div>
+            <h2>关联节点（{form.nodes.length}）</h2>
+            <small>勾选节点后可直接配置倍率、独立流量（0 不限）、限速和设备数</small>
+          </div>
           <div className="page-actions">
-            <Button type="button" variant="secondary" onClick={() => setShowAdvanced((value) => !value)}>
-              <Gauge size={16} />{showAdvanced ? "收起固定节点明细" : "配置固定节点明细"}
-            </Button>
             <Button type="button" variant="ghost" onClick={toggleVisible} disabled={visibleNodes.length === 0}>
               {allVisibleSelected ? "取消当前结果" : "选择当前结果"}
             </Button>
@@ -809,45 +803,59 @@ function PackageEditorDialog({ item, nodes, servers, tunnels, onClose, onComplet
         {unavailableIDs.length > 0 ? (
           <ErrorState message={`有 ${unavailableIDs.length} 个已关联节点不在当前列表中；保持选中可保留关联，也可在下方移除。`} />
         ) : null}
-        <div className="preview-list">
-          {visibleNodes.map((node) => (
-            <div key={node.id}>
-              <label className="checkbox-row">
-                <input type="checkbox" checked={form.nodes.includes(node.id)} onChange={() => toggleNode(node.id)} />
-                <span>{node.node_name} <small>#{node.id} · {node.node_type === "routed" ? "路由转发 · " : ""}{node.original_server || "外部节点"}</small></span>
-              </label>
-              <Badge tone={node.enabled ? "good" : "neutral"}>{node.enabled ? node.protocol || "启用" : "停用"}</Badge>
-            </div>
-          ))}
-          {unavailableIDs.map((nodeID) => (
-            <div key={`missing-${nodeID}`}>
-              <label className="checkbox-row">
-                <input type="checkbox" checked onChange={() => toggleNode(nodeID)} />
-                <span>不可用节点 #{nodeID}</span>
-              </label>
-              <Badge tone="warn">已失联</Badge>
-            </div>
-          ))}
+        <div className="package-entitlement-list">
+          {visibleNodes.map((node) => {
+            const isSelected = form.nodes.includes(node.id);
+            const key = String(node.id);
+            return (
+              <div key={node.id} className={isSelected ? "is-selected" : ""}>
+                <div className="package-node-row-head">
+                  <label className="checkbox-row">
+                    <input type="checkbox" checked={isSelected} onChange={() => toggleNode(node.id)} />
+                    <span>
+                      <strong>{node.node_name}</strong>
+                      <small>#{node.id} · {node.node_type === "routed" ? "路由转发 · " : ""}{node.original_server || "外部节点"}</small>
+                    </span>
+                  </label>
+                  <Badge tone={node.enabled ? "good" : "neutral"}>{node.enabled ? node.protocol || "启用" : "停用"}</Badge>
+                </div>
+                {isSelected ? (
+                  <div className="package-entitlement-fields">
+                    <Field label="流量倍率"><input aria-label={`${node.node_name} 流量倍率`} type="number" min="0" step="0.01" value={form.nodeMultipliers[key] ?? ""} placeholder="1" onChange={(event) => setForm({ ...form, nodeMultipliers: { ...form.nodeMultipliers, [key]: event.target.value } })} /></Field>
+                    <Field label="流量 GB"><input aria-label={`${node.node_name} 流量额度`} type="number" min="0" step="0.01" value={form.nodeTrafficLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeTrafficLimits: { ...form.nodeTrafficLimits, [key]: event.target.value } })} /></Field>
+                    <Field label="限速 Mbps"><input aria-label={`${node.node_name} 限速`} type="number" min="0" step="0.1" value={form.nodeSpeedLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeSpeedLimits: { ...form.nodeSpeedLimits, [key]: event.target.value } })} /></Field>
+                    <Field label="设备数"><input aria-label={`${node.node_name} 设备数`} type="number" min="0" step="1" value={form.nodeDeviceLimits[key] ?? ""} placeholder="继承套餐设备数" onChange={(event) => setForm({ ...form, nodeDeviceLimits: { ...form.nodeDeviceLimits, [key]: event.target.value } })} /></Field>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+          {unavailableIDs.map((nodeID) => {
+            const key = String(nodeID);
+            return (
+              <div key={`missing-${nodeID}`} className="is-selected">
+                <div className="package-node-row-head">
+                  <label className="checkbox-row">
+                    <input type="checkbox" checked onChange={() => toggleNode(nodeID)} />
+                    <span><strong>不可用节点 #{nodeID}</strong><small>节点已失联</small></span>
+                  </label>
+                  <Badge tone="warn">已失联</Badge>
+                </div>
+                <div className="package-entitlement-fields">
+                  <Field label="流量倍率"><input aria-label={`${nodeID} 流量倍率`} type="number" min="0" step="0.01" value={form.nodeMultipliers[key] ?? ""} placeholder="1" onChange={(event) => setForm({ ...form, nodeMultipliers: { ...form.nodeMultipliers, [key]: event.target.value } })} /></Field>
+                  <Field label="流量 GB"><input aria-label={`${nodeID} 流量额度`} type="number" min="0" step="0.01" value={form.nodeTrafficLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeTrafficLimits: { ...form.nodeTrafficLimits, [key]: event.target.value } })} /></Field>
+                  <Field label="限速 Mbps"><input aria-label={`${nodeID} 限速`} type="number" min="0" step="0.1" value={form.nodeSpeedLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeSpeedLimits: { ...form.nodeSpeedLimits, [key]: event.target.value } })} /></Field>
+                  <Field label="设备数"><input aria-label={`${nodeID} 设备数`} type="number" min="0" step="1" value={form.nodeDeviceLimits[key] ?? ""} placeholder="继承套餐设备数" onChange={(event) => setForm({ ...form, nodeDeviceLimits: { ...form.nodeDeviceLimits, [key]: event.target.value } })} /></Field>
+                </div>
+              </div>
+            );
+          })}
           {visibleNodes.length === 0 && unavailableIDs.length === 0 ? (
-            <div><span className="muted">{eligibleNodes.length === 0 ? "当前没有可关联的多用户节点" : "没有匹配的节点"}</span></div>
+            <div className="package-empty-entitlement">
+              <span className="muted">{eligibleNodes.length === 0 ? "当前没有可关联的多用户节点" : "没有匹配的节点"}</span>
+            </div>
           ) : null}
         </div>
-        {showAdvanced ? <>
-          <div className="surface-heading package-subheading"><div><h2>固定节点明细限制</h2><small>各节点独立计算；流量和限速填 0 表示不限</small></div></div>
-          <div className="package-node-overrides">
-            {form.nodes.length === 0 ? <span className="muted">先选择关联节点后配置明细</span> : form.nodes.map((nodeID) => {
-              const node = nodes.find((itemNode) => itemNode.id === nodeID);
-              const key = String(nodeID);
-              return <div key={nodeID}>
-                <span><strong>{node?.node_name ?? `节点 #${nodeID}`}</strong><small>{node?.node_type === "routed" ? "路由转发 · " : ""}{node?.protocol || "节点已失联"}</small></span>
-                <Field label="流量倍率"><input aria-label={`${node?.node_name ?? nodeID} 流量倍率`} type="number" min="0" step="0.01" value={form.nodeMultipliers[key] ?? ""} placeholder="1" onChange={(event) => setForm({ ...form, nodeMultipliers: { ...form.nodeMultipliers, [key]: event.target.value } })} /></Field>
-                <Field label="流量 GB"><input aria-label={`${node?.node_name ?? nodeID} 流量额度`} type="number" min="0" step="0.01" value={form.nodeTrafficLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeTrafficLimits: { ...form.nodeTrafficLimits, [key]: event.target.value } })} /></Field>
-                <Field label="限速 Mbps"><input aria-label={`${node?.node_name ?? nodeID} 限速`} type="number" min="0" step="0.1" value={form.nodeSpeedLimits[key] ?? ""} placeholder="0" onChange={(event) => setForm({ ...form, nodeSpeedLimits: { ...form.nodeSpeedLimits, [key]: event.target.value } })} /></Field>
-                <Field label="设备数"><input aria-label={`${node?.node_name ?? nodeID} 设备数`} type="number" min="0" step="1" value={form.nodeDeviceLimits[key] ?? ""} placeholder="继承套餐设备数" onChange={(event) => setForm({ ...form, nodeDeviceLimits: { ...form.nodeDeviceLimits, [key]: event.target.value } })} /></Field>
-              </div>;
-            })}
-          </div>
-        </> : null}
 
         <div className="surface-heading package-subheading">
           <div>

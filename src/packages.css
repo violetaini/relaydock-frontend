@@ -96,6 +96,7 @@
 
 .package-entitlement-list > div:last-child { border-bottom: 0; }
 .package-entitlement-list > div.is-selected { background: var(--surface-muted); }
+.package-node-row-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .package-entitlement-list .checkbox-row > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .package-entitlement-list .checkbox-row small { color: var(--text-soft); }
 .package-tunnel-title {

@@ -452,7 +452,7 @@ describe("unified subscription wizard", () => {
 
     fireEvent.click(within(moreSummary.parentElement!).getByRole("button", { name: "客户端订阅链接" }));
     const dialog = await screen.findByRole("dialog", { name: "外部机场 · 订阅链接" });
-    const dialogClashLinks = within(dialog).getAllByText("一键导入 Clash");
+    const dialogClashLinks = within(dialog).getAllByRole("link", { name: "导入客户端" });
     expect(dialogClashLinks.length).toBeGreaterThanOrEqual(1);
   });
 

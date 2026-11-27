@@ -25,36 +25,39 @@ const managedNode: WorkbenchNode = {
 };
 
 describe("managed node offer editor", () => {
-  it("publishes an eligible node with only the controlled offer fields", async () => {
+  it("automatically publishes an eligible node without a separate publishing switch", async () => {
     vi.spyOn(api, "put").mockResolvedValue({ success: true });
     const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
     const complete = vi.fn();
     render(<NodeEditor node={managedNode} onClose={vi.fn()} onComplete={complete} />);
 
-    fireEvent.click(screen.getByRole("switch", { name: "允许获授权用户自助开通" }));
-    fireEvent.change(screen.getByRole("spinbutton", { name: /^目录排序/ }), { target: { value: "6" } });
+    expect(screen.queryByRole("switch", { name: "允许获授权用户自助开通" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "保存节点" }));
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/managed-node-offers", {
       node_id: 9,
       enabled: true,
-      sort_order: 6,
+      sort_order: 0,
     }));
     expect(complete).toHaveBeenCalledWith("节点已更新");
   });
 
-  it("disables publishing when the node is not bound to a managed inbound", () => {
-    render(<NodeEditor node={{ ...managedNode, original_server: "", inbound_tag: "" }} onClose={vi.fn()} onComplete={vi.fn()} />);
-    expect(screen.getByRole("switch", { name: "允许获授权用户自助开通" })).toBeDisabled();
-    expect(screen.getByText("需要受管服务器和入站标识（Tag）后才能发布。")).toBeInTheDocument();
+  it("does not publish a node without a managed server and inbound", async () => {
+    const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
+    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
+    const complete = vi.fn();
+    render(<NodeEditor node={{ ...managedNode, original_server: "", inbound_tag: "" }} onClose={vi.fn()} onComplete={complete} />);
+    fireEvent.click(screen.getByRole("button", { name: "保存节点" }));
+    await waitFor(() => expect(complete).toHaveBeenCalledWith("节点已更新"));
+    expect(put).toHaveBeenCalledWith("/api/admin/nodes/9", expect.anything());
+    expect(post).not.toHaveBeenCalled();
   });
 
-  it("pauses an existing offer without deleting its identity", async () => {
+  it("pauses an existing offer after its managed server binding is lost", async () => {
     const put = vi.spyOn(api, "put").mockResolvedValue({ success: true });
     const remove = vi.spyOn(api, "delete").mockResolvedValue({ success: true });
-    render(<NodeEditor node={managedNode} offer={{ id: 31, node_id: 9, server_id: 3, inbound_tag: "vless-443", enabled: true, sort_order: 2 }} onClose={vi.fn()} onComplete={vi.fn()} />);
+    render(<NodeEditor node={{ ...managedNode, original_server: "" }} offer={{ id: 31, node_id: 9, server_id: 3, inbound_tag: "vless-443", enabled: true, sort_order: 2 }} onClose={vi.fn()} onComplete={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole("switch", { name: "允许获授权用户自助开通" }));
     fireEvent.click(screen.getByRole("button", { name: "保存节点" }));
 
     await waitFor(() => expect(put).toHaveBeenCalledWith("/api/admin/managed-node-offers/31", { enabled: false, sort_order: 2 }));

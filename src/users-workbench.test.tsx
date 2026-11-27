@@ -31,7 +31,7 @@ describe("users workbench", () => {
   it("never saves an empty subscription assignment after either source failed to load", async () => {
     let fileAttempts = 0;
     vi.spyOn(api, "get").mockImplementation(async (path) => {
-      if (path === "/api/admin/users") return { users: [alice] };
+      if (path.startsWith("/api/admin/users/management?")) return { users: [alice] };
       if (path === "/api/admin/packages") return { packages: [] };
       if (path === "/api/admin/subscribe-files") {
         fileAttempts += 1;
@@ -59,7 +59,7 @@ describe("users workbench", () => {
 
   it("keeps the selected user view in the URL", async () => {
     vi.spyOn(api, "get").mockImplementation(async (path) => {
-      if (path === "/api/admin/users") return { users: [alice] };
+      if (path.startsWith("/api/admin/users/management?")) return { users: [alice] };
       if (path === "/api/admin/packages") return { packages: [] };
       if (path === "/api/admin/tgbot/invites") return { success: true, items: [] };
       throw new Error(`unexpected GET ${path}`);
@@ -77,7 +77,7 @@ describe("users workbench", () => {
         success: true,
         items: [{ code: "INVITE123456", kind: "new", max_uses: 1, used_count: 0, revoked: false, usable: true }],
       };
-      if (path === "/api/admin/users") return { users: [alice] };
+      if (path.startsWith("/api/admin/users/management?")) return { users: [alice] };
       if (path === "/api/admin/packages") return { packages: [] };
       throw new Error(`unexpected GET ${path}`);
     });
@@ -89,7 +89,7 @@ describe("users workbench", () => {
     expect(screen.queryByRole("button", { name: "新建用户" })).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "搜索用户" })).not.toBeInTheDocument();
     expect(screen.queryByRole("table", { name: /用户/ })).not.toBeInTheDocument();
-    expect(get).toHaveBeenCalledWith("/api/admin/users");
+    expect(get).not.toHaveBeenCalledWith(expect.stringContaining("/api/admin/users/management?"));
   });
 
   it("shows accumulated usage without a removed global quota", async () => {
@@ -104,23 +104,17 @@ describe("users workbench", () => {
     expect(screen.getByRole("button", { name: "用户设置 alice" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "删除用户 alice" })).toHaveClass("is-danger");
     expect(screen.getByRole("columnheader", { name: "服务授权" })).toBeInTheDocument();
-    expect(screen.getByText("套餐 · 标准", { selector: ".user-package-chip" })).toBeInTheDocument();
+    expect(screen.getByText("标准", { selector: ".um-package-label strong" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("switch", { name: "停用用户 alice" }));
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/users/status", { username: "alice", is_active: false }));
   });
 
-  it("does not expose destructive account actions for an administrator", async () => {
-    const admin = { ...alice, username: "admin", nickname: "管理员", role: "admin" };
-    vi.spyOn(api, "get").mockResolvedValue({ users: [admin] });
-    const post = vi.spyOn(api, "post");
+  it("excludes administrators from user management entirely", async () => {
+    vi.spyOn(api, "get").mockResolvedValue({ users: [{ ...alice, username: "admin", nickname: "管理员", role: "admin" }] });
     render(<UsersWorkbenchPage notify={vi.fn()} />);
-
-    fireEvent.click(await screen.findByRole("button", { name: "用户设置 admin" }));
-
-    expect(screen.queryByRole("button", { name: "停用用户" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "删除用户" })).not.toBeInTheDocument();
-    expect(post).not.toHaveBeenCalled();
+    expect(await screen.findByText("暂无普通用户")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "用户设置 admin" })).not.toBeInTheDocument();
   });
 
   it("toggles a user's active state through the provisioning endpoint", async () => {
@@ -153,7 +147,7 @@ describe("users workbench", () => {
 
   it("opens every custom service grant from the unified authorization panel", async () => {
     const get = vi.spyOn(api, "get").mockImplementation(async (path) => {
-      if (path === "/api/admin/users") return { users: [customAlice] };
+      if (path.startsWith("/api/admin/users/management?")) return { users: [customAlice] };
       if (path === "/api/admin/packages") return { packages: [] };
       if (path === "/api/admin/nodes") return { nodes: [] };
       if (path === "/api/admin/users/alice/node-grants") return { items: [] };
@@ -166,7 +160,7 @@ describe("users workbench", () => {
     });
     render(<UsersWorkbenchPage notify={vi.fn()} />);
 
-    expect(await screen.findByText("自定义", { selector: ".user-package-chip" })).toBeInTheDocument();
+    expect(await screen.findByText("独立授权", { selector: ".um-grant-summary .um-muted" })).toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "用户设置 alice" }));
     fireEvent.click(screen.getByRole("tab", { name: "服务授权" }));
 
@@ -184,7 +178,7 @@ describe("users workbench", () => {
 
   it("manages personalized fixed nodes independently from package templates", async () => {
     const get = vi.spyOn(api, "get").mockImplementation(async (path) => {
-      if (path === "/api/admin/users") return { users: [customAlice] };
+      if (path.startsWith("/api/admin/users/management?")) return { users: [customAlice] };
       if (path === "/api/admin/packages") return { packages: [] };
       if (path === "/api/admin/nodes") return { nodes: [
         { id: 7, node_name: "香港固定入口", protocol: "vless", enabled: true, direct_grant_eligible: true, node_type: "physical", original_server: "HK-01", inbound_tag: "vless-main" },
@@ -217,7 +211,7 @@ describe("users workbench", () => {
 
   it("does not offer nodes that the backend has not marked as independently manageable", async () => {
     vi.spyOn(api, "get").mockImplementation(async (path) => {
-      if (path === "/api/admin/users") return { users: [customAlice] };
+      if (path.startsWith("/api/admin/users/management?")) return { users: [customAlice] };
       if (path === "/api/admin/packages") return { packages: [] };
       if (path === "/api/admin/nodes") return { nodes: [
         { id: 7, node_name: "共享导入节点", protocol: "vless", enabled: true, node_type: "physical", original_server: "HK-01", inbound_tag: "vless-main" },
@@ -266,7 +260,7 @@ describe("users workbench", () => {
 
   it("hides and clears legacy package-wide traffic and speed overrides", async () => {
     vi.spyOn(api, "get").mockImplementation(async (path) => {
-      if (path === "/api/admin/users") return { users: [{ ...alice, traffic_limit_override_gb: 12.5, speed_limit_override: 80 }] };
+      if (path.startsWith("/api/admin/users/management?")) return { users: [{ ...alice, traffic_limit_override_gb: 12.5, speed_limit_override: 80 }] };
       if (path === "/api/admin/packages") return { packages: [] };
       if (path === "/api/admin/nodes") return { nodes: [] };
       throw new Error(`unexpected GET ${path}`);
@@ -297,7 +291,7 @@ describe("users workbench", () => {
 
   it("saves a per-user fixed-node traffic override with the other node limits", async () => {
     vi.spyOn(api, "get").mockImplementation(async (path) => {
-      if (path === "/api/admin/users") return { users: [{ ...alice, node_traffic_limit_overrides: { "7": 15 }, node_speed_limit_overrides: { "7": 8 }, node_device_limit_overrides: { "7": 2 } }] };
+      if (path.startsWith("/api/admin/users/management?")) return { users: [{ ...alice, node_traffic_limit_overrides: { "7": 15 }, node_speed_limit_overrides: { "7": 8 }, node_device_limit_overrides: { "7": 2 } }] };
       if (path === "/api/admin/packages") return { packages: [] };
       if (path === "/api/admin/nodes") return { nodes: [{ id: 7, node_name: "香港固定节点", protocol: "vless" }] };
       throw new Error(`unexpected GET ${path}`);
@@ -321,7 +315,7 @@ describe("users workbench", () => {
 
   it("reports which limit steps were saved when a later push fails", async () => {
     vi.spyOn(api, "get").mockImplementation(async (path) => {
-      if (path === "/api/admin/users") return { users: [alice] };
+      if (path.startsWith("/api/admin/users/management?")) return { users: [alice] };
       if (path === "/api/admin/packages") return { packages: [] };
       if (path === "/api/admin/nodes") return { nodes: [] };
       throw new Error(`unexpected GET ${path}`);
@@ -345,7 +339,7 @@ describe("users workbench", () => {
   it("assigns a package and expiry from the unified user settings", async () => {
     const unassigned = { ...alice, package_id: undefined, package_name: undefined, package_end_date: undefined };
     vi.spyOn(api, "get").mockImplementation(async (path) => {
-      if (path === "/api/admin/users") return { users: [unassigned] };
+      if (path.startsWith("/api/admin/users/management?")) return { users: [unassigned] };
       if (path === "/api/admin/packages") return { packages: [{ id: 9, name: "合租套餐", traffic_limit_gb: 200, cycle_days: 30 }] };
       throw new Error(`unexpected GET ${path}`);
     });
@@ -368,7 +362,7 @@ describe("users workbench", () => {
   it("lets an administrator override the selected fixed-node reset policy", async () => {
     const unassigned = { ...alice, package_id: undefined, package_name: undefined, package_end_date: undefined };
     vi.spyOn(api, "get").mockImplementation(async (path) => {
-      if (path === "/api/admin/users") return { users: [unassigned] };
+      if (path.startsWith("/api/admin/users/management?")) return { users: [unassigned] };
       if (path === "/api/admin/packages") return { packages: [{ id: 9, name: "月付套餐", traffic_limit_gb: 200, cycle_days: 30, is_reset: true, reset_day: 8, node_traffic_reset_period: "quarterly" }] };
       throw new Error(`unexpected GET ${path}`);
     });
@@ -399,7 +393,7 @@ describe("users workbench", () => {
     const notify = vi.fn();
     render(<UsersWorkbenchPage notify={notify} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "续期工作台" }));
+    fireEvent.click(await screen.findByRole("button", { name: "到期管理" }));
     expect(await screen.findByText(/已过期/)).toBeInTheDocument();
     expect(screen.getByText("Later", { exact: true })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "为 alice 续期 30 天" }));
@@ -428,7 +422,7 @@ describe("users workbench", () => {
 
   it("reports provisioning warnings from the settings renewal panel", async () => {
     vi.spyOn(api, "get").mockImplementation(async (path) => {
-      if (path === "/api/admin/users") return { users: [alice] };
+      if (path.startsWith("/api/admin/users/management?")) return { users: [alice] };
       if (path === "/api/admin/packages") return { packages: [] };
       throw new Error(`unexpected GET ${path}`);
     });
@@ -453,7 +447,7 @@ describe("users workbench", () => {
 
   it("requires confirmation before switching a package user to custom authorization", async () => {
     vi.spyOn(api, "get").mockImplementation(async (path) => {
-      if (path === "/api/admin/users") return { users: [alice] };
+      if (path.startsWith("/api/admin/users/management?")) return { users: [alice] };
       if (path === "/api/admin/packages") return { packages: [{ id: 2, name: "标准", traffic_limit_gb: 100, cycle_days: 30 }] };
       throw new Error(`unexpected GET ${path}`);
     });
@@ -478,7 +472,7 @@ describe("users workbench", () => {
 
   it("shows the concrete processing warning when a service authorization succeeds with cleanup work", async () => {
     vi.spyOn(api, "get").mockImplementation(async (path) => {
-      if (path === "/api/admin/users") return { users: [alice] };
+      if (path.startsWith("/api/admin/users/management?")) return { users: [alice] };
       if (path === "/api/admin/packages") return { packages: [{ id: 2, name: "标准", traffic_limit_gb: 100, cycle_days: 30 }] };
       throw new Error(`unexpected GET ${path}`);
     });
@@ -509,7 +503,7 @@ describe("users workbench", () => {
   it("treats a durable package assignment as authoritative over a stale custom mode", async () => {
     const staleModeUser = { ...alice, authorization_mode: "custom" as const };
     vi.spyOn(api, "get").mockImplementation(async (path) => {
-      if (path === "/api/admin/users") return { users: [staleModeUser] };
+      if (path.startsWith("/api/admin/users/management?")) return { users: [staleModeUser] };
       if (path === "/api/admin/packages") return { packages: [{ id: 2, name: "标准", traffic_limit_gb: 100, cycle_days: 30 }] };
       throw new Error(`unexpected GET ${path}`);
     });
@@ -525,159 +519,10 @@ describe("users workbench", () => {
     expect(screen.queryByText("转发线路授权")).not.toBeInTheDocument();
   });
 
-  it("batch assigns one package to selected non-admin users", async () => {
-    const bob = { ...alice, username: "bob", nickname: "Bob" };
-    const admin = { ...alice, username: "admin", nickname: "管理员", role: "admin" };
-    vi.spyOn(api, "get").mockImplementation(async (path) => {
-      if (path === "/api/admin/users") return { users: [alice, bob, admin] };
-      if (path === "/api/admin/packages") return { packages: [{ id: 9, name: "团队套餐", is_reset: true, reset_day: 8 }] };
-      if (path === "/api/admin/nodes") return { nodes: [] };
-      if (path === "/api/admin/remote-servers") return { servers: [] };
-      if (path === "/api/admin/tunnel-templates") return { templates: [] };
-      throw new Error(`unexpected GET ${path}`);
-    });
-    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
-    render(<UsersWorkbenchPage notify={vi.fn()} />);
-
-    fireEvent.click(await screen.findByRole("checkbox", { name: "选择用户 alice" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "选择用户 bob" }));
-    expect(screen.queryByRole("checkbox", { name: "选择用户 admin" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "批量服务授权 (2)" }));
-    fireEvent.click(screen.getByRole("radio", { name: /套餐授权/ }));
-    fireEvent.change(await screen.findByRole("combobox", { name: "批量套餐" }), { target: { value: "9" } });
-    fireEvent.click(screen.getByRole("button", { name: "应用到 2 位用户" }));
-
-    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/users/service-authorization/batch", {
-      usernames: ["alice", "bob"],
-      mode: "package",
-      package: { package_id: 9, is_reset: true, reset_day: 8 },
-    }));
-  });
-
-  it("batch replaces custom service grants with explicit service policies", async () => {
-    const bob = { ...customAlice, username: "bob", nickname: "Bob" };
-    vi.spyOn(api, "get").mockImplementation(async (path) => {
-      if (path === "/api/admin/users") return { users: [customAlice, bob] };
-      if (path === "/api/admin/packages") return { packages: [] };
-      if (path === "/api/admin/nodes") return { nodes: [{
-        id: 7, node_name: "香港固定入口", protocol: "vless", enabled: true,
-        direct_grant_eligible: true, node_type: "physical", original_server: "HK-01",
-      }] };
-      if (path === "/api/admin/remote-servers") return { servers: [{ id: 11, name: "东京服务器", status: "online" }] };
-      if (path === "/api/admin/tunnel-templates") return { templates: [{
-        id: 22, name: "东京中继", state: "active", hops: [{ server_id: 11 }],
-      }] };
-      throw new Error(`unexpected GET ${path}`);
-    });
-    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
-    render(<UsersWorkbenchPage notify={vi.fn()} />);
-
-    fireEvent.click(await screen.findByRole("checkbox", { name: "选择当前用户" }));
-    fireEvent.click(screen.getByRole("button", { name: "批量服务授权 (2)" }));
-    fireEvent.click(screen.getByRole("radio", { name: /自定义授权/ }));
-    fireEvent.click(await screen.findByRole("checkbox", { name: /香港固定入口/ }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /东京服务器/ }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /东京中继/ }));
-    fireEvent.change(screen.getByRole("spinbutton", { name: "批量每转发限速" }), { target: { value: "25" } });
-    fireEvent.change(screen.getByRole("combobox", { name: "批量转发流量计算" }), { target: { value: "upload" } });
-    fireEvent.click(screen.getByRole("button", { name: "应用到 2 位用户" }));
-
-    await waitFor(() => expect(post).toHaveBeenCalledWith("/api/admin/users/service-authorization/batch", {
-      usernames: ["alice", "bob"],
-      mode: "custom",
-      custom: {
-        fixed_node_grants: [{ node_id: 7, expires_at: null }],
-        server_grants: [{
-          server_id: 11, enabled: true, starts_at: expect.any(String), expires_at: null,
-          max_active_nodes: 0, speed_limit_mbps: 0, connection_limit: 0,
-          traffic_limit_bytes: 0, billing_mode: "download", reset_policy: "none", reset_day: 1,
-          allowed_protocols: [], allowed_protocol_profiles: [],
-        }],
-        forwarding_grants: [{
-          tunnel_id: 22, enabled: true, starts_at: expect.any(String), expires_at: null,
-          max_active_forwards: 1, per_forward_speed_mbps: 25, per_forward_connection_limit: 0,
-          traffic_limit_bytes: 0, billing_mode_override: "upload", allow_custom_public_target: false,
-        }],
-      },
-    }));
-  });
-
-  it("reports batch authorization partial results and keeps only failed users selected", async () => {
-    const bob = { ...alice, username: "bob", nickname: "Bob" };
-    vi.spyOn(api, "get").mockImplementation(async (path) => {
-      if (path === "/api/admin/users") return { users: [alice, bob] };
-      if (path === "/api/admin/packages") return { packages: [{ id: 9, name: "团队套餐", is_reset: false, reset_day: 1 }] };
-      if (path === "/api/admin/nodes") return { nodes: [] };
-      if (path === "/api/admin/remote-servers") return { servers: [] };
-      if (path === "/api/admin/tunnel-templates") return { templates: [] };
-      throw new Error(`unexpected GET ${path}`);
-    });
-    vi.spyOn(api, "post").mockResolvedValue({
-      success: false,
-      applied_users: ["alice"],
-      results: [
-        { username: "alice", mode: "package", status: "applied" },
-        { username: "bob", mode: "package", status: "rolled_back", error: "Agent 离线" },
-      ],
-    });
-    const notify = vi.fn();
-    render(<UsersWorkbenchPage notify={notify} />);
-
-    fireEvent.click(await screen.findByRole("checkbox", { name: "选择当前用户" }));
-    fireEvent.click(screen.getByRole("button", { name: "批量服务授权 (2)" }));
-    fireEvent.click(screen.getByRole("radio", { name: /套餐授权/ }));
-    fireEvent.change(await screen.findByRole("combobox", { name: "批量套餐" }), { target: { value: "9" } });
-    fireEvent.click(screen.getByRole("button", { name: "应用到 2 位用户" }));
-
-    await waitFor(() => expect(notify).toHaveBeenCalledWith(
-      "已为 1/2 位用户应用套餐授权；1 位未应用（bob：Agent 离线）",
-      "error",
-    ));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "批量服务授权 · 2 位用户" })).not.toBeInTheDocument());
-    expect(screen.getByRole("checkbox", { name: "选择用户 alice" })).not.toBeChecked();
-    expect(screen.getByRole("checkbox", { name: "选择用户 bob" })).toBeChecked();
-    expect(screen.getByRole("button", { name: "批量服务授权 (1)" })).toBeInTheDocument();
-  });
-
-  it("locks the batch dialog and authorization mode while a replacement is running", async () => {
-    const bob = { ...alice, username: "bob", nickname: "Bob" };
-    vi.spyOn(api, "get").mockImplementation(async (path) => {
-      if (path === "/api/admin/users") return { users: [alice, bob] };
-      if (path === "/api/admin/packages") return { packages: [{ id: 9, name: "团队套餐" }] };
-      if (path === "/api/admin/nodes") return { nodes: [] };
-      if (path === "/api/admin/remote-servers") return { servers: [] };
-      if (path === "/api/admin/tunnel-templates") return { templates: [] };
-      throw new Error(`unexpected GET ${path}`);
-    });
-    let resolveBatch!: (value: { success: boolean }) => void;
-    const post = vi.spyOn(api, "post").mockImplementation(() => new Promise((resolve) => { resolveBatch = resolve; }));
-    render(<UsersWorkbenchPage notify={vi.fn()} />);
-
-    fireEvent.click(await screen.findByRole("checkbox", { name: "选择当前用户" }));
-    fireEvent.click(screen.getByRole("button", { name: "批量服务授权 (2)" }));
-    const packageMode = screen.getByRole("radio", { name: /套餐授权/ });
-    const customMode = screen.getByRole("radio", { name: /自定义授权/ });
-    fireEvent.click(packageMode);
-    fireEvent.change(await screen.findByRole("combobox", { name: "批量套餐" }), { target: { value: "9" } });
-    fireEvent.click(screen.getByRole("button", { name: "应用到 2 位用户" }));
-
-    await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
-    expect(screen.queryByRole("button", { name: "关闭" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "取消" })).toBeDisabled();
-    expect(packageMode).toBeDisabled();
-    expect(customMode).toBeDisabled();
-    fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.getByRole("dialog", { name: "批量服务授权 · 2 位用户" })).toBeInTheDocument();
-    expect(packageMode).toHaveAttribute("aria-checked", "true");
-
-    resolveBatch({ success: true });
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "批量服务授权 · 2 位用户" })).not.toBeInTheDocument());
-  });
-
   it("retries a failed package list in one user's service authorization panel", async () => {
     let packageAttempts = 0;
     vi.spyOn(api, "get").mockImplementation(async (path) => {
-      if (path === "/api/admin/users") return { users: [alice] };
+      if (path.startsWith("/api/admin/users/management?")) return { users: [alice] };
       if (path === "/api/admin/packages") {
         packageAttempts += 1;
         if (packageAttempts === 1) throw new Error("套餐列表暂不可用");
@@ -696,30 +541,9 @@ describe("users workbench", () => {
     expect(packageAttempts).toBe(2);
   });
 
-  it("blocks batch replacement when authorization options fail to load", async () => {
-    const bob = { ...customAlice, username: "bob", nickname: "Bob" };
-    vi.spyOn(api, "get").mockImplementation(async (path) => {
-      if (path === "/api/admin/users") return { users: [customAlice, bob] };
-      if (path === "/api/admin/packages") return { packages: [] };
-      if (path === "/api/admin/nodes") return { nodes: [] };
-      if (path === "/api/admin/remote-servers") throw new Error("服务器选项加载失败");
-      if (path === "/api/admin/tunnel-templates") return { templates: [] };
-      throw new Error(`unexpected GET ${path}`);
-    });
-    const post = vi.spyOn(api, "post").mockResolvedValue({ success: true });
-    render(<UsersWorkbenchPage notify={vi.fn()} />);
-
-    fireEvent.click(await screen.findByRole("checkbox", { name: "选择当前用户" }));
-    fireEvent.click(screen.getByRole("button", { name: "批量服务授权 (2)" }));
-    fireEvent.click(screen.getByRole("radio", { name: /自定义授权/ }));
-    expect(await screen.findByText("服务器选项加载失败")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "应用到 2 位用户" })).toBeDisabled();
-    expect(post).not.toHaveBeenCalled();
-  });
-
   it("hides AnyDoor nodes and keeps routed forwarding nodes in user node limits panel", async () => {
     vi.spyOn(api, "get").mockImplementation(async (path) => {
-      if (path === "/api/admin/users") return { users: [alice] };
+      if (path.startsWith("/api/admin/users/management?")) return { users: [alice] };
       if (path === "/api/admin/nodes") {
         return {
           nodes: [

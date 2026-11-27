@@ -7,6 +7,7 @@ import { isAnyDoorNode } from "./managed-node-presets";
 import { Badge, Button, ConfirmDialog, Dialog, EmptyState, ErrorState, Field, IconButton, PageHeader, Spinner, Surface, Toggle } from "./ui";
 import type { ContentPageProps, CustomRuleOption, NodeItem, OverrideScriptOption, SubscribeFile } from "./content-workbench";
 import ruleCategories from "./subscription-rule-categories.json";
+import { SubscriptionDeliveryDialog, subscriptionClientIDs, subscriptionDeliveryURL } from "./subscription-delivery";
 import "./subscription-workbench.css";
 
 type Kind = "external" | "custom" | "strategy";
@@ -1393,7 +1394,7 @@ function SubscriptionCopyButton({ file, disabled, onCopy }: { file: SubscribeFil
   const [position, setPosition] = useState({ top: 0, left: 0, width: 260 });
   const anchor = useRef<HTMLDivElement>(null);
   const menu = useRef<HTMLDivElement>(null);
-  const outputs = file.generation?.outputs || [];
+  const outputs = subscriptionClientIDs(file).map(client => ({ client }));
   const multiple = outputs.length > 1;
   const updatePosition = useCallback(() => {
     if (!anchor.current || !menu.current) return;
@@ -1435,9 +1436,12 @@ function SubscriptionCopyButton({ file, disabled, onCopy }: { file: SubscribeFil
   </div>;
 }
 
-export function SubscriptionManager({ notify = noNotify, isAdmin = true, onOpenRulesConfig, onOpenCustomRules, ImportDialog, ContentDialog }: ManagerProps) {
+export function SubscriptionManager({ notify = noNotify, isAdmin = true, canManage = true, onOpenRulesConfig, onOpenCustomRules, ImportDialog, ContentDialog }: ManagerProps) {
   const [tab, setTab] = useState<"all" | Kind>("all");
   const [search, setSearch] = useState("");
+  const [origin, setOrigin] = useState("all");
+  const [userCode, setUserCode] = useState("");
+  const editable = (file: SubscribeFile) => canManage && !file.read_only;
   const [files, setFiles] = useState<SubscribeFile[]>([]);
   const [nodes, setNodes] = useState<NodeItem[]>([]);
   const [templates, setTemplates] = useState<string[]>([]);
@@ -1455,34 +1459,39 @@ export function SubscriptionManager({ notify = noNotify, isAdmin = true, onOpenR
   const [content, setContent] = useState<SubscribeFile | null>(null);
   const [pending, setPending] = useState<SubscribeFile | null>(null);
   const [linkFile, setLinkFile] = useState<SubscribeFile | null>(null);
-  const [linksVisible, setLinksVisible] = useState(false);
   const load = useCallback(async () => {
     setError(""); setWarning("");
     const results = await Promise.allSettled([
-      api.get<{ files?: SubscribeFile[] }>("/api/admin/subscribe-files"),
-      api.get<{ nodes?: NodeItem[] }>("/api/admin/nodes"),
-      api.get<{ templates?: string[] }>("/api/admin/rule-templates"),
-      api.get<{ token?: string }>("/api/user/token"),
-      api.get<CustomRuleOption[]>("/api/admin/custom-rules"),
-      api.get<OverrideScriptOption[]>("/api/admin/override-scripts"),
+      canManage ? api.get<{ files?: SubscribeFile[] }>("/api/admin/subscribe-files") : Promise.resolve({ files: [] as SubscribeFile[] }),
+      canManage ? api.get<{ nodes?: NodeItem[] }>("/api/admin/nodes") : Promise.resolve({ nodes: [] as NodeItem[] }),
+      canManage ? api.get<{ templates?: string[] }>("/api/admin/rule-templates") : Promise.resolve({ templates: [] as string[] }),
+      api.get<{ token?: string; user_short_code?: string }>("/api/user/token"),
+      canManage ? api.get<CustomRuleOption[]>("/api/admin/custom-rules") : Promise.resolve([] as CustomRuleOption[]),
+      canManage ? api.get<OverrideScriptOption[]>("/api/admin/override-scripts") : Promise.resolve([] as OverrideScriptOption[]),
+      api.get<{ subscriptions?: SubscribeFile[] }>("/api/subscriptions"),
     ]);
-    if (results[0].status === "fulfilled") {
-      const next = results[0].value.files || []; setFiles(next);
-      setSelected(current => current.filter(id => next.some(file => file.id === id && subscriptionKind(file) !== "strategy")));
-    } else setError(message(results[0].reason));
+    const managed = results[0].status === "fulfilled" ? results[0].value.files || [] : [];
+    const delivered = results[6].status === "fulfilled" ? results[6].value.subscriptions || [] : [];
+    const metadata = new Map(delivered.map(file => [file.id, file]));
+    const next: SubscribeFile[] = managed.map(file => ({ ...metadata.get(file.id), ...file, read_only: false, access_source: metadata.get(file.id)?.access_source || (isAdmin ? "managed" : "owned") }));
+    if (!isAdmin) for (const file of delivered) if (!next.some(item => item.id === file.id)) next.push({ ...file, read_only: true, auto_sync_custom_rules: false, access_source: file.access_source || "assigned" });
+    setFiles(next);
+    setSelected(current => current.filter(id => next.some(file => file.id === id && !file.read_only && subscriptionKind(file) !== "strategy")));
+    if (results[0].status === "rejected") setError("管理列表加载失败，请刷新后再编辑订阅。");
+    if (results[6].status === "rejected" && !isAdmin) setError("分配订阅加载失败，请刷新重试。");
     if (results[1].status === "fulfilled") setNodes(results[1].value.nodes || []);
     if (results[2].status === "fulfilled") setTemplates([builtinTemplate, ...(results[2].value.templates || []).filter(name => name !== builtinTemplate)]);
-    if (results[3].status === "fulfilled") setToken(results[3].value.token || "");
+    if (results[3].status === "fulfilled") { setToken(results[3].value.token || ""); setUserCode(results[3].value.user_short_code || ""); }
     if (results[4].status === "fulfilled") setRules(results[4].value || []);
     if (results[5].status === "fulfilled") setScripts(results[5].value || []);
     const labels = ["节点", "模板", "订阅令牌", "覆写规则", "脚本"];
-    const missing = results.slice(1).flatMap((result, i) => result.status === "rejected" ? [`${labels[i]}加载失败`] : []);
+    const missing = results.slice(1, 6).flatMap((result, i) => result.status === "rejected" ? [`${labels[i]}加载失败`] : []);
     if (missing.length) setWarning(`${missing.join("、")}；已有订阅仍可查看，请刷新后再创建。`);
     setLoading(false);
-  }, [isAdmin]);
+  }, [isAdmin, canManage]);
   useEffect(() => { void load(); }, [load]);
-  const visible = useMemo(() => files.filter(file => (tab === "all" || subscriptionKind(file) === tab) && `${file.name} ${file.filename} ${file.template_filename || ""}`.toLowerCase().includes(search.toLowerCase())), [files, tab, search]);
-  const selectable = visible.filter(file => subscriptionKind(file) !== "strategy");
+  const visible = useMemo(() => files.filter(file => (tab === "all" || subscriptionKind(file) === tab) && (origin === "all" || (origin === "assigned" ? ["assigned", "package"].includes(file.access_source || "") : file.access_source === "owned")) && `${file.name} ${file.filename} ${file.template_filename || ""}`.toLowerCase().includes(search.toLowerCase())), [files, tab, search, origin]);
+  const selectable = visible.filter(file => editable(file) && subscriptionKind(file) !== "strategy");
   const allSelected = selectable.length > 0 && selectable.every(file => selected.includes(file.id));
   const toggle = (id: number) => setSelected(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
   const create = (kind: Kind) => kind === "external" ? setShowImport(true) : setWizard({ kind, sourceIDs: kind === "strategy" ? selected : [] });
@@ -1495,11 +1504,7 @@ export function SubscriptionManager({ notify = noNotify, isAdmin = true, onOpenR
       const anchor = document.createElement("a"); anchor.href = url; anchor.download = "routing.json"; anchor.click(); URL.revokeObjectURL(url);
     } catch (reason) { setError(message(reason)); } finally { setBusy(false); }
   };
-  const link = (file: SubscribeFile, client?: string) => {
-    if (!token) return "";
-    const query = new URLSearchParams({ filename: file.filename, token }); if (client) query.set("t", client);
-    return `${window.location.origin}/api/clash/subscribe?${query}`;
-  };
+  const link = (file: SubscribeFile, client?: string) => subscriptionDeliveryURL(file, token, userCode, client);
   const clashLink = (file: SubscribeFile) => link(file, "clashmeta") || link(file);
   const importClash = (file: SubscribeFile) => {
     const url = clashLink(file);
@@ -1511,30 +1516,36 @@ export function SubscriptionManager({ notify = noNotify, isAdmin = true, onOpenR
     window.location.href = deepLink;
     notify(`已呼起 Clash 导入「${file.name}」`);
   };
+  const searching = Boolean(search.trim());
+  const emptyTitle = searching ? "未找到匹配的订阅" : origin === "assigned" ? (tab === "all" ? "暂无分配给你的订阅" : `暂无分配给你的${kindLabel[tab]}`) : origin === "owned" ? (tab === "all" ? "你还没有创建订阅" : `你还没有创建${kindLabel[tab]}`) : tab === "all" ? "还没有订阅" : `暂无${kindLabel[tab]}`;
+  const emptyDescription = searching ? "试试其他关键词，或清空搜索查看当前分类。" : origin === "assigned" ? "管理员或套餐分配的订阅会显示在这里，可切换筛选查看其他订阅。" : canManage ? (tab === "strategy" ? "选择外部或自选订阅，组合为策略订阅。" : "导入或创建订阅后，会显示在这里。") : "管理员分配的订阅和你自己创建的订阅会显示在这里。";
+  const emptyAction = searching ? <Button variant="secondary" onClick={() => setSearch("")}>清空搜索</Button> : origin === "assigned" ? (files.length > 0 ? <Button variant="secondary" onClick={() => { setOrigin("all"); setTab("all"); }}>查看全部订阅</Button> : undefined) : canManage ? <Button onClick={() => create(tab === "all" ? "external" : tab)}><Plus size={16} />{tab === "all" || tab === "external" ? "添加外部订阅" : `创建${kindLabel[tab]}`}</Button> : undefined;
   if (loading) return <section className="subscription-manager"><PageHeader title="订阅管理" /><div className="cw-loading"><Spinner label="正在加载订阅" /></div></section>;
   return <section className="subscription-manager">
-    <PageHeader title="订阅管理" description="导入外部来源，选择自建节点，按策略组合交付。" actions={<div className="sm-header-actions">
-      {(["external", "custom", "strategy"] as Kind[]).map(kind => <Button key={kind} variant={(tab === "all" ? kind === "external" : tab === kind) ? "primary" : "secondary"} onClick={() => create(kind)}><Plus size={16} />{kind === "external" ? "添加外部订阅" : kind === "custom" ? "创建自选订阅" : "创建策略订阅"}</Button>)}
+    <PageHeader title="订阅管理" description={canManage ? "管理外部、自选和策略订阅，查看分配给你的订阅。" : "查看分配给你的和自己创建的订阅，复制链接或导入客户端。"} actions={<div className="sm-header-actions">
+      {canManage && (["external", "custom", "strategy"] as Kind[]).map(kind => <Button key={kind} variant={(tab === "all" ? kind === "external" : tab === kind) ? "primary" : "secondary"} onClick={() => create(kind)}><Plus size={16} />{kind === "external" ? "添加外部订阅" : kind === "custom" ? "创建自选订阅" : "创建策略订阅"}</Button>)}
     </div>} />
     {error && !pending && !linkFile && <ErrorState message={error} onRetry={() => void load()} />}
     {warning && <div className="sm-notice" role="status">{warning}</div>}
     <Surface className="sm-list-surface">
       <div className="sm-list-toolbar"><div className="sm-tabs" role="tablist" aria-label="订阅分类">
         {(["all", "external", "custom", "strategy"] as const).map(kind => <button key={kind} type="button" role="tab" aria-selected={tab === kind} className={tab === kind ? "is-active" : ""} onClick={() => setTab(kind)}>{kind === "all" ? "全部订阅" : kindLabel[kind]}<span>{files.filter(file => kind === "all" || subscriptionKind(file) === kind).length}</span></button>)}
-      </div><div className="sm-search"><Search size={16} /><input type="search" aria-label="搜索订阅" placeholder="搜索名称或模板" value={search} onChange={event => setSearch(event.target.value)} /><IconButton label="刷新订阅列表" disabled={busy} onClick={() => void load()}><RefreshCw size={15} /></IconButton></div></div>
+      </div><div className="sm-search"><select aria-label="订阅归属" value={origin} onChange={e => setOrigin(e.target.value)}><option value="all">全部归属</option><option value="owned">我创建的</option><option value="assigned">分配给我</option></select><Search size={16} /><input type="search" aria-label="搜索订阅" placeholder="搜索名称或模板" value={search} onChange={event => setSearch(event.target.value)} /><IconButton label="刷新订阅列表" disabled={busy} onClick={() => void load()}><RefreshCw size={15} /></IconButton></div></div>
       {selected.length > 0 && <div className="sm-selection-bar"><span>已选 <strong>{selected.length}</strong> 个来源</span><div><Button variant="ghost" onClick={() => setSelected([])}>取消选择</Button><Button onClick={() => create("strategy")}><Layers size={15} />用所选来源创建策略</Button></div></div>}
-      {loading ? <div className="cw-loading"><Spinner /></div> : visible.length === 0 ? <EmptyState icon={<Layers size={24} />} title={search ? "未找到匹配的订阅" : "还没有订阅"} description={search ? "试试其他名称或模板。" : "从导入一个来源或选择面板节点开始。"} action={!search ? <Button onClick={() => create(tab === "all" ? "external" : tab)}><Plus size={16} />{tab === "all" || tab === "external" ? "添加外部订阅" : `创建${kindLabel[tab]}`}</Button> : undefined} /> : <div className="sm-table-wrap"><table className="sm-table"><thead><tr><th className="sm-select"><input type="checkbox" aria-label="选择全部可用来源" checked={allSelected} disabled={!selectable.length} onChange={() => setSelected(current => allSelected ? current.filter(id => !selectable.some(file => file.id === id)) : [...new Set([...current, ...selectable.map(file => file.id)])])} /></th><th>订阅</th><th>来源 / 更新</th><th>规则与输出</th><th className="sm-action-cell">操作</th></tr></thead><tbody>
-        {visible.map(file => { const kind = subscriptionKind(file); const outputs = file.generation?.outputs || []; const sourceNames = (file.generation?.source_ids || []).map(id => files.find(source => source.id === id)?.name || "来源已移除");
-          return <tr key={file.id}><td className="sm-select">{kind !== "strategy" && <input type="checkbox" aria-label={`选择来源 ${file.name}`} checked={selected.includes(file.id)} onChange={() => toggle(file.id)} />}</td><td><div className="sm-file-name"><span>{file.name}</span><Badge tone={kind === "strategy" ? "warn" : kind === "custom" ? "good" : "info"}>{kindLabel[kind]}</Badge></div><small>{file.filename}</small></td><td><span>{kind === "strategy" ? sourceNames.length ? sourceNames.join(" + ") : "旧版组合 · 请重新绑定来源" : kind === "external" ? file.url ? "URL 导入" : "本地导入" : `${file.selected_node_ids?.length || 0} 个面板节点`}</span><div className="sm-sync-meta"><small>{kind === "external" ? intervalLabel(file.auto_update_interval) : "配置变更自动跟随"}</small>{file.last_sync_error ? <div className="sm-sync-error" title={file.last_sync_error}><AlertTriangle size={13} className="sm-sync-error-icon" /><span className="sm-sync-error-text">同步失败: {file.last_sync_error}</span></div> : file.last_sync_at ? <small className="sm-sync-time">上次更新: {formatSyncTime(file.last_sync_at)}</small> : null}</div></td><td><span>{outputs[0] ? outputs[0].mode === "source" ? "保留上游规则" : outputs[0].mode === "nodes" ? "仅节点" : outputs[0].rule_mode === "custom" ? `自定义规则 · ${outputs[0].rule_categories?.length || 0} 个分类` : templateName(outputs[0].template_filename) : file.template_filename || (kind === "external" ? "原始配置" : "未绑定模板")}</span><small>{outputs.length ? outputs.map(out => clientName(out.client)).join(" · ") : "可配置客户端输出"}</small></td><td className="sm-action-cell"><div className="sm-row-actions"><SubscriptionCopyButton file={file} disabled={!token} onCopy={client => { setError(""); void (async () => { try { await navigator.clipboard.writeText(link(file, client)); notify(client ? `${clientName(client)} 订阅链接已复制` : "订阅链接已复制"); } catch (reason) { setError(message(reason)); } })(); }} /><a className={`icon-button ${!token ? "is-disabled" : ""}`} role="button" tabIndex={0} href={token ? clashDeepLink(clashLink(file), file.name) : undefined} aria-label={`一键导入 Clash ${file.name}`} title="一键导入 Clash" onClick={e => { if (!token) { e.preventDefault(); setError("订阅令牌未就绪，无法生成导入链接"); return; } notify(`已呼起 Clash 导入「${file.name}」`); }}><Download size={16} /></a><IconButton label={`编辑 ${file.name}`} onClick={() => setWizard({ kind, file })}><Pencil size={16} /></IconButton><details className="sm-more" onToggle={event => { const menu = event.currentTarget; if (menu.open) { const bounds = menu.getBoundingClientRect(); menu.style.setProperty("--sm-menu-top", `${Math.max(8, Math.min(bounds.bottom + 6, window.innerHeight - 240))}px`); menu.style.setProperty("--sm-menu-left", `${Math.max(8, bounds.right - 200)}px`); } }}><summary aria-label={`更多操作 ${file.name}`}><MoreHorizontal size={18} /></summary><div className="sm-menu"><a role="menuitem" href={token ? clashDeepLink(clashLink(file), file.name) : undefined} className={!token ? "is-disabled" : ""} onClick={e => { if (!token) { e.preventDefault(); setError("订阅令牌未就绪，无法生成导入链接"); return; } notify(`已呼起 Clash 导入「${file.name}」`); }}><Download size={15} />一键导入 Clash</a><button type="button" disabled={!token} onClick={() => { setLinksVisible(false); setLinkFile(file); }}><Link2 size={15} />客户端订阅链接</button>{file.url && <button type="button" aria-label={`立即同步 ${file.name}`} disabled={busy} onClick={() => void run(() => api.post(`/api/admin/subscribe-files/${file.id}/sync`), `“${file.name}”外部订阅同步成功`)}><RefreshCw size={15} />立即同步</button>}<button type="button" onClick={() => setContent(file)}><FileCode size={15} />修改配置内容</button><button type="button" aria-label={`${file.auto_sync_custom_rules ? "关闭" : "开启"} ${file.name} 自动同步`} disabled={busy} onClick={() => void run(() => api.put(`/api/admin/subscribe-files/${file.id}`, { ...file, auto_sync_custom_rules: !file.auto_sync_custom_rules }), "覆写规则同步设置已更新")}><RefreshCw size={15} />{file.auto_sync_custom_rules ? "关闭" : "开启"}规则同步</button><button type="button" className="sm-danger" onClick={() => setPending(file)}><Trash2 size={15} />删除订阅</button></div></details></div></td></tr>;
+      {loading ? <div className="cw-loading"><Spinner /></div> : visible.length === 0 ? <EmptyState icon={<Layers size={24} />} title={emptyTitle} description={emptyDescription} action={emptyAction} /> : <div className="sm-table-wrap"><table className="sm-table"><thead><tr><th className="sm-select"><input type="checkbox" aria-label="选择全部可用来源" checked={allSelected} disabled={!selectable.length} onChange={() => setSelected(current => allSelected ? current.filter(id => !selectable.some(file => file.id === id)) : [...new Set([...current, ...selectable.map(file => file.id)])])} /></th><th>订阅</th><th>来源 / 更新</th><th>规则与输出</th><th className="sm-action-cell">操作</th></tr></thead><tbody>
+        {visible.map(file => { const kind = subscriptionKind(file); const outputs = file.generation?.outputs || subscriptionClientIDs(file).map(client => ({ client, mode: "nodes" as const })); const sourceNames = (file.generation?.source_ids || []).map(id => files.find(source => source.id === id)?.name || "来源已移除");
+          const canClash = !subscriptionClientIDs(file).length || subscriptionClientIDs(file).includes("clashmeta");
+          return <tr key={file.id}><td className="sm-select">{editable(file) && kind !== "strategy" && <input type="checkbox" aria-label={`选择来源 ${file.name}`} checked={selected.includes(file.id)} onChange={() => toggle(file.id)} />}</td><td><div className="sm-file-name"><span>{file.name}</span><Badge tone={kind === "strategy" ? "warn" : kind === "custom" ? "good" : "info"}>{kindLabel[kind]}</Badge><Badge>{file.access_source === "owned" ? "我创建的" : file.access_source === "package" ? "套餐分配" : file.access_source === "assigned" ? "管理员分配" : "后台管理"}</Badge></div><small>{file.filename}</small></td><td><span>{file.read_only ? file.access_source === "owned" ? "我创建的订阅" : "分配给我的订阅" : kind === "strategy" ? sourceNames.length ? sourceNames.join(" + ") : "旧版组合 · 请重新绑定来源" : kind === "external" ? file.url ? "URL 导入" : "本地导入" : `${file.selected_node_ids?.length || 0} 个面板节点`}</span><div className="sm-sync-meta"><small>{kind === "external" ? intervalLabel(file.auto_update_interval) : "配置变更自动跟随"}</small>{file.last_sync_error ? <div className="sm-sync-error" title={file.last_sync_error}><AlertTriangle size={13} className="sm-sync-error-icon" /><span className="sm-sync-error-text">同步失败: {file.last_sync_error}</span></div> : file.last_sync_at ? <small className="sm-sync-time">上次更新: {formatSyncTime(file.last_sync_at)}</small> : null}</div></td><td><span>{file.read_only ? "按授权配置下发" : outputs[0] ? outputs[0].mode === "source" ? "保留上游规则" : outputs[0].mode === "nodes" ? "仅节点" : outputs[0].rule_mode === "custom" ? `自定义规则 · ${outputs[0].rule_categories?.length || 0} 个分类` : templateName(outputs[0].template_filename) : file.template_filename || (kind === "external" ? "原始配置" : "未绑定模板")}</span><small>{outputs.length ? outputs.map(out => clientName(out.client)).join(" · ") : "可配置客户端输出"}</small></td><td className="sm-action-cell"><div className="sm-row-actions"><SubscriptionCopyButton file={file} disabled={!token} onCopy={client => { setError(""); void (async () => { try { await navigator.clipboard.writeText(link(file, client)); notify(client ? `${clientName(client)} 订阅链接已复制` : "订阅链接已复制"); } catch (reason) { setError(message(reason)); } })(); }} />{canClash ? <a className={`icon-button ${!token ? "is-disabled" : ""}`} role="button" tabIndex={0} href={token ? clashDeepLink(clashLink(file), file.name) : undefined} aria-label={`一键导入 Clash ${file.name}`} title="一键导入 Clash" onClick={e => { if (!token) { e.preventDefault(); setError("订阅令牌未就绪，无法生成导入链接"); return; } notify(`已呼起 Clash 导入「${file.name}」`); }}><Download size={16} /></a> : <IconButton label={`导入 ${file.name}`} disabled={!token} onClick={() => setLinkFile(file)}><Download size={16} /></IconButton>}{editable(file) && <IconButton label={`编辑 ${file.name}`} onClick={() => setWizard({ kind, file })}><Pencil size={16} /></IconButton>}<details className="sm-more" onToggle={event => { const menu = event.currentTarget; if (menu.open) { const bounds = menu.getBoundingClientRect(); menu.style.setProperty("--sm-menu-top", `${Math.max(8, Math.min(bounds.bottom + 6, window.innerHeight - 240))}px`); menu.style.setProperty("--sm-menu-left", `${Math.max(8, bounds.right - 200)}px`); } }}><summary aria-label={`更多操作 ${file.name}`}><MoreHorizontal size={18} /></summary><div className="sm-menu">{canClash && <a role="menuitem" href={token ? clashDeepLink(clashLink(file), file.name) : undefined} className={!token ? "is-disabled" : ""} onClick={e => { if (!token) { e.preventDefault(); setError("订阅令牌未就绪，无法生成导入链接"); return; } notify(`已呼起 Clash 导入「${file.name}」`); }}><Download size={15} />一键导入 Clash</a>}<button type="button" disabled={!token} onClick={() => { setLinkFile(file); }}><Link2 size={15} />客户端订阅链接</button>{editable(file) && file.url && <button type="button" aria-label={`立即同步 ${file.name}`} disabled={busy} onClick={() => void run(() => api.post(`/api/admin/subscribe-files/${file.id}/sync`), `“${file.name}”外部订阅同步成功`)}><RefreshCw size={15} />立即同步</button>}{editable(file) && <><button type="button" onClick={() => setContent(file)}><FileCode size={15} />修改配置内容</button><button type="button" aria-label={`${file.auto_sync_custom_rules ? "关闭" : "开启"} ${file.name} 自动同步`} disabled={busy} onClick={() => void run(() => api.put(`/api/admin/subscribe-files/${file.id}`, { ...file, auto_sync_custom_rules: !file.auto_sync_custom_rules }), "覆写规则同步设置已更新")}><RefreshCw size={15} />{file.auto_sync_custom_rules ? "关闭" : "开启"}规则同步</button><button type="button" className="sm-danger" onClick={() => setPending(file)}><Trash2 size={15} />删除订阅</button></>}</div></details></div></td></tr>;
         })}
       </tbody></table></div>}
-      <div className="sm-list-footer"><small>{visible.length} 个订阅{tab === "strategy" ? " · 单个来源也可以创建策略" : " · 可勾选外部、自选订阅组合"}</small><div>{onOpenRulesConfig && <Button variant="ghost" onClick={onOpenRulesConfig}>模板管理</Button>}{onOpenCustomRules && <Button variant="ghost" onClick={onOpenCustomRules}>覆写规则</Button>}</div></div>
+      <div className="sm-list-footer"><small>{visible.length} 个订阅{origin === "assigned" || !canManage ? " · 复制链接、查看二维码或导入客户端" : tab === "strategy" ? " · 单个来源也可以创建策略" : " · 可勾选外部、自选订阅组合"}</small><div>{canManage && onOpenRulesConfig && <Button variant="ghost" onClick={onOpenRulesConfig}>模板管理</Button>}{canManage && onOpenCustomRules && <Button variant="ghost" onClick={onOpenCustomRules}>覆写规则</Button>}</div></div>
     </Surface>
-    {showImport && <ImportDialog templates={templates} rules={rules} scripts={scripts} onClose={created => { setShowImport(false); if (created) { notify("订阅已导入，但高级设置尚未保存", "error"); void load(); } }} onComplete={() => { setShowImport(false); notify("外部订阅已添加"); void load(); }} />}
-    {wizard && <SubscriptionWizard {...wizard} isAdmin={isAdmin} files={files} nodes={nodes} templates={templates} rules={rules} scripts={scripts} onClose={() => setWizard(null)} onSaved={() => { const kind = wizard.kind; setWizard(null); setTab(kind); setSelected([]); notify("订阅配置已保存"); void load(); }} onManageTemplates={onOpenRulesConfig} onManageCustomRules={onOpenCustomRules} />}
-    {content && <ContentDialog item={content} onClose={() => setContent(null)} onComplete={() => { setContent(null); void load(); }} />}
-    {pending && <ConfirmDialog title="删除订阅" description={`删除“${pending.name}”后，引用它的策略订阅需要重新选择来源；原有链接将失效。`} confirmLabel="删除" tone="danger" working={busy} error={error} onCancel={() => setPending(null)} onConfirm={() => void run(async () => { await api.delete(`/api/admin/subscribe-files/${pending.id}`); setPending(null); }, "订阅已删除")} />}
-    {linkFile && <Dialog title={`${linkFile.name} · 订阅链接`} description="同一订阅按客户端生成配置，来源更新后链接保持不变。" onClose={() => setLinkFile(null)} wide><div className="sm-link-list">{error && <ErrorState message={error} />}{(linkFile.generation?.outputs.length ? linkFile.generation.outputs : [{ client: "clashmeta", mode: "full" }, { client: "v2ray", mode: "nodes" }]).map(out => <div key={out.client}><strong>{clientName(out.client)}</strong><div className="sm-link-line"><input aria-label={`${clientName(out.client)}订阅地址`} type={linksVisible ? "text" : "password"} readOnly value={link(linkFile, out.client)} /><IconButton label={`复制 ${clientName(out.client)} 链接`} onClick={() => { void navigator.clipboard.writeText(link(linkFile, out.client)).then(() => notify("链接已复制")); }}><Copy size={16} /></IconButton>{out.client === "clashmeta" && <a className="icon-button" role="button" tabIndex={0} href={clashDeepLink(link(linkFile, out.client), linkFile.name)} aria-label="一键导入 Clash" title="一键导入 Clash" onClick={() => notify(`已呼起 Clash 导入「${linkFile.name}」`)}><Download size={16} /></a>}</div></div>)}{linkFile.generation?.outputs.some(out => out.client === "v2ray") && <div className="sm-route-download"><Button variant="secondary" disabled={busy} onClick={() => void downloadRoutes(linkFile)}>导出 Xray 路由 JSON</Button><p className="sm-hint">路由需在客户端单独导入。策略组映射为 proxy，直连为 direct，拦截为 block。</p></div>}<div className="sm-link-dialog-actions" style={{ display: "flex", gap: "10px", alignItems: "center", justifyContent: "space-between", marginTop: "12px" }}><a className="button button-secondary" href={clashDeepLink(clashLink(linkFile), linkFile.name)} onClick={() => notify(`已呼起 Clash 导入「${linkFile.name}」`)}><Download size={15} />一键导入 Clash</a><Button variant="ghost" onClick={() => setLinksVisible(value => !value)}>{linksVisible ? "隐藏链接" : "显示链接"}</Button></div></div></Dialog>}
+    {canManage && showImport && <ImportDialog templates={templates} rules={rules} scripts={scripts} onClose={created => { setShowImport(false); if (created) { notify("订阅已导入，但高级设置尚未保存", "error"); void load(); } }} onComplete={() => { setShowImport(false); notify("外部订阅已添加"); void load(); }} />}
+    {canManage && wizard && <SubscriptionWizard {...wizard} isAdmin={isAdmin} files={files.filter(editable)} nodes={nodes} templates={templates} rules={rules} scripts={scripts} onClose={() => setWizard(null)} onSaved={() => { const kind = wizard.kind; setWizard(null); setTab(kind); setSelected([]); notify("订阅配置已保存"); void load(); }} onManageTemplates={onOpenRulesConfig} onManageCustomRules={onOpenCustomRules} />}
+    {content && editable(content) && <ContentDialog item={content} onClose={() => setContent(null)} onComplete={() => { setContent(null); void load(); }} />}
+    {pending && editable(pending) && <ConfirmDialog title="删除订阅" description={`删除“${pending.name}”后，引用它的策略订阅需要重新选择来源；原有链接将失效。`} confirmLabel="删除" tone="danger" working={busy} error={error} onCancel={() => setPending(null)} onConfirm={() => void run(async () => { await api.delete(`/api/admin/subscribe-files/${pending.id}`); setPending(null); }, "订阅已删除")} />}
+    {linkFile && <SubscriptionDeliveryDialog file={linkFile} link={client => link(linkFile, client)} onClose={() => setLinkFile(null)} onCopy={() => notify("订阅链接已复制")} onDownloadRoutes={editable(linkFile) ? () => void downloadRoutes(linkFile) : undefined} />}
+
   </section>;
 }
 

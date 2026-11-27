@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import {
   ArrowLeft,
-  CalendarDays,
+  Pencil,
+  ShieldCheck,
+  Trash2,
   CalendarPlus,
   ChevronRight,
   Copy,
@@ -9,38 +11,26 @@ import {
   KeyRound,
   Link2,
   Mail,
-  Package as PackageIcon,
-  Pencil,
   Plus,
-  RefreshCw,
-  Search,
-  ShieldCheck,
   SlidersHorizontal,
-  Trash2,
   Unplug,
   UserCog,
   UserRoundCheck,
   UserRoundX,
-  Users,
 } from "lucide-react";
 import { api } from "./api";
 import { isAnyDoorNode } from "./managed-node-presets";
-import { BatchServiceAuthorizationDialog, ServiceAuthorizationPanel } from "./service-authorization";
-import { TGBotInvitesPanel } from "./tg-bot-invites";
+import { ServiceAuthorizationPanel } from "./service-authorization";
 import type { NodeItem, NodeListResponse, UserItem } from "./types";
-import { isPackageAuthorization } from "./user-authorization";
 import {
   Badge,
   Button,
-  ConfirmDialog,
   Dialog,
   EmptyState,
   ErrorState,
   Field,
   IconButton,
-  PageHeader,
   Spinner,
-  Surface,
   Toggle,
   formatBytes,
 } from "./ui";
@@ -49,7 +39,7 @@ import "./users-workbench.css";
 type Notify = (message: string, tone?: "success" | "error") => void;
 export type UsersScope = "all" | "renewal" | "invites";
 
-interface ManagedUser extends UserItem {
+export interface ManagedUser extends UserItem {
   avatar_url?: string;
   traffic_multiplier?: number;
   is_reset?: boolean;
@@ -85,10 +75,6 @@ interface Subaccount {
   updated_at?: string;
 }
 
-type Editor =
-  | { kind: "create" }
-  | { kind: "manage"; user: ManagedUser };
-
 function messageOf(reason: unknown, fallback: string) {
   return reason instanceof Error && reason.message ? reason.message : fallback;
 }
@@ -100,236 +86,9 @@ function copyText(value: string, notify: Notify, label = "内容") {
   );
 }
 
-type ExpiryState = { label: string; tone: "good" | "warn" | "bad" | "neutral"; sortValue: number };
-
-function expiryState(value?: string): ExpiryState {
-  if (!value) return { label: "未设置到期日", tone: "neutral", sortValue: Number.POSITIVE_INFINITY };
-  const end = new Date(`${value}T23:59:59`);
-  if (!Number.isFinite(end.getTime())) return { label: "到期日无效", tone: "bad", sortValue: Number.POSITIVE_INFINITY };
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const days = Math.floor((end.getTime() - today.getTime()) / 86_400_000);
-  if (days < 0) return { label: `已过期 ${Math.abs(days)} 天`, tone: "bad", sortValue: days };
-  if (days === 0) return { label: "今日到期", tone: "bad", sortValue: days };
-  if (days <= 7) return { label: `剩余 ${days} 天`, tone: "warn", sortValue: days };
-  return { label: `剩余 ${days} 天`, tone: "good", sortValue: days };
-}
-
-export function UsersWorkbenchPage({ notify, initialScope = "all" }: { notify: Notify; initialScope?: UsersScope }) {
-  const [users, setUsers] = useState<ManagedUser[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [query, setQuery] = useState("");
-  const [scope, setScope] = useState<UsersScope>(initialScope);
-  const [status, setStatus] = useState<"all" | "active" | "disabled">("all");
-  const [editor, setEditor] = useState<Editor | null>(null);
-  const [pendingDelete, setPendingDelete] = useState<ManagedUser | null>(null);
-  const [workingUser, setWorkingUser] = useState("");
-  const [selectedUsernames, setSelectedUsernames] = useState<string[]>([]);
-  const [showBatchAuthorization, setShowBatchAuthorization] = useState(false);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const response = await api.get<{ users?: ManagedUser[] }>("/api/admin/users");
-      const nextUsers = response.users ?? [];
-      setUsers(nextUsers);
-      const selectable = new Set(nextUsers.filter((user) => user.role !== "admin").map((user) => user.username));
-      setSelectedUsernames((current) => current.filter((username) => selectable.has(username)));
-      return nextUsers;
-    } catch (reason) {
-      setError(messageOf(reason, "用户列表加载失败"));
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { if (scope !== "invites") void load(); }, [load, scope]);
-  useEffect(() => { setScope(initialScope); }, [initialScope]);
-
-  const changeScope = (next: UsersScope) => {
-    setScope(next);
-    location.hash = `/users${next === "all" ? "" : `?view=${next}`}`;
-  };
-
-  const filtered = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    const matching = users.filter((user) => {
-      if (status === "active" && !user.is_active) return false;
-      if (status === "disabled" && user.is_active) return false;
-      if (scope === "renewal") {
-        if (user.role === "admin" || !user.package_id) return false;
-      }
-      return !needle || [user.username, user.nickname, user.email, user.remark, user.package_name, user.user_short_code]
-        .some((value) => value?.toLowerCase().includes(needle));
-    });
-    return scope === "renewal"
-      ? matching.sort((left, right) => expiryState(left.package_end_date).sortValue - expiryState(right.package_end_date).sortValue)
-      : matching;
-  }, [query, scope, status, users]);
-
-  const regularUsers = users.filter((user) => user.role !== "admin");
-  const activeCount = regularUsers.filter((user) => user.is_active).length;
-  const visibleRegularUsers = filtered.filter((user) => user.role !== "admin");
-  const allVisibleSelected = visibleRegularUsers.length > 0 && visibleRegularUsers.every((user) => selectedUsernames.includes(user.username));
-
-  const toggleSelected = (username: string) => setSelectedUsernames((current) => current.includes(username)
-    ? current.filter((value) => value !== username)
-    : [...current, username]);
-
-  const toggleAllVisible = () => setSelectedUsernames((current) => {
-    const visible = visibleRegularUsers.map((user) => user.username);
-    return allVisibleSelected
-      ? current.filter((username) => !visible.includes(username))
-      : Array.from(new Set([...current, ...visible]));
-  });
-
-  const toggleStatus = async (user: ManagedUser) => {
-    setWorkingUser(user.username);
-    try {
-      await api.post("/api/admin/users/status", { username: user.username, is_active: !user.is_active });
-      notify(user.is_active ? "用户已停用，节点凭据已暂停" : "用户已启用，节点凭据正在恢复");
-      await load();
-    } catch (reason) {
-      notify(messageOf(reason, "状态更新失败"), "error");
-    } finally {
-      setWorkingUser("");
-    }
-  };
-
-  const remove = async () => {
-    if (!pendingDelete) return;
-    setWorkingUser(pendingDelete.username);
-    try {
-      await api.post("/api/admin/users/delete", { username: pendingDelete.username });
-      notify(`用户 ${pendingDelete.username} 已删除`);
-      setPendingDelete(null);
-      await load();
-    } catch (reason) {
-      notify(messageOf(reason, "删除用户失败"), "error");
-    } finally {
-      setWorkingUser("");
-    }
-  };
-
-  const renew = async (user: ManagedUser, days: number) => {
-    setWorkingUser(user.username);
-    try {
-      const response = await api.post<{ success?: boolean; end_date?: string; message?: string; warnings?: string[] }>("/api/admin/users/extend", { username: user.username, days });
-      if (response.success === false) throw new Error(response.message || "续期失败");
-      const result = `${user.username} 已续期${response.end_date ? `至 ${response.end_date}` : ` ${days} 天`}`;
-      if (response.warnings?.length) {
-        notify(`${result}；${response.warnings.length} 项节点截止日下发失败，请到服务管理检查`, "error");
-      } else {
-        notify(result);
-      }
-      await load();
-    } catch (reason) {
-      notify(messageOf(reason, "续期失败"), "error");
-    } finally {
-      setWorkingUser("");
-    }
-  };
-
-  const completed = async (message: string) => {
-    setEditor(null);
-    notify(message);
-    await load();
-  };
-
-  const completedInSettings = async (username: string, message: string, tone?: "success" | "error") => {
-    if (tone) notify(message, tone);
-    else notify(message);
-    const refreshedUsers = await load();
-    if (!refreshedUsers) return;
-    const refreshedUser = refreshedUsers.find((user) => user.username === username);
-    setEditor((current) => current?.kind === "manage" && current.user.username === username
-      ? refreshedUser ? { kind: "manage", user: refreshedUser } : null
-      : current);
-  };
-
-  return (
-    <>
-      <PageHeader
-        title="用户管理"
-        description={scope === "invites" ? "管理 Telegram Bot 注册与账号绑定邀请码" : `${regularUsers.length} 位普通用户 · ${activeCount} 位启用`}
-        actions={scope === "invites" ? undefined : <><Button variant="secondary" disabled={!selectedUsernames.length} onClick={() => setShowBatchAuthorization(true)}><ShieldCheck size={17} />批量服务授权{selectedUsernames.length ? ` (${selectedUsernames.length})` : ""}</Button><IconButton label="刷新用户" onClick={() => void load()} disabled={loading}><RefreshCw size={18} /></IconButton><Button onClick={() => setEditor({ kind: "create" })}><Plus size={17} />新建用户</Button></>}
-      />
-      {scope !== "invites" && error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
-      <div className="users-toolbar">
-        <div className="segmented-control" aria-label="用户视图">
-          <button className={scope === "all" ? "is-active" : ""} onClick={() => changeScope("all")}>完整视图</button>
-          <button className={scope === "renewal" ? "is-active" : ""} onClick={() => changeScope("renewal")}>续期工作台</button>
-          <button className={scope === "invites" ? "is-active" : ""} onClick={() => changeScope("invites")}>TG 邀请码</button>
-        </div>
-        {scope !== "invites" ? <div className="users-toolbar-right">
-          <Field label="状态" className="compact-field"><select value={status} onChange={(event) => setStatus(event.target.value as typeof status)}><option value="all">全部状态</option><option value="active">已启用</option><option value="disabled">已停用</option></select></Field>
-          <div className="search-box users-search"><Search size={17} /><input aria-label="搜索用户" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="用户名、邮箱、套餐或短码" /></div>
-        </div> : null}
-      </div>
-      {scope === "invites" ? <TGBotInvitesPanel notify={notify} /> : <Surface className="table-surface users-table-surface">
-        {loading ? <div className="center-state"><Spinner label="正在加载用户" /></div> : filtered.length === 0 ? <EmptyState icon={<Users size={24} />} title={users.length ? "没有匹配的用户" : "暂无用户"} /> : (
-          <div className="table-wrap">
-            <table>
-              <thead><tr><th className="user-select-cell"><input type="checkbox" aria-label="选择当前用户" checked={allVisibleSelected} disabled={!visibleRegularUsers.length} onChange={toggleAllVisible} /></th><th>用户</th><th>服务授权</th><th>累计用量</th><th>到期</th><th>启用</th><th aria-label="操作">操作</th></tr></thead>
-              <tbody>{filtered.map((user) => {
-                const isAdmin = user.role === "admin";
-                const effectiveDevices = user.device_limit_override ?? user.device_limit;
-                const expiry = expiryState(user.package_end_date);
-                const identityDetail = [user.nickname && user.nickname !== user.username ? user.username : "", user.email].filter(Boolean).join(" · ") || "未填写邮箱";
-                const rowWorking = workingUser === user.username;
-                return <tr key={user.username}>
-                  <td className="user-select-cell" data-label="选择">{isAdmin ? null : <input type="checkbox" aria-label={`选择用户 ${user.username}`} checked={selectedUsernames.includes(user.username)} onChange={() => toggleSelected(user.username)} />}</td>
-                  <td data-label="用户">
-                    <div className="user-list-identity">
-                      <strong>{user.nickname || user.username}</strong>
-                      <span>{identityDetail}</span>
-                      {user.remark ? <small className="user-remark" title={user.remark}>{user.remark}</small> : null}
-                    </div>
-                  </td>
-                  <td data-label="服务授权">
-                    {isAdmin ? <Badge tone="info">管理员</Badge> : isPackageAuthorization(user)
-                      ? <span className="user-package-chip"><PackageIcon size={14} />套餐 · {user.package_name || `#${user.package_id}`}</span>
-                      : <span className="user-package-chip is-custom"><ShieldCheck size={14} />自定义</span>}
-                  </td>
-                  <td data-label="累计用量">
-                    <strong>{formatBytes(user.traffic_used)}</strong>
-                    <small className="user-limit-note">{effectiveDevices ? `${effectiveDevices} 台设备` : "设备不限"}</small>
-                  </td>
-                  <td data-label="到期">
-                    <span className="user-expiry"><CalendarDays size={15} /><span><strong>{user.package_end_date || "-"}</strong><small>{user.package_end_date ? expiry.label : "未设置到期日"}</small></span></span>
-                  </td>
-                  <td data-label="启用">
-                    {isAdmin ? <Badge tone="info">管理员</Badge> : <div className="user-status-toggle"><Toggle checked={user.is_active} onChange={() => void toggleStatus(user)} label={`${user.is_active ? "停用" : "启用"}用户 ${user.username}`} disabled={rowWorking} /></div>}
-                  </td>
-                  <td data-label="操作">
-                    <div className="user-actions">
-                      {scope === "renewal" && !isAdmin && user.package_id ? <div className="user-renew-actions"><Button type="button" variant="secondary" aria-label={`为 ${user.username} 续期 30 天`} disabled={workingUser !== ""} onClick={() => void renew(user, 30)}>{rowWorking ? <Spinner label="续期中" /> : "+30"}</Button><Button type="button" variant="secondary" aria-label={`为 ${user.username} 续期 60 天`} disabled={workingUser !== ""} onClick={() => void renew(user, 60)}>+60</Button><Button type="button" variant="secondary" aria-label={`为 ${user.username} 续期 90 天`} disabled={workingUser !== ""} onClick={() => void renew(user, 90)}>+90</Button></div> : null}
-                      {!isAdmin ? <IconButton label={`复制订阅短码 ${user.username}`} disabled={rowWorking || !user.user_short_code} onClick={() => copyText(user.user_short_code ?? "", notify, "订阅短码")}><Link2 size={16} /></IconButton> : null}
-                      <IconButton label={`用户设置 ${user.username}`} disabled={rowWorking} onClick={() => setEditor({ kind: "manage", user })}><Pencil size={16} /></IconButton>
-                      {!isAdmin ? <IconButton className="is-danger" label={`删除用户 ${user.username}`} disabled={rowWorking} onClick={() => setPendingDelete(user)}><Trash2 size={16} /></IconButton> : null}
-                    </div>
-                  </td>
-                </tr>;
-              })}</tbody>
-            </table>
-          </div>
-        )}
-      </Surface>}
-
-      {editor?.kind === "create" ? <CreateUserDialog notify={notify} onClose={() => setEditor(null)} onComplete={completed} /> : null}
-      {editor?.kind === "manage" ? <UserSettingsDialog user={editor.user} notify={notify} working={workingUser === editor.user.username} onClose={() => setEditor(null)} onComplete={(message, tone) => completedInSettings(editor.user.username, message, tone)} onToggleStatus={async () => { await toggleStatus(editor.user); setEditor(null); }} onDelete={() => { setEditor(null); setPendingDelete(editor.user); }} /> : null}
-      {pendingDelete ? <ConfirmDialog title="删除用户" description={`确认删除 ${pendingDelete.username}？该用户在所有节点上的客户端、私有路由、订阅关联和登录数据都会清理，此操作无法撤销。`} confirmLabel="确认删除" working={workingUser === pendingDelete.username} onCancel={() => setPendingDelete(null)} onConfirm={() => void remove()} /> : null}
-      {showBatchAuthorization ? <BatchServiceAuthorizationDialog usernames={selectedUsernames} onClose={() => setShowBatchAuthorization(false)} onComplete={async (message, tone, failedUsernames = []) => { setShowBatchAuthorization(false); notify(message, tone); await load(); setSelectedUsernames(failedUsernames); }} /> : null}
-    </>
-  );
-}
-
 type UserSettingsPanel = "overview" | "profile" | "password" | "extend" | "limits" | "services" | "subscriptions" | "subaccounts";
 
-function UserSettingsDialog({
+export function UserSettingsDialog({
   user,
   notify,
   working,
@@ -448,7 +207,7 @@ function UserSettingsPanelFrame({ title, description, onBack, children }: { titl
   return <div className="user-settings-panel-frame"><div className="user-settings-panel-heading"><div><h3>{title}</h3><p>{description}</p></div><Button type="button" variant="ghost" onClick={onBack}><ArrowLeft size={16} />返回设置总览</Button></div>{children}</div>;
 }
 
-function CreateUserDialog({ notify, onClose, onComplete }: { notify: Notify; onClose: () => void; onComplete: (message: string) => void }) {
+export function CreateUserDialog({ notify, onClose, onComplete }: { notify: Notify; onClose: () => void; onComplete: (message: string) => void }) {
   const [form, setForm] = useState({ username: "", email: "", nickname: "", password: "", remark: "" });
   const [result, setResult] = useState<{ username: string; password: string } | null>(null);
   const [working, setWorking] = useState(false);
@@ -573,3 +332,5 @@ function SubaccountsSettingsPanel({ user }: { user: ManagedUser }) {
   useEffect(() => { api.get<{ subaccounts?: Subaccount[] }>(`/api/admin/users/subaccounts?username=${encodeURIComponent(user.username)}`).then((r) => setItems(r.subaccounts ?? [])).catch((reason) => setError(messageOf(reason, "子账号加载失败"))).finally(() => setLoading(false)); }, [user.username]);
   return <>{error ? <ErrorState message={error} /> : null}{loading ? <div className="center-state"><Spinner /></div> : items.length === 0 ? <EmptyState icon={<Unplug size={24} />} title="暂无节点子账号" /> : <div className="subaccount-list">{items.map((item, index) => <div key={`${item.type}-${item.node_id}-${item.server_id}-${item.inbound_tag}-${index}`}><span className="subaccount-icon"><ShieldCheck size={18} /></span><span><strong>{item.node_name || item.server_name || item.inbound_tag || "节点账号"}</strong><small>{item.type === "routed" ? "私有路由" : "入站凭据"} · {item.protocol || item.inbound_tag || "未知协议"}</small><code>{item.email || item.identifier || "凭据已隐藏"}</code></span><Badge tone={item.is_active ? "good" : "bad"}>{item.is_active ? "有效" : "暂停"}</Badge></div>)}</div>}</>;
 }
+
+export { UserManagementPage as UsersWorkbenchPage } from "./user-management";

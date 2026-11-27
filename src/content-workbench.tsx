@@ -44,7 +44,6 @@ import {
   X,
 } from "lucide-react";
 import { load as loadYAML } from "js-yaml";
-import QRCode from "qrcode";
 import { api, request } from "./api";
 import { isAnyDoorNode } from "./managed-node-presets";
 import {
@@ -72,22 +71,10 @@ export interface ContentPageProps {
   onOpenCustomRules?: () => void;
   onOpenRulesConfig?: () => void;
   isAdmin?: boolean;
+  canManage?: boolean;
 }
 
 interface Envelope { success?: boolean; message?: string; error?: string }
-interface SubscriptionItem {
-  id: number;
-  name: string;
-  description?: string;
-  filename: string;
-  type: string;
-  can_delete?: boolean;
-  file_short_code?: string;
-  custom_short_code?: string;
-  updated_at?: string;
-  latest_version?: number;
-}
-interface TokenBundle { token: string; user_short_code?: string }
 export interface NodeItem {
   id: number;
   node_name: string;
@@ -109,6 +96,10 @@ interface RuleTemplateList {
   is_admin?: boolean;
 }
 export interface SubscribeFile {
+  read_only?: boolean;
+  can_manage?: boolean;
+  access_source?: "owned" | "assigned" | "package" | "managed";
+  available_clients?: string[];
   kind?: "external" | "custom" | "strategy";
   generation?: SubscriptionGeneration;
   id: number;
@@ -658,306 +649,6 @@ function structuredYAML(value: unknown, indent = 0): string {
     }).join("\n");
   }
   return `${pad}${yamlScalar(value)}`;
-}
-
-type SubscriptionPlatformKey =
-  | "clash"
-  | "clash-to-shadowrocket"
-  | "sing-box"
-  | "clash-to-surge"
-  | "clash-to-loon"
-  | "qx"
-  | "stash"
-  | "v2ray"
-  | "uri";
-
-interface SubscriptionPlatformOption {
-  key: SubscriptionPlatformKey;
-  label: string;
-  description: string;
-  queryValue: string;
-  importLabel?: string;
-  deepLink?: (url: string, name: string) => string;
-}
-
-const SUBSCRIPTION_PLATFORMS: SubscriptionPlatformOption[] = [
-  {
-    key: "clash",
-    label: "Clash / Mihomo",
-    description: "Mihomo / Clash 兼容配置",
-    queryValue: "",
-    importLabel: "导入 Clash",
-    deepLink: (url, name) => clashDeepLink(url, name),
-  },
-  {
-    key: "clash-to-shadowrocket",
-    label: "Shadowrocket",
-    description: "Shadowrocket 小火箭完整配置",
-    queryValue: "clash-to-shadowrocket",
-    importLabel: "导入 Shadowrocket",
-    deepLink: (url, name) => {
-      try {
-        return `shadowrocket://add/sub://${btoa(url)}?title=${encodeURIComponent(name)}`;
-      } catch {
-        return "";
-      }
-    },
-  },
-  {
-    key: "sing-box",
-    label: "sing-box",
-    description: "sing-box 原生 JSON 配置",
-    queryValue: "sing-box",
-    importLabel: "导入 sing-box",
-    deepLink: (url, name) => `sing-box://import-remote-profile?url=${encodeURIComponent(url)}#${encodeURIComponent(name)}`,
-  },
-  {
-    key: "clash-to-surge",
-    label: "Surge",
-    description: "Surge 托管配置",
-    queryValue: "clash-to-surge",
-    importLabel: "导入 Surge",
-    deepLink: (url) => `surge:///install-config?url=${encodeURIComponent(url)}`,
-  },
-  {
-    key: "clash-to-loon",
-    label: "Loon",
-    description: "Loon 完整配置",
-    queryValue: "clash-to-loon",
-    importLabel: "导入 Loon",
-    deepLink: (url, name) => `loon://import?n=${encodeURIComponent(name)}&url=${encodeURIComponent(url)}`,
-  },
-  {
-    key: "qx",
-    label: "Quantumult X",
-    description: "Quantumult X 节点订阅",
-    queryValue: "qx",
-    importLabel: "导入 Quantumult X",
-    deepLink: (url, name) => `quantumult-x:///add-resource?remote-resource=${encodeURIComponent(JSON.stringify({ server_remote: [`${url}, tag=${name}`] }))}`,
-  },
-  {
-    key: "stash",
-    label: "Stash",
-    description: "Stash (iOS/macOS) 兼容配置",
-    queryValue: "stash",
-    importLabel: "导入 Stash",
-    deepLink: (url, name) => `stash://install-config?url=${encodeURIComponent(url)}&name=${encodeURIComponent(name)}`,
-  },
-  {
-    key: "v2ray",
-    label: "v2rayN / v2rayNG",
-    description: "Base64 通用节点订阅",
-    queryValue: "v2ray",
-  },
-  {
-    key: "uri",
-    label: "通用 URI",
-    description: "纯文本节点 URI 列表",
-    queryValue: "uri",
-  },
-];
-
-function resolveSubscriptionURL(item: SubscriptionItem, token: TokenBundle | null, clientQuery = ""): string {
-  const fileCode = item.custom_short_code || item.file_short_code;
-  let base = "";
-  if (fileCode && token?.user_short_code) {
-    base = absoluteURL(`/x/${fileCode}${token.user_short_code}`);
-  } else {
-    const params = new URLSearchParams({ filename: item.filename });
-    if (token?.token) params.set("token", token.token);
-    base = absoluteURL(`/api/clash/subscribe?${params.toString()}`);
-  }
-  if (!clientQuery) return base;
-  const separator = base.includes("?") ? "&" : "?";
-  return `${base}${separator}t=${encodeURIComponent(clientQuery)}`;
-}
-
-function privateURL(value: string): string {
-  try {
-    const parsed = new URL(value);
-    if (parsed.searchParams.has("token")) parsed.searchParams.set("token", "••••••••");
-    return parsed.toString();
-  } catch {
-    return value;
-  }
-}
-
-function safeProxy(node: NodeItem): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(node.clash_config) as Record<string, unknown>;
-    if (!parsed || typeof parsed !== "object") return null;
-    return { ...parsed, name: node.node_name || parsed.name };
-  } catch {
-    return null;
-  }
-}
-
-export function SubscriptionLinksPage({ notify = noNotify }: ContentPageProps) {
-  const [items, setItems] = useState<SubscriptionItem[]>([]);
-  const [token, setToken] = useState<TokenBundle | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [qrItem, setQRItem] = useState<{ name: string; url: string } | null>(null);
-  const [deleteItem, setDeleteItem] = useState<SubscriptionItem | null>(null);
-  const [deleting, setDeleting] = useState(false);
-  const [search, setSearch] = useState("");
-  const [platformKey, setPlatformKey] = useState<SubscriptionPlatformKey>("clash");
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const [subscriptions, bundle] = await Promise.all([
-        api.get<{ subscriptions?: SubscriptionItem[] }>("/api/subscriptions"),
-        api.get<TokenBundle>("/api/user/token"),
-      ]);
-      setItems(subscriptions.subscriptions ?? []);
-      setToken(bundle);
-    } catch (reason) {
-      setError(fail(reason, "加载订阅链接失败"));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { void load(); }, [load]);
-
-  const platform = useMemo(
-    () => SUBSCRIPTION_PLATFORMS.find((entry) => entry.key === platformKey) ?? SUBSCRIPTION_PLATFORMS[0],
-    [platformKey],
-  );
-
-  const filteredItems = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return items.filter((item) => {
-      if (!query) return true;
-      const url = resolveSubscriptionURL(item, token, platform.queryValue).toLowerCase();
-      return (
-        item.name.toLowerCase().includes(query) ||
-        item.filename.toLowerCase().includes(query) ||
-        (item.description || "").toLowerCase().includes(query) ||
-        url.includes(query)
-      );
-    });
-  }, [items, platform.queryValue, search, token]);
-
-  const remove = async () => {
-    if (!deleteItem?.can_delete || deleteItem.id <= 0) return;
-    setDeleting(true);
-    setError("");
-    try {
-      await api.delete(`/api/admin/subscribe-files/${deleteItem.id}`);
-      setItems((current) => current.filter((item) => item.id !== deleteItem.id));
-      notify(`订阅“${deleteItem.name}”已删除`);
-      setDeleteItem(null);
-    } catch (reason) {
-      setError(fail(reason, "删除订阅失败"));
-    } finally {
-      setDeleting(false);
-    }
-  };
-
-  return (
-    <section className="cw-page">
-      <PageHeader title="订阅链接" description="查看已分配的配置并选择目标客户端平台，一键复制或导入。" actions={<IconButton label="刷新订阅" onClick={() => void load()}><RefreshCw size={18} /></IconButton>} />
-      {error ? <ErrorState message={error} onRetry={() => void load()} /> : null}
-      {!loading && items.length > 0 ? (
-        <Surface className="cw-sublinks-toolbar">
-          <label className="cw-sublinks-search">
-            <Search size={16} />
-            <input
-              type="search"
-              aria-label="搜索订阅链接"
-              placeholder="搜索名称、文件名或链接..."
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
-          </label>
-          <div className="cw-sublinks-controls">
-            <span className="cw-sublinks-count">
-              {search.trim() ? `匹配 ${filteredItems.length} / ${items.length} 个` : `共 ${items.length} 个订阅`}
-            </span>
-            <label className="cw-sublinks-platform">
-              <span>导入平台</span>
-              <select
-                aria-label="导入平台"
-                value={platformKey}
-                onChange={(event) => setPlatformKey(event.target.value as SubscriptionPlatformKey)}
-              >
-                {SUBSCRIPTION_PLATFORMS.map((opt) => (
-                  <option key={opt.key} value={opt.key}>{opt.label}</option>
-                ))}
-              </select>
-            </label>
-          </div>
-        </Surface>
-      ) : null}
-      {loading ? <Surface className="cw-loading"><Spinner /></Surface> : items.length === 0 ? (
-        <Surface><EmptyState icon={<Link2 size={24} />} title="暂无可用订阅" description="尚未分配套餐或订阅文件。" /></Surface>
-      ) : filteredItems.length === 0 ? (
-        <Surface>
-          <EmptyState
-            icon={<Search size={24} />}
-            title="未找到匹配的订阅"
-            description="尝试更换搜索关键词。"
-            action={<Button variant="secondary" onClick={() => setSearch("")}>清空搜索</Button>}
-          />
-        </Surface>
-      ) : (
-        <div className="cw-grid cw-subscription-grid">
-          {filteredItems.map((item) => {
-            const url = resolveSubscriptionURL(item, token, platform.queryValue);
-            const importHref = platform.deepLink ? platform.deepLink(url, item.name) : "";
-            return (
-              <Surface className="cw-card" key={item.id}>
-                <div className="cw-card-head">
-                  <div><h2>{item.name}</h2><p>{item.description || platform.description}</p></div>
-                  <div className="cw-sublinks-badges">
-                    {platform.key !== "clash" ? <Badge tone="good">{platform.label}</Badge> : null}
-                    <Badge tone={item.type === "package" ? "info" : "neutral"}>{item.type === "package" ? "套餐" : "订阅"}</Badge>
-                  </div>
-                </div>
-                <div className="cw-meta">
-                  <span><FileText size={13} />{item.filename}</span>
-                  {item.latest_version ? <span>版本 {item.latest_version}</span> : null}
-                  <span>更新于 {formatDate(item.updated_at)}</span>
-                </div>
-                <div className="cw-link-box">
-                  <code title={privateURL(url)}>{privateURL(url)}</code>
-                  <IconButton label={`复制 ${item.name} 订阅链接`} onClick={async () => { await copyText(url); notify(`${platform.label} 订阅链接已复制`); }}><Copy size={17} /></IconButton>
-                </div>
-                <div className="cw-card-actions cw-subscription-actions">
-                  <Button variant="secondary" onClick={async () => { await copyText(url); notify(`${platform.label} 订阅链接已复制`); }}><Clipboard size={16} />复制链接</Button>
-                  <Button variant="secondary" onClick={() => setQRItem({ name: item.name, url })}><QrCode size={16} />二维码</Button>
-                  {importHref && platform.importLabel ? <a className="button button-secondary" href={importHref}><Download size={16} />{platform.importLabel}</a> : null}
-                  <Button variant="ghost" onClick={() => window.open(url, "_blank", "noopener,noreferrer")}><ExternalLink size={16} />浏览器打开</Button>
-                  {item.can_delete ? <IconButton className="cw-subscription-delete" label={`删除订阅 ${item.name}`} disabled={deleting} onClick={() => setDeleteItem(item)}><Trash2 size={17} /></IconButton> : null}
-                </div>
-              </Surface>
-            );
-          })}
-        </div>
-      )}
-      {qrItem ? <SubscriptionQRDialog name={qrItem.name} url={qrItem.url} onClose={() => setQRItem(null)} /> : null}
-      {deleteItem ? <ConfirmDialog title="删除订阅" description={`将永久删除“${deleteItem.name}”及其订阅文件，所有已分配链接会立即失效。`} confirmLabel="确认删除" working={deleting} onCancel={() => setDeleteItem(null)} onConfirm={() => void remove()} /> : null}
-    </section>
-  );
-}
-
-function SubscriptionQRDialog({ name, url, onClose }: { name: string; url: string; onClose: () => void }) {
-  const [dataURL, setDataURL] = useState("");
-  const [error, setError] = useState("");
-  useEffect(() => {
-    let active = true;
-    void QRCode.toDataURL(url, {
-      errorCorrectionLevel: "M",
-      margin: 2,
-      width: 320,
-      color: { dark: "#111815", light: "#ffffff" },
-    }).then((value) => { if (active) setDataURL(value); }).catch((reason: unknown) => { if (active) setError(fail(reason, "生成二维码失败")); });
-    return () => { active = false; };
-  }, [url]);
-  return <Dialog title="订阅二维码" description={name} onClose={onClose}>{error ? <ErrorState message={error} /> : null}<div className="cw-qr-wrap">{dataURL ? <img src={dataURL} alt={`${name} 订阅二维码`} width={320} height={320} /> : <Spinner label="正在本地生成二维码" />}</div><div className="cw-link-box"><code title={privateURL(url)}>{privateURL(url)}</code><IconButton label={`复制 ${name} 二维码中的链接`} onClick={async () => { await copyText(url); }}><Copy size={17} /></IconButton></div><div className="dialog-actions"><Button variant="secondary" onClick={onClose}>关闭</Button>{dataURL ? <a className="button button-primary" href={dataURL} download={`${safeDownloadBasename(name)}.png`}><Download size={16} />下载 PNG</a> : null}</div></Dialog>;
 }
 
 function subscribeFilePayload(file: SubscribeFile, overrides: Partial<SubscribeFile> = {}) {

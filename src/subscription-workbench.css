@@ -281,3 +281,9 @@
 .sm-override-chip input { margin:0; }
 
 
+.sm-search select { max-width:150px;min-width:110px;border:0;background:transparent;color:var(--text);padding:8px;font:inherit; }
+.sm-delivery-panel { display:grid;gap:16px;min-width:0; }
+.sm-delivery-actions { display:flex;flex-wrap:wrap;gap:8px; }
+.sm-delivery-qr { display:grid;justify-items:center;gap:12px; }
+.sm-delivery-qr img { width:min(100%,320px);height:auto;background:#fff;border-radius:8px; }
+@media(max-width:760px){.sm-search{flex-wrap:wrap}.sm-search select{max-width:none}.sm-delivery-actions .button{flex:1;justify-content:center}}

@@ -693,9 +693,11 @@ function SubscriptionCredentialsPanel({ notify, refreshKey }: { notify: Notify; 
           </Field>
           <form className="account-short-code-form" onSubmit={updateShortCode}>
             <Field label="自定义短码" hint="留空后恢复系统短码；支持 2-16 位字母、数字、下划线或横杠">
-              <input aria-label="自定义短码" pattern="[A-Za-z0-9_-]{2,16}" value={shortCode} onChange={(event) => setShortCode(event.target.value)} placeholder={bundle.user_short_code || "系统自动生成"} />
+              <div className="account-short-code-row">
+                <input aria-label="自定义短码" pattern="[A-Za-z0-9_-]{2,16}" value={shortCode} onChange={(event) => setShortCode(event.target.value)} placeholder={bundle.user_short_code || "系统自动生成"} />
+                <Button type="submit" variant="secondary" disabled={working !== "" || shortCode.trim() === (bundle.custom_user_short_code ?? "")}>{working === "short-code" ? <Spinner label="正在保存" /> : <><Save size={16} />保存短码</>}</Button>
+              </div>
             </Field>
-            <Button type="submit" variant="secondary" disabled={working !== "" || shortCode.trim() === (bundle.custom_user_short_code ?? "")}>{working === "short-code" ? <Spinner label="正在保存" /> : <><Save size={16} />保存短码</>}</Button>
           </form>
           <div className="account-effective-code">
             <span><small>当前生效短码</small><code>{bundle.user_short_code || "尚未生成"}</code></span>

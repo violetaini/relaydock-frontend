@@ -332,12 +332,16 @@
 .service-card-actions { margin: 0 -5px -5px; padding-top: 11px; display: grid; grid-template-columns: minmax(0, 1fr) repeat(3, auto); align-items: center; gap: 4px; border-top: 1px solid var(--border); }
 .service-card-primary-actions { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
 .service-card-primary-actions .button { min-width: 0; justify-content: center; }
-.service-version-stack { min-width: 126px; display: flex; flex-direction: column; align-items: stretch; gap: 5px; }
+.service-version-stack { min-width: 146px; display: flex; flex-direction: column; align-items: stretch; gap: 5px; }
 .service-version-stack .service-xray-quick { flex: none; }
 .service-version-stack .service-xray-state,
-.service-version-stack .service-agent-version { min-height: 29px; }
+.service-version-stack .service-agent-version { min-height: 32px; padding: 0 10px; justify-content: flex-start; gap: 8px; font-size: 12px; line-height: 1.3; text-align: left; box-sizing: border-box; }
 .service-version-stack .service-xray-copy { flex-direction: row; align-items: center; justify-content: space-between; gap: 5px; }
 .service-version-stack .service-agent-version { width: 100%; min-width: 0; }
+.service-version-stack .service-xray-state > svg:first-child,
+.service-version-stack .service-agent-version > svg:first-child { width: 14px; height: 14px; flex: 0 0 14px; }
+.service-version-stack .service-xray-state > i:first-child { width: 7px; height: 7px; flex: 0 0 7px; margin: 0 3.5px; }
+.service-version-stack .service-xray-copy b { font-size: 12px; line-height: 1.3; }
 
 .service-spin { animation: service-spin .8s linear infinite; }
 @keyframes service-spin { to { transform: rotate(360deg); } }
@@ -348,6 +352,7 @@
 @keyframes service-traffic-flow { from { background-position: 0 0; } to { background-position: 220% 0; } }
 
 .service-table-surface { overflow: hidden; }
+:root .service-table-surface thead th { font-size: 14px; font-weight: 600; line-height: 1.5; vertical-align: middle; }
 .service-table-surface th:first-child,
 .service-table-surface td:first-child { width: 42px; text-align: center; }
 .service-table-surface th:last-child,
@@ -358,8 +363,9 @@
 .service-name-button small { max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .service-name-button:hover strong { color: var(--accent); }
 .service-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 1px; }
-.service-resource-compact { min-width: 110px; display: grid; grid-template-columns: repeat(3, auto); gap: 7px; color: var(--text-soft); font: 700 10px/1.25 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.service-resource-compact span { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.service-resource-compact { min-width: 215px; display: grid; grid-template-columns: repeat(3, max-content); justify-content: space-between; gap: 14px; color: var(--text); font-family: inherit; font-size: 14px; font-weight: 600; line-height: 1.4; font-variant-numeric: tabular-nums; }
+.service-resource-compact span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.service-resource-compact svg { width: 14px; height: 14px; flex: 0 0 14px; }
 .service-resource-compact span:nth-child(1) svg { color: var(--blue); }
 .service-resource-compact span:nth-child(2) svg { color: var(--green); }
 .service-resource-compact span:nth-child(3) svg { color: var(--amber); }

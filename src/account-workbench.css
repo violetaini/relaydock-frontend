@@ -261,10 +261,19 @@
 .account-copy-field input { font-family: "SFMono-Regular", Consolas, monospace; }
 
 .account-short-code-form {
+  margin: 0;
+}
+
+.account-short-code-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
+  align-items: stretch;
   gap: 10px;
+}
+
+.account-short-code-row .button {
+  min-height: 39px;
+  white-space: nowrap;
 }
 
 .account-effective-code {

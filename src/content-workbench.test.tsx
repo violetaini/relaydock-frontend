@@ -11,7 +11,7 @@ vi.mock("./api", async (importOriginal) => {
 vi.mock("qrcode", () => ({ default: { toDataURL: qrMock } }));
 
 import { api } from "./api";
-import { CertificatesWorkbenchPage, SubscribeFilesPage, SubscriptionLinksPage, TemplatesWorkbenchPage } from "./content-workbench";
+import { CertificatesWorkbenchPage, SubscribeFilesPage, TemplatesWorkbenchPage } from "./content-workbench";
 
 vi.hoisted(() => {
   (globalThis as unknown as { process: { env: { NODE_ENV?: string } } }).process.env.NODE_ENV = "test";
@@ -27,6 +27,7 @@ afterEach(() => {
 
 function subscribeLoad(path: string, files: unknown[] = [], external: unknown[] = [], providers: unknown[] = []): unknown {
   if (path === "/api/admin/subscribe-files") return { files };
+  if (path === "/api/subscriptions") return { subscriptions: [] };
   if (path === "/api/user/external-subscriptions") return external;
   if (path === "/api/user/token") return { token: "secret", user_short_code: "usr" };
   if (path === "/api/admin/custom-rules") return [{ id: 11, name: "DNS 覆写", type: "dns", enabled: true }];
@@ -347,93 +348,6 @@ describe("content workbench subscriptions", () => {
 
     expect(onOpenCustomRules).toHaveBeenCalledOnce();
     expect(onOpenRulesConfig).toHaveBeenCalledOnce();
-  });
-
-  it("exposes a real Clash deep link for the resolved subscription URL", async () => {
-    qrMock.mockResolvedValue("data:image/png;base64,LOCAL_QR");
-    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
-      if (path === "/api/subscriptions") return { subscriptions: [{ id: 4, name: "日常套餐", filename: "daily.yaml", type: "package", file_short_code: "abc" }] } as T;
-      if (path === "/api/user/token") return { token: "secret", user_short_code: "usr" } as T;
-      throw new Error(`unexpected GET ${path}`);
-    });
-    render(<SubscriptionLinksPage />);
-
-    const clash = await screen.findByRole("link", { name: "导入 Clash" });
-    expect(clash.getAttribute("href")).toContain("clash://install-config?");
-    expect(clash.getAttribute("href")).toContain("url=http%3A%2F%2Flocalhost%3A3000%2Fx%2Fabcusr");
-    expect(screen.queryByRole("link", { name: "导入 Clash Meta" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "二维码" }));
-
-    const image = await screen.findByRole("img", { name: "日常套餐 订阅二维码" });
-    expect(qrMock).toHaveBeenCalledWith("http://localhost:3000/x/abcusr", {
-      errorCorrectionLevel: "M",
-      margin: 2,
-      width: 320,
-      color: { dark: "#111815", light: "#ffffff" },
-    });
-    expect(image).toHaveAttribute("src", "data:image/png;base64,LOCAL_QR");
-    expect(screen.getByRole("link", { name: "下载 PNG" })).toHaveAttribute("download", "日常套餐.png");
-  });
-
-  it("deletes only subscriptions the current user is allowed to remove", async () => {
-    const notify = vi.fn();
-    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
-      if (path === "/api/subscriptions") return { subscriptions: [
-        { id: 4, name: "自建订阅", filename: "mine.yaml", type: "create", file_short_code: "abc", can_delete: true },
-        { id: -1, name: "套餐订阅", filename: "__package__", type: "package", file_short_code: "pkg", can_delete: false },
-      ] } as T;
-      if (path === "/api/user/token") return { token: "secret", user_short_code: "usr" } as T;
-      throw new Error(`unexpected GET ${path}`);
-    });
-    const remove = vi.spyOn(api, "delete").mockResolvedValue({});
-    render(<SubscriptionLinksPage notify={notify} />);
-
-    fireEvent.click(await screen.findByRole("button", { name: "删除订阅 自建订阅" }));
-    expect(screen.queryByRole("button", { name: "删除订阅 套餐订阅" })).not.toBeInTheDocument();
-    expect(screen.getByText("所有已分配链接会立即失效。", { exact: false })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
-
-    await waitFor(() => expect(remove).toHaveBeenCalledWith("/api/admin/subscribe-files/4"));
-    await waitFor(() => expect(screen.queryByText("自建订阅")).not.toBeInTheDocument());
-    expect(screen.getByText("套餐订阅")).toBeInTheDocument();
-    expect(notify).toHaveBeenCalledWith("订阅“自建订阅”已删除");
-  });
-
-  it("supports searching and switching client platform on subscription links", async () => {
-    vi.spyOn(api, "get").mockImplementation(async <T,>(path: string): Promise<T> => {
-      if (path === "/api/subscriptions") {
-        return {
-          subscriptions: [
-            { id: 4, name: "香港专线", filename: "hk.yaml", type: "create", file_short_code: "hk1", can_delete: true },
-            { id: -1, name: "基础套餐", filename: "__package__", type: "package", file_short_code: "pkg", can_delete: false },
-          ],
-        } as T;
-      }
-      if (path === "/api/user/token") return { token: "secret", user_short_code: "usr" } as T;
-      throw new Error(`unexpected GET ${path}`);
-    });
-    qrMock.mockResolvedValue("data:image/png;base64,LOCAL_QR");
-    render(<SubscriptionLinksPage />);
-
-    expect(await screen.findByText("香港专线")).toBeInTheDocument();
-    expect(screen.getByText("基础套餐")).toBeInTheDocument();
-
-    // Search by filename
-    fireEvent.change(screen.getByRole("searchbox", { name: "搜索订阅链接" }), { target: { value: "hk.yaml" } });
-    expect(screen.getByText("香港专线")).toBeInTheDocument();
-    expect(screen.queryByText("基础套餐")).not.toBeInTheDocument();
-
-    // Switch platform to sing-box
-    fireEvent.change(screen.getByRole("combobox", { name: "导入平台" }), { target: { value: "sing-box" } });
-    expect(screen.getByText("http://localhost:3000/x/hk1usr?t=sing-box")).toBeInTheDocument();
-    const singboxLink = screen.getByRole("link", { name: "导入 sing-box" });
-    expect(singboxLink.getAttribute("href")).toContain("sing-box://import-remote-profile?url=");
-    expect(singboxLink.getAttribute("href")).toContain(encodeURIComponent("http://localhost:3000/x/hk1usr?t=sing-box"));
-
-    // Switch platform to v2ray (no deep link button, URL has ?t=v2ray)
-    fireEvent.change(screen.getByRole("combobox", { name: "导入平台" }), { target: { value: "v2ray" } });
-    expect(screen.getByText("http://localhost:3000/x/hk1usr?t=v2ray")).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /导入 / })).not.toBeInTheDocument();
   });
 
   it("preserves server scopes and traffic limits when toggling an unrelated setting", async () => {

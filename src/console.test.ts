@@ -89,6 +89,16 @@ describe("dashboard traffic periods", () => {
 });
 
 describe("member console navigation permissions", () => {
+  it("maps the legacy links route and view grant into one read-only subscription entry", async () => {
+    location.hash = "/subscriptions";
+    const get = renderMemberConsole(["subscription"]);
+    await screen.findByRole("button", { name: "订阅管理" });
+    expect(screen.queryByRole("button", { name: "订阅链接" })).not.toBeInTheDocument();
+    await waitFor(() => expect(location.hash).toBe("#/subscribeFiles"));
+    await screen.findByRole("heading", { name: "订阅管理" });
+    expect(screen.queryByRole("button", { name: "添加外部订阅" })).not.toBeInTheDocument();
+    expect(get.mock.calls.some(([path]) => path === "/api/admin/subscribe-files")).toBe(false);
+  });
   it("hides forwarding and redirects a direct route without the forwarding page grant", async () => {
     location.hash = "/forwarding";
     renderMemberConsole([]);

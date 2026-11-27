@@ -63,7 +63,7 @@ export function ErrorState({ message, onRetry }: { message: string; onRetry?: ()
   );
 }
 
-export function Dialog({ title, description, children, onClose, medium = false, wide = false, extraWide = false, dismissible = true, describedBy }: { title: string; description?: string; children: ReactNode; onClose: () => void; medium?: boolean; wide?: boolean; extraWide?: boolean; dismissible?: boolean; describedBy?: string }) {
+export function Dialog({ title, description, headerIcon, headerMeta, children, onClose, medium = false, wide = false, extraWide = false, dismissible = true, describedBy }: { title: string; description?: string; headerIcon?: ReactNode; headerMeta?: ReactNode; children: ReactNode; onClose: () => void; medium?: boolean; wide?: boolean; extraWide?: boolean; dismissible?: boolean; describedBy?: string }) {
   const titleId = useId();
   const descriptionId = useId();
   const dialogRef = useRef<HTMLElement>(null);
@@ -143,8 +143,9 @@ export function Dialog({ title, description, children, onClose, medium = false, 
         tabIndex={-1}
       >
         <header className="dialog-header">
+          {headerIcon}
           <div>
-            <h2 id={titleId}>{title}</h2>
+            {headerMeta ? <div className="dialog-title-row"><h2 id={titleId}>{title}</h2>{headerMeta}</div> : <h2 id={titleId}>{title}</h2>}
             {description ? <p id={descriptionId}>{description}</p> : null}
           </div>
           {dismissible ? <IconButton label="关闭" onClick={onClose}><X size={19} /></IconButton> : null}

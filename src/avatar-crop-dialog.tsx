@@ -372,11 +372,11 @@ export function AvatarCropDialog({ file, uploading, onCancel, onConfirm }: Avata
             <div className="avatar-crop-preview-circles">
               <div className="avatar-crop-preview-item">
                 <canvas ref={previewLargeRef} width={84} height={84} className="avatar-crop-canvas-lg" />
-                <small>个人资料</small>
+                <span className="avatar-crop-preview-label">个人资料</span>
               </div>
               <div className="avatar-crop-preview-item">
                 <canvas ref={previewSmallRef} width={36} height={36} className="avatar-crop-canvas-sm" />
-                <small>顶栏</small>
+                <span className="avatar-crop-preview-label">顶栏</span>
               </div>
             </div>
           </div>

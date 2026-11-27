@@ -543,9 +543,10 @@
 }
 
 .avatar-crop-control-label {
-  flex: 0 0 68px;
-  font-size: 12px;
-  color: var(--text-soft);
+  flex: 0 0 72px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
 }
 
 .avatar-crop-control-row input[type="range"] {
@@ -561,19 +562,19 @@
   align-items: center;
   justify-content: center;
   gap: 4px;
-  height: 26px;
-  padding: 0 8px;
+  height: 28px;
+  padding: 0 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm, 4px);
   background: var(--surface);
-  color: var(--text-soft);
-  font-size: 12px;
+  color: var(--text);
+  font-size: 13px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .avatar-crop-step-btn {
-  width: 26px;
+  width: 28px;
   padding: 0;
 }
 
@@ -584,11 +585,12 @@
 }
 
 .avatar-crop-value {
-  flex: 0 0 48px;
+  flex: 0 0 52px;
   text-align: right;
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
-  color: var(--text-soft);
+  color: var(--text);
 }
 
 .avatar-crop-sidebar {
@@ -599,7 +601,7 @@
 
 .avatar-crop-preview-card {
   flex: 1;
-  padding: 20px 14px;
+  padding: 24px 16px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md, 8px);
   background: var(--surface-muted);
@@ -607,33 +609,35 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 20px;
+  gap: 22px;
   text-align: center;
 }
 
 .avatar-crop-preview-title {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 700;
   color: var(--text);
+  letter-spacing: 0.5px;
 }
 
 .avatar-crop-preview-circles {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 14px;
+  gap: 18px;
 }
 
 .avatar-crop-preview-item {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
-.avatar-crop-preview-item small {
-  font-size: 11px;
-  color: var(--text-soft);
+.avatar-crop-preview-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
 }
 
 .avatar-crop-canvas-lg,

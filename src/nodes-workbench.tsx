@@ -2054,7 +2054,7 @@ export function NodesWorkbench({ isAdmin, notify }: NodesWorkbenchProps) {
                     value={server}
                     onChange={(event) => setServer(event.target.value)}
                   >
-                    <option value="all">下拉直选 ({sourceScopedNodes.length})</option>
+                    <option value="all">下拉直选 ({serverFilterOptions.length})</option>
                     {serverFilterOptions.map((item) => (
                       <option key={item} value={item}>
                         {item} ({serverCounts[item]})

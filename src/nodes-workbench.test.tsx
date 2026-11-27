@@ -2292,6 +2292,7 @@ describe("single node QR import", () => {
       // Since there are 5 servers (node-hk-aliyun, node-jp-ddps, node-kr-seoul, node-tw-bgp, 外部导入) > 4, dropdown is rendered
       const select = within(serverGroup).getByLabelText("快速选择服务器");
       expect(select).toBeInTheDocument();
+      expect(within(select).getByRole("option", { name: "下拉直选 (5)" })).toBeInTheDocument();
 
       // Select via dropdown
       fireEvent.change(select, { target: { value: "node-jp-ddps" } });

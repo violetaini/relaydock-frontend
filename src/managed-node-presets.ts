@@ -36,7 +36,10 @@ export type ShadowsocksCipher =
   | "aes-256-gcm"
   | "chacha20-ietf-poly1305"
   | "2022-blake3-aes-128-gcm"
-  | "2022-blake3-aes-256-gcm";
+  | "2022-blake3-aes-256-gcm"
+  | "2022-blake3-chacha20-poly1305";
+
+export const shadowsocks2022ChaChaCipher = "2022-blake3-chacha20-poly1305";
 
 export interface ManagedInboundDraft {
   name: string;
@@ -156,6 +159,7 @@ export function isShadowsocksClassicMultiUserCipher(cipher: ShadowsocksCipher): 
 
 export function managedInboundSupportsPublishing(draft: Pick<ManagedInboundDraft, "protocol" | "ssCipher">): boolean {
   if (draft.protocol === "anydoor" || draft.protocol === "wireguard") return false;
+  if (draft.protocol === "shadowsocks" && draft.ssCipher === shadowsocks2022ChaChaCipher) return false;
   return draft.protocol !== "shadowsocks"
     || isShadowsocks2022Cipher(draft.ssCipher)
     || isShadowsocksClassicMultiUserCipher(draft.ssCipher);
@@ -722,8 +726,17 @@ export function buildManagedInboundRequest(
       let decodedLength = 0;
       let userDecodedLength = 0;
       try { decodedLength = globalThis.atob(draft.password.trim()).length; } catch { /* Validation below provides one error. */ }
-      try { userDecodedLength = globalThis.atob(draft.ssUserPassword.trim()).length; } catch { /* Validation below provides one error. */ }
       if (decodedLength !== keyLength) throw new Error(`该加密方式的服务端密钥必须是 ${keyLength} 字节 Base64`);
+      if (draft.ssCipher === shadowsocks2022ChaChaCipher) {
+        inbound = baseInbound(draft, "shadowsocks", {
+          method: draft.ssCipher,
+          password: draft.password.trim(),
+          email: "admin",
+          network: "tcp,udp",
+        });
+        break;
+      }
+      try { userDecodedLength = globalThis.atob(draft.ssUserPassword.trim()).length; } catch { /* Validation below provides one error. */ }
       if (userDecodedLength !== keyLength) throw new Error(`该加密方式的初始用户密钥必须是 ${keyLength} 字节 Base64`);
       inbound = baseInbound(draft, "shadowsocks", {
         method: draft.ssCipher,

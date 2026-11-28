@@ -98,6 +98,7 @@ import {
   isManagedWSSProtocol,
   isShadowsocksClassicMultiUserCipher,
   isShadowsocks2022Cipher,
+  shadowsocks2022ChaChaCipher,
   managedInboundSupportsPublishing,
   managedProtocolOptions,
   newManagedInboundDraft,
@@ -2908,7 +2909,7 @@ const managedProtocolGrantScopes: Partial<Record<ManagedProtocol, { family: Mana
 export function managedGrantAllowsProtocol(grant: UserManagedCreationGrant | undefined, protocol: ManagedProtocol, ssCipher?: ManagedInboundDraft["ssCipher"]): boolean {
   if (!grant) return false;
   if (protocol === "wireguard" || protocol === "anydoor") return false;
-  if (protocol === "shadowsocks" && ssCipher === "chacha20-ietf-poly1305") return false;
+  if (protocol === "shadowsocks" && (ssCipher === "chacha20-ietf-poly1305" || ssCipher === shadowsocks2022ChaChaCipher)) return false;
   const scopes = protocol === "shadowsocks"
     ? (ssCipher
       ? [{
@@ -3103,12 +3104,15 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
   const isTunnel = draft.protocol === "anydoor";
   const isWireGuard = draft.protocol === "wireguard";
   const wireGuardEndpoint = selectedServer?.domain?.trim() || selectedServer?.ip_address?.trim() || selectedServer?.ip_address_v6?.trim() || "";
-  const isLegacySharedShadowsocks = draft.protocol === "shadowsocks" && !managedInboundSupportsPublishing(draft);
+  const isDedicatedShadowsocks2022 = draft.protocol === "shadowsocks" && draft.ssCipher === shadowsocks2022ChaChaCipher;
+  const isLegacySharedShadowsocks = draft.protocol === "shadowsocks" && draft.ssCipher === "chacha20-ietf-poly1305";
   const canPublish = isAdmin && selectedServer?.xray_mode === "embedded" && managedInboundSupportsPublishing(draft);
   const publishDisabledReason = isTunnel
     ? "任意门是端口转发入站，不提供独立用户凭据，不能发布到用户目录。"
     : isWireGuard
     ? "WireGuard 暂不支持普通用户自助开通，管理员创建后仍会作为正常节点使用。"
+    : isDedicatedShadowsocks2022
+    ? "Shadowsocks 2022 ChaCha20 每个端口使用一组密钥，仅用于独立节点。"
     : isLegacySharedShadowsocks
     ? "经典 ChaCha20 Shadowsocks 只有一组共享密码，不能安全下发独立用户凭据；请使用经典 AES-GCM 或 SS2022。"
     : "当前服务器为【接管外部 Xray】模式，只能创建管理员节点；如需支持多用户独立凭据与自助开通，请在服务管理中将该服务器切换为【全托管】模式。";
@@ -3345,13 +3349,13 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
     }
     setError("");
     const is2022 = isShadowsocks2022Cipher(cipher);
-    const supportsPublishing = is2022 || isShadowsocksClassicMultiUserCipher(cipher);
+    const supportsPublishing = managedInboundSupportsPublishing({ protocol: "shadowsocks", ssCipher: cipher });
     const keyLength = cipher === "2022-blake3-aes-128-gcm" ? 16 : 32;
     setDraft((current) => ({
       ...current,
       ssCipher: cipher,
       password: randomBase64(is2022 ? keyLength : 32),
-      ssUserPassword: is2022 ? randomBase64(keyLength) : current.ssUserPassword,
+      ssUserPassword: supportsPublishing && is2022 ? randomBase64(keyLength) : current.ssUserPassword,
       publish: supportsPublishing ? current.publish : false,
     }));
   };
@@ -3552,7 +3556,36 @@ function ManagedNodeWizard({ nodes, isAdmin, initialServerID, userContext, onClo
         </> : isPlainWS ? <div className="form-grid"><Field label="WebSocket Host（可选）" hint="留空即可直接使用服务器 IP 或节点地址"><input value={draft.domain} onChange={(event) => setDraft({ ...draft, domain: event.target.value })} placeholder="可留空" /></Field><Field label="WebSocket 路径"><input value={draft.wsPath} onChange={(event) => setDraft({ ...draft, wsPath: event.target.value })} /></Field></div> : null}
         {draft.protocol === "vless" ? <div className="nw-inline-note"><Shield size={16} /><span>VLESS TCP（无 TLS）未启用传输加密，支持直接通过 IP 监听或作为中转落地节点。</span></div> : null}
         {draft.protocol === "vless-ws" ? <div className="nw-inline-note"><Shield size={16} /><span>VLESS WS 未启用传输加密，适合受信或私有链路；公网优先使用 Reality 或 WSS。</span></div> : null}
-        {draft.protocol === "shadowsocks" ? <><Field label="加密方式"><select aria-label="Shadowsocks 加密方式" value={draft.ssCipher} onChange={(event) => chooseSSCipher(event.target.value as ManagedInboundDraft["ssCipher"])}><optgroup label="经典 AEAD"><option value="aes-128-gcm" disabled={!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", "aes-128-gcm")}>AES-128-GCM（多用户）</option><option value="aes-256-gcm" disabled={!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", "aes-256-gcm")}>AES-256-GCM（多用户）</option><option value="chacha20-ietf-poly1305" disabled={!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", "chacha20-ietf-poly1305")}>ChaCha20-IETF-Poly1305（共享密码）</option></optgroup><optgroup label="Shadowsocks 2022（多用户）"><option value="2022-blake3-aes-128-gcm" disabled={!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", "2022-blake3-aes-128-gcm")}>2022 BLAKE3 AES-128-GCM</option><option value="2022-blake3-aes-256-gcm" disabled={!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", "2022-blake3-aes-256-gcm")}>2022 BLAKE3 AES-256-GCM</option></optgroup></select></Field>{isAdmin ? isShadowsocks2022Cipher(draft.ssCipher) ? <div className="form-grid"><Field label="服务端主密钥" hint="切换加密方式时自动生成"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value.trim() })} /></Field><Field label="初始用户密钥" hint="管理员节点凭据"><input value={draft.ssUserPassword} onChange={(event) => setDraft({ ...draft, ssUserPassword: event.target.value.trim() })} /></Field></div> : isShadowsocksClassicMultiUserCipher(draft.ssCipher) ? <Field label="初始用户密码" hint="管理员节点凭据；后续用户使用独立密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field> : <Field label="节点共享密码" hint="旧式共享凭据，不能发布到用户自助目录"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field> : null}</> : null}
+        {draft.protocol === "shadowsocks" ? <>
+          <Field label="加密方式">
+            <select aria-label="Shadowsocks 加密方式" value={draft.ssCipher} onChange={(event) => chooseSSCipher(event.target.value as ManagedInboundDraft["ssCipher"])}>
+              <optgroup label="经典 AEAD">
+                <option value="aes-128-gcm" disabled={!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", "aes-128-gcm")}>AES-128-GCM（多用户）</option>
+                <option value="aes-256-gcm" disabled={!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", "aes-256-gcm")}>AES-256-GCM（多用户）</option>
+                <option value="chacha20-ietf-poly1305" disabled={!isAdmin}>ChaCha20-IETF-Poly1305（共享密码）</option>
+              </optgroup>
+              <optgroup label="Shadowsocks 2022">
+                <option value="2022-blake3-aes-128-gcm" disabled={!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", "2022-blake3-aes-128-gcm")}>2022 BLAKE3 AES-128-GCM（多用户）</option>
+                <option value="2022-blake3-aes-256-gcm" disabled={!isAdmin && !managedGrantAllowsProtocol(selectedGrant, "shadowsocks", "2022-blake3-aes-256-gcm")}>2022 BLAKE3 AES-256-GCM（多用户）</option>
+                {isAdmin ? <option value={shadowsocks2022ChaChaCipher}>2022 BLAKE3 ChaCha20-Poly1305（独立端口）</option> : null}
+              </optgroup>
+            </select>
+          </Field>
+          {isAdmin ? isDedicatedShadowsocks2022 ? (
+            <Field label="节点密钥" hint="使用一组 32 字节 Base64 密钥，切换加密方式时自动生成">
+              <input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value.trim() })} />
+            </Field>
+          ) : isShadowsocks2022Cipher(draft.ssCipher) ? (
+            <div className="form-grid">
+              <Field label="服务端主密钥" hint="切换加密方式时自动生成"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value.trim() })} /></Field>
+              <Field label="初始用户密钥" hint="管理员节点凭据"><input value={draft.ssUserPassword} onChange={(event) => setDraft({ ...draft, ssUserPassword: event.target.value.trim() })} /></Field>
+            </div>
+          ) : isShadowsocksClassicMultiUserCipher(draft.ssCipher) ? (
+            <Field label="初始用户密码" hint="管理员节点凭据；后续用户使用独立密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field>
+          ) : (
+            <Field label="节点共享密码" hint="旧式共享凭据，不能发布到用户自助目录"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field>
+          ) : null}
+        </> : null}
         {isAdmin && (draft.protocol === "socks5" || draft.protocol === "http") ? <div className="form-grid"><Field label="初始用户名"><input value={draft.accountUsername} onChange={(event) => setDraft({ ...draft, accountUsername: event.target.value.trim() })} /></Field><Field label="初始密码"><input value={draft.password} onChange={(event) => setDraft({ ...draft, password: event.target.value })} /></Field></div> : null}
                 {draft.protocol === "chitanda" ? (
           <>
